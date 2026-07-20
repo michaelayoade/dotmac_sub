@@ -180,9 +180,9 @@ huawei_generic = OltTypeAdapter(
         requires_slow_send=True,
         supports_slash_fsp_display=False,
         supports_ont_wifi_config=False,
-        supports_ont_port_vlan=True,
-        supports_traffic_table=True,
+        supports_ont_port_vlan=False,
+        supports_traffic_table=False,
     ),
-    notes="Generic Huawei OLT - conservative fallback; verify before OMCI WAN.",
+    notes="Generic Huawei OLT - read-only until its firmware profile is verified.",
 )
 olt_type_registry.register(huawei_generic)

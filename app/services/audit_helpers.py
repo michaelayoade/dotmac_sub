@@ -21,6 +21,7 @@ from app.timezone import APP_TIMEZONE
 logger = logging.getLogger(__name__)
 
 SENSITIVE_FIELDS = {
+    "nin",
     "password",
     "password_hash",
     "hashed_password",
@@ -35,6 +36,7 @@ SENSITIVE_FIELDS = {
 
 # Keys containing any of these tokens are treated as sensitive.
 SENSITIVE_FIELD_TOKENS = {
+    "nin",
     "password",
     "secret",
     "token",
@@ -128,9 +130,13 @@ def format_changes(changes: dict | None, max_items: int = 3) -> str | None:
     for idx, (field, value) in enumerate(changes.items()):
         if idx >= max_items:
             break
-        before_val = value.get("from")
-        after_val = value.get("to")
-        items.append(f"{field}: {before_val} -> {after_val}")
+        if isinstance(value, Mapping):
+            items.append(f"{field}: {value.get('from')} -> {value.get('to')}")
+        else:
+            # "created" events (and legacy rows) store the field snapshot
+            # directly — {field: value} — rather than a {"from","to"} pair.
+            # Render the value as-is instead of 500ing the whole detail page.
+            items.append(f"{field}: {value}")
     if not items:
         return None
     suffix = "…" if len(changes) > max_items else ""

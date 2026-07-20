@@ -5,10 +5,12 @@ Provides services for Subscriptions and SubscriptionAddOns.
 
 import logging
 from calendar import monthrange
+from collections.abc import Collection
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from fastapi import HTTPException
+from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.catalog import (
@@ -17,6 +19,8 @@ from app.models.catalog import (
     BillingMode,
     CatalogOffer,
     ContractTerm,
+    NasDevice,
+    NasDeviceStatus,
     OfferPrice,
     OfferRadiusProfile,
     OfferVersionPrice,
@@ -37,8 +41,8 @@ from app.services import settings_spec
 from app.services.common import (
     apply_ordering,
     apply_pagination,
+    coerce_uuid,
     round_money,
-    to_decimal,
     validate_enum,
 )
 from app.services.crud import CRUDManager
@@ -59,6 +63,32 @@ def _ensure_utc(value: datetime | None) -> datetime | None:
     return value
 
 
+def _subscription_billing_mode_for_write(
+    db: Session,
+    *,
+    subscriber_id: str,
+    offer_id: str,
+    requested_mode: BillingMode | None,
+) -> BillingMode:
+    from app.services.billing_profile import (
+        BillingModeWriteRejected,
+        resolve_subscription_billing_mode_for_write,
+    )
+
+    try:
+        return resolve_subscription_billing_mode_for_write(
+            db,
+            account_id=subscriber_id,
+            offer_id=offer_id,
+            requested_mode=requested_mode,
+        )
+    except BillingModeWriteRejected as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Subscription billing mode is not aligned: {exc.reason}",
+        ) from exc
+
+
 def _add_months(value: datetime, months: int) -> datetime:
     total = value.month - 1 + months
     year = value.year + total // 12
@@ -71,7 +101,12 @@ def _resolve_billing_cycle(
     db: Session,
     offer_id: str,
     offer_version_id: str | None,
+    override: BillingCycle | None = None,
 ) -> BillingCycle:
+    # Subscription-owned cadence wins over the offer price (SOT precedence:
+    # subscription.billing_cycle -> offer/version price -> offer header -> monthly).
+    if override is not None:
+        return override
     if offer_version_id:
         version_price: OfferVersionPrice | None = (
             db.query(OfferVersionPrice)
@@ -102,7 +137,7 @@ def _compute_next_billing_at(start_at: datetime, cycle: BillingCycle) -> datetim
 
     Args:
         start_at: The reference date (subscription start or last billing date)
-        cycle: The billing cycle (daily, weekly, monthly, annual)
+        cycle: The billing cycle (daily, weekly, monthly, quarterly, annual)
 
     Returns:
         The next billing date
@@ -111,6 +146,8 @@ def _compute_next_billing_at(start_at: datetime, cycle: BillingCycle) -> datetim
         return start_at + timedelta(days=1)
     if cycle == BillingCycle.weekly:
         return start_at + timedelta(weeks=1)
+    if cycle == BillingCycle.quarterly:
+        return _add_months(start_at, 3)
     if cycle == BillingCycle.annual:
         return _add_months(start_at, 12)
     # Default to monthly
@@ -243,11 +280,13 @@ def _auto_generate_pppoe(
         db,
         str(subscription.subscriber_id),
         radius_profile_id=str(profile_id) if profile_id else None,
+        subscription_id=str(subscription.id),
     )
     active_credential = (
         db.query(AccessCredential)
         .filter(
             AccessCredential.subscriber_id == subscription.subscriber_id,
+            AccessCredential.subscription_id == subscription.id,
             AccessCredential.is_active.is_(True),
         )
         .first()
@@ -855,6 +894,8 @@ def _calculate_proration(
     db: Session,
     subscription: Subscription,
     new_offer_id: str,
+    *,
+    effective_at: datetime | None = None,
 ) -> dict:
     """Calculate proration amounts for a mid-cycle plan change.
 
@@ -867,10 +908,11 @@ def _calculate_proration(
     - days_remaining: days left in current billing cycle
     - days_in_cycle: total days in billing cycle
     """
-    now = datetime.now(UTC)
+    now = _ensure_utc(effective_at) or datetime.now(UTC)
     next_billing = subscription.next_billing_at
     if not next_billing:
         return {
+            "effective_at": now,
             "credit_amount": Decimal("0.00"),
             "charge_amount": Decimal("0.00"),
             "net_amount": Decimal("0.00"),
@@ -900,6 +942,7 @@ def _calculate_proration(
 
     if remaining_cycle_seconds <= 0:
         return {
+            "effective_at": now,
             "credit_amount": Decimal("0.00"),
             "charge_amount": Decimal("0.00"),
             "net_amount": Decimal("0.00"),
@@ -940,6 +983,7 @@ def _calculate_proration(
     days_in_cycle = max(total_cycle_seconds // 86400, 0)
 
     return {
+        "effective_at": now,
         "credit_amount": credit_amount,
         "charge_amount": charge_amount,
         "net_amount": net_amount,
@@ -951,162 +995,6 @@ def _calculate_proration(
         "old_price": round_money(old_price),
         "new_price": round_money(new_price),
     }
-
-
-def _generate_proration_invoice(
-    db: Session,
-    subscription: Subscription,
-    proration: dict,
-    old_offer_name: str,
-    new_offer_name: str,
-) -> None:
-    """Generate a proration invoice or credit note for a plan change.
-
-    For **prepaid** subscribers (already paid for the cycle):
-    - Upgrade: invoice for the price difference (remaining days)
-    - Downgrade: credit note for the overpayment (remaining days)
-
-    For **postpaid** subscribers (pay at end of cycle):
-    - The next invoice will naturally reflect the new rate
-    - Only generate an adjustment if changing mid-cycle with partial billing
-    """
-    from decimal import Decimal
-
-    # Postpaid: next invoice naturally reflects new rate — skip mid-cycle proration
-    billing_mode = getattr(subscription, "billing_mode", None)
-    if billing_mode and hasattr(billing_mode, "value"):
-        billing_mode = billing_mode.value
-    if billing_mode == "postpaid":
-        logger.info(
-            "Skipping proration for postpaid subscription %s — next invoice will reflect new rate",
-            subscription.id,
-        )
-        return
-
-    from app.models.billing import (
-        CreditNote,
-        CreditNoteStatus,
-        Invoice,
-        InvoiceLine,
-        InvoiceStatus,
-        TaxApplication,
-    )
-    from app.services import numbering
-
-    net = proration["net_amount"]
-    if abs(net) < Decimal("1.00"):
-        # Skip tiny amounts
-        return
-
-    subscriber_id = str(subscription.subscriber_id)
-    days = proration["days_remaining"]
-
-    if net > 0:
-        # Customer owes more — generate invoice
-        invoice_number = numbering.generate_number(
-            db,
-            SettingDomain.billing,
-            "invoice_number",
-            "invoice_number_enabled",
-            "invoice_number_prefix",
-            "invoice_number_padding",
-            "invoice_number_start",
-        )
-        invoice = Invoice(
-            account_id=subscriber_id,
-            invoice_number=invoice_number,
-            currency="NGN",
-            subtotal=net,
-            tax_total=Decimal("0"),
-            total=net,
-            balance_due=net,
-            status=InvoiceStatus.issued,
-            memo=f"Plan change proration: {old_offer_name} → {new_offer_name} ({days} days remaining)",
-        )
-        db.add(invoice)
-        db.flush()
-        line = InvoiceLine(
-            invoice_id=invoice.id,
-            subscription_id=subscription.id,
-            description=f"Proration: upgrade to {new_offer_name} ({days} days)",
-            quantity=Decimal("1"),
-            unit_price=net,
-            amount=net,
-            tax_application=TaxApplication.exclusive,
-            is_active=True,
-        )
-        db.add(line)
-        logger.info(
-            "Generated proration invoice %s for ₦%s (upgrade %s → %s)",
-            invoice_number,
-            net,
-            old_offer_name,
-            new_offer_name,
-        )
-    else:
-        # Customer gets credit — generate credit note
-        credit_amount = abs(net)
-        credit_number = numbering.generate_number(
-            db,
-            SettingDomain.billing,
-            "credit_note_number",
-            "credit_note_number_enabled",
-            "credit_note_number_prefix",
-            "credit_note_number_padding",
-            "credit_note_number_start",
-        )
-        credit = CreditNote(
-            account_id=subscriber_id,
-            credit_number=credit_number,
-            currency="NGN",
-            subtotal=credit_amount,
-            tax_total=Decimal("0"),
-            total=credit_amount,
-            status=CreditNoteStatus.issued,
-            memo=f"Plan change credit: {old_offer_name} → {new_offer_name} ({days} days remaining)",
-        )
-        db.add(credit)
-        logger.info(
-            "Generated proration credit %s for ₦%s (downgrade %s → %s)",
-            credit_number,
-            credit_amount,
-            old_offer_name,
-            new_offer_name,
-        )
-
-
-def _create_prepaid_plan_change_debit(
-    db: Session,
-    subscription: Subscription,
-    amount: Decimal,
-    *,
-    currency: str = "NGN",
-    old_offer_name: str,
-    new_offer_name: str,
-):
-    """Record a debit against account credit for a prepaid mid-cycle upgrade."""
-    from app.models.billing import (
-        LedgerCategory,
-        LedgerEntry,
-        LedgerEntryType,
-        LedgerSource,
-    )
-
-    debit_amount = round_money(to_decimal(amount))
-    if debit_amount <= Decimal("0.00"):
-        return None
-
-    entry = LedgerEntry(
-        account_id=subscription.subscriber_id,
-        entry_type=LedgerEntryType.debit,
-        source=LedgerSource.adjustment,
-        category=LedgerCategory.internet_service,
-        amount=debit_amount,
-        currency=currency,
-        memo=(f"Prepaid plan change charge: {old_offer_name} -> {new_offer_name}"),
-    )
-    db.add(entry)
-    return entry
 
 
 def _emit_offer_change_event(
@@ -1217,6 +1105,53 @@ def _create_service_order_for_subscription(db: Session, subscription: Subscripti
 
 class Subscriptions(ListResponseMixin):
     @staticmethod
+    def list_nonterminal_for_nas_devices(
+        db: Session,
+        nas_device_ids: Collection[object],
+    ) -> list[Subscription]:
+        """Return services that still depend on the supplied NAS inventory."""
+        if not nas_device_ids:
+            return []
+        from app.services.subscription_lifecycle_policy import (
+            TERMINAL_SERVICE_STATUSES,
+        )
+
+        return list(
+            db.scalars(
+                select(Subscription)
+                .where(Subscription.provisioning_nas_device_id.in_(nas_device_ids))
+                .where(Subscription.status.not_in(TERMINAL_SERVICE_STATUSES))
+                .order_by(Subscription.id)
+            ).all()
+        )
+
+    @staticmethod
+    def stage_provisioning_nas_assignment(
+        db: Session,
+        subscription_id: str,
+        nas_device_id: str,
+    ) -> Subscription:
+        """Stage an authoritative subscription-to-NAS relink."""
+        subscription = db.scalar(
+            select(Subscription)
+            .where(Subscription.id == coerce_uuid(subscription_id))
+            .with_for_update()
+        )
+        if subscription is None:
+            raise ValueError("Subscription not found")
+        nas = db.scalar(
+            select(NasDevice)
+            .where(NasDevice.id == coerce_uuid(nas_device_id))
+            .with_for_update()
+        )
+        if nas is None:
+            raise ValueError("Target NAS not found")
+        if not nas.is_active or nas.status != NasDeviceStatus.active:
+            raise ValueError("Target NAS is not active")
+        subscription.provisioning_nas_device_id = nas.id
+        return subscription
+
+    @staticmethod
     def create(db: Session, payload: SubscriptionCreate):
         catalog_validators.validate_subscription_links(
             db,
@@ -1262,38 +1197,44 @@ class Subscriptions(ListResponseMixin):
                 data["contract_term"] = validate_enum(
                     default_contract_term, ContractTerm, "contract_term"
                 )
-        if "billing_mode" not in fields_set:
-            # Inherit from subscriber first, then fall back to offer
-            from app.models.subscriber import Subscriber
-
-            subscriber = db.get(Subscriber, str(payload.subscriber_id))
-            if subscriber and subscriber.billing_mode:
-                data["billing_mode"] = subscriber.billing_mode
-            else:
-                offer = db.get(CatalogOffer, str(payload.offer_id))
-                data["billing_mode"] = (
-                    offer.billing_mode
-                    if offer and offer.billing_mode
-                    else BillingMode.prepaid
-                )
+        data["billing_mode"] = _subscription_billing_mode_for_write(
+            db,
+            subscriber_id=str(payload.subscriber_id),
+            offer_id=str(payload.offer_id),
+            requested_mode=(
+                data.get("billing_mode") if "billing_mode" in fields_set else None
+            ),
+        )
         if (
             "start_at" not in fields_set
             and data.get("status") == SubscriptionStatus.active
         ):
             data["start_at"] = datetime.now(UTC)
         start_at = data.get("start_at")
-        if (
-            "next_billing_at" not in fields_set
-            and start_at
-            and data.get("status") == SubscriptionStatus.active
-        ):
+        # Own the effective cadence on the subscription (SOT precedence:
+        # contracted/sales cadence -> offer price -> monthly). Snapshot it so the
+        # row is self-describing and the recurring biller reads the subscription,
+        # not the offer, for owned subs.
+        if data.get("offer_id"):
             offer_version_id = data.get("offer_version_id")
             cycle = _resolve_billing_cycle(
                 db,
                 str(data["offer_id"]),
                 str(offer_version_id) if offer_version_id else None,
+                override=data.get("billing_cycle"),
             )
-            data["next_billing_at"] = _compute_next_billing_at(start_at, cycle)
+            # Snapshot whenever no contracted cadence was given (unset, or passed
+            # as None by a caller that always forwards the field): None means
+            # "inherit the offer", which we materialize here so the row is
+            # self-describing.
+            if not data.get("billing_cycle"):
+                data["billing_cycle"] = cycle
+            if (
+                "next_billing_at" not in fields_set
+                and start_at
+                and data.get("status") == SubscriptionStatus.active
+            ):
+                data["next_billing_at"] = _compute_next_billing_at(start_at, cycle)
         if "end_at" not in fields_set and start_at and data.get("contract_term"):
             end_at = _compute_contract_end_at(start_at, data["contract_term"])
             if end_at:
@@ -1329,9 +1270,37 @@ class Subscriptions(ListResponseMixin):
         db.add(subscription)
         activating = subscription.status == SubscriptionStatus.active
         try:
+            from app.models.subscriber import Subscriber, SubscriberStatus
+            from app.services.account_lifecycle import (
+                clear_account_lifecycle_override,
+                compute_account_status,
+            )
+
+            subscriber = db.get(Subscriber, str(payload.subscriber_id))
+            if subscriber and subscriber.lifecycle_override_status is not None:
+                if subscriber.lifecycle_override_status not in {
+                    SubscriberStatus.active,
+                    SubscriberStatus.new,
+                }:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "Account lifecycle restriction must be cleared before "
+                            "creating a subscription"
+                        ),
+                    )
+                clear_account_lifecycle_override(
+                    db,
+                    str(subscriber.id),
+                    reason="Subscription created",
+                    source="catalog:subscription_create",
+                )
             if activating:
                 db.flush()
                 _auto_generate_pppoe(db, subscription)
+            else:
+                db.flush()
+            compute_account_status(db, str(payload.subscriber_id))
             db.commit()
         except Exception:
             db.rollback()
@@ -1458,15 +1427,36 @@ class Subscriptions(ListResponseMixin):
         payload: SubscriptionUpdate,
         *,
         skip_proration_artifacts: bool = False,
+        plan_change_operation_key: str | None = None,
+        plan_change_preview_fingerprint: str | None = None,
+        plan_change_effective_at: datetime | None = None,
+        plan_change_request_id: str | None = None,
+        plan_change_actor_id: str | None = None,
     ):
         subscription = db.get(Subscription, subscription_id)
         if not subscription:
             raise HTTPException(status_code=404, detail="Subscription not found")
-        # Track status before update for event emission
+        data = payload.model_dump(exclude_unset=True)
+        requested_offer_id = data.get("offer_id")
+        if (
+            requested_offer_id is not None
+            and str(requested_offer_id) != str(subscription.offer_id)
+            and subscription.status == SubscriptionStatus.active
+            and subscription.billing_mode == BillingMode.prepaid
+            and not skip_proration_artifacts
+        ):
+            # Acquire the account lock before capturing old state. A concurrent
+            # wallet debit or plan change may have committed while this request
+            # was waiting, so refresh before deriving the quote and mutation.
+            from app.services.billing._common import lock_account
+
+            lock_account(db, str(subscription.subscriber_id))
+            db.refresh(subscription)
+
+        # Track state after any lock wait for event emission and idempotency.
         previous_status = subscription.status
         previous_offer_id = subscription.offer_id
         previous_profile_id = subscription.radius_profile_id
-        data = payload.model_dump(exclude_unset=True)
         subscriber_id = str(data.get("subscriber_id", subscription.subscriber_id))
         offer_id = str(data.get("offer_id", subscription.offer_id))
         offer_version_id = data.get("offer_version_id", subscription.offer_version_id)
@@ -1495,29 +1485,137 @@ class Subscriptions(ListResponseMixin):
         )
         catalog_validators.validate_offer_active(db, offer_id)
 
+        if {"subscriber_id", "offer_id", "billing_mode"}.intersection(data):
+            data["billing_mode"] = _subscription_billing_mode_for_write(
+                db,
+                subscriber_id=subscriber_id,
+                offer_id=offer_id,
+                requested_mode=data.get("billing_mode"),
+            )
+
         # Plan change validation and proration
         offer_changing = (
             "offer_id" in data
             and str(data["offer_id"]) != str(subscription.offer_id)
             and subscription.status == SubscriptionStatus.active
         )
-        proration_result = None
         if offer_changing:
             _validate_plan_change(db, subscription, str(data["offer_id"]))
-            proration_result = _calculate_proration(
-                db, subscription, str(data["offer_id"])
-            )
-            # Use the EFFECTIVE prices (negotiated/discounted/version-aware) the
-            # subscription actually pays — already computed by _calculate_proration —
-            # to pick the upgrade vs downgrade fee. Raw catalog prices can give the
-            # wrong direction: a negotiated ₦50 → new ₦80 is an upgrade, but raw
-            # catalog ₦100 → ₦80 reads as a downgrade.
-            proration_result = _apply_plan_change_policy(
-                db,
-                proration_result,
-                old_price=proration_result.get("old_price", Decimal("0")),
-                new_price=proration_result.get("new_price", Decimal("0")),
-            )
+            is_prepaid = subscription.billing_mode == BillingMode.prepaid
+            if is_prepaid and not skip_proration_artifacts:
+                from app.services.prepaid_plan_changes import (
+                    PrepaidPlanChangePreviewRequired,
+                    PrepaidPlanChangePreviewStale,
+                    PrepaidPlanChangeRejected,
+                    prepare_immediate_prepaid_plan_change,
+                )
+
+                target_offer = db.get(CatalogOffer, str(data["offer_id"]))
+                if target_offer is None:
+                    raise HTTPException(status_code=404, detail="Offer not found")
+                old_offer = db.get(CatalogOffer, previous_offer_id)
+                try:
+                    prepared = prepare_immediate_prepaid_plan_change(
+                        db,
+                        subscription,
+                        target_offer,
+                        old_offer_name=(
+                            old_offer.name if old_offer else "Previous Plan"
+                        ),
+                        operation_key=plan_change_operation_key,
+                        effective_at=plan_change_effective_at,
+                        expected_preview_fingerprint=(plan_change_preview_fingerprint),
+                    )
+                except (
+                    PrepaidPlanChangePreviewRequired,
+                    PrepaidPlanChangePreviewStale,
+                ) as exc:
+                    raise HTTPException(status_code=409, detail=str(exc)) from exc
+                except PrepaidPlanChangeRejected as exc:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=exc.decision.rejection_detail(),
+                    ) from exc
+                logger.info(
+                    "Prepared prepaid plan change subscription=%s debit=%s credit=%s replayed=%s",
+                    subscription.id,
+                    prepared.ledger_entry is not None,
+                    prepared.credit_note is not None,
+                    prepared.replayed,
+                )
+                if plan_change_request_id:
+                    from app.models.audit import AuditActorType
+                    from app.models.subscription_change import (
+                        SubscriptionChangeRequest,
+                    )
+                    from app.services.audit_adapter import stage_audit_event
+
+                    change_request = db.get(
+                        SubscriptionChangeRequest,
+                        coerce_uuid(plan_change_request_id),
+                    )
+                    if change_request is None:
+                        raise HTTPException(
+                            status_code=409,
+                            detail="Plan-change confirmation request was not found",
+                        )
+                    if (
+                        str(change_request.subscription_id) != str(subscription.id)
+                        or str(change_request.requested_offer_id)
+                        != str(target_offer.id)
+                        or change_request.confirmation_preview_fingerprint
+                        != prepared.decision.fingerprint
+                    ):
+                        raise HTTPException(
+                            status_code=409,
+                            detail="Plan-change confirmation does not match this change",
+                        )
+                    change_request.confirmation_snapshot = (
+                        prepared.decision.as_evidence_dict()
+                    )
+                    change_request.confirmed_at = datetime.now(UTC)
+                    change_request.account_adjustment_id = (
+                        prepared.account_adjustment.id
+                        if prepared.account_adjustment
+                        else None
+                    )
+                    change_request.credit_note_id = (
+                        prepared.credit_note.id if prepared.credit_note else None
+                    )
+                    change_request.ledger_entry_id = (
+                        prepared.ledger_entry.id if prepared.ledger_entry else None
+                    )
+                    stage_audit_event(
+                        db,
+                        action="confirm_immediate_plan_change",
+                        entity_type="subscription_change_request",
+                        entity_id=str(change_request.id),
+                        actor_type=(
+                            AuditActorType.user
+                            if plan_change_actor_id
+                            else AuditActorType.system
+                        ),
+                        actor_id=plan_change_actor_id,
+                        metadata={
+                            **prepared.decision.as_evidence_dict(),
+                            "account_adjustment_id": (
+                                str(prepared.account_adjustment.id)
+                                if prepared.account_adjustment
+                                else None
+                            ),
+                            "credit_note_id": (
+                                str(prepared.credit_note.id)
+                                if prepared.credit_note
+                                else None
+                            ),
+                            "ledger_entry_id": (
+                                str(prepared.ledger_entry.id)
+                                if prepared.ledger_entry
+                                else None
+                            ),
+                            "replayed": prepared.replayed,
+                        },
+                    )
 
         # When the offer changes, refresh the snapshotted recurring price to the
         # new offer (unless an explicit unit_price was supplied) so the customer
@@ -1532,21 +1630,6 @@ class Subscriptions(ListResponseMixin):
             data["unit_price"] = _offer_recurring_price_amount(
                 db, str(data["offer_id"])
             )
-
-        # Re-derive billing_mode from the new offer on an offer change (unless one
-        # was supplied), so it can't drift out of sync — only Subscription.billing_mode
-        # gates invoicing, and a stale mode silently leaves a sub on the wrong
-        # billing path. For active subs _validate_plan_change already rejects a
-        # cross-mode change, so this is a no-op there; it closes the gap for
-        # non-active subs whose offer is switched without that guard.
-        if (
-            "offer_id" in data
-            and str(data["offer_id"]) != str(previous_offer_id)
-            and "billing_mode" not in data
-        ):
-            new_offer = db.get(CatalogOffer, str(data["offer_id"]))
-            if new_offer and new_offer.billing_mode:
-                data["billing_mode"] = new_offer.billing_mode
 
         status = data.get("status", subscription.status)
         # State-machine guard: the raw form/CRUD write path must not resurrect a
@@ -1593,9 +1676,19 @@ class Subscriptions(ListResponseMixin):
             # subscription start time if it was previously unset.
             start_at = datetime.now(UTC)
             data["start_at"] = start_at
+        # Service-change cadence transition (SOT): an explicit billing_cycle in
+        # the update becomes the new owned cadence; otherwise keep the sub's own.
+        cadence_override = data.get("billing_cycle", subscription.billing_cycle)
+        cadence_changing = (
+            "billing_cycle" in data
+            and data["billing_cycle"] != subscription.billing_cycle
+        )
         if status == SubscriptionStatus.active and start_at:
             cycle = _resolve_billing_cycle(
-                db, offer_id, str(offer_version_id) if offer_version_id else None
+                db,
+                offer_id,
+                str(offer_version_id) if offer_version_id else None,
+                override=cadence_override,
             )
             existing_next = _ensure_utc(data.get("next_billing_at") or next_billing_at)
             now = datetime.now(UTC)
@@ -1605,8 +1698,11 @@ class Subscriptions(ListResponseMixin):
             # 3. The existing value is more than 60 days in the past (stale migration data)
             stale = existing_next and (now - existing_next).days > 60
             resuming = previous_status == SubscriptionStatus.suspended
+            # A pure cadence change re-anchors on the NEXT cycle: keep the current
+            # next_billing_at so the in-flight period bills as scheduled; the new
+            # cadence applies when the biller next advances the anchor.
             if (
-                offer_changing
+                (offer_changing or cadence_changing)
                 and previous_status == SubscriptionStatus.active
                 and existing_next
                 and "next_billing_at" not in data
@@ -1694,24 +1790,6 @@ class Subscriptions(ListResponseMixin):
             and subscription.status == SubscriptionStatus.active
         ):
             _emit_offer_change_event(db, subscription, str(previous_offer_id))
-
-            # Generate proration invoice/credit for the plan change
-            if (
-                not skip_proration_artifacts
-                and proration_result
-                and proration_result.get("net_amount")
-                and proration_result.get("generate_now")
-            ):
-                old_offer = db.get(CatalogOffer, previous_offer_id)
-                new_offer = db.get(CatalogOffer, subscription.offer_id)
-                _generate_proration_invoice(
-                    db,
-                    subscription,
-                    proration_result,
-                    old_offer.name if old_offer else "Previous Plan",
-                    new_offer.name if new_offer else "New Plan",
-                )
-                db.commit()
 
         return subscription
 

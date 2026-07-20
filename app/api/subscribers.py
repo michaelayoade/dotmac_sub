@@ -1,11 +1,11 @@
 import uuid
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
-from app.db import get_db
+from app.db import finish_read_response, get_db
 from app.models.subscriber import (
-    NINVerificationStatus,
     Subscriber,
     SubscriberNINVerification,
 )
@@ -16,23 +16,24 @@ from app.schemas.subscriber import (
     AddressUpdate,
     ResellerCreate,
     ResellerRead,
+    ResellerSyncRead,
     ResellerUpdate,
     SubscriberCreate,
     SubscriberCustomFieldCreate,
     SubscriberCustomFieldRead,
     SubscriberCustomFieldUpdate,
     SubscriberRead,
+    SubscriberSyncRead,
     SubscriberUpdate,
 )
 from app.services import subscriber as subscriber_service
 from app.services.auth_dependencies import require_permission
 from app.services.nin_matching import normalize_nin, validate_nin
 from app.services.nin_verifications import (
-    get_or_create_pending_nin_verification,
+    begin_subscriber_nin_verification_committed,
     latest_nin_verification,
 )
-from app.services.queue_adapter import enqueue_task
-from app.tasks.nin_tasks import verify_nin_task
+from app.services.sync_feeds import SYNC_FEED_MAX_PAGE_SIZE
 
 router = APIRouter()
 
@@ -75,13 +76,40 @@ def create_reseller(payload: ResellerCreate, db: Session = Depends(get_db)):
 
 
 @router.get(
+    "/resellers/sync",
+    response_model=ListResponse[ResellerSyncRead],
+    tags=["resellers"],
+    dependencies=[Depends(require_permission("customer:read"))],
+)
+def sync_resellers(
+    is_active: bool | None = None,
+    updated_since: datetime | None = None,
+    limit: int = Query(
+        default=SYNC_FEED_MAX_PAGE_SIZE, ge=1, le=SYNC_FEED_MAX_PAGE_SIZE
+    ),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    return finish_read_response(
+        db,
+        subscriber_service.resellers.sync_list_response(
+            db,
+            is_active=is_active,
+            updated_since=updated_since,
+            limit=limit,
+            offset=offset,
+        ),
+    )
+
+
+@router.get(
     "/resellers/{reseller_id}",
     response_model=ResellerRead,
     tags=["resellers"],
     dependencies=[Depends(require_permission("customer:read"))],
 )
 def get_reseller(reseller_id: str, db: Session = Depends(get_db)):
-    return subscriber_service.resellers.get(db, reseller_id)
+    return finish_read_response(db, subscriber_service.resellers.get(db, reseller_id))
 
 
 @router.get(
@@ -98,8 +126,11 @@ def list_resellers(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    return subscriber_service.resellers.list_response(
-        db, is_active, order_by, order_dir, limit, offset
+    return finish_read_response(
+        db,
+        subscriber_service.resellers.list_response(
+            db, is_active, order_by, order_dir, limit, offset
+        ),
     )
 
 
@@ -137,13 +168,45 @@ def create_subscriber(payload: SubscriberCreate, db: Session = Depends(get_db)):
 
 
 @router.get(
+    "/subscribers/sync",
+    response_model=ListResponse[SubscriberSyncRead],
+    tags=["subscribers"],
+    dependencies=[Depends(require_permission("customer:read"))],
+)
+def sync_subscribers(
+    subscriber_type: str | None = None,
+    updated_since: datetime | None = Query(
+        default=None,
+        description="Inclusive updated_at watermark for integration synchronization.",
+    ),
+    limit: int = Query(
+        default=SYNC_FEED_MAX_PAGE_SIZE, ge=1, le=SYNC_FEED_MAX_PAGE_SIZE
+    ),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    return finish_read_response(
+        db,
+        subscriber_service.subscribers.sync_list_response(
+            db,
+            subscriber_type=subscriber_type,
+            updated_since=updated_since,
+            limit=limit,
+            offset=offset,
+        ),
+    )
+
+
+@router.get(
     "/subscribers/{subscriber_id}",
     response_model=SubscriberRead,
     tags=["subscribers"],
     dependencies=[Depends(require_permission("customer:read"))],
 )
 def get_subscriber(subscriber_id: str, db: Session = Depends(get_db)):
-    return subscriber_service.subscribers.get(db, subscriber_id)
+    return finish_read_response(
+        db, subscriber_service.subscribers.get(db, subscriber_id)
+    )
 
 
 @router.get(
@@ -161,15 +224,18 @@ def list_subscribers(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    return subscriber_service.subscribers.list_response(
+    return finish_read_response(
         db,
-        person_id,
-        None,
-        subscriber_type,
-        order_by,
-        order_dir,
-        limit,
-        offset,
+        subscriber_service.subscribers.list_response(
+            db,
+            person_id,
+            None,
+            subscriber_type,
+            order_by,
+            order_dir,
+            limit,
+            offset,
+        ),
     )
 
 
@@ -222,46 +288,11 @@ async def verify_subscriber_nin(
     if not validate_nin(normalized_nin):
         raise HTTPException(status_code=400, detail="Invalid NIN")
 
-    try:
-        subscriber_uuid = uuid.UUID(str(subscriber_id))
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail="Subscriber not found") from exc
-
-    subscriber = db.get(Subscriber, subscriber_uuid)
-    if subscriber is None:
-        raise HTTPException(status_code=404, detail="Subscriber not found")
-
-    verification = get_or_create_pending_nin_verification(
+    return begin_subscriber_nin_verification_committed(
         db,
-        subscriber_uuid,
-        normalized_nin,
+        subscriber_id=subscriber_id,
+        normalized_nin=normalized_nin,
     )
-    db.commit()
-
-    if verification.status == NINVerificationStatus.success:
-        # Lock once verified — identity already confirmed; no new (paid) Mono
-        # lookup. Corrections go through an explicit admin re-verify path.
-        return {"status": "already_verified", "task_id": ""}
-
-    dispatch = enqueue_task(
-        verify_nin_task,
-        args=[str(subscriber.id), normalized_nin],
-        queue="nin",
-        source="subscriber_nin_verification",
-    )
-    if not dispatch.queued:
-        verification.status = NINVerificationStatus.failed
-        verification.is_match = False
-        verification.match_score = 0
-        verification.failure_reason = (
-            dispatch.error or "NIN verification could not be queued"
-        )
-        db.commit()
-        raise HTTPException(
-            status_code=503,
-            detail=dispatch.error or "NIN verification could not be queued",
-        )
-    return {"status": "queued", "task_id": dispatch.task_id or ""}
 
 
 @router.get(
@@ -282,7 +313,9 @@ def get_subscriber_nin_verification(
     if subscriber is None:
         raise HTTPException(status_code=404, detail="Subscriber not found")
 
-    return _nin_verification_payload(latest_nin_verification(db, subscriber_uuid))
+    return finish_read_response(
+        db, _nin_verification_payload(latest_nin_verification(db, subscriber_uuid))
+    )
 
 
 @router.post(
@@ -303,7 +336,7 @@ def create_address(payload: AddressCreate, db: Session = Depends(get_db)):
     dependencies=[Depends(require_permission("customer:read"))],
 )
 def get_address(address_id: str, db: Session = Depends(get_db)):
-    return subscriber_service.addresses.get(db, address_id)
+    return finish_read_response(db, subscriber_service.addresses.get(db, address_id))
 
 
 @router.get(
@@ -320,8 +353,11 @@ def list_addresses(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    return subscriber_service.addresses.list_response(
-        db, subscriber_id, order_by, order_dir, limit, offset
+    return finish_read_response(
+        db,
+        subscriber_service.addresses.list_response(
+            db, subscriber_id, order_by, order_dir, limit, offset
+        ),
     )
 
 
@@ -367,7 +403,9 @@ def create_subscriber_custom_field(
     dependencies=[Depends(require_permission("customer:read"))],
 )
 def get_subscriber_custom_field(custom_field_id: str, db: Session = Depends(get_db)):
-    return subscriber_service.subscriber_custom_fields.get(db, custom_field_id)
+    return finish_read_response(
+        db, subscriber_service.subscriber_custom_fields.get(db, custom_field_id)
+    )
 
 
 @router.get(
@@ -385,8 +423,11 @@ def list_subscriber_custom_fields(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    return subscriber_service.subscriber_custom_fields.list_response(
-        db, subscriber_id, is_active, order_by, order_dir, limit, offset
+    return finish_read_response(
+        db,
+        subscriber_service.subscriber_custom_fields.list_response(
+            db, subscriber_id, is_active, order_by, order_dir, limit, offset
+        ),
     )
 
 

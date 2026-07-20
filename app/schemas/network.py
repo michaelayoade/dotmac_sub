@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ipaddress
 from datetime import datetime
+from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
@@ -10,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from app.models.network import (
     DeviceStatus,
     DeviceType,
+    FiberCableType,
     FiberEndpointType,
     FiberSegmentType,
     FiberStrandStatus,
@@ -37,6 +39,7 @@ class CPEDeviceBase(BaseModel):
         serialization_alias="account_id",
         description="Optional caller-supplied owner reference; not required for standalone OLT/ONT operation.",
     )
+    subscription_id: UUID | None = None
     service_address_id: UUID | None = None
     device_type: DeviceType = DeviceType.router
     status: DeviceStatus = DeviceStatus.active
@@ -58,6 +61,7 @@ class CPEDeviceUpdate(BaseModel):
     subscriber_id: UUID | None = Field(
         default=None, validation_alias="account_id", serialization_alias="account_id"
     )
+    subscription_id: UUID | None = None
     service_address_id: UUID | None = None
     device_type: DeviceType | None = None
     status: DeviceStatus | None = None
@@ -309,6 +313,7 @@ class IpPoolBase(BaseModel):
     dns_primary: str | None = Field(default=None, max_length=64)
     dns_secondary: str | None = Field(default=None, max_length=64)
     is_active: bool = True
+    nas_device_id: UUID | None = None
     olt_device_id: UUID | None = None
     vlan_id: UUID | None = None
     notes: str | None = None
@@ -328,6 +333,7 @@ class IpPoolUpdate(BaseModel):
     dns_primary: str | None = Field(default=None, max_length=64)
     dns_secondary: str | None = Field(default=None, max_length=64)
     is_active: bool | None = None
+    nas_device_id: UUID | None = None
     olt_device_id: UUID | None = None
     vlan_id: UUID | None = None
     notes: str | None = None
@@ -711,6 +717,10 @@ class OntAssignmentBase(BaseModel):
             "standalone OLT/ONT operation."
         ),
     )
+    subscription_id: UUID | None = Field(
+        default=None,
+        description="Catalog subscription whose access service is delivered by this ONT.",
+    )
     service_address_id: UUID | None = None
     assigned_at: datetime | None = None
     active: bool = True
@@ -934,11 +944,28 @@ class FdhCabinetRead(FdhCabinetBase):
 class SplitterBase(BaseModel):
     fdh_id: UUID | None = None
     name: str = Field(min_length=1, max_length=160)
-    splitter_ratio: str | None = Field(default=None, max_length=40)
+    splitter_ratio: str = Field(min_length=3, max_length=40)
     input_ports: int = Field(default=1, ge=1)
     output_ports: int = Field(default=8, ge=1)
     notes: str | None = None
     is_active: bool = True
+
+    @model_validator(mode="after")
+    def _validate_declared_capacity(self) -> SplitterBase:
+        parts = self.splitter_ratio.strip().split(":")
+        if len(parts) != 2 or not all(part.isdigit() for part in parts):
+            raise ValueError("splitter_ratio must use the exact input:output form")
+        ratio_inputs, ratio_outputs = (int(part) for part in parts)
+        if "input_ports" not in self.model_fields_set:
+            self.input_ports = ratio_inputs
+        if "output_ports" not in self.model_fields_set:
+            self.output_ports = ratio_outputs
+        expected = f"{self.input_ports}:{self.output_ports}"
+        if self.is_active and self.splitter_ratio.strip() != expected:
+            raise ValueError(
+                f"splitter_ratio must equal declared input/output capacity {expected}"
+            )
+        return self
 
 
 class SplitterCreate(SplitterBase):
@@ -959,6 +986,7 @@ class SplitterRead(SplitterBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
+    insertion_loss_db: Decimal | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -1083,6 +1111,7 @@ class FiberStrandRead(FiberStrandBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
+    segment_id: UUID | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -1220,6 +1249,8 @@ class FiberTerminationPointRead(FiberTerminationPointBase):
 class FiberSegmentBase(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     segment_type: FiberSegmentType = FiberSegmentType.distribution
+    cable_type: FiberCableType | None = None
+    fiber_count: int | None = Field(default=None, ge=1)
     from_point_id: UUID | None = None
     to_point_id: UUID | None = None
     fiber_strand_id: UUID | None = None
@@ -1235,6 +1266,8 @@ class FiberSegmentCreate(FiberSegmentBase):
 class FiberSegmentUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=160)
     segment_type: FiberSegmentType | None = None
+    cable_type: FiberCableType | None = None
+    fiber_count: int | None = Field(default=None, ge=1)
     from_point_id: UUID | None = None
     to_point_id: UUID | None = None
     fiber_strand_id: UUID | None = None

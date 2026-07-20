@@ -39,7 +39,7 @@ SyncStatus = Literal["synced", "reconciling", "out_of_sync"]
                        writes; sweep mode keeps retrying.
 """
 
-WanMode = Literal["pppoe", "bridge"]
+WanMode = Literal["pppoe", "dhcp", "static", "bridge"]
 PppoeProvisioningMethod = Literal["omci", "tr069", "auto"]
 WriteSurface = Literal["olt", "acs"]
 ObserveSurface = Literal["olt", "acs"]
@@ -47,6 +47,43 @@ ReconcileMode = Literal["sync", "sweep", "bootstrap"]
 
 
 # ── Desired state ───────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class Tr181WanParameterPaths:
+    """Resolved model-specific CWMP paths for one TR-181 WAN instance."""
+
+    ip_enable: str
+    dhcp_enable: str
+    ip_address: str
+    subnet_mask: str
+    gateway: str
+    dns_primary: str
+    dns_secondary: str
+    nat_enable: str
+    vlan_enable: str
+    vlan_id: str
+
+
+@dataclass(frozen=True)
+class Tr069WifiParameterPaths:
+    """Resolved model-specific CWMP paths for the managed WiFi instance."""
+
+    enabled: str
+    ssid: str
+    psk_path: str
+    channel: str
+    security_mode: str
+
+
+@dataclass(frozen=True)
+class Tr069RemoteAccessParameterPaths:
+    """Resolved model-specific CWMP paths for WAN support access."""
+
+    ssh_enabled: str
+    ssh_port: str
+    telnet_enabled: str
+    telnet_port: str
 
 
 @dataclass(frozen=True)
@@ -127,6 +164,28 @@ class OntDesiredState:
     wan_uprate_kbps: int | None
     wan_downrate_kbps: int | None
 
+    # Huawei models span TR-098 and TR-181. The root selects model-specific
+    # ACS paths for settings such as IPv6.
+    tr069_data_model_root: str | None = None
+    wan_static_ip: str | None = None
+    wan_static_subnet: str | None = None
+    wan_static_gateway: str | None = None
+    wan_static_dns: str | None = None
+    wan_static_ip_is_public: bool | None = None
+    tr181_wan_paths: Tr181WanParameterPaths | None = None
+    acs_url: str | None = None
+    acs_username: str | None = None
+    acs_password_ref: str | None = None
+    wifi_enabled: bool | None = None
+    wifi_channel: int | None = None
+    wifi_security_mode: str | None = None
+    wifi_paths: Tr069WifiParameterPaths | None = None
+    wan_remote_access_enabled: bool = False
+    wan_remote_access_expires_at: datetime | None = None
+    wan_remote_access_source_cidrs: tuple[str, ...] = ()
+    wan_remote_access_ssh_port: int = 22
+    remote_access_paths: Tr069RemoteAccessParameterPaths | None = None
+
 
 # ── Observed state ──────────────────────────────────────────────────────────
 
@@ -152,6 +211,7 @@ class OltObservedFields:
     olt_service_profile_id: int | None
     # Each service-port entry: {index, vlan, gem, state}. Tuple to keep frozen.
     olt_service_ports: tuple[dict[str, Any], ...]
+    olt_tr069_profile_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -189,6 +249,28 @@ class AcsObservedFields:
     acs_observed_wan_wcd_index: int | None
     acs_observed_wan_instance_index: int | None
     acs_observed_wan_ppp_locations: tuple[tuple[int, int], ...]
+    acs_data_model_root: str | None = None
+    acs_observed_ipv6_enabled: bool | None = None
+    acs_observed_wan_ip_enable: bool | None = None
+    acs_observed_wan_addressing_type: str | None = None
+    acs_observed_wan_ip_address: str | None = None
+    acs_observed_wan_subnet_mask: str | None = None
+    acs_observed_wan_gateway: str | None = None
+    acs_observed_wan_dns_servers: str | None = None
+    acs_observed_dhcpv6_enabled: bool | None = None
+    acs_observed_dhcpv6_request_prefixes: bool | None = None
+    acs_observed_ra_enabled: bool | None = None
+    acs_observed_url: str | None = None
+    acs_observed_username: str | None = None
+    acs_observed_password_set: bool | None = None
+    acs_observed_wifi_enabled: bool | None = None
+    acs_observed_wifi_channel: int | None = None
+    acs_observed_wifi_security_mode: str | None = None
+    acs_observed_wifi_instance_index: int | None = None
+    acs_observed_remote_ssh_enabled: bool | None = None
+    acs_observed_remote_ssh_port: int | None = None
+    acs_observed_remote_telnet_enabled: bool | None = None
+    acs_observed_remote_telnet_port: int | None = None
 
 
 @dataclass(frozen=True)
@@ -246,6 +328,7 @@ class AppliedAction:
     old_value: Any
     new_value: Any
     duration_ms: int
+    evidence: dict[str, Any] | None = None
 
 
 # ── Failure reasons ─────────────────────────────────────────────────────────
@@ -295,6 +378,7 @@ class ReconcileFailure:
 
     reason: str
     message: str
+    evidence: dict[str, Any] | None = None
 
 
 # ── Final reconcile result ──────────────────────────────────────────────────

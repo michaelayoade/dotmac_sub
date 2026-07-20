@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 from datetime import date, timedelta
+from decimal import Decimal
+from urllib.parse import urlencode
 
 from pydantic import ValidationError
 from sqlalchemy import case, func, select
@@ -19,6 +21,7 @@ from app.models.catalog import (
     ContractTerm,
     GuaranteedSpeedType,
     NasVendor,
+    OfferPrice,
     OfferStatus,
     PlanCategory,
     PriceBasis,
@@ -45,8 +48,9 @@ from app.schemas.catalog import (
     RadiusProfileCreate,
     RadiusProfileUpdate,
 )
+from app.schemas.status_presentation import StatusTone
 from app.services import catalog as catalog_service
-from app.services import settings_spec
+from app.services import catalog_billing_governance, settings_spec
 from app.services.audit_helpers import (
     build_audit_activities,
     diff_dicts,
@@ -59,6 +63,7 @@ from app.services.network.profile_sync import (
     enqueue_offer_profile_sync_tasks_for_existing_bundles,
 )
 from app.services.radius import reconcile_subscription_connectivity
+from app.services.ui_contracts import Kpi, StateValue
 
 logger = logging.getLogger(__name__)
 
@@ -149,8 +154,19 @@ def get_offer_availability(
     }
 
 
-def default_offer_form() -> dict[str, object]:
-    """Return default values for offer create form."""
+def default_offer_form(db: Session | None = None) -> dict[str, object]:
+    """Return default values for offer create form.
+
+    Visibility flags default OFF unless the ``new_offer_visible_by_default``
+    catalog setting opts in: a fresh offer silently landing on the customer
+    portal is a real incident pattern (~40 e2e offers went customer-visible).
+    """
+    visible_default = False
+    if db is not None:
+        raw = settings_spec.resolve_value(
+            db, SettingDomain.catalog, "new_offer_visible_by_default"
+        )
+        visible_default = str(raw).lower() in {"true", "1", "on", "yes"}
     return {
         "name": "",
         "code": "",
@@ -176,8 +192,8 @@ def default_offer_form() -> dict[str, object]:
         "guaranteed_speed": GuaranteedSpeedType.none.value,
         "aggregation": "",
         "priority": "",
-        "available_for_services": True,
-        "show_on_customer_portal": True,
+        "available_for_services": visible_default,
+        "show_on_customer_portal": visible_default,
         "olt_profile_auto_sync_enabled": False,
         "plan_category": PlanCategory.internet.value,
         "hide_on_admin_portal": False,
@@ -526,7 +542,14 @@ def backfill_offer_radius_profiles(
     return {"offers_processed": created_or_updated, "links_updated": linked}
 
 
-def create_recurring_price(db: Session, offer_id: str, offer: dict[str, object]):
+def create_recurring_price(
+    db: Session,
+    offer_id: str,
+    offer: dict[str, object],
+    *,
+    actor_id: str | None = None,
+    actor_type: str | None = None,
+):
     """Create recurring offer price if amount is provided."""
     if not offer.get("price_amount"):
         return None
@@ -543,11 +566,21 @@ def create_recurring_price(db: Session, offer_id: str, offer: dict[str, object])
     if offer.get("price_description"):
         price_payload["description"] = offer["price_description"]
     return catalog_service.offer_prices.create(
-        db=db, payload=OfferPriceCreate.model_validate(price_payload)
+        db=db,
+        payload=OfferPriceCreate.model_validate(price_payload),
+        actor_id=actor_id,
+        actor_type=actor_type,
     )
 
 
-def upsert_recurring_price(db: Session, offer_id: str, offer: dict[str, object]):
+def upsert_recurring_price(
+    db: Session,
+    offer_id: str,
+    offer: dict[str, object],
+    *,
+    actor_id: str | None = None,
+    actor_type: str | None = None,
+):
     """Create/update recurring offer price if amount is provided."""
     if not offer.get("price_amount"):
         return None, None
@@ -567,11 +600,16 @@ def upsert_recurring_price(db: Session, offer_id: str, offer: dict[str, object])
             db=db,
             price_id=str(offer["price_id"]),
             payload=OfferPriceUpdate.model_validate(price_payload),
+            actor_id=actor_id,
+            actor_type=actor_type,
         )
         return updated, "updated"
     price_payload["offer_id"] = offer_id
     created = catalog_service.offer_prices.create(
-        db=db, payload=OfferPriceCreate.model_validate(price_payload)
+        db=db,
+        payload=OfferPriceCreate.model_validate(price_payload),
+        actor_id=actor_id,
+        actor_type=actor_type,
     )
     return created, "created"
 
@@ -932,9 +970,74 @@ def offer_form_context(
     return context
 
 
+def _overview_cohort_url(*, status: str | None = None) -> str:
+    """Drill-down into the offer overview list filtered exactly as the tile counts."""
+    query = urlencode([("status", status)]) if status else ""
+    return f"/admin/catalog?{query}" if query else "/admin/catalog"
+
+
+def _subscriptions_cohort_url(*, status: str | None = None) -> str:
+    """Drill-down into the subscriptions list filtered exactly as the tile counts."""
+    query = urlencode([("status", status)]) if status else ""
+    return (
+        f"/admin/catalog/subscriptions?{query}"
+        if query
+        else "/admin/catalog/subscriptions"
+    )
+
+
+def _stat_int(stats: dict[str, object], key: str) -> int:
+    value = stats.get(key)
+    if isinstance(value, (int, float, Decimal, str)):
+        return int(value)
+    return 0
+
+
+def catalog_overview_kpis(stats: dict[str, object]) -> dict[str, Kpi]:
+    """Project the catalog overview headline counts as KPI-parity tiles.
+
+    Each ``cohort_url`` drills into the exact filtered list that produced the
+    number, so a tile total and the list it opens can never diverge. The
+    subscription tile crosses into the subscriptions list, where its ``active``
+    filter matches the count query.
+    """
+    return {
+        "active_offers": Kpi(
+            label="Active Offers",
+            value=StateValue.present(_stat_int(stats, "active_count")),
+            cohort_url=_overview_cohort_url(status=OfferStatus.active.value),
+            tone=StatusTone.positive,
+        ),
+        "total_plans": Kpi(
+            label="Total Plans",
+            value=StateValue.present(_stat_int(stats, "total_count")),
+            cohort_url=_overview_cohort_url(),
+        ),
+        "active_subscriptions": Kpi(
+            label="Active Subscriptions",
+            value=StateValue.present(_stat_int(stats, "total_subscriptions")),
+            cohort_url=_subscriptions_cohort_url(
+                status=SubscriptionStatus.active.value
+            ),
+            tone=StatusTone.info,
+        ),
+        "archived": Kpi(
+            label="Archived",
+            value=StateValue.present(_stat_int(stats, "archived_count")),
+            cohort_url=_overview_cohort_url(status=OfferStatus.archived.value),
+        ),
+    }
+
+
 def dashboard_stats(db: Session) -> dict[str, object]:
-    """Return catalog dashboard KPIs and chart data from core service."""
-    return catalog_service.offers.get_dashboard_stats(db)
+    """Return catalog dashboard KPIs and chart data from core service.
+
+    The four headline counts are projected as ``Kpi`` contracts under ``kpis``;
+    chart datasets stay as raw dicts for the client-side chart renderers.
+    """
+    stats = catalog_service.offers.get_dashboard_stats(db)
+    stats["kpis"] = catalog_overview_kpis(stats)
+    return stats
 
 
 def overview_page_data(
@@ -1075,7 +1178,12 @@ def create_offer_with_audit(
     Returns the created offer ORM object.
     """
     payload = create_offer_payload(offer)
-    created_offer = catalog_service.offers.create(db=db, payload=payload)
+    created_offer = catalog_service.offers.create(
+        db=db,
+        payload=payload,
+        actor_id=actor_id,
+        actor_type="user",
+    )
 
     log_audit_event(
         db=db,
@@ -1107,7 +1215,13 @@ def create_offer_with_audit(
         )
 
     if offer["price_amount"]:
-        created_price = create_recurring_price(db, str(created_offer.id), offer)
+        created_price = create_recurring_price(
+            db,
+            str(created_offer.id),
+            offer,
+            actor_id=actor_id,
+            actor_type="user",
+        )
         if created_price:
             log_audit_event(
                 db=db,
@@ -1138,11 +1252,40 @@ def update_offer_with_audit(
 
     Returns the updated offer ORM object.
     """
+    price_id = str(offer_data.get("price_id") or "").strip()
+    if price_id and offer_data.get("price_amount"):
+        existing_price = db.get(OfferPrice, coerce_uuid(price_id))
+        if existing_price is not None:
+            candidate_price = {
+                "price_type": str(offer_data.get("price_type") or "recurring"),
+                "amount": offer_data["price_amount"],
+                "currency": offer_data["price_currency"],
+                "billing_cycle": offer_data.get("price_billing_cycle"),
+                # The edit form represents an unset optional unit as "" while
+                # the database stores it as NULL. Normalize before governance
+                # comparison so a non-financial offer edit does not look like
+                # a protected price-unit mutation.
+                "unit": offer_data.get("price_unit") or None,
+            }
+            price_changes = catalog_billing_governance.billing_field_changes(
+                existing_price,
+                candidate_price,
+            )
+            catalog_billing_governance.assert_offer_price_update_safe(
+                db,
+                existing_price,
+                price_changes,
+            )
+
     before_snapshot = model_to_dict(existing_offer)
     previous_profile_id = get_linked_radius_profile_id(db, offer_id)
     payload = update_offer_payload(offer_data)
     updated_offer = catalog_service.offers.update(
-        db=db, offer_id=offer_id, payload=payload
+        db=db,
+        offer_id=offer_id,
+        payload=payload,
+        actor_id=actor_id,
+        actor_type="user",
     )
     after_snapshot = model_to_dict(updated_offer)
     changes = diff_dicts(before_snapshot, after_snapshot)
@@ -1186,7 +1329,13 @@ def update_offer_with_audit(
         addon_configs=addon_configs,
     )
 
-    price, price_action = upsert_recurring_price(db, offer_id, offer_data)
+    price, price_action = upsert_recurring_price(
+        db,
+        offer_id,
+        offer_data,
+        actor_id=actor_id,
+        actor_type="user",
+    )
     if price and price_action:
         log_audit_event(
             db=db,

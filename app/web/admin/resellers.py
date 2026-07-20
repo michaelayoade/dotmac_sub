@@ -1,5 +1,7 @@
 """Admin reseller portal web routes."""
 
+from urllib.parse import quote_plus
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -115,16 +117,23 @@ def reseller_impersonate(
 @router.get(
     "",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("customer:read"))],
+    dependencies=[Depends(require_permission("reseller:read"))],
 )
 def resellers_list(
     request: Request,
     page: int = Query(1, ge=1),
     per_page: int = Query(25, ge=10, le=200),
+    status: str = Query("active"),
+    notice: str | None = Query(None),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     context = _base_context(request, db, active_page="resellers")
-    context.update(reseller_svc.list_page_context(db, page=page, per_page=per_page))
+    context.update(
+        reseller_svc.list_page_context(
+            db, page=page, per_page=per_page, status_filter=status
+        )
+    )
+    context["notice"] = notice
     return templates.TemplateResponse("admin/resellers/index.html", context)
 
 
@@ -147,7 +156,7 @@ def reseller_edit(
 @router.post(
     "",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("customer:write"))],
+    dependencies=[Depends(require_permission("reseller:write"))],
 )
 def reseller_create(
     request: Request,
@@ -170,7 +179,7 @@ def reseller_create(
             "admin/resellers/reseller_form.html", context, status_code=400
         )
     try:
-        reseller_svc.create_reseller_from_form(db, form)
+        reseller, invite_note = reseller_svc.create_reseller_from_form(db, form)
     except Exception as exc:
         db.rollback()
         context = _base_context(request, db, active_page="resellers")
@@ -184,13 +193,18 @@ def reseller_create(
         return templates.TemplateResponse(
             "admin/resellers/reseller_form.html", context, status_code=400
         )
+    if invite_note and "could not" in invite_note.lower():
+        return RedirectResponse(
+            url=f"/admin/resellers/{reseller.id}?notice={quote_plus(invite_note)}",
+            status_code=303,
+        )
     return RedirectResponse(url="/admin/resellers", status_code=303)
 
 
 @router.post(
     "/{reseller_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("customer:write"))],
+    dependencies=[Depends(require_permission("reseller:write"))],
 )
 def reseller_update(
     reseller_id: str,
@@ -206,6 +220,7 @@ def reseller_update(
         context = _base_context(request, db, active_page="resellers")
         context.update(
             reseller_svc.update_form_error_context(
+                db,
                 reseller_id=reseller_id,
                 payload=payload,
                 error=_error_message(exc, "Unable to update reseller."),
@@ -217,12 +232,43 @@ def reseller_update(
     return RedirectResponse(url="/admin/resellers", status_code=303)
 
 
+@router.post(
+    "/{reseller_id}/status",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("reseller:write"))],
+)
+def reseller_status_update(
+    reseller_id: str,
+    request: Request,
+    form: FormData = Depends(parse_form_data),
+    db: Session = Depends(get_db),
+):
+    is_active = _form_str(form, "status").strip().lower() == "active"
+    return_status = _form_str(form, "return_status", "all").strip() or "all"
+    page = _form_int(form, "page", 1)
+    per_page = _form_int(form, "per_page", 25)
+    try:
+        reseller_svc.update_reseller_active_status(
+            db, reseller_id=reseller_id, is_active=is_active
+        )
+    except Exception:
+        db.rollback()
+        raise
+    return RedirectResponse(
+        url=(
+            f"/admin/resellers?status={return_status}&page={page}&per_page={per_page}"
+        ),
+        status_code=303,
+    )
+
+
 @router.get("/{reseller_id}", response_class=HTMLResponse)
 def reseller_detail(
     reseller_id: str,
     request: Request,
     page: int = Query(1, ge=1),
     per_page: int = Query(25, ge=10, le=200),
+    notice: str | None = Query(None),
     db: Session = Depends(get_db),
 ):
     detail = reseller_svc.get_reseller_detail_context(
@@ -232,16 +278,20 @@ def reseller_detail(
         per_page=per_page,
     )
     if not detail:
-        return RedirectResponse(url="/admin/resellers", status_code=303)
+        return RedirectResponse(
+            url="/admin/resellers?notice=" + quote_plus("Reseller not found."),
+            status_code=303,
+        )
     context = _base_context(request, db, active_page="resellers")
     context.update(detail)
+    context["notice"] = notice
     return templates.TemplateResponse("admin/resellers/detail.html", context)
 
 
 @router.post(
     "/{reseller_id}/users/link",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("customer:write"))],
+    dependencies=[Depends(require_permission("reseller:write"))],
 )
 def reseller_user_link(
     reseller_id: str,
@@ -250,7 +300,7 @@ def reseller_user_link(
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     page = _form_int(form, "page", 1)
-    per_page = _form_int(form, "per_page", 50)
+    per_page = _form_int(form, "per_page", 25)
     subscriber_id = (
         _form_str(form, "subscriber_id").strip() or _form_str(form, "person_id").strip()
     )
@@ -282,7 +332,7 @@ def reseller_user_link(
 @router.post(
     "/{reseller_id}/users/create",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("customer:write"))],
+    dependencies=[Depends(require_permission("reseller:write"))],
 )
 def reseller_user_create(
     reseller_id: str,
@@ -291,12 +341,13 @@ def reseller_user_create(
     db: Session = Depends(get_db),
 ):
     page = _form_int(form, "page", 1)
-    per_page = _form_int(form, "per_page", 50)
+    per_page = _form_int(form, "per_page", 25)
     fields = {
         "first_name": _form_str(form, "first_name").strip(),
         "last_name": _form_str(form, "last_name").strip(),
         "email": _form_str(form, "email").strip(),
         "username": _form_str(form, "email").strip(),
+        "role": _form_str(form, "role").strip() or None,
     }
     if not all([fields["first_name"], fields["last_name"], fields["email"]]):
         detail = reseller_svc.get_reseller_detail_context(
@@ -319,6 +370,7 @@ def reseller_user_create(
             last_name=fields["last_name"],
             email=fields["email"],
             username=fields["username"],
+            role=fields["role"],
         )
     except Exception as exc:
         db.rollback()

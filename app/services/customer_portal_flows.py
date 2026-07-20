@@ -27,7 +27,6 @@ from app.services.customer_portal_flow_common import (
     _resolve_next_billing_date,
 )
 from app.services.customer_portal_flow_payments import (
-    _resolve_payment_provider,
     complete_invoice_payment_intent,
     create_invoice_payment_intent,
     create_topup_intent,
@@ -77,7 +76,6 @@ __all__ = [
     "cancel_customer_arrangement",
     "get_payment_arrangement_detail",
     "get_invoice_detail",
-    "_resolve_payment_provider",
     "complete_invoice_payment_intent",
     "create_invoice_payment_intent",
     "create_topup_intent",

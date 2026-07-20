@@ -18,6 +18,7 @@ from app.services.network.olt_hardware_crud import (
     OltSfpModules,
     OltShelves,
 )
+from app.services.network.ont_assignment_commands import OntAssignmentCommands
 from app.services.network.ont_assignment_crud import OntAssignments
 from app.services.network.ont_crud import OntUnits
 from app.services.network.pon_crud import PonPorts
@@ -46,7 +47,11 @@ _validator = _default_subscriber_validator()
 olt_devices = OLTDevices()
 pon_ports = PonPorts()
 ont_units = OntUnits(subscriber_validator=_validator)
-ont_assignments = OntAssignments(subscriber_validator=_validator)
+ont_assignment_commands = OntAssignmentCommands(subscriber_validator=_validator)
+ont_assignments = OntAssignments(
+    subscriber_validator=_validator,
+    command_owner=ont_assignment_commands,
+)
 olt_shelves = OltShelves()
 olt_cards = OltCards()
 olt_card_ports = OltCardPorts()

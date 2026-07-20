@@ -4,24 +4,40 @@ from __future__ import annotations
 
 import json
 import logging
+import secrets
+from datetime import UTC, datetime, timedelta
 from typing import cast
 from urllib.parse import urlparse
 from uuid import UUID
 
 import httpx
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
-from app.models.webhook import WebhookDelivery, WebhookEndpoint
+from app.models.integration import (
+    IntegrationJob,
+    IntegrationRun,
+    IntegrationRunStatus,
+    IntegrationTarget,
+)
+from app.models.webhook import WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint
 from app.schemas.billing import PaymentProviderCreate
 from app.schemas.connector import ConnectorConfigCreate, ConnectorConfigUpdate
 from app.schemas.integration import IntegrationJobCreate, IntegrationTargetCreate
-from app.schemas.webhook import WebhookEndpointCreate, WebhookSubscriptionCreate
+from app.schemas.webhook import (
+    WebhookDeliveryCreate,
+    WebhookEndpointCreate,
+    WebhookEndpointUpdate,
+    WebhookSubscriptionCreate,
+)
 from app.services import billing as billing_service
 from app.services import connector as connector_service
 from app.services import integration as integration_service
 from app.services import webhook as webhook_service
 from app.services.common import validate_enum
+from app.services.credential_crypto import encrypt_credential
 from app.services.integrations import registry as integration_registry
+from app.services.queue_adapter import enqueue_task
 from app.validators.forms import parse_uuid
 
 logger = logging.getLogger(__name__)
@@ -448,40 +464,101 @@ def _connector_registration_meta(connector) -> dict[str, object]:
     return {}
 
 
-def _connector_health(db: Session, connector_id: str) -> tuple[str, dict[str, int]]:
-    endpoints = (
-        db.query(WebhookEndpoint)
-        .filter(
-            WebhookEndpoint.connector_config_id
-            == parse_uuid(connector_id, "connector_id")
+def _latest_run_by_connector(
+    db: Session, connector_ids: list[UUID]
+) -> dict[str, tuple[str, datetime | None]]:
+    """Most recent completed IntegrationRun per connector, one grouped query."""
+    if not connector_ids:
+        return {}
+    rank = (
+        func.row_number()
+        .over(
+            partition_by=IntegrationTarget.connector_config_id,
+            order_by=IntegrationRun.started_at.desc(),
         )
+        .label("rank")
+    )
+    ranked = (
+        db.query(
+            IntegrationTarget.connector_config_id.label("connector_id"),
+            IntegrationRun.status.label("status"),
+            IntegrationRun.started_at.label("started_at"),
+            rank,
+        )
+        .join(IntegrationJob, IntegrationJob.target_id == IntegrationTarget.id)
+        .join(IntegrationRun, IntegrationRun.job_id == IntegrationJob.id)
+        .filter(IntegrationTarget.connector_config_id.in_(connector_ids))
+        .filter(IntegrationRun.status != IntegrationRunStatus.running)
+        .subquery()
+    )
+    rows = (
+        db.query(ranked.c.connector_id, ranked.c.status, ranked.c.started_at)
+        .filter(ranked.c.rank == 1)
         .all()
     )
-    endpoint_ids = [endpoint.id for endpoint in endpoints]
-    if not endpoint_ids:
-        return "green", {"calls": 0, "failed": 0}
+    return {
+        str(row.connector_id): (
+            getattr(row.status, "value", str(row.status)),
+            row.started_at,
+        )
+        for row in rows
+    }
 
-    deliveries = (
-        db.query(WebhookDelivery)
-        .filter(WebhookDelivery.endpoint_id.in_(endpoint_ids))
-        .order_by(WebhookDelivery.created_at.desc())
-        .limit(100)
+
+def _webhook_stats_by_connector(
+    db: Session, connector_ids: list[UUID]
+) -> dict[str, tuple[int, int]]:
+    """(total, failed) webhook deliveries per connector over the last 7 days."""
+    if not connector_ids:
+        return {}
+    since = datetime.now(UTC) - timedelta(days=7)
+    rows = (
+        db.query(
+            WebhookEndpoint.connector_config_id.label("connector_id"),
+            func.count(WebhookDelivery.id).label("total"),
+            func.sum(
+                case(
+                    (WebhookDelivery.status == WebhookDeliveryStatus.failed, 1),
+                    else_=0,
+                )
+            ).label("failed"),
+        )
+        .join(WebhookDelivery, WebhookDelivery.endpoint_id == WebhookEndpoint.id)
+        .filter(WebhookEndpoint.connector_config_id.in_(connector_ids))
+        .filter(WebhookDelivery.created_at >= since)
+        .group_by(WebhookEndpoint.connector_config_id)
         .all()
     )
-    total = len(deliveries)
-    failed = sum(
-        1
-        for item in deliveries
-        if getattr(item.status, "value", str(item.status)) == "failed"
-    )
-    if total == 0:
-        return "green", {"calls": 0, "failed": 0}
-    failure_ratio = failed / total
-    if failure_ratio >= 0.35:
-        return "red", {"calls": total, "failed": failed}
-    if failure_ratio >= 0.10:
-        return "amber", {"calls": total, "failed": failed}
-    return "green", {"calls": total, "failed": failed}
+    return {
+        str(row.connector_id): (int(row.total or 0), int(row.failed or 0))
+        for row in rows
+    }
+
+
+def _connector_health(
+    last_run: tuple[str, datetime | None] | None,
+    webhook_stats: tuple[int, int] | None,
+) -> tuple[str, dict[str, object]]:
+    """Health from real signals only: healthy / degraded / unknown.
+
+    Signals are the most recent completed IntegrationRun and recent webhook
+    delivery failures; a connector with neither is "unknown", never green.
+    """
+    calls, failed = webhook_stats or (0, 0)
+    stats: dict[str, object] = {
+        "calls": calls,
+        "failed": failed,
+        "last_run_status": last_run[0] if last_run else None,
+        "last_run_at": last_run[1] if last_run else None,
+    }
+    degraded = bool(last_run and last_run[0] == "failed")
+    if calls and (failed / calls) >= 0.10:
+        degraded = True
+    if degraded:
+        return "degraded", stats
+    if last_run or calls:
+        return "healthy", stats
+    return "unknown", stats
 
 
 def build_installed_integrations_data(db: Session) -> dict[str, object]:
@@ -494,10 +571,17 @@ def build_installed_integrations_data(db: Session) -> dict[str, object]:
         limit=1000,
         offset=0,
     )
+    connector_ids = [connector.id for connector in connectors]
+    connector_names = {str(connector.id): connector.name for connector in connectors}
+    last_runs = _latest_run_by_connector(db, connector_ids)
+    webhook_stats = _webhook_stats_by_connector(db, connector_ids)
     rows: list[dict[str, object]] = []
     for connector in connectors:
         registration = _connector_registration_meta(connector)
-        health, health_stats = _connector_health(db, str(connector.id))
+        health, health_stats = _connector_health(
+            last_runs.get(str(connector.id)),
+            webhook_stats.get(str(connector.id)),
+        )
         rows.append(
             {
                 "connector": connector,
@@ -507,13 +591,11 @@ def build_installed_integrations_data(db: Session) -> dict[str, object]:
                     registration.get("integration_type")
                     or connector.connector_type.value
                 ),
-                "relay_to_portal": bool(registration.get("relay_to_portal", False)),
                 "health": health,
                 "health_stats": health_stats,
             }
         )
 
-    connector_ids = [row["connector"].id for row in rows]
     endpoint_map = {
         str(endpoint.id): str(endpoint.connector_config_id)
         for endpoint in db.query(WebhookEndpoint)
@@ -539,6 +621,7 @@ def build_installed_integrations_data(db: Session) -> dict[str, object]:
         activities.append(
             {
                 "connector_id": connector_id,
+                "connector_name": connector_names.get(connector_id, connector_id),
                 "timestamp": delivery.created_at,
                 "event_type": getattr(
                     delivery.event_type, "value", str(delivery.event_type)
@@ -553,6 +636,41 @@ def build_installed_integrations_data(db: Session) -> dict[str, object]:
                 "status": getattr(delivery.status, "value", str(delivery.status)),
             }
         )
+    if connector_ids:
+        run_rows = (
+            db.query(
+                IntegrationRun,
+                IntegrationJob.name.label("job_name"),
+                IntegrationTarget.connector_config_id.label("connector_id"),
+            )
+            .join(IntegrationJob, IntegrationRun.job_id == IntegrationJob.id)
+            .join(IntegrationTarget, IntegrationJob.target_id == IntegrationTarget.id)
+            .filter(IntegrationTarget.connector_config_id.in_(connector_ids))
+            .order_by(IntegrationRun.started_at.desc())
+            .limit(50)
+            .all()
+        )
+        for run, job_name, run_connector_id in run_rows:
+            duration_ms = None
+            if run.finished_at is not None and run.started_at is not None:
+                duration_ms = int(
+                    (run.finished_at - run.started_at).total_seconds() * 1000
+                )
+            run_connector_key = str(run_connector_id)
+            activities.append(
+                {
+                    "connector_id": run_connector_key,
+                    "connector_name": connector_names.get(
+                        run_connector_key, run_connector_key
+                    ),
+                    "timestamp": run.started_at,
+                    "event_type": f"job: {job_name}",
+                    "status_code": None,
+                    "response_time_ms": duration_ms,
+                    "status": getattr(run.status, "value", str(run.status)),
+                }
+            )
+    activities.sort(key=lambda item: item["timestamp"], reverse=True)
     activities = activities[:50]
     return {
         "integrations": rows,
@@ -560,7 +678,7 @@ def build_installed_integrations_data(db: Session) -> dict[str, object]:
         "stats": {
             "total": len(rows),
             "enabled": sum(1 for row in rows if row["connector"].is_active),
-            "healthy": sum(1 for row in rows if row["health"] == "green"),
+            "healthy": sum(1 for row in rows if row["health"] == "healthy"),
         },
     }
 
@@ -576,23 +694,6 @@ def bulk_set_integrations_enabled(
         updated += 1
     db.commit()
     return updated
-
-
-def set_relay_to_portal(db: Session, connector_id: str, *, relay: bool):
-    connector = connector_service.connector_configs.get(db, connector_id)
-    metadata = dict(connector.metadata_ or {})
-    registration = (
-        metadata.get("registration")
-        if isinstance(metadata.get("registration"), dict)
-        else {}
-    )
-    registration["relay_to_portal"] = bool(relay)
-    metadata["registration"] = registration
-    connector.metadata_ = metadata
-    db.add(connector)
-    db.commit()
-    db.refresh(connector)
-    return connector
 
 
 def uninstall_integration(db: Session, connector_id: str):
@@ -973,6 +1074,9 @@ def webhook_error_state(
     secret: str | None,
     event_types: list[str] | None,
     is_active: bool,
+    delivery_timeout_seconds: str | int | None = None,
+    max_retries: str | int | None = None,
+    retry_backoff_seconds: str | int | None = None,
 ) -> dict[str, object]:
     return {
         **webhook_form_options(db),
@@ -980,11 +1084,63 @@ def webhook_error_state(
             "name": name,
             "url": url,
             "connector_config_id": connector_config_id or "",
-            "secret": secret or "",
+            "secret": "",
             "event_types": event_types or [],
             "is_active": is_active,
+            "delivery_timeout_seconds": delivery_timeout_seconds or "",
+            "max_retries": max_retries or "",
+            "retry_backoff_seconds": retry_backoff_seconds or "",
         },
     }
+
+
+def _selected_webhook_events(event_types: list[str] | None):
+    from app.models.webhook import WebhookEventType
+
+    selected = []
+    seen = set()
+    for event_type in event_types or []:
+        event = validate_enum(event_type, WebhookEventType, "event_type")
+        if event in seen:
+            continue
+        seen.add(event)
+        selected.append(event)
+    return selected
+
+
+def _optional_int(value: str | int | None) -> int | None:
+    if value is None or value == "":
+        return None
+    return int(value)
+
+
+def _sync_webhook_subscriptions(db, endpoint, event_types: list[str] | None) -> None:
+    from app.models.webhook import WebhookSubscription
+
+    selected = set(_selected_webhook_events(event_types))
+    existing = {
+        subscription.event_type: subscription
+        for subscription in db.query(WebhookSubscription).filter(
+            WebhookSubscription.endpoint_id == endpoint.id
+        )
+    }
+    for event_type in selected:
+        subscription = existing.get(event_type)
+        if subscription:
+            subscription.is_active = True
+        else:
+            webhook_service.webhook_subscriptions.create(
+                db,
+                WebhookSubscriptionCreate(
+                    endpoint_id=endpoint.id,
+                    event_type=event_type,
+                    is_active=True,
+                ),
+            )
+    for event_type, subscription in existing.items():
+        if event_type not in selected:
+            subscription.is_active = False
+    db.commit()
 
 
 def create_webhook_endpoint(
@@ -996,27 +1152,138 @@ def create_webhook_endpoint(
     secret: str | None,
     event_types: list[str] | None,
     is_active: bool,
+    delivery_timeout_seconds: str | int | None = None,
+    max_retries: str | int | None = None,
+    retry_backoff_seconds: str | int | None = None,
 ):
-    from app.models.webhook import WebhookEventType
-
     payload = WebhookEndpointCreate(
         name=name.strip(),
         url=url.strip(),
         connector_config_id=parse_uuid(
             connector_config_id, "connector_config_id", required=False
         ),
-        secret=secret.strip() if secret else None,
+        secret=encrypt_credential(secret.strip())
+        if secret and secret.strip()
+        else None,
         is_active=is_active,
+        delivery_timeout_seconds=_optional_int(delivery_timeout_seconds),
+        max_retries=_optional_int(max_retries),
+        retry_backoff_seconds=_optional_int(retry_backoff_seconds),
     )
     endpoint = webhook_service.webhook_endpoints.create(db, payload)
-    for event_type in event_types or []:
-        subscription_payload = WebhookSubscriptionCreate(
-            endpoint_id=endpoint.id,
-            event_type=validate_enum(event_type, WebhookEventType, "event_type"),
-            is_active=True,
-        )
-        webhook_service.webhook_subscriptions.create(db, subscription_payload)
+    _sync_webhook_subscriptions(db, endpoint, event_types)
     return endpoint
+
+
+def build_webhook_edit_data(db, *, endpoint_id: str) -> dict[str, object]:
+    state = build_webhook_detail_data(db, endpoint_id=endpoint_id)
+    endpoint = state["endpoint"]
+    subscriptions = state["subscriptions"]
+    return {
+        **webhook_form_options(db),
+        "endpoint": endpoint,
+        "form": {
+            "name": endpoint.name,
+            "url": endpoint.url,
+            "connector_config_id": str(endpoint.connector_config_id or ""),
+            "secret": "",
+            "event_types": [
+                subscription.event_type.value
+                for subscription in subscriptions
+                if subscription.is_active and subscription.event_type
+            ],
+            "is_active": endpoint.is_active,
+            "delivery_timeout_seconds": endpoint.delivery_timeout_seconds or "",
+            "max_retries": endpoint.max_retries or "",
+            "retry_backoff_seconds": endpoint.retry_backoff_seconds or "",
+        },
+        "action_url": f"/admin/integrations/webhooks/{endpoint.id}",
+        "submit_label": "Save Webhook",
+    }
+
+
+def update_webhook_endpoint(
+    db,
+    *,
+    endpoint_id: str,
+    name: str,
+    url: str,
+    connector_config_id: str | None,
+    secret: str | None,
+    event_types: list[str] | None,
+    is_active: bool,
+    delivery_timeout_seconds: str | int | None = None,
+    max_retries: str | int | None = None,
+    retry_backoff_seconds: str | int | None = None,
+):
+    data = {
+        "name": name.strip(),
+        "url": url.strip(),
+        "connector_config_id": parse_uuid(
+            connector_config_id, "connector_config_id", required=False
+        ),
+        "is_active": is_active,
+        "delivery_timeout_seconds": _optional_int(delivery_timeout_seconds),
+        "max_retries": _optional_int(max_retries),
+        "retry_backoff_seconds": _optional_int(retry_backoff_seconds),
+    }
+    if secret and secret.strip():
+        data["secret"] = encrypt_credential(secret.strip())
+    endpoint = webhook_service.webhook_endpoints.update(
+        db, endpoint_id, WebhookEndpointUpdate(**data)
+    )
+    _sync_webhook_subscriptions(db, endpoint, event_types)
+    return endpoint
+
+
+def set_webhook_endpoint_active(db, *, endpoint_id: str, is_active: bool):
+    return webhook_service.webhook_endpoints.update(
+        db, endpoint_id, WebhookEndpointUpdate(is_active=is_active)
+    )
+
+
+def delete_webhook_endpoint(db, *, endpoint_id: str) -> None:
+    webhook_service.webhook_endpoints.delete(db, endpoint_id)
+
+
+def rotate_webhook_endpoint_secret(db, *, endpoint_id: str):
+    return webhook_service.webhook_endpoints.update(
+        db,
+        endpoint_id,
+        WebhookEndpointUpdate(secret=encrypt_credential(secrets.token_urlsafe(32))),
+    )
+
+
+def queue_webhook_test_delivery(db, *, endpoint_id: str):
+    endpoint = webhook_service.webhook_endpoints.get(db, endpoint_id)
+    subscriptions = webhook_service.webhook_subscriptions.list(
+        db=db,
+        endpoint_id=str(endpoint.id),
+        event_type=None,
+        is_active=True,
+        order_by="created_at",
+        order_dir="asc",
+        limit=1,
+        offset=0,
+    )
+    if not subscriptions:
+        raise ValueError("Add at least one active event subscription before testing.")
+    subscription = subscriptions[0]
+    delivery = webhook_service.webhook_deliveries.create(
+        db,
+        WebhookDeliveryCreate(
+            subscription_id=subscription.id,
+            event_type=subscription.event_type,
+            payload={"event": "webhook.test", "endpoint_id": str(endpoint.id)},
+        ),
+    )
+    enqueue_task(
+        "app.tasks.webhooks.deliver_webhook",
+        args=[str(delivery.id)],
+        correlation_id=f"webhook_delivery:{delivery.id}",
+        source="admin_integrations_webhook_test",
+    )
+    return delivery
 
 
 def build_webhooks_list_data(db) -> dict[str, object]:
@@ -1195,10 +1462,31 @@ def build_webhook_detail_data(db, *, endpoint_id: str) -> dict[str, object]:
         limit=50,
         offset=0,
     )
+    failed_deliveries = [
+        delivery
+        for delivery in deliveries
+        if getattr(getattr(delivery, "status", None), "value", None) == "failed"
+    ]
+    delivery_summary = {
+        "latest_delivery": deliveries[0] if deliveries else None,
+        "latest_failure": failed_deliveries[0] if failed_deliveries else None,
+        "pending_count": sum(
+            1
+            for delivery in deliveries
+            if getattr(getattr(delivery, "status", None), "value", None) == "pending"
+        ),
+        "failed_count": len(failed_deliveries),
+        "delivered_count": sum(
+            1
+            for delivery in deliveries
+            if getattr(getattr(delivery, "status", None), "value", None) == "delivered"
+        ),
+    }
     return {
         "endpoint": endpoint,
         "subscriptions": subscriptions,
         "deliveries": deliveries,
+        "delivery_summary": delivery_summary,
     }
 
 

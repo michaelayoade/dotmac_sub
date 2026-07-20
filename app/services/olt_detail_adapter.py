@@ -42,21 +42,6 @@ class OltDetailAdapter:
 
         olt = page_data.get("olt")
         monitoring_device = page_data.get("monitoring_device")
-        zabbix_health: dict[str, object] = {}
-        if olt is not None:
-            try:
-                from app.services.web_network_core_devices_inventory import (
-                    build_olt_zabbix_health,
-                )
-
-                zabbix_health = build_olt_zabbix_health([olt]).get(str(olt.id), {})
-            except Exception:
-                logger.warning(
-                    "Failed to load Zabbix health for OLT %s",
-                    olt_id,
-                    exc_info=True,
-                )
-
         try:
             operations = operations_service.build_operation_history(
                 db, "olt", str(olt_id)
@@ -75,6 +60,7 @@ class OltDetailAdapter:
             )
             activities = []
         available_firmware = olt_action_adapter.get_olt_firmware_images(db, olt_id)
+        from app.services.control_plane_identity_view import olt_identity_view
 
         page_data.update(
             {
@@ -87,12 +73,12 @@ class OltDetailAdapter:
                 ),
                 "access_info": self._build_access_info(olt, monitoring_device),
                 "monitoring_source": self._build_monitoring_source(page_data),
-                "zabbix_health": zabbix_health,
                 "detail_actions": self._build_detail_actions(olt_id, olt),
                 "terminal_context": self._build_terminal_context(olt_id),
                 "firmware_context": self._build_firmware_context(
-                    olt, available_firmware
+                    olt, available_firmware, operations
                 ),
+                "identity_view": olt_identity_view(olt),
                 "config_context": self._build_config_context(page_data),
                 "ont_relationship_context": self._build_ont_relationship_context(
                     page_data
@@ -198,7 +184,7 @@ class OltDetailAdapter:
                 "repair_pon_ports": {
                     "url": f"{base}/repair-pon-ports",
                     "method": "POST",
-                    "visible": True,
+                    "visible": False,
                 },
                 "backup_create": {
                     "url": f"{base}/backups/ssh-backup",
@@ -232,13 +218,31 @@ class OltDetailAdapter:
         }
 
     def _build_firmware_context(
-        self, olt: object | None, available_firmware: list[object]
+        self,
+        olt: object | None,
+        available_firmware: list[object],
+        operations: list[dict[str, Any]],
     ) -> dict[str, object]:
+        latest_operation = next(
+            (
+                operation
+                for operation in operations
+                if isinstance(operation, dict)
+                and operation.get("operation_type") == "olt_firmware_upgrade"
+            ),
+            None,
+        )
         return {
             "current_version": getattr(olt, "firmware_version", None) or "Unknown",
             "software_version": getattr(olt, "software_version", None),
             "vendor": getattr(olt, "vendor", None),
             "images": available_firmware,
+            "latest_operation": latest_operation,
+            "upgrade_active": bool(
+                latest_operation
+                and latest_operation.get("status_value")
+                in {"pending", "running", "waiting"}
+            ),
         }
 
     def _build_config_context(self, page_data: dict[str, object]) -> dict[str, object]:

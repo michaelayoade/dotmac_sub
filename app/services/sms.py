@@ -14,6 +14,7 @@ Configuration via environment variables or DomainSettings:
 
 import logging
 import os
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -23,15 +24,19 @@ from sqlalchemy.orm import Session
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.notification import (
     DeliveryStatus,
-    Notification,
     NotificationChannel,
     NotificationDelivery,
     NotificationStatus,
     NotificationTemplate,
 )
+from app.schemas.notification import NotificationCreate
 from app.services.customer_identity_normalization import normalize_phone_identifier
+from app.services.notification import notifications as notification_records
+from app.services.notification_template_renderer import render_template_text
 
 logger = logging.getLogger(__name__)
+
+_UNRESOLVED_TEMPLATE_RE = re.compile(r"\{\{?\s*[a-zA-Z0-9_]+\s*\}?\}")
 
 
 def _get_setting(
@@ -66,6 +71,7 @@ def _send_via_twilio(
     from_number: str,
     to_phone: str,
     body: str,
+    timeout: float = 30.0,
 ) -> tuple[bool, str | None, str | None]:
     """Send SMS via Twilio.
 
@@ -83,7 +89,7 @@ def _send_via_twilio(
                 "To": to_phone,
                 "Body": body,
             },
-            timeout=30.0,
+            timeout=timeout,
         )
 
         if response.status_code in (200, 201):
@@ -111,6 +117,7 @@ def _send_via_africastalking(
     from_number: str | None,
     to_phone: str,
     body: str,
+    timeout: float = 30.0,
 ) -> tuple[bool, str | None, str | None]:
     """Send SMS via Africa's Talking.
 
@@ -133,7 +140,7 @@ def _send_via_africastalking(
         if from_number:
             data["from"] = from_number
 
-        response = httpx.post(url, headers=headers, data=data, timeout=30.0)
+        response = httpx.post(url, headers=headers, data=data, timeout=timeout)
 
         if response.status_code in (200, 201):
             resp_data = response.json()
@@ -166,6 +173,7 @@ def _send_via_webhook(
     api_key: str | None,
     to_phone: str,
     body: str,
+    timeout: float = 30.0,
 ) -> tuple[bool, str | None, str | None]:
     """Send SMS via generic HTTP webhook.
 
@@ -181,7 +189,9 @@ def _send_via_webhook(
             "message": body,
         }
 
-        response = httpx.post(webhook_url, headers=headers, json=payload, timeout=30.0)
+        response = httpx.post(
+            webhook_url, headers=headers, json=payload, timeout=timeout
+        )
 
         if response.status_code in (200, 201, 202):
             try:
@@ -224,6 +234,20 @@ def send_sms(
     Returns:
         True if SMS was sent successfully
     """
+    if track and notification_id is None:
+        queued = notification_records.create_customer_notification(
+            db,
+            NotificationCreate(
+                channel=NotificationChannel.sms,
+                recipient=_normalize_phone(to_phone),
+                body=body,
+                event_type="direct.sms",
+                category="general",
+                metadata_={"source": "sms_service"},
+            ),
+        )
+        return queued.status == NotificationStatus.queued
+
     # Check if SMS is disabled
     sms_enabled = _get_setting(db, "sms_enabled", "SMS_ENABLED", "true") or "true"
     if sms_enabled.lower() in ("false", "0", "no", "disabled"):
@@ -235,29 +259,39 @@ def send_sms(
     api_secret = _get_setting(db, "sms_api_secret", "SMS_API_SECRET")
     from_number = _get_setting(db, "sms_from_number", "SMS_FROM_NUMBER")
     webhook_url = _get_setting(db, "sms_webhook_url", "SMS_WEBHOOK_URL")
+    try:
+        timeout = float(
+            _get_setting(db, "sms_api_timeout_seconds", "SMS_API_TIMEOUT_SECONDS", "30")
+            or "30"
+        )
+    except ValueError:
+        timeout = 30.0
 
     normalized_phone = _normalize_phone(to_phone)
+    try:
+        max_length = int(
+            _get_setting(db, "sms_max_length", "SMS_MAX_LENGTH", "160") or 160
+        )
+    except ValueError:
+        max_length = 160
+    if max_length > 0 and len(body) > max_length:
+        logger.warning(
+            "SMS body length %d exceeds configured max %d; truncating",
+            len(body),
+            max_length,
+        )
+        body = body[:max_length]
 
     # Create notification record if tracking
     notification = None
-    if notification_id:
-        notification = db.get(Notification, notification_id)
-    if notification is None and track:
-        notification = Notification(
+    if notification_id or track:
+        notification = notification_records.record_transport_attempt(
+            db,
+            notification_id=notification_id,
             channel=NotificationChannel.sms,
             recipient=normalized_phone,
             body=body,
-            status=NotificationStatus.sending,
         )
-        db.add(notification)
-        db.flush()
-    elif notification is not None:
-        notification.channel = NotificationChannel.sms
-        notification.recipient = normalized_phone
-        notification.body = body
-        notification.status = NotificationStatus.sending
-        notification.last_error = None
-        db.flush()
 
     # Send based on provider
     success = False
@@ -270,20 +304,30 @@ def send_sms(
             logger.error(error_message)
         else:
             success, external_id, error_message = _send_via_twilio(
-                api_key, api_secret, from_number, normalized_phone, body
+                api_key,
+                api_secret,
+                from_number,
+                normalized_phone,
+                body,
+                timeout=timeout,
             )
 
     elif provider == "africastalking":
-        # Africa's Talking requires a username; default to "sandbox" if unset.
-        username = (
-            _get_setting(db, "sms_username", "SMS_USERNAME", "sandbox") or "sandbox"
-        )
+        username = _get_setting(db, "sms_username", "SMS_USERNAME")
         if not api_key:
             error_message = "Africa's Talking API key not configured"
             logger.error(error_message)
+        elif not username:
+            error_message = "Africa's Talking username not configured"
+            logger.error(error_message)
         else:
             success, external_id, error_message = _send_via_africastalking(
-                api_key, username, from_number, normalized_phone, body
+                api_key,
+                username,
+                from_number,
+                normalized_phone,
+                body,
+                timeout=timeout,
             )
 
     elif provider == "webhook":
@@ -292,7 +336,11 @@ def send_sms(
             logger.error(error_message)
         else:
             success, external_id, error_message = _send_via_webhook(
-                webhook_url, api_key, normalized_phone, body
+                webhook_url,
+                api_key,
+                normalized_phone,
+                body,
+                timeout=timeout,
             )
 
     else:
@@ -357,15 +405,14 @@ def send_with_template(
         logger.error(f"SMS template not found: {template_code}")
         return False
 
-    # Simple template substitution using Python format strings
-    try:
-        body = template.body
-        for key, value in context.items():
-            body = body.replace(f"{{{{{key}}}}}", str(value))
-            body = body.replace(f"{{{{ {key} }}}}", str(value))
-            body = body.replace(f"${{{key}}}", str(value))
-    except Exception as exc:
-        logger.error(f"Template substitution failed: {exc}")
-        body = template.body
+    body = render_template_text(template.body, context)
+    unresolved = sorted(set(_UNRESOLVED_TEMPLATE_RE.findall(body)))
+    if unresolved:
+        logger.error(
+            "SMS template %s has unresolved variable(s): %s",
+            template_code,
+            ", ".join(unresolved),
+        )
+        return False
 
     return send_sms(db, to_phone, body, track=True)

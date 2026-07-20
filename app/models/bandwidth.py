@@ -19,6 +19,7 @@ from app.db import Base
 class BandwidthSample(Base):
     __tablename__ = "bandwidth_samples"
     __table_args__ = (
+        Index("ix_bandwidth_samples_sample_at", "sample_at"),
         Index(
             "ix_bandwidth_samples_subscription_sample_at",
             "subscription_id",

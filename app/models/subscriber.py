@@ -2,13 +2,13 @@ import enum
 import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from typing import ClassVar
 
 import sqlalchemy.orm as sa_orm
 from geoalchemy2 import Geometry
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     Enum,
@@ -33,6 +33,8 @@ from sqlalchemy.orm import (
 
 from app.db import Base
 from app.models.catalog import BillingMode
+from app.models.organization import Organization  # noqa: F401 (mapper registry)
+from app.models.party import Party
 from app.models.subscription_engine import SettingValueType
 
 
@@ -73,6 +75,20 @@ class SubscriberStatus(enum.Enum):
     disabled = "disabled"  # Permanently deactivated by admin
     canceled = "canceled"  # Terminated / soft-deleted
     delinquent = "delinquent"  # Past due, pre-suspension
+
+
+class PartyStatus(enum.Enum):
+    """Lifecycle status for the unified party model (CRM ``people.party_status``).
+
+    Keeps prospects created by the party-identity backfill
+    party backfill (leads/quotes/referrals persons with no account) out of
+    billing/RADIUS sweeps. Stored as String(20) + app enum per sub convention.
+    """
+
+    lead = "lead"  # Prospect, minimal info
+    contact = "contact"  # Known individual, verified
+    customer = "customer"  # Converted (accepted quote/signed up)
+    subscriber = "subscriber"  # Active billing account
 
 
 # --- Deprecated aliases for backwards compatibility ---
@@ -124,6 +140,17 @@ class Reseller(Base):
 
     __tablename__ = "resellers"
     __table_args__ = (
+        CheckConstraint(
+            "(party_id IS NULL AND party_bound_at IS NULL AND "
+            "party_binding_source IS NULL AND party_binding_reason IS NULL) OR "
+            "(party_id IS NOT NULL AND party_bound_at IS NOT NULL AND "
+            "party_binding_source IS NOT NULL AND "
+            "party_binding_reason IS NOT NULL AND "
+            "length(trim(party_binding_source)) > 0 AND "
+            "length(trim(party_binding_reason)) > 0)",
+            name="ck_resellers_party_binding_evidence",
+        ),
+        UniqueConstraint("party_id", name="uq_resellers_party_id"),
         Index(
             "uq_resellers_one_house",
             "is_house",
@@ -136,6 +163,12 @@ class Reseller(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
+    party_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("parties.id", ondelete="RESTRICT")
+    )
+    party_bound_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    party_binding_source: Mapped[str | None] = mapped_column(String(80))
+    party_binding_reason: Mapped[str | None] = mapped_column(Text)
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     code: Mapped[str | None] = mapped_column(String(60), unique=True)
     contact_email: Mapped[str | None] = mapped_column(String(255))
@@ -149,6 +182,11 @@ class Reseller(Base):
     is_house: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false"
     )
+    # C-2: catalog visibility override. NULL = inherit the global
+    # ``reseller_default_catalog_open`` setting; True = this reseller sees ONLY
+    # offers explicitly assigned to it (assigned-only); False = open (all
+    # unrestricted offers, today's behavior).
+    restrict_to_assigned_offers: Mapped[bool | None] = mapped_column(Boolean)
     notes: Mapped[str | None] = mapped_column(Text)
 
     created_at: Mapped[datetime] = mapped_column(
@@ -161,18 +199,18 @@ class Reseller(Base):
     )
 
     subscribers = relationship("Subscriber", back_populates="reseller")
+    party = relationship("Party", back_populates="reseller_profile")
     billing_account = relationship(
         "BillingAccount", back_populates="reseller", uselist=False
     )
 
 
 class Subscriber(Base):
-    """Unified subscriber model combining identity, account, and billing.
+    """Subscriber service/billing account with legacy identity fields.
 
-    This is the core entity representing a customer with:
-    - Identity info (name, contact details)
-    - Account info (subscriber number, status)
-    - Billing info (payment settings, billing address)
+    ``party_id`` is the canonical identity binding when populated. The copied
+    name/contact columns remain compatibility data until their own verified
+    cutover; they do not become a second identity authority.
     """
 
     __tablename__ = "subscribers"
@@ -189,11 +227,34 @@ class Subscriber(Base):
             unique=True,
             postgresql_where=text("crm_subscriber_id IS NOT NULL"),
         ),
+        CheckConstraint(
+            "(party_id IS NULL AND party_bound_at IS NULL AND "
+            "party_binding_source IS NULL AND party_binding_reason IS NULL) OR "
+            "(party_id IS NOT NULL AND party_bound_at IS NOT NULL AND "
+            "party_binding_source IS NOT NULL AND "
+            "party_binding_reason IS NOT NULL AND "
+            "length(trim(party_binding_source)) > 0 AND "
+            "length(trim(party_binding_reason)) > 0)",
+            name="ck_subscribers_party_binding_evidence",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
+
+    # Canonical identity binding. One Party may own several service/billing
+    # accounts; this column is deliberately not unique. The evidence columns
+    # make the first reviewed binding attributable and are immutable through
+    # the party.registry command (repointing is a later reviewed slice).
+    party_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("parties.id", ondelete="RESTRICT"),
+        index=True,
+    )
+    party_bound_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    party_binding_source: Mapped[str | None] = mapped_column(String(80))
+    party_binding_reason: Mapped[str | None] = mapped_column(Text)
 
     # === Identity Fields (from Person) ===
     first_name: Mapped[str] = mapped_column(String(80), nullable=False)
@@ -213,6 +274,7 @@ class Subscriber(Base):
     email: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
     email_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     phone: Mapped[str | None] = mapped_column(String(40))
+    nin: Mapped[str | None] = mapped_column(String(11))
 
     date_of_birth: Mapped[date | None] = mapped_column(Date)
     gender: Mapped[Gender] = mapped_column(Enum(Gender), default=Gender.unknown)
@@ -228,6 +290,11 @@ class Subscriber(Base):
     address_line2: Mapped[str | None] = mapped_column(String(120))
     city: Mapped[str | None] = mapped_column(String(80))
     region: Mapped[str | None] = mapped_column(String(80))
+    # Local Government Area — an NCC administrative unit, required per row of
+    # the quarterly complaints return. Captured, never derived: validated
+    # against ``ncc_location`` for its ``region`` at the capture boundary, and
+    # left blank when unknown rather than guessed from address text.
+    lga: Mapped[str | None] = mapped_column(String(80))
     postal_code: Mapped[str | None] = mapped_column(String(20))
     country_code: Mapped[str | None] = mapped_column(String(2))
 
@@ -243,6 +310,14 @@ class Subscriber(Base):
 
     status: Mapped[SubscriberStatus] = mapped_column(
         Enum(SubscriberStatus), default=SubscriberStatus.active
+    )
+    lifecycle_override_status: Mapped[SubscriberStatus | None] = mapped_column(
+        Enum(SubscriberStatus)
+    )
+    lifecycle_override_reason: Mapped[str | None] = mapped_column(String(200))
+    lifecycle_override_source: Mapped[str | None] = mapped_column(String(120))
+    lifecycle_override_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
     )
     user_type: Mapped[UserType] = mapped_column(
         Enum(UserType), default=UserType.system_user
@@ -307,6 +382,21 @@ class Subscriber(Base):
     # splynx_customer_id -> CRM external_id resolution chain for subscribers
     # that have it; backfilled from CRM, persisted lazily on first resolve.
     crm_subscriber_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    # Party lifecycle status ported from CRM people.party_status.
+    # PartyStatus values; NULL means the row predates the party
+    # backfill and is treated as an ordinary subscriber.
+    party_status: Mapped[str | None] = mapped_column(String(20))
+    # B2B organization link (ported CRM party model, doc 02 ). Replaces
+    # the flattened company_name/legal_name/tax_id/domain fields over time.
+    organization_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), index=True
+    )
+    # CRM-owned account-matrix field: the sales order that created
+    # this account. Real FK since the native sales migration landed the
+    # sales_orders table; backfilled from CRM via link key 2.
+    sales_order_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("sales_orders.id"), index=True
+    )
     metadata_: Mapped[dict | None] = mapped_column(
         "metadata", MutableDict.as_mutable(JSON())
     )
@@ -320,13 +410,13 @@ class Subscriber(Base):
         onupdate=lambda: datetime.now(UTC),
     )
 
-    # === Transient Attributes (not persisted) ===
-    # Used by legacy_bss.py to stage customer ID before writing ID mappings.
-    _legacy_bss_customer_id: ClassVar[int | None] = None
-
     # === Relationships ===
     reseller = relationship("Reseller", back_populates="subscribers")
     tax_rate = relationship("TaxRate")
+    organization = relationship("Organization")
+    party: Mapped[Party | None] = relationship(
+        "Party", back_populates="subscriber_accounts"
+    )
 
     addresses = relationship(
         "Address", back_populates="subscriber", cascade="all, delete-orphan"
@@ -462,6 +552,21 @@ class SubscriberContact(Base):
 
     __tablename__ = "subscriber_contacts"
     __table_args__ = (
+        CheckConstraint(
+            "(person_party_id IS NULL AND party_bound_at IS NULL AND "
+            "party_binding_source IS NULL AND party_binding_reason IS NULL) OR "
+            "(person_party_id IS NOT NULL AND party_bound_at IS NOT NULL AND "
+            "party_binding_source IS NOT NULL AND "
+            "party_binding_reason IS NOT NULL AND "
+            "length(trim(party_binding_source)) > 0 AND "
+            "length(trim(party_binding_reason)) > 0)",
+            name="ck_subscriber_contacts_party_binding_evidence",
+        ),
+        UniqueConstraint(
+            "subscriber_id",
+            "person_party_id",
+            name="uq_subscriber_contacts_subscriber_person_party",
+        ),
         Index("ix_subscriber_contacts_subscriber_id", "subscriber_id"),
         Index("ix_subscriber_contacts_email", "email"),
         Index("ix_subscriber_contacts_phone", "phone"),
@@ -470,6 +575,12 @@ class SubscriberContact(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
+    person_party_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("parties.id", ondelete="RESTRICT")
+    )
+    party_bound_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    party_binding_source: Mapped[str | None] = mapped_column(String(80))
+    party_binding_reason: Mapped[str | None] = mapped_column(Text)
     subscriber_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("subscribers.id", ondelete="CASCADE"),
@@ -502,6 +613,17 @@ class SubscriberContact(Base):
     )
 
     subscriber = sa_orm.relationship("Subscriber", back_populates="contacts")
+    person_party = sa_orm.relationship("Party", foreign_keys=[person_party_id])
+    relationship_projections = sa_orm.relationship(
+        "SubscriberContactRelationshipProjection",
+        back_populates="subscriber_contact",
+        cascade="all, delete-orphan",
+    )
+    contact_point_projections = sa_orm.relationship(
+        "SubscriberContactPointProjection",
+        back_populates="subscriber_contact",
+        cascade="all, delete-orphan",
+    )
 
 
 class SubscriberNINVerification(Base):
@@ -601,6 +723,9 @@ class Address(Base):
     address_line2: Mapped[str | None] = mapped_column(String(120))
     city: Mapped[str | None] = mapped_column(String(80))
     region: Mapped[str | None] = mapped_column(String(80))
+    # Local Government Area — see ``Subscriber.lga``. Captured and validated
+    # against ``region``; blank when unknown.
+    lga: Mapped[str | None] = mapped_column(String(80))
     postal_code: Mapped[str | None] = mapped_column(String(20))
     country_code: Mapped[str | None] = mapped_column(String(2))
     latitude: Mapped[float | None] = mapped_column(Float)
@@ -630,15 +755,48 @@ class ResellerUser(Base):
     """Reseller user linkage model.
 
     Maps to the active reseller_users table while preserving
-    subscriber_id/person_id compatibility across callers.
+    subscriber_id/person_id compatibility across callers. Reviewed rows may
+    also link one Person Party and one explicit reseller PartyMembership;
+    existing authentication remains authoritative until cutover.
     """
 
     __tablename__ = "reseller_users"
-    __table_args__ = {"extend_existing": True}
+    __table_args__ = (
+        CheckConstraint(
+            "(person_party_id IS NULL AND party_membership_id IS NULL AND "
+            "party_bound_at IS NULL AND party_binding_source IS NULL AND "
+            "party_binding_reason IS NULL) OR "
+            "(person_party_id IS NOT NULL AND party_membership_id IS NOT NULL AND "
+            "party_bound_at IS NOT NULL AND party_binding_source IS NOT NULL AND "
+            "party_binding_reason IS NOT NULL AND "
+            "length(trim(party_binding_source)) > 0 AND "
+            "length(trim(party_binding_reason)) > 0)",
+            name="ck_reseller_users_party_binding_evidence",
+        ),
+        UniqueConstraint(
+            "reseller_id",
+            "person_party_id",
+            name="uq_reseller_users_reseller_person_party",
+        ),
+        UniqueConstraint(
+            "party_membership_id",
+            name="uq_reseller_users_party_membership_id",
+        ),
+        {"extend_existing": True},
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
+    person_party_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("parties.id", ondelete="RESTRICT")
+    )
+    party_membership_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("party_memberships.id", ondelete="RESTRICT")
+    )
+    party_bound_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    party_binding_source: Mapped[str | None] = mapped_column(String(80))
+    party_binding_reason: Mapped[str | None] = mapped_column(Text)
     # DB column name is person_id in legacy schemas.
     subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
         "person_id",
@@ -665,4 +823,9 @@ class ResellerUser(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
+    )
+
+    person_party = relationship("Party", foreign_keys=[person_party_id])
+    party_membership = relationship(
+        "PartyMembership", foreign_keys=[party_membership_id]
     )

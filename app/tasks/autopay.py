@@ -13,14 +13,12 @@ from app.services.billing_settings import billing_enabled
 from app.services.db_session_adapter import db_session_adapter
 
 logger = logging.getLogger(__name__)
-SessionLocal = db_session_adapter.create_session
 
 
 @celery_app.task(name="app.tasks.autopay.charge_due_invoices")
 def charge_due_invoices() -> dict:
     """Run autopay for every active mandate with open invoices."""
-    session = SessionLocal()
-    try:
+    with db_session_adapter.session() as session:
         if not billing_enabled(session):
             logger.info("autopay skipped: local billing disabled (billing_enabled)")
             return {"skipped": "billing_disabled"}
@@ -29,5 +27,3 @@ def charge_due_invoices() -> dict:
             result["total"] = str(result["total"])
         logger.info("autopay run complete: %s", result)
         return result
-    finally:
-        session.close()

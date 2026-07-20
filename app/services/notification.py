@@ -1,6 +1,9 @@
 import logging
 import os
+import re
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
+from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy import func
@@ -45,13 +48,38 @@ from app.services.common import (
     validate_enum,
 )
 from app.services.customer_notification_policy import (
+    channel_disabled_in_config,
+    has_recent_notification,
     is_notification_enabled_for_subscriber,
+    quiet_hours_send_at,
     resolve_notification_category,
     resolve_subscriber_id_for_recipient,
+    status_allows_notification_for_subscriber,
 )
+from app.services.email_template import html_to_text
+from app.services.notification_template_conditions import validate_conditions
 from app.services.response import ListResponseMixin, list_response
 
 logger = logging.getLogger(__name__)
+
+# Unrendered double-brace template tokens (e.g. "{{amount}}") that leaked into a
+# stored/sent notification body — they must never reach the in-app feed.
+_LEAKED_TOKEN_RE = re.compile(r"\{\{\s*[a-zA-Z0-9_.]+\s*\}\}")
+
+
+def _clean_feed_body(body: str | None) -> str | None:
+    """Sanitise a notification body for the in-app feed: convert email HTML to
+    readable text (so an email notification doesn't dump raw ``<!DOCTYPE html>``)
+    and drop any unrendered ``{{token}}`` placeholders that leaked into the
+    content. Returns None when nothing readable remains — the app then shows
+    just the title."""
+    if not body:
+        return body
+    text = html_to_text(body)
+    text = _LEAKED_TOKEN_RE.sub("", text)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    return text or None
 
 
 def _severity_rank(severity: AlertSeverity) -> int:
@@ -121,7 +149,9 @@ def _setting_str(
 class Templates(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: NotificationTemplateCreate):
-        template = NotificationTemplate(**payload.model_dump())
+        data = payload.model_dump()
+        data["conditions"] = validate_conditions(data.get("conditions"))
+        template = NotificationTemplate(**data)
         db.add(template)
         db.commit()
         db.refresh(template)
@@ -139,6 +169,7 @@ class Templates(ListResponseMixin):
         db: Session,
         channel: str | None,
         is_active: bool | None,
+        search: str | None,
         order_by: str,
         order_dir: str,
         limit: int,
@@ -150,10 +181,15 @@ class Templates(ListResponseMixin):
                 NotificationTemplate.channel
                 == validate_enum(channel, NotificationChannel, "channel")
             )
-        if is_active is None:
-            query = query.filter(NotificationTemplate.is_active.is_(True))
-        else:
+        if is_active is not None:
             query = query.filter(NotificationTemplate.is_active == is_active)
+        if search:
+            pattern = f"%{search.strip()}%"
+            query = query.filter(
+                (NotificationTemplate.name.ilike(pattern))
+                | (NotificationTemplate.code.ilike(pattern))
+                | (NotificationTemplate.subject.ilike(pattern))
+            )
         query = apply_ordering(
             query,
             order_by,
@@ -166,15 +202,27 @@ class Templates(ListResponseMixin):
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
-    def count(db: Session, channel: str | None = None) -> int:
-        """Count active templates, optionally filtered by channel."""
-        query = db.query(func.count(NotificationTemplate.id)).filter(
-            NotificationTemplate.is_active.is_(True)
-        )
+    def count(
+        db: Session,
+        channel: str | None = None,
+        is_active: bool | None = None,
+        search: str | None = None,
+    ) -> int:
+        """Count templates, optionally filtered by channel/status/search."""
+        query = db.query(func.count(NotificationTemplate.id))
         if channel:
             query = query.filter(
                 NotificationTemplate.channel
                 == validate_enum(channel, NotificationChannel, "channel")
+            )
+        if is_active is not None:
+            query = query.filter(NotificationTemplate.is_active == is_active)
+        if search:
+            pattern = f"%{search.strip()}%"
+            query = query.filter(
+                (NotificationTemplate.name.ilike(pattern))
+                | (NotificationTemplate.code.ilike(pattern))
+                | (NotificationTemplate.subject.ilike(pattern))
             )
         return query.scalar() or 0
 
@@ -202,6 +250,8 @@ class Templates(ListResponseMixin):
         if not template:
             raise HTTPException(status_code=404, detail="Template not found")
         for key, value in payload.model_dump(exclude_unset=True).items():
+            if key == "conditions":
+                value = validate_conditions(value)
             setattr(template, key, value)
         db.commit()
         db.refresh(template)
@@ -218,34 +268,371 @@ class Templates(ListResponseMixin):
 
 class Notifications(ListResponseMixin):
     @staticmethod
-    def create(db: Session, payload: NotificationCreate):
+    def queue_customer_notifications_for_policy(
+        db: Session,
+        *,
+        subscriber,
+        template_code: str | None,
+        event_type: str | None,
+        category: str | None,
+        default_channels: Iterable[NotificationChannel | str],
+        subject: str | None,
+        body: str | None,
+        commit: bool = True,
+    ) -> int:
+        """Queue customer notifications after channel-policy resolution.
+
+        Domain code supplies the intent. This service owns channel selection,
+        recipient selection, policy gates, and row creation.
+        """
+        if subscriber is None:
+            return 0
+        from app.services.communication_intents import (
+            CommunicationIntent,
+            submit,
+        )
+
+        normalized_defaults = tuple(
+            channel
+            if isinstance(channel, NotificationChannel)
+            else NotificationChannel(str(channel))
+            for channel in default_channels
+        )
+        result = submit(
+            db,
+            CommunicationIntent(
+                subscriber_id=subscriber.id,
+                event_type=event_type or "customer_notification",
+                category=category or "general",
+                template_code=template_code,
+                subject=subject,
+                body=body,
+                default_channels=normalized_defaults,
+                persist_policy_suppressions=True,
+            ),
+        )
+        if commit:
+            db.commit()
+        return len(result.queued)
+
+    @staticmethod
+    def _apply_customer_queue_policy(
+        db: Session,
+        data: dict,
+        *,
+        recipient: str | None,
+        requested_status: NotificationStatus,
+    ) -> None:
+        """Apply shared customer notification gates to a pending notification."""
+        channel = data["channel"]
+        subscriber_id = data.get("subscriber_id")
+        category = str(data.get("category") or "general")
+        data["category"] = category
+        event_type = data.get("event_type")
+
+        if requested_status != NotificationStatus.queued:
+            return
+
+        if channel_disabled_in_config(db, channel):
+            data["status"] = NotificationStatus.canceled
+            data["last_error"] = "Suppressed by notification channel configuration"
+            return
+
+        if subscriber_id is None:
+            return
+
+        if not status_allows_notification_for_subscriber(
+            db,
+            subscriber_id=subscriber_id,
+            category=category,
+        ):
+            data["status"] = NotificationStatus.canceled
+            data["last_error"] = "Suppressed by account notification status policy"
+            return
+
+        if not is_notification_enabled_for_subscriber(
+            db,
+            subscriber_id=subscriber_id,
+            channel=channel,
+            category=category,
+            recipient=recipient,
+        ):
+            data["status"] = NotificationStatus.canceled
+            data["last_error"] = "Suppressed by customer notification preferences"
+            return
+
+        from app.services.communication_eligibility import suppression_reason
+
+        durable_suppression = suppression_reason(
+            db,
+            channel=channel,
+            category=category,
+            address=recipient,
+        )
+        if durable_suppression:
+            data["status"] = NotificationStatus.canceled
+            data["last_error"] = (
+                "Suppressed by communication ledger: " + durable_suppression
+            )
+            return
+
+        if has_recent_notification(
+            db,
+            subscriber_id=subscriber_id,
+            channel=channel,
+            event_type=event_type,
+            category=category,
+            recipient=recipient,
+        ):
+            data["status"] = NotificationStatus.canceled
+            data["last_error"] = "Suppressed duplicate customer notification"
+            return
+
+        if requested_status == NotificationStatus.queued and not data.get("send_at"):
+            data["send_at"] = quiet_hours_send_at(db)
+
+    @staticmethod
+    def _queue_internal(
+        db: Session,
+        payload: NotificationCreate,
+        *,
+        apply_customer_policy: bool,
+        resolve_customer_identity: bool,
+        persist_policy_suppression: bool,
+    ) -> Notification | None:
+        """Queue a notification without committing the caller's transaction."""
         if payload.template_id:
             template = db.get(NotificationTemplate, payload.template_id)
             if not template:
                 raise HTTPException(status_code=404, detail="Template not found")
         data = payload.model_dump()
-        subscriber_id = data.get(
-            "subscriber_id"
-        ) or resolve_subscriber_id_for_recipient(
-            db,
-            data.get("recipient"),
-        )
+        subscriber_id = data.get("subscriber_id")
+        if resolve_customer_identity:
+            subscriber_id = subscriber_id or resolve_subscriber_id_for_recipient(
+                db,
+                data.get("recipient"),
+            )
         data["subscriber_id"] = subscriber_id
         category = data.get("category") or resolve_notification_category(
             data.get("event_type")
         )
         data["category"] = category
-        if not is_notification_enabled_for_subscriber(
-            db,
-            subscriber_id=subscriber_id,
-            channel=data["channel"],
-            category=category,
-            recipient=data.get("recipient"),
+        requested_status = data["status"]
+        if apply_customer_policy:
+            Notifications._apply_customer_queue_policy(
+                db,
+                data,
+                recipient=data.get("recipient"),
+                requested_status=requested_status,
+            )
+        if (
+            apply_customer_policy
+            and not persist_policy_suppression
+            and requested_status == NotificationStatus.queued
+            and data["status"] == NotificationStatus.canceled
         ):
-            data["status"] = NotificationStatus.canceled
-            data["last_error"] = "Suppressed by customer notification preferences"
+            return None
         notification = Notification(**data)
         db.add(notification)
+        db.flush()
+        return notification
+
+    @staticmethod
+    def _queue_customer_delivery(
+        db: Session, payload: NotificationCreate
+    ) -> Notification:
+        notification = Notifications._queue_internal(
+            db,
+            payload,
+            apply_customer_policy=True,
+            resolve_customer_identity=True,
+            persist_policy_suppression=True,
+        )
+        if notification is None:  # pragma: no cover - impossible with persistence on.
+            raise RuntimeError("notification was unexpectedly suppressed")
+        return notification
+
+    @staticmethod
+    def _queue_event_delivery(
+        db: Session, payload: NotificationCreate
+    ) -> Notification | None:
+        return Notifications._queue_internal(
+            db,
+            payload,
+            apply_customer_policy=True,
+            resolve_customer_identity=True,
+            persist_policy_suppression=False,
+        )
+
+    @staticmethod
+    def queue_customer_notification(
+        db: Session, payload: NotificationCreate
+    ) -> Notification:
+        """Create a durable intent, then queue its customer-facing delivery."""
+        if payload.communication_intent_id is not None:
+            return Notifications._queue_customer_delivery(db, payload)
+        from app.services.communication_intents import CommunicationIntent, submit
+
+        subscriber_id = payload.subscriber_id or resolve_subscriber_id_for_recipient(
+            db, payload.recipient
+        )
+        result = submit(
+            db,
+            CommunicationIntent(
+                subscriber_id=subscriber_id,
+                event_type=payload.event_type or "customer_notification",
+                category=payload.category or "general",
+                subject=payload.subject,
+                body=payload.body,
+                template_id=payload.template_id,
+                channels=(payload.channel,),
+                include_reseller=False,
+                subscriber_recipients={payload.channel: payload.recipient},
+                metadata=dict(payload.metadata_ or {}),
+                send_at=payload.send_at,
+                requested_status=payload.status,
+                requested_last_error=payload.last_error,
+            ),
+        )
+        notification = next(
+            (
+                item
+                for item in result.deliveries
+                if item.audience_type == "subscriber"
+                and item.recipient == payload.recipient
+            ),
+            None,
+        )
+        if notification is None:
+            raise RuntimeError("customer communication intent produced no delivery")
+        return notification
+
+    @staticmethod
+    def queue_event_notification(
+        db: Session, payload: NotificationCreate
+    ) -> Notification | None:
+        """Create a durable event intent and drop policy-suppressed deliveries."""
+        if payload.communication_intent_id is not None:
+            return Notifications._queue_event_delivery(db, payload)
+        from app.services.communication_intents import CommunicationIntent, submit
+
+        subscriber_id = payload.subscriber_id or resolve_subscriber_id_for_recipient(
+            db, payload.recipient
+        )
+        result = submit(
+            db,
+            CommunicationIntent(
+                subscriber_id=subscriber_id,
+                event_type=payload.event_type or "event_notification",
+                category=payload.category or "general",
+                subject=payload.subject,
+                body=payload.body,
+                template_id=payload.template_id,
+                channels=(payload.channel,),
+                include_reseller=False,
+                subscriber_recipients={payload.channel: payload.recipient},
+                persist_policy_suppressions=False,
+                metadata=dict(payload.metadata_ or {}),
+                send_at=payload.send_at,
+                requested_status=payload.status,
+                requested_last_error=payload.last_error,
+            ),
+        )
+        return next(
+            (
+                item
+                for item in result.queued
+                if item.audience_type == "subscriber"
+                and item.recipient == payload.recipient
+            ),
+            None,
+        )
+
+    @staticmethod
+    def queue_internal_notification(
+        db: Session, payload: NotificationCreate
+    ) -> Notification:
+        """Queue a staff/internal notification without customer policy gates."""
+        notification = Notifications._queue_internal(
+            db,
+            payload,
+            apply_customer_policy=False,
+            resolve_customer_identity=False,
+            persist_policy_suppression=True,
+        )
+        if notification is None:  # pragma: no cover - impossible without policy drop.
+            raise RuntimeError("internal notification was unexpectedly suppressed")
+        return notification
+
+    @staticmethod
+    def record_transport_attempt(
+        db: Session,
+        *,
+        channel: NotificationChannel,
+        recipient: str,
+        subject: str | None = None,
+        body: str | None = None,
+        notification_id: str | UUID | None = None,
+        commit: bool = False,
+    ) -> Notification:
+        """Create or update the notification row for an active transport send."""
+        notification = (
+            db.get(Notification, notification_id) if notification_id else None
+        )
+        if notification is None:
+            notification = Notification(
+                channel=channel,
+                recipient=recipient,
+                subject=subject,
+                body=body,
+                status=NotificationStatus.sending,
+            )
+            db.add(notification)
+        else:
+            notification.channel = channel
+            notification.recipient = recipient
+            notification.subject = subject
+            notification.body = body
+            notification.status = NotificationStatus.sending
+            notification.last_error = None
+        if commit:
+            db.commit()
+            db.refresh(notification)
+        else:
+            db.flush()
+        return notification
+
+    @staticmethod
+    def queue(db: Session, payload: NotificationCreate) -> Notification:
+        """Backward-compatible customer notification queue entry point."""
+        return Notifications.queue_customer_notification(db, payload)
+
+    @staticmethod
+    def queue_or_drop_suppressed(
+        db: Session, payload: NotificationCreate
+    ) -> Notification | None:
+        """Backward-compatible event notification queue entry point."""
+        return Notifications.queue_event_notification(db, payload)
+
+    @staticmethod
+    def create(db: Session, payload: NotificationCreate):
+        notification = Notifications.create_customer_notification(db, payload)
+        return notification
+
+    @staticmethod
+    def create_customer_notification(
+        db: Session, payload: NotificationCreate
+    ) -> Notification:
+        notification = Notifications.queue_customer_notification(db, payload)
+        db.commit()
+        db.refresh(notification)
+        return notification
+
+    @staticmethod
+    def create_internal_notification(
+        db: Session, payload: NotificationCreate
+    ) -> Notification:
+        notification = Notifications.queue_internal_notification(db, payload)
         db.commit()
         db.refresh(notification)
         return notification
@@ -267,31 +654,21 @@ class Notifications(ListResponseMixin):
             category = payload.category or resolve_notification_category(
                 payload.event_type
             )
-            status = payload.status
-            last_error = None
-            if not is_notification_enabled_for_subscriber(
+            notification = Notifications.queue_customer_notification(
                 db,
-                subscriber_id=subscriber_id,
-                channel=payload.channel,
-                category=category,
-                recipient=recipient,
-            ):
-                status = NotificationStatus.canceled
-                last_error = "Suppressed by customer notification preferences"
-            notification = Notification(
-                template_id=payload.template_id,
-                subscriber_id=subscriber_id,
-                channel=payload.channel,
-                event_type=payload.event_type,
-                category=category,
-                recipient=recipient,
-                subject=payload.subject or (template.subject if template else None),
-                body=payload.body or (template.body if template else None),
-                status=status,
-                send_at=payload.send_at,
-                last_error=last_error,
+                NotificationCreate(
+                    template_id=payload.template_id,
+                    subscriber_id=subscriber_id,
+                    channel=payload.channel,
+                    event_type=payload.event_type,
+                    category=category,
+                    recipient=recipient,
+                    subject=payload.subject or (template.subject if template else None),
+                    body=payload.body or (template.body if template else None),
+                    status=payload.status,
+                    send_at=payload.send_at,
+                ),
             )
-            db.add(notification)
             notifications.append(notification)
         db.commit()
         for notification in notifications:
@@ -363,6 +740,12 @@ class Notifications(ListResponseMixin):
     @classmethod
     def list_response_for_subscriber(cls, db, subscriber_id, limit, offset):
         items = cls.list_for_subscriber(db, subscriber_id, limit, offset)
+        # Sanitise bodies for the in-app feed (strip email HTML, drop leaked
+        # {{tokens}}). Detach each row first so these display-only edits are
+        # never flushed back to the database.
+        for n in items:
+            db.expunge(n)
+            n.body = _clean_feed_body(n.body)
         return list_response(items, limit, offset)
 
     @staticmethod
@@ -604,6 +987,36 @@ class AlertNotificationPolicies(ListResponseMixin):
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
+    def count(
+        db: Session,
+        channel: str | None,
+        status: str | None,
+        severity_min: str | None,
+        is_active: bool | None,
+    ) -> int:
+        query = db.query(func.count(AlertNotificationPolicy.id))
+        if channel:
+            query = query.filter(
+                AlertNotificationPolicy.channel
+                == validate_enum(channel, NotificationChannel, "channel")
+            )
+        if status:
+            query = query.filter(
+                AlertNotificationPolicy.status
+                == validate_enum(status, AlertStatus, "status")
+            )
+        if severity_min:
+            query = query.filter(
+                AlertNotificationPolicy.severity_min
+                == validate_enum(severity_min, AlertSeverity, "severity_min")
+            )
+        if is_active is None:
+            query = query.filter(AlertNotificationPolicy.is_active.is_(True))
+        else:
+            query = query.filter(AlertNotificationPolicy.is_active == is_active)
+        return query.scalar() or 0
+
+    @staticmethod
     def update(db: Session, policy_id: str, payload: AlertNotificationPolicyUpdate):
         policy = db.get(AlertNotificationPolicy, policy_id)
         if not policy:
@@ -742,8 +1155,16 @@ class AlertNotificationPolicies(ListResponseMixin):
                 template_id = step.template_id or (
                     default_template_id if default_template_id else None
                 )
-                if template_id:
-                    template = db.get(NotificationTemplate, template_id)
+                template_uuid = None
+                if isinstance(template_id, UUID):
+                    template_uuid = template_id
+                elif template_id:
+                    try:
+                        template_uuid = UUID(str(template_id))
+                    except ValueError:
+                        template_uuid = None
+                if template_uuid:
+                    template = db.get(NotificationTemplate, template_uuid)
                     if template:
                         subject = template.subject or subject
                         body = template.body
@@ -753,17 +1174,17 @@ class AlertNotificationPolicies(ListResponseMixin):
                     delay_minutes = default_delay_minutes
                 if delay_minutes and delay_minutes > 0:
                     send_at = datetime.now(UTC) + timedelta(minutes=delay_minutes)
-                notification = Notification(
-                    template_id=template_id,
-                    channel=step.channel,
-                    recipient=recipient,
-                    subject=subject,
-                    body=body,
-                    status=NotificationStatus.queued,
-                    send_at=send_at,
+                notification = Notifications.queue_internal_notification(
+                    db,
+                    NotificationCreate(
+                        template_id=template_uuid,
+                        channel=step.channel,
+                        recipient=recipient,
+                        subject=subject,
+                        body=body,
+                        send_at=send_at,
+                    ),
                 )
-                db.add(notification)
-                db.flush()
                 log = AlertNotificationLog(
                     alert_id=alert.id,
                     policy_id=policy.id,

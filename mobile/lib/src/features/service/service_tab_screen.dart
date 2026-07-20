@@ -7,6 +7,7 @@ import '../../models/addon.dart';
 import '../../models/subscription.dart';
 import '../../models/usage.dart';
 import '../../providers/data_providers.dart';
+import '../../widgets/account_avatar_button.dart';
 import '../../widgets/async_value_view.dart';
 import '../../widgets/skeleton.dart';
 import '../usage/fup_card.dart';
@@ -53,7 +54,10 @@ class ServiceTabScreen extends ConsumerWidget {
     final serviceCount = services.asData?.value.items.length ?? 0;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Service')),
+      appBar: AppBar(
+        title: const Text('Service'),
+        actions: const [AccountAvatarButton()],
+      ),
       body: RefreshIndicator(
         onRefresh: () async {
           ref.invalidate(usageSummaryProvider(period));
@@ -122,7 +126,24 @@ class ServiceTabScreen extends ConsumerWidget {
             // Real-time speed, high on the tab so it's visible without a deep
             // scroll past the history charts.
             const LiveBandwidthCard(),
-            const SizedBox(height: 12),
+            const SizedBox(height: 16),
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.troubleshoot_outlined),
+                title: const Text('Connection status'),
+                subtitle: const Text(
+                  "See what's wrong and what to do if you're offline",
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => context.push('/connection'),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'Grow your service',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
             Card(
               child: ListTile(
                 leading: const Icon(Icons.add_location_alt_outlined),

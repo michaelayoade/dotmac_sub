@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.models.network import OLTDevice, OntSyncStatus, OntUnit
+from app.models.network import DeviceStatus, OLTDevice, OntSyncStatus, OntUnit
 from app.services.network.reconcile import (
     OntDesiredState,
     ReconcileFailure,
@@ -32,6 +32,7 @@ def olt_device(db_session):
     olt = OLTDevice(
         name="OLT-SWEEP-TEST",
         mgmt_ip="172.20.100.30",
+        vendor="huawei",
         is_active=True,
     )
     db_session.add(olt)
@@ -197,6 +198,39 @@ def test_sweep_skips_onts_under_non_active_olt(db_session, db_factory, monkeypat
     assert calls == []
 
 
+def test_sweep_never_selects_uisp_ufiber_onu(db_session, db_factory):
+    """UISP inventory rows must never enter the Huawei reconciler."""
+    olt = OLTDevice(
+        name="UF-OLT",
+        vendor="ubiquiti",
+        uisp_device_id="uisp-olt-1",
+        is_active=False,
+        status=DeviceStatus.active,
+    )
+    db_session.add(olt)
+    db_session.flush()
+    db_session.add(
+        OntUnit(
+            serial_number="UF-ONU-1",
+            olt_device_id=olt.id,
+            vendor="ubiquiti",
+            uisp_device_id="uisp-onu-1",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    calls: list = []
+    stats = run_sweep_once(
+        db_factory,
+        ping_function=lambda ip, count, timeout_sec: True,
+        reconcile_fn=lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    assert stats.total_onts == 0
+    assert calls == []
+
+
 def test_sweep_skips_unreachable_ont_without_invoking_reconcile(
     db_session, two_onts, db_factory, monkeypatch
 ):
@@ -225,6 +259,59 @@ def test_sweep_skips_unreachable_ont_without_invoking_reconcile(
     for ont in two_onts:
         db_session.refresh(ont)
         assert ont.consecutive_sweep_unreachable == 1
+
+
+def test_sweep_honors_batch_limit(two_onts, db_factory, monkeypatch):
+    monkeypatch.setattr(
+        "app.services.network.reconcile.sweeper.desired_from_ont_unit",
+        lambda db, ont: _make_desired(ont),
+    )
+    calls: list[str] = []
+
+    def _fake_reconcile(db, ont_id, **kwargs):
+        calls.append(str(ont_id))
+        return _stub_result(True)
+
+    stats = run_sweep_once(
+        db_factory,
+        ping_function=lambda ip, count, timeout_sec: True,
+        reconcile_fn=_fake_reconcile,
+        max_onts=1,
+    )
+
+    assert stats.total_onts == 1
+    assert len(calls) == 1
+
+
+def test_sweep_defers_remaining_targets_when_wall_clock_budget_expires(
+    two_onts, db_factory, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.services.network.reconcile.sweeper.desired_from_ont_unit",
+        lambda db, ont: _make_desired(ont),
+    )
+    elapsed = {"seconds": 0.0}
+    monkeypatch.setattr(
+        "app.services.network.reconcile.sweeper.time.monotonic",
+        lambda: elapsed["seconds"],
+    )
+    calls: list[str] = []
+
+    def _slow_reconcile(db, ont_id, **kwargs):
+        calls.append(str(ont_id))
+        elapsed["seconds"] += 2.0
+        return _stub_result(True)
+
+    stats = run_sweep_once(
+        db_factory,
+        ping_function=lambda ip, count, timeout_sec: True,
+        reconcile_fn=_slow_reconcile,
+        max_duration_sec=1,
+    )
+
+    assert len(calls) == 1
+    assert stats.succeeded == 1
+    assert stats.deferred == 1
 
 
 def test_sweep_invokes_reconcile_for_reachable_onts(
@@ -416,7 +503,6 @@ def test_sweep_fires_escalation_on_threshold_crossing(
         ping_function=lambda ip, count, timeout_sec: False,  # unreachable
         reconcile_fn=lambda *a, **k: _stub_result(True),
         alert_threshold=3,
-        trapper=None,
     )
 
     assert len(escalations) == 2
@@ -448,7 +534,6 @@ def test_sweep_skips_escalation_when_threshold_is_zero(
         ping_function=lambda ip, count, timeout_sec: False,
         reconcile_fn=lambda *a, **k: _stub_result(True),
         alert_threshold=0,
-        trapper=None,
     )
 
     assert escalations == []

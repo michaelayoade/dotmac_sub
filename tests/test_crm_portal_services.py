@@ -19,6 +19,9 @@ def _ticket(
     priority="normal",
     created="2026-01-01T00:00:00+00:00",
     updated="2026-01-02T00:00:00+00:00",
+    due="2026-01-03T00:00:00+00:00",
+    resolved=None,
+    closed=None,
 ) -> Mock:
     """A stand-in for a local support Ticket ORM row."""
     t = Mock()
@@ -31,6 +34,9 @@ def _ticket(
     t.priority = priority
     t.created_at = datetime.fromisoformat(created)
     t.updated_at = datetime.fromisoformat(updated)
+    t.due_at = datetime.fromisoformat(due) if due else None
+    t.resolved_at = datetime.fromisoformat(resolved) if resolved else None
+    t.closed_at = datetime.fromisoformat(closed) if closed else None
     return t
 
 
@@ -120,7 +126,7 @@ def test_resolve_crm_subscriber_id_caches_crm_mapping(
         "app.services.crm_portal._cache_set",
         lambda key, value, ttl: cache_sets.append((key, value, ttl)),
     )
-    monkeypatch.setattr("app.services.crm_portal.get_crm_client", lambda: client)
+    monkeypatch.setattr("app.services.crm_portal.get_crm_client", lambda *_: client)
 
     resolved = crm_portal.resolve_crm_subscriber_id(db_session, str(subscriber.id))
 
@@ -149,7 +155,7 @@ def test_resolve_crm_subscriber_id_uses_short_ttl_for_lookup_miss(
         "app.services.crm_portal._cache_set",
         lambda key, value, ttl: cache_sets.append((key, value, ttl)),
     )
-    monkeypatch.setattr("app.services.crm_portal.get_crm_client", lambda: client)
+    monkeypatch.setattr("app.services.crm_portal.get_crm_client", lambda *_: client)
 
     resolved = crm_portal.resolve_crm_subscriber_id(db_session, str(subscriber.id))
 
@@ -172,7 +178,54 @@ def test_resolve_crm_subscriber_ids_deduplicates_and_skips_blanks(monkeypatch) -
     assert resolved == ["crm-1", "crm-3"]
 
 
+def test_reseller_open_tickets_count_returns_none_when_crm_unavailable(
+    monkeypatch,
+    db_session,
+) -> None:
+    client = Mock()
+    client.list_tickets.side_effect = crm_portal.CRMClientError("down")
+    monkeypatch.setattr(
+        "app.services.crm_portal.resolve_crm_subscriber_id",
+        lambda _db, _account_id: "crm-sub-1",
+    )
+    monkeypatch.setattr("app.services.crm_portal.get_crm_client", lambda *_: client)
+
+    count = crm_portal.reseller_open_tickets_count(
+        db_session,
+        "reseller-1",
+        ["account-1"],
+    )
+
+    assert count is None
+
+
 # ── Customer Portal: Tickets (sourced from the local support module) ──────
+
+
+def test_ticket_portal_keeps_priority_display_maps_only() -> None:
+    for priority in ["lower", "low", "medium", "normal", "high", "urgent"]:
+        assert priority in crm_portal.TICKET_PRIORITY_DISPLAY
+        assert priority in crm_portal.TICKET_PRIORITY_COLORS
+
+
+def test_ticket_to_dict_includes_native_sla_resolution_timestamps() -> None:
+    ticket = _ticket(
+        due="2026-01-03T00:00:00+00:00",
+        resolved="2026-01-04T00:00:00+00:00",
+        closed="2026-01-05T00:00:00+00:00",
+    )
+
+    payload = crm_portal._ticket_to_dict(ticket)
+
+    assert payload["due_at"] == "2026-01-03T00:00:00+00:00"
+    assert payload["resolved_at"] == "2026-01-04T00:00:00+00:00"
+    assert payload["closed_at"] == "2026-01-05T00:00:00+00:00"
+    assert payload["status_presentation"] == {
+        "value": "open",
+        "label": "Open",
+        "tone": "info",
+        "icon": "info",
+    }
 
 
 def test_tickets_list_context_skips_blank_subscriber_ids(monkeypatch) -> None:
@@ -208,7 +261,7 @@ def test_tickets_list_context_merges_multiple_allowed_accounts(monkeypatch) -> N
 
     assert sorted(t["id"] for t in context["tickets"]) == ["t-1", "t-2"]
     assert context["crm_error"] is False
-    assert context["status_display"] == crm_portal.TICKET_STATUS_DISPLAY
+    assert context["tickets"][0]["status_presentation"]["value"] == "open"
 
 
 def test_tickets_list_context_returns_error_context_on_failure(monkeypatch) -> None:
@@ -223,7 +276,7 @@ def test_tickets_list_context_returns_error_context_on_failure(monkeypatch) -> N
 
     assert context["tickets"] == []
     assert context["crm_error"] is True
-    assert context["status_display"] == crm_portal.TICKET_STATUS_DISPLAY
+    assert "status_display" not in context
 
 
 def test_ticket_detail_context_rejects_ticket_with_wrong_subscriber(
@@ -280,7 +333,7 @@ def test_ticket_detail_context_filters_internal_comments(monkeypatch) -> None:
 
     assert context["ticket"]["id"] == "ticket-1"
     assert [c["body"] for c in context["comments"]] == ["Visible"]
-    assert context["status_display"] == crm_portal.TICKET_STATUS_DISPLAY
+    assert context["ticket"]["status_presentation"]["value"] == "open"
 
 
 def test_ticket_create_context_exposes_priority_choices() -> None:
@@ -428,7 +481,7 @@ def test_resolve_crm_subscriber_id_prefers_stored_id(
         "app.services.crm_portal._cache_set",
         lambda key, value, ttl: cache_sets.append((key, value, ttl)),
     )
-    monkeypatch.setattr("app.services.crm_portal.get_crm_client", lambda: client)
+    monkeypatch.setattr("app.services.crm_portal.get_crm_client", lambda *_: client)
 
     resolved = crm_portal.resolve_crm_subscriber_id(db_session, str(subscriber.id))
 
@@ -450,7 +503,7 @@ def test_resolve_crm_subscriber_id_persists_fallback_result(
     monkeypatch.setattr(
         "app.services.crm_portal._cache_set", lambda key, value, ttl: None
     )
-    monkeypatch.setattr("app.services.crm_portal.get_crm_client", lambda: client)
+    monkeypatch.setattr("app.services.crm_portal.get_crm_client", lambda *_: client)
 
     resolved = crm_portal.resolve_crm_subscriber_id(db_session, str(subscriber.id))
     db_session.refresh(subscriber)

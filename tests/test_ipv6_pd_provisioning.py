@@ -98,6 +98,55 @@ def test_provision_pd_is_flag_gated_and_idempotent(
     assert pd2.id == pd.id
 
 
+def test_pd_is_scoped_to_subscription_for_multi_service_subscriber(
+    db_session, subscriber, catalog_offer
+):
+    pool = _v6pool(db_session, "multi-service")
+    first = _subscription(db_session, subscriber, catalog_offer)
+    second = _subscription(db_session, subscriber, catalog_offer)
+
+    first_pd = ipv6_pd.allocate_delegated_prefix(
+        db_session,
+        pool=pool,
+        subscriber_id=subscriber.id,
+        subscription_id=first.id,
+    )
+    second_pd = ipv6_pd.allocate_delegated_prefix(
+        db_session,
+        pool=pool,
+        subscriber_id=subscriber.id,
+        subscription_id=second.id,
+    )
+
+    assert first_pd.id != second_pd.id
+    assert (
+        ipv6_pd.active_delegated_prefix_for_subscription(
+            db_session, first.id, subscriber_id=subscriber.id
+        )
+        == f"{first_pd.prefix}/{first_pd.prefix_length}"
+    )
+    assert (
+        ipv6_pd.active_delegated_prefix_for_subscription(
+            db_session, second.id, subscriber_id=subscriber.id
+        )
+        == f"{second_pd.prefix}/{second_pd.prefix_length}"
+    )
+
+    assert ipv6_pd.release_subscription_prefixes(db_session, first.id) == 1
+    assert (
+        ipv6_pd.active_delegated_prefix_for_subscription(
+            db_session, first.id, subscriber_id=subscriber.id
+        )
+        is None
+    )
+    assert (
+        ipv6_pd.active_delegated_prefix_for_subscription(
+            db_session, second.id, subscriber_id=subscriber.id
+        )
+        is not None
+    )
+
+
 def test_manual_assign_action(db_session, subscriber):
     from app.services.web_network_ip import assign_delegated_prefix_action
 

@@ -4,8 +4,8 @@
 {% block title %}Network Usage Report - Admin{% endblock %}
 
 {% block charts_js %}
-<script src="/static/js/vendor/chart.min.js"></script>
-<script src="/static/js/charts.js"></script>
+<script src="/static/js/vendor/echarts.min.js"></script>
+<script src="/static/js/echarts-charts.js"></script>
 {% endblock %}
 
 {% block content %}
@@ -15,6 +15,7 @@
             <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Network Usage</h1>
             <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Review network utilization and infrastructure status</p>
         </div>
+        {% if can(request, "reports:network:export") %}
         <form method="GET" action="/admin/reports/network/export" class="flex items-center gap-2">
             <label for="hours" class="sr-only">Export period</label>
             <select id="hours" name="hours" class="rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
@@ -27,6 +28,7 @@
                 Export
             </button>
         </form>
+        {% endif %}
     </div>
 
     <!-- Summary Cards -->

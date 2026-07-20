@@ -70,22 +70,8 @@
     <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
         <div class="flex flex-wrap items-center justify-between gap-4">
             <div class="min-w-0 flex-1">
-                {% set zh = zabbix_health | default({}, true) %}
                 <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Health:</span>
                 <div class="mt-2 flex flex-wrap items-center gap-3">
-                    {% if zh.runtime_health_state == 'attention' %}
-                    <span class="inline-flex items-center gap-1.5 rounded-full bg-rose-100 px-3 py-1 text-xs font-semibold text-rose-700 dark:bg-rose-900/30 dark:text-rose-300">
-                        <span class="h-2 w-2 rounded-full bg-rose-500"></span>{{ zh.runtime_health_label or 'Attention' }}
-                    </span>
-                    {% elif zh.runtime_health_state == 'healthy' %}
-                    <span class="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">
-                        <span class="h-2 w-2 rounded-full bg-emerald-500"></span>{{ zh.runtime_health_label or 'Healthy' }}
-                    </span>
-                    {% elif zh %}
-                    <span class="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">
-                        <span class="h-2 w-2 rounded-full bg-slate-400"></span>{{ zh.runtime_health_label or 'Unknown' }}
-                    </span>
-                    {% else %}
                     {% set info = resolved_device_info %}
                     {% if info.ping_enabled %}
                         {% set ping_state = 'ok' if info.last_ping_ok is sameas true else ('fail' if info.last_ping_ok is sameas false else 'unknown') %}
@@ -99,35 +85,11 @@
                     {% endif %}
                     {{ health_dot(ping_state, "Ping") }}
                     {{ health_dot(snmp_state, "SNMP") }}
-                    {% endif %}
                     <form method="POST" action="/admin/network/olts/{{ olt.id }}/test-ssh" class="inline">
                         {% include "components/forms/csrf_input.html" %}
                         <button type="submit" class="text-xs font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400">Test SSH</button>
                     </form>
                 </div>
-                {% if zh %}
-                <div class="mt-3 grid gap-2 text-xs text-slate-600 dark:text-slate-300 sm:grid-cols-2 lg:grid-cols-4">
-                    <div>
-                        <span class="font-semibold text-slate-800 dark:text-slate-100">Reason:</span>
-                        {{ zh.runtime_health_reason or 'Zabbix telemetry is current' }}
-                    </div>
-                    <div>
-                        <span class="font-semibold text-slate-800 dark:text-slate-100">SNMP:</span>
-                        {{ zh.runtime_snmp_label or 'Unknown' }}
-                    </div>
-                    <div>
-                        <span class="font-semibold text-slate-800 dark:text-slate-100">PON:</span>
-                        {{ zh.runtime_pon_up or '0' }}/{{ zh.runtime_pon_total or '0' }} up
-                    </div>
-                    <div>
-                        <span class="font-semibold text-slate-800 dark:text-slate-100">Low signal:</span>
-                        {{ zh.runtime_low_signal or '0' }}
-                    </div>
-                </div>
-                {% if zh.runtime_last_seen_at %}
-                <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">Zabbix telemetry updated {{ zh.runtime_last_seen_at }}</p>
-                {% endif %}
-                {% endif %}
             </div>
             <div class="flex flex-wrap items-center gap-2">
                 <form method="POST" action="/admin/network/olts/{{ olt.id }}/import-state" class="inline">
@@ -304,6 +266,80 @@
                  hx-swap="innerHTML">
                 <div class="text-sm text-slate-500 dark:text-slate-400">Loading imported OLT profiles...</div>
             </div>
+        </div>
+    </details>
+
+    <section class="border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
+        <div class="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 px-5 py-4 dark:border-slate-700">
+            <div>
+                <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Control plane identity</h2>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ identity_view.write_reason }}</p>
+            </div>
+            {{ status_badge(identity_view.readiness_label, identity_view.readiness_tone, size="sm") }}
+        </div>
+        <dl class="grid gap-x-6 gap-y-3 px-5 py-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
+            <div><dt class="text-xs font-medium text-slate-500">Observed hardware</dt><dd class="mt-1 text-slate-900 dark:text-white">{{ identity_view.identity.vendor ~ ' ' ~ identity_view.identity.model if identity_view.identity else (olt.vendor or 'Unknown') ~ ' ' ~ (olt.model or 'Unknown') }}</dd></div>
+            <div><dt class="text-xs font-medium text-slate-500">Observed firmware</dt><dd class="mt-1 font-mono text-xs text-slate-900 dark:text-white">{{ identity_view.identity.firmware_version if identity_view.identity and identity_view.identity.firmware_version else 'Unknown' }}</dd></div>
+            <div><dt class="text-xs font-medium text-slate-500">Selected adapter</dt><dd class="mt-1 break-all font-mono text-xs text-slate-900 dark:text-white">{{ identity_view.adapter_label }}</dd></div>
+            <div><dt class="text-xs font-medium text-slate-500">Last observation</dt><dd class="mt-1 text-slate-900 dark:text-white">{{ identity_view.observed_at | app_datetime('%Y-%m-%d %H:%M:%S', 'Never') }}<span class="block text-xs text-slate-500">{{ identity_view.observed_source }}</span></dd></div>
+        </dl>
+    </section>
+
+    {# Firmware lifecycle #}
+    <details class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <summary class="cursor-pointer px-5 py-4 text-sm font-semibold text-slate-900 dark:text-white">Firmware lifecycle</summary>
+        <div class="border-t border-slate-200 px-5 py-4 dark:border-slate-700">
+            <div class="grid gap-4 md:grid-cols-3">
+                <div>
+                    <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Observed version</p>
+                    <p class="mt-1 font-mono text-sm text-slate-900 dark:text-white">{{ firmware_context.current_version }}</p>
+                </div>
+                <div>
+                    <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Software</p>
+                    <p class="mt-1 font-mono text-sm text-slate-900 dark:text-white">{{ firmware_context.software_version or 'Unknown' }}</p>
+                </div>
+                <div>
+                    <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Last operation</p>
+                    {% if firmware_context.latest_operation %}
+                    <p class="mt-1 text-sm font-medium text-slate-900 dark:text-white">{{ firmware_context.latest_operation.status }}</p>
+                    {% if firmware_context.latest_operation.message %}<p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ firmware_context.latest_operation.message }}</p>{% endif %}
+                    {% else %}
+                    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">No upgrade recorded</p>
+                    {% endif %}
+                </div>
+            </div>
+
+            {% if firmware_context.images %}
+            <form method="POST"
+                  action="/admin/network/olts/{{ olt.id }}/firmware-upgrade"
+                  class="mt-5 grid gap-3 border-t border-slate-200 pt-4 dark:border-slate-700 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] md:items-end"
+                  data-confirm="Queue this firmware upgrade for {{ olt.name }}? Customer traffic will be interrupted during reboot and success requires exact version readback."
+                  data-confirm-variant="warning"
+                  data-confirm-label="Queue upgrade">
+                {% include "components/forms/csrf_input.html" %}
+                <div>
+                    <label for="olt-firmware-image" class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Target image</label>
+                    <select id="olt-firmware-image" name="firmware_image_id" required {% if firmware_context.upgrade_active %}disabled{% endif %} class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+                        <option value="">Select firmware</option>
+                        {% for image in firmware_context.images %}
+                        <option value="{{ image.id }}">{{ image.vendor }} {{ image.model or 'all models' }} v{{ image.version }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label for="firmware-confirm-olt-name" class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Type {{ olt.name }} to confirm</label>
+                    <input id="firmware-confirm-olt-name" name="confirm_olt_name" type="text" required autocomplete="off" {% if firmware_context.upgrade_active %}disabled{% endif %} class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+                </div>
+                <button type="submit" {% if firmware_context.upgrade_active %}disabled{% endif %} class="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50">
+                    {{ 'Upgrade active' if firmware_context.upgrade_active else 'Queue upgrade' }}
+                </button>
+            </form>
+            {% else %}
+            <p class="mt-4 border-t border-slate-200 pt-4 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                No compatible active firmware image is available for this OLT.
+                <a href="/admin/network/firmware-images/create?kind=olt" class="font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400">Add image</a>
+            </p>
+            {% endif %}
         </div>
     </details>
 

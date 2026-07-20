@@ -7,6 +7,7 @@ from celery.schedules import crontab
 
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.scheduler import ScheduledTask, ScheduleType
+from app.services import control_registry
 from app.services import integration as integration_service
 from app.services.db_session_adapter import db_session_adapter
 from app.services.settings_spec import resolve_value
@@ -28,16 +29,6 @@ TR069_TASK_QUEUE_NAMES = {
     "app.tasks.tr069.apply_saved_ont_service_config",
     "app.tasks.tr069.apply_acs_config",
 }
-
-
-def _zabbix_configured_default() -> bool:
-    try:
-        from app.services.zabbix import zabbix_configured
-
-        return zabbix_configured()
-    except Exception:
-        logger.debug("zabbix_scheduler_default_resolution_failed", exc_info=True)
-        return False
 
 
 def _env_value(name: str) -> str | None:
@@ -85,11 +76,9 @@ def _effective_bool(
     db, domain: SettingDomain, key: str, env_key: str, default: bool
 ) -> bool:
     # Single control plane: if this (domain, key) is a registered control, the
-    # ONE resolver decides — composing env override, the canonical row a
-    # registry-driven admin page writes, the legacy alias, and the owning
-    # module. Behavior-neutral for registered keys until a module is disabled or
-    # a canonical row is set, because each control's on_missing == the legacy
-    # default here (asserted by the parity test).
+    # ONE resolver decides from the canonical row/default and owning module.
+    # ``domain``/``key`` are caller-routing metadata only; ``env_key`` and the
+    # retired domain-setting row are never consulted for registered controls.
     from app.services import control_registry
 
     canonical = control_registry.control_for_legacy(domain, key)
@@ -129,6 +118,11 @@ def _resolve_int(db, domain: SettingDomain, key: str, default: int) -> int:
         return int(str(raw))
     except (TypeError, ValueError):
         return default
+
+
+def _resolve_bool(db, domain: SettingDomain, key: str, default: bool) -> bool:
+    value = resolve_value(db, domain, key)
+    return value if isinstance(value, bool) else default
 
 
 def _effective_str(
@@ -371,7 +365,6 @@ def get_celery_config() -> dict:
             # limit can kill a catch-up billing or dunning pass mid-run.
             "app.tasks.billing.run_invoice_cycle": long_limits,
             "app.tasks.collections.run_billing_enforcement": long_limits,
-            "app.tasks.collections.run_dunning": long_limits,
         }
     )
     config["task_annotations"] = annotations
@@ -397,17 +390,29 @@ def _interval_to_beat_schedule(task_id, interval_seconds: int):
     """Beat schedule object for an interval task.
 
     Celery beat measures `timedelta` intervals from its own (non-persisted)
-    start time, so a daily task only fires after 24h of uninterrupted beat
-    uptime — under frequent deploys it never comes due (this starved billing,
-    dunning, expiration and FUP runs for weeks). Day-long intervals are
-    therefore anchored to a stable wall-clock slot instead: 00:00-05:59,
-    spread deterministically by task id so the daily runners don't stampede.
-    Sub-daily intervals keep their timedelta — a restart delays them by at
-    most one interval, which is acceptable.
+    start time, so a task only comes due after a full interval of
+    uninterrupted beat uptime — under frequent deploys long intervals never
+    fire. This starved billing, dunning, expiration and FUP runs for weeks,
+    and later starved the hourly topology_lldp_poll/topology_reconcile
+    (network_topology_links stayed empty for 17+ days because beat rarely
+    survived a full hour between deploys). Intervals that map onto a
+    wall-clock cadence are therefore anchored to stable crontab slots,
+    spread deterministically by task id so runners don't stampede:
+
+    - day-long: a fixed minute/hour in the 00:00-05:59 window;
+    - whole-hour multiples (1h..23h): a fixed minute, every Nth hour.
+
+    Sub-hourly intervals keep their timedelta (a restart delays them by at
+    most one interval, which at that cadence is fine), as do intervals that
+    don't divide into whole hours (crontab cannot express e.g. a 90-minute
+    cadence without drift).
     """
+    anchor = task_id.int if hasattr(task_id, "int") else abs(hash(task_id))
     if 86400 <= interval_seconds < 2 * 86400:
-        anchor = task_id.int if hasattr(task_id, "int") else abs(hash(task_id))
         return crontab(minute=anchor % 60, hour=(anchor // 60) % 6)
+    if 3600 <= interval_seconds < 86400 and interval_seconds % 3600 == 0:
+        step_hours = interval_seconds // 3600
+        return crontab(minute=anchor % 60, hour=f"*/{step_hours}")
     if interval_seconds >= 2 * 86400:
         logger.warning(
             "scheduled_task_multiday_interval_restart_relative",
@@ -518,27 +523,20 @@ def build_beat_schedule() -> dict:
                 "task": "app.tasks.gis.sync_gis_sources",
                 "schedule": timedelta(minutes=max(interval_minutes, 1)),
             }
-        vas_enabled = _effective_bool(
-            session, SettingDomain.vas, "enabled", "VAS_ENABLED", False
+        credential_rotation_enabled = _effective_bool(
+            session,
+            SettingDomain.auth,
+            "credential_rotation_enabled",
+            "CREDENTIAL_ROTATION_ENABLED",
+            True,
         )
-        if vas_enabled:
-            # Daily sweep; pay_bill settlement is idempotent so re-runs are safe.
-            schedule["vas_wallet_auto_deduct"] = {
-                "task": "app.tasks.vas.run_wallet_auto_deduct",
-                "schedule": timedelta(hours=24),
-            }
-            schedule["vas_requery"] = {
-                "task": "app.tasks.vas.run_vas_requery",
-                "schedule": timedelta(minutes=5),
-            }
-            schedule["vas_catalog_sync"] = {
-                "task": "app.tasks.vas.sync_vas_catalog",
-                "schedule": timedelta(hours=12),
-            }
-            schedule["vas_review_requery"] = {
-                "task": "app.tasks.vas.run_vas_review_requery",
-                "schedule": timedelta(hours=24),
-            }
+        _sync_scheduled_task(
+            session,
+            name="credential_encryption_key_rotation",
+            task_name="app.tasks.security.run_scheduled_credential_rotation",
+            enabled=credential_rotation_enabled,
+            interval_seconds=86400,
+        )
         usage_enabled = _effective_bool(
             session,
             SettingDomain.usage,
@@ -633,6 +631,36 @@ def build_beat_schedule() -> dict:
             enabled=radius_reap_enabled,
             interval_seconds=radius_reap_interval_seconds,
         )
+        # Staff device-login reconcile: authoritative sweep of radcheck_admin /
+        # radreply_admin from active SystemUser device-login state. This is the
+        # backstop that actually revokes router login when staff are deactivated,
+        # deleted, or renamed — populate_device_login otherwise only runs on a
+        # device-login edit, so a deactivation via the normal user-admin path
+        # would never take effect in RADIUS. Default-on (a security control).
+        device_login_sync_enabled = _effective_bool(
+            session,
+            SettingDomain.usage,
+            "device_login_sync_enabled",
+            "DEVICE_LOGIN_SYNC_ENABLED",
+            True,
+        )
+        device_login_sync_interval_seconds = max(
+            _effective_int(
+                session,
+                SettingDomain.usage,
+                "device_login_sync_interval_seconds",
+                "DEVICE_LOGIN_SYNC_INTERVAL_SECONDS",
+                900,
+            ),
+            60,
+        )
+        _sync_scheduled_task(
+            session,
+            name="device_login_sync",
+            task_name="app.tasks.radius_population.sync_device_login",
+            enabled=device_login_sync_enabled,
+            interval_seconds=device_login_sync_interval_seconds,
+        )
         # Companion to the app-side reaper above: this one closes the *external*
         # FreeRADIUS radacct table (the mirror reaper only touches the app-side
         # RadiusAccountingSession). Same flag/interval — without it, dead NAS
@@ -643,6 +671,116 @@ def build_beat_schedule() -> dict:
             task_name="app.tasks.radius.reap_radacct_ghosts",
             enabled=radius_reap_enabled,
             interval_seconds=radius_reap_interval_seconds,
+        )
+        # Rebuild the live radius_active_sessions view from OPEN external radacct
+        # sessions. The accounting-hook populator isn't firing in prod (the table
+        # starved to 1 row while radacct carries ~893 open sessions), so this
+        # discover-reconcile sweep is the authoritative populator. Gated by the
+        # usage flag; refreshes often (it's a live view). Default-on so the view
+        # actually gets populated.
+        radius_active_session_reconcile_interval_seconds = max(
+            _effective_int(
+                session,
+                SettingDomain.usage,
+                "radius_active_session_reconcile_interval_seconds",
+                "RADIUS_ACTIVE_SESSION_RECONCILE_INTERVAL_SECONDS",
+                120,
+            ),
+            60,
+        )
+        _sync_scheduled_task(
+            session,
+            name="radius_active_session_reconcile",
+            task_name="app.tasks.radius.reconcile_active_sessions",
+            enabled=usage_enabled,
+            interval_seconds=radius_active_session_reconcile_interval_seconds,
+        )
+        # Enforce billing suspensions at the live session (SP-1). A suspend only
+        # writes Auth-Type := Reject, which bites at the *next* re-auth — a stable
+        # PPPoE session survives it, so a suspended/terminated subscriber can stay
+        # online for days (revenue leak). run_enforcement_reconciler CoA-kicks open
+        # sessions whose user has no radcheck row or sits in a reject pool, and
+        # repairs walled-garden radreply drift. It caps kicks per run so systemic
+        # drift degrades to alerts rather than a mass disconnect — hence safe to
+        # run by default. Previously defined but never scheduled.
+        enforcement_reconciler_enabled = _effective_bool(
+            session,
+            SettingDomain.usage,
+            "enforcement_reconciler_enabled",
+            "ENFORCEMENT_RECONCILER_ENABLED",
+            True,
+        )
+        enforcement_reconciler_interval_seconds = max(
+            _effective_int(
+                session,
+                SettingDomain.usage,
+                "enforcement_reconciler_interval_seconds",
+                "ENFORCEMENT_RECONCILER_INTERVAL_SECONDS",
+                600,
+            ),
+            120,
+        )
+        _sync_scheduled_task(
+            session,
+            name="enforcement_reconciler",
+            task_name="app.tasks.radius.run_enforcement_reconciler",
+            enabled=enforcement_reconciler_enabled,
+            interval_seconds=enforcement_reconciler_interval_seconds,
+        )
+        # Daily status-backstop reconcilers (SP-8): the event path normally
+        # clears these, but the sweeps are the catch-up for lost events.
+        # account_status: auto-repair subscribers stuck `new`/`blocked` while
+        # all subs are active. The all-active filter is a robust guard, pure
+        # service-state, so apply mode is safe.
+        account_status_reconcile_enabled = _effective_bool(
+            session,
+            SettingDomain.billing,
+            "account_status_reconcile_enabled",
+            "ACCOUNT_STATUS_RECONCILE_ENABLED",
+            True,
+        )
+        _sync_scheduled_task(
+            session,
+            name="account_status_reconcile",
+            task_name="app.tasks.enforcement.reconcile_account_status_drift",
+            enabled=account_status_reconcile_enabled,
+            interval_seconds=86400,
+        )
+        # stale overdue locks: money-adjacent, so DETECT-only (dry-run) — it
+        # WARNs with the candidate count for an operator to clear after review,
+        # rather than auto-clearing an overdue lock on a possibly-wrong "no debt".
+        stale_overdue_lock_detect_enabled = _effective_bool(
+            session,
+            SettingDomain.billing,
+            "stale_overdue_lock_detect_enabled",
+            "STALE_OVERDUE_LOCK_DETECT_ENABLED",
+            True,
+        )
+        _sync_scheduled_task(
+            session,
+            name="stale_overdue_lock_detect",
+            task_name="app.tasks.enforcement.detect_stale_overdue_locks",
+            enabled=stale_overdue_lock_detect_enabled,
+            interval_seconds=86400,
+        )
+        # Cross-app drift detector (R-3): daily read-only proof that CRM / sub /
+        # ERP still agree on the business facts that matter. Detect-only — it
+        # persists findings by fingerprint and WARNs on material drift, pointing
+        # at the reconciler that owns each fix; it never heals. Safe to run by
+        # default (no writes to business state).
+        cross_app_drift_enabled = _effective_bool(
+            session,
+            SettingDomain.audit,
+            "cross_app_drift_detection_enabled",
+            "CROSS_APP_DRIFT_DETECTION_ENABLED",
+            True,
+        )
+        _sync_scheduled_task(
+            session,
+            name="cross_app_drift_detection",
+            task_name="app.tasks.cross_app_drift.run_cross_app_drift_detection",
+            enabled=cross_app_drift_enabled,
+            interval_seconds=86400,
         )
         # Roll imported RADIUS accounting into quota buckets (feeds FUP/overage).
         # Gated by the same usage flag. This follows the RADIUS accounting
@@ -685,32 +823,15 @@ def build_beat_schedule() -> dict:
             enabled=usage_enabled,
             interval_seconds=max(usage_interval_seconds, 300),
         )
-        zabbix_usage_enabled_by_default = _zabbix_configured_default()
-        zabbix_usage_enabled = _effective_bool(
-            session,
-            SettingDomain.usage,
-            "zabbix_portal_usage_ingestion_enabled",
-            "ZABBIX_PORTAL_USAGE_INGESTION_ENABLED",
-            zabbix_usage_enabled_by_default,
-        )
-        zabbix_usage_interval_seconds = _effective_int(
-            session,
-            SettingDomain.usage,
-            "zabbix_portal_usage_ingestion_interval_seconds",
-            "ZABBIX_PORTAL_USAGE_INGESTION_INTERVAL_SECONDS",
-            300,
-        )
-        zabbix_usage_interval_seconds = max(zabbix_usage_interval_seconds, 30)
+        # Zabbix portal-usage ingestion retired with the native monitoring
+        # cutover; disable any existing DB rows.
         _retire_scheduled_task(
             session,
             "app.tasks.zabbix_ingestion.ingest_portal_usage",
         )
-        _sync_scheduled_task(
+        _retire_scheduled_task(
             session,
-            name="zabbix_portal_usage_ingestion",
-            task_name="app.tasks.zabbix_ingestion.dispatch_portal_usage_ingestion",
-            enabled=zabbix_usage_enabled,
-            interval_seconds=zabbix_usage_interval_seconds,
+            "app.tasks.zabbix_ingestion.dispatch_portal_usage_ingestion",
         )
         billing_enabled = _effective_bool(
             session,
@@ -834,6 +955,38 @@ def build_beat_schedule() -> dict:
             enabled=dunning_enabled,
             interval_seconds=dunning_interval_seconds,
         )
+        # Bundle-state reconcile: heal any divergent bundle member (base active
+        # while a component sub is suspended, or vice versa) back to its anchor.
+        _sync_scheduled_task(
+            session,
+            name="bundle_reconcile",
+            task_name="app.tasks.collections.run_bundle_reconcile",
+            enabled=dunning_enabled,
+            interval_seconds=900,
+        )
+        # Balance/expiry-based prepaid enforcement sweep. DEFAULT OFF (its own
+        # control key, routed through the single control-plane resolver): it
+        # arms low-balance/deactivation timers and SUSPENDS depleted prepaid
+        # accounts, so it stays a deliberate opt-in. The sweep also no-ops
+        # internally when the control is off. Cadence is constrained by the
+        # registered setting so the sweep reaches every configured blocking
+        # window instead of being anchored once daily before that window.
+        prepaid_balance_enforcement_enabled = control_registry.is_enabled(
+            session, "collections.prepaid_balance_enforcement"
+        )
+        prepaid_balance_sweep_interval_seconds = _resolve_int(
+            session,
+            SettingDomain.collections,
+            "prepaid_balance_sweep_interval_seconds",
+            3600,
+        )
+        _sync_scheduled_task(
+            session,
+            name="prepaid_balance_sweep",
+            task_name="app.tasks.collections.prepaid_balance_sweep",
+            enabled=prepaid_balance_enforcement_enabled,
+            interval_seconds=prepaid_balance_sweep_interval_seconds,
+        )
         # Billing master-switch config guard — ALWAYS on (independent of
         # billing_enabled) so an unexpected flip is caught, not silently armed.
         _sync_scheduled_task(
@@ -842,6 +995,57 @@ def build_beat_schedule() -> dict:
             task_name="app.tasks.billing.check_billing_switch",
             enabled=True,
             interval_seconds=3600,
+        )
+        # Heavy cohort health is produced out of band. Prometheus scrapes only
+        # the bounded Redis snapshot and never walks customer financial rows.
+        _sync_scheduled_task(
+            session,
+            name="billing_health_snapshot",
+            task_name="app.tasks.billing.refresh_billing_health_snapshot",
+            enabled=True,
+            interval_seconds=900,
+        )
+        cutover_audit_enabled = _effective_bool(
+            session,
+            SettingDomain.billing,
+            "cutover_balance_audit_enabled",
+            "BILLING_CUTOVER_BALANCE_AUDIT_ENABLED",
+            True,
+        )
+        cutover_audit_interval_seconds = _effective_int(
+            session,
+            SettingDomain.billing,
+            "cutover_balance_audit_interval_seconds",
+            "BILLING_CUTOVER_BALANCE_AUDIT_INTERVAL_SECONDS",
+            86400,
+        )
+        _sync_scheduled_task(
+            session,
+            name="cutover_balance_invariant_audit",
+            task_name="app.tasks.billing.audit_cutover_balance_invariant",
+            enabled=cutover_audit_enabled,
+            interval_seconds=max(cutover_audit_interval_seconds, 3600),
+        )
+        funded_inactive_audit_enabled = _effective_bool(
+            session,
+            SettingDomain.billing,
+            "funded_inactive_exposure_audit_enabled",
+            "BILLING_FUNDED_INACTIVE_EXPOSURE_AUDIT_ENABLED",
+            True,
+        )
+        funded_inactive_audit_interval_seconds = _effective_int(
+            session,
+            SettingDomain.billing,
+            "funded_inactive_exposure_audit_interval_seconds",
+            "BILLING_FUNDED_INACTIVE_EXPOSURE_AUDIT_INTERVAL_SECONDS",
+            2592000,
+        )
+        _sync_scheduled_task(
+            session,
+            name="funded_inactive_exposure_audit",
+            task_name="app.tasks.billing.audit_funded_inactive_exposure",
+            enabled=funded_inactive_audit_enabled,
+            interval_seconds=max(funded_inactive_audit_interval_seconds, 86400),
         )
         # Autopay charging (idempotent; due-date gating lives in the service)
         autopay_enabled = _effective_bool(
@@ -1018,6 +1222,61 @@ def build_beat_schedule() -> dict:
             enabled=subscription_expiration_enabled,
             interval_seconds=subscription_expiration_interval_seconds,
         )
+        # Apply admin-scheduled next-cycle plan changes once their effective
+        # (next-billing) date arrives. Hourly so a change lands promptly after
+        # the boundary; the applier is idempotent (only picks up approved,
+        # unapplied rows whose effective_date has passed).
+        scheduled_plan_change_enabled = _effective_bool(
+            session,
+            SettingDomain.catalog,
+            "scheduled_plan_change_enabled",
+            "SCHEDULED_PLAN_CHANGE_ENABLED",
+            True,
+        )
+        scheduled_plan_change_interval_seconds = _effective_int(
+            session,
+            SettingDomain.catalog,
+            "scheduled_plan_change_interval_seconds",
+            "SCHEDULED_PLAN_CHANGE_INTERVAL_SECONDS",
+            3600,  # Hourly
+        )
+        scheduled_plan_change_interval_seconds = max(
+            scheduled_plan_change_interval_seconds, 300
+        )
+        _sync_scheduled_task(
+            session,
+            name="scheduled_plan_change_applier",
+            task_name="app.tasks.catalog.apply_due_subscription_changes",
+            enabled=scheduled_plan_change_enabled,
+            interval_seconds=scheduled_plan_change_interval_seconds,
+        )
+        # Deferred status commands have their own durable queue. Keep this
+        # runner independent from plan changes so billing can disable its plan
+        # applier without stranding reviewed access/lifecycle actions.
+        scheduled_status_change_enabled = _effective_bool(
+            session,
+            SettingDomain.catalog,
+            "scheduled_status_change_enabled",
+            "SCHEDULED_STATUS_CHANGE_ENABLED",
+            True,
+        )
+        scheduled_status_change_interval_seconds = _effective_int(
+            session,
+            SettingDomain.catalog,
+            "scheduled_status_change_interval_seconds",
+            "SCHEDULED_STATUS_CHANGE_INTERVAL_SECONDS",
+            300,
+        )
+        scheduled_status_change_interval_seconds = max(
+            scheduled_status_change_interval_seconds, 60
+        )
+        _sync_scheduled_task(
+            session,
+            name="scheduled_subscription_status_applier",
+            task_name=("app.tasks.catalog.apply_due_subscription_status_commands"),
+            enabled=scheduled_status_change_enabled,
+            interval_seconds=scheduled_status_change_interval_seconds,
+        )
         # Infrastructure availability snapshot - daily rollup powering the
         # performance/SLA trend charts (see INFRASTRUCTURE_SLA_PERFORMANCE.md).
         # Safe to run regardless of SLA_AVAILABILITY_LOG_ENABLED: it records the
@@ -1078,6 +1337,36 @@ def build_beat_schedule() -> dict:
             enabled=infra_availability_prune_enabled,
             interval_seconds=infra_availability_prune_interval_seconds,
         )
+        # Unified device projection reconcile - keeps device_projections fresh
+        # (one materialised row per device with pre-derived operational status)
+        # so the admin device list can page in SQL.
+        device_projection_reconcile_enabled = _effective_bool(
+            session,
+            SettingDomain.network_monitoring,
+            "device_projection_reconcile_enabled",
+            "DEVICE_PROJECTION_RECONCILE_ENABLED",
+            True,
+        )
+        device_projection_reconcile_interval_seconds = _effective_int(
+            session,
+            SettingDomain.network_monitoring,
+            "device_projection_reconcile_interval_seconds",
+            "DEVICE_PROJECTION_RECONCILE_INTERVAL_SECONDS",
+            # Every 60s: the reconcile is ~1.75s for ~1.5k devices (measured on
+            # staging), and the admin device list reads this projection's
+            # last-known status, so a tight interval keeps that staleness small.
+            60,
+        )
+        device_projection_reconcile_interval_seconds = max(
+            device_projection_reconcile_interval_seconds, 60
+        )
+        _sync_scheduled_task(
+            session,
+            name="device_projection_reconcile",
+            task_name="app.tasks.device_projection.reconcile_device_projections",
+            enabled=device_projection_reconcile_enabled,
+            interval_seconds=device_projection_reconcile_interval_seconds,
+        )
         # Vacation hold auto-resume - runs hourly to resume expired holds
         vacation_hold_resume_enabled = _effective_bool(
             session,
@@ -1124,6 +1413,65 @@ def build_beat_schedule() -> dict:
             task_name="app.tasks.notifications.deliver_notification_queue",
             enabled=notification_queue_enabled,
             interval_seconds=notification_queue_interval_seconds,
+        )
+        campaign_processing_enabled = _effective_bool(
+            session,
+            SettingDomain.comms,
+            "campaign_processing_enabled",
+            "CAMPAIGN_PROCESSING_ENABLED",
+            False,
+        )
+        campaign_processing_interval_seconds = max(
+            _effective_int(
+                session,
+                SettingDomain.comms,
+                "campaign_processing_interval_seconds",
+                "CAMPAIGN_PROCESSING_INTERVAL_SECONDS",
+                60,
+            ),
+            30,
+        )
+        _sync_scheduled_task(
+            session,
+            name="campaign_due_runner",
+            task_name="app.tasks.campaigns.process_due_campaigns",
+            enabled=campaign_processing_enabled,
+            interval_seconds=campaign_processing_interval_seconds,
+        )
+        _sync_scheduled_task(
+            session,
+            name="campaign_sequence_runner",
+            task_name="app.tasks.campaigns.process_due_campaign_steps",
+            enabled=campaign_processing_enabled,
+            interval_seconds=campaign_processing_interval_seconds,
+        )
+        operational_escalation_delivery_enabled = _effective_bool(
+            session,
+            SettingDomain.notification,
+            "operational_escalation_delivery_enabled",
+            "OPERATIONAL_ESCALATION_DELIVERY_ENABLED",
+            True,
+        )
+        operational_escalation_delivery_interval_seconds = _effective_int(
+            session,
+            SettingDomain.notification,
+            "operational_escalation_delivery_interval_seconds",
+            "OPERATIONAL_ESCALATION_DELIVERY_INTERVAL_SECONDS",
+            60,
+        )
+        operational_escalation_delivery_interval_seconds = max(
+            operational_escalation_delivery_interval_seconds,
+            30,
+        )
+        _sync_scheduled_task(
+            session,
+            name="operational_escalation_delivery_runner",
+            task_name=(
+                "app.tasks.operational_escalations."
+                "dispatch_operational_escalation_deliveries"
+            ),
+            enabled=operational_escalation_delivery_enabled,
+            interval_seconds=operational_escalation_delivery_interval_seconds,
         )
         retention_enabled = _effective_bool(
             session,
@@ -1174,6 +1522,14 @@ def build_beat_schedule() -> dict:
         if not integration_jobs:
             logger.info("EMAIL_POLL_EXIT reason=no_jobs")
         for job in integration_jobs:
+            adapter_key = str(getattr(job, "adapter_key", "") or "").strip().lower()
+            action = str(getattr(job, "action", "") or "").strip().lower()
+            if adapter_key == "crm" and action == "pull_tickets":
+                logger.info(
+                    "integration_interval_job_skipped_dedicated_crm_pull job_id=%s",
+                    getattr(job, "id", ""),
+                )
+                continue
             # Be defensive: tests may use MagicMock jobs and production may have
             # string values depending on where the job was sourced.
             raw_seconds = getattr(job, "interval_seconds", None)
@@ -1314,41 +1670,91 @@ def build_beat_schedule() -> dict:
             interval_seconds=600,
         )
 
-        # ONT telemetry ingest from centralized monitoring data.
-        ont_signal_minutes = _resolve_int(
+        # Zabbix-fed ONT signal ingest + topology reconcile retired with the
+        # native monitoring cutover; disable any existing DB rows.
+        _retire_scheduled_task(
+            session, "app.tasks.zabbix_ingestion.ingest_olt_signals_from_zabbix"
+        )
+        _retire_scheduled_task(
+            session, "app.tasks.zabbix_ingestion.repair_stale_olt_signal_ingest"
+        )
+        _retire_scheduled_task(
+            session, "app.tasks.topology_sync.run_topology_reconcile"
+        )
+        # Native infrastructure poll: ping/SNMP reachability sweep over active
+        # network devices (Zabbix runtime cutover). The sweep itself only
+        # probes devices whose last check is older than the per-check staleness
+        # settings, so a tight beat cadence is safe; overlap is single-flighted
+        # by an advisory lock inside the task.
+        infrastructure_poll_seconds = _resolve_int(
             session,
             SettingDomain.network_monitoring,
-            "ont_signal_ingest_interval_minutes",
-            15,
-        )
-        _sync_scheduled_task(
-            session,
-            name="ont_signal_ingest",
-            task_name="app.tasks.zabbix_ingestion.ingest_olt_signals_from_zabbix",
-            enabled=True,
-            interval_seconds=max(ont_signal_minutes * 60, 120),
-        )
-        _sync_scheduled_task(
-            session,
-            name="ont_signal_ingest_watchdog",
-            task_name="app.tasks.zabbix_ingestion.repair_stale_olt_signal_ingest",
-            enabled=True,
-            interval_seconds=600,
-        )
-        # Topology reconcile: pull Zabbix groups/hosts onto pop_sites +
-        # network_devices. Device graph changes slowly, so hourly is ample.
-        topology_reconcile_minutes = _resolve_int(
-            session,
-            SettingDomain.network_monitoring,
-            "topology_reconcile_interval_minutes",
+            "infrastructure_poll_interval_seconds",
             60,
         )
         _sync_scheduled_task(
             session,
-            name="topology_reconcile",
-            task_name="app.tasks.topology_sync.run_topology_reconcile",
+            name="infrastructure_poll",
+            task_name="app.tasks.infrastructure_polling.run_infrastructure_poll",
             enabled=True,
-            interval_seconds=max(topology_reconcile_minutes * 60, 300),
+            interval_seconds=max(infrastructure_poll_seconds, 30),
+        )
+        ont_reconcile_seconds = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "ont_reconcile_interval_seconds",
+            900,
+        )
+        _sync_scheduled_task(
+            session,
+            name="ont_reconcile_sweep",
+            task_name="app.tasks.ont_reconcile.run_ont_reconcile_sweep",
+            enabled=control_registry.is_enabled(session, "network.ont_reconcile"),
+            interval_seconds=max(ont_reconcile_seconds, 300),
+        )
+        ont_status_seconds = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "huawei_ont_status_interval_seconds",
+            300,
+        )
+        _sync_scheduled_task(
+            session,
+            name="huawei_ont_status",
+            task_name="app.tasks.ont_runtime_status.dispatch_huawei_ont_status",
+            enabled=True,
+            interval_seconds=max(ont_status_seconds, 120),
+        )
+        # RADIUS health: accounting freshness + enforcement drift from the
+        # external radacct DB and the reconciled live-session view. Customer
+        # experience often fails here before any router goes down.
+        radius_health_seconds = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "radius_health_interval_seconds",
+            120,
+        )
+        _sync_scheduled_task(
+            session,
+            name="radius_health_check",
+            task_name="app.tasks.radius_health.run_radius_health_check",
+            enabled=True,
+            interval_seconds=max(radius_health_seconds, 60),
+        )
+        # Customer-impact counters (customers under outage / with infra
+        # tickets / suppressed from billing comms) -> VictoriaMetrics trends.
+        customer_impact_seconds = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "customer_impact_metrics_interval_seconds",
+            300,
+        )
+        _sync_scheduled_task(
+            session,
+            name="customer_impact_metrics",
+            task_name="app.tasks.customer_impact_metrics.export_customer_impact_metrics",
+            enabled=True,
+            interval_seconds=max(customer_impact_seconds, 120),
         )
         # Warm cached live status for topology nodes (read by the Network Path
         # panel). Default 180s, matching the monitoring dashboard cache TTL.
@@ -1380,50 +1786,171 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(lldp_poll_minutes * 60, 300),
         )
-        dashboard_cache_seconds = _resolve_int(
+        # Reviewed forwarding declarations scope a read-only RouterOS BGP/route
+        # poll. The fail-closed control keeps deployment from silently starting
+        # collection before operators approve the observation shadow run.
+        forwarding_observation_seconds = _resolve_int(
             session,
             SettingDomain.network_monitoring,
-            "dashboard_cache_refresh_interval_seconds",
+            "forwarding_control_observation_interval_seconds",
+            300,
+        )
+        _sync_scheduled_task(
+            session,
+            name="forwarding_control_observation_poll",
+            task_name=(
+                "app.tasks.forwarding_control_observations."
+                "run_forwarding_control_observation_poll"
+            ),
+            enabled=control_registry.is_enabled(
+                session, "network.forwarding_observation_collection"
+            ),
+            interval_seconds=max(forwarding_observation_seconds, 60),
+        )
+        # The open-only auto-detect scan is retired: the classifier reconcile
+        # below owns all auto detection (dark nodes + wireless clusters).
+        _retire_scheduled_task(
+            session,
+            "app.tasks.topology_outage.run_outage_scan",
+        )
+        # Detected-outage incident reconcile (design ): debounce the
+        # classifier's point-in-time verdicts into the suspected/confirmed/
+        # clearing/resolved lifecycle. Aligned with the topology status warmer's
+        # cadence so each pass reads freshly-warmed live_status; floor 120s.
+        outage_reconcile_seconds = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "outage_reconcile_interval_seconds",
             180,
         )
         _sync_scheduled_task(
             session,
-            name="dashboard_cache_refresh",
-            task_name="app.tasks.app_cache.refresh_dashboard_stats_cache",
+            name="topology_outage_reconcile",
+            task_name="app.tasks.topology_outage.reconcile_detected_outages",
             enabled=True,
-            interval_seconds=max(dashboard_cache_seconds, 60),
+            interval_seconds=max(outage_reconcile_seconds, 120),
         )
-        # Default 120s, below the 180s snapshot cache TTL, so the key is
-        # re-warmed before it lapses (a 180s==180s interval let it expire just
-        # before the next write, exposing cold-cache reads).
-        ont_snapshot_cache_seconds = _resolve_int(
+        # UISP topology sync: import the wireless/UFiber customer-device
+        # relationship layer (radios -> APs, ONUs -> UF-OLTs) into sub's
+        # tables. Association churn is faster than the device graph, so it
+        # runs on a 15-minute default cadence.
+        topology_uisp_minutes = _resolve_int(
             session,
             SettingDomain.network_monitoring,
-            "ont_snapshot_cache_refresh_interval_seconds",
-            120,
+            "topology_uisp_sync_interval_minutes",
+            15,
         )
         _sync_scheduled_task(
             session,
-            name="ont_snapshot_cache_refresh",
-            task_name="app.tasks.app_cache.refresh_ont_zabbix_snapshot_cache",
+            name="topology_uisp_sync",
+            task_name="app.tasks.topology_uisp.run_uisp_topology_sync",
             enabled=True,
-            interval_seconds=max(ont_snapshot_cache_seconds, 60),
-        )
-        # Keep the per-OLT Zabbix summary cache the monitoring dashboard reads
-        # hot. Default 120s, below the 180s snapshot/summary cache TTL, so a
-        # viewer never lands on a cold cache and pays the live per-OLT fan-out.
-        monitoring_summary_warm_seconds = _resolve_int(
-            session,
-            SettingDomain.network_monitoring,
-            "monitoring_summary_warm_interval_seconds",
-            120,
+            interval_seconds=max(topology_uisp_minutes * 60, 300),
         )
         _sync_scheduled_task(
             session,
-            name="monitoring_summary_cache_warm",
-            task_name="app.tasks.monitoring_warm.warm_monitoring_caches",
+            name="uisp_config_readback",
+            task_name="app.tasks.uisp_control.reconcile_uisp_config_readback",
             enabled=True,
-            interval_seconds=max(monitoring_summary_warm_seconds, 30),
+            interval_seconds=max(topology_uisp_minutes * 60, 300),
+        )
+        _sync_scheduled_task(
+            session,
+            name="router_config_readback",
+            task_name="router_sync.reconcile_config_push_readback",
+            enabled=True,
+            interval_seconds=300,
+        )
+        _sync_scheduled_task(
+            session,
+            name="router_sot_drift",
+            task_name="router_sync.audit_sot_drift",
+            enabled=True,
+            interval_seconds=900,
+        )
+        _sync_scheduled_task(
+            session,
+            name="mikrotik_nas_vlan_readback",
+            task_name="router_sync.reconcile_nas_vlan_readback",
+            enabled=True,
+            interval_seconds=300,
+        )
+        # Preview-only UFiber ONU/subscription candidate audit. Router-mode
+        # UF-Wifi ONUs carry an observed MAC from UISP, which can be compared to
+        # ACTIVE-subscription MAC observations for field review. The task writes
+        # neither customer assignments nor subscription MACs. It runs after the
+        # UISP sync, so an hourly default (vs the 15-min importer) is ample.
+        ufiber_onu_link_minutes = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "ufiber_onu_link_interval_minutes",
+            60,
+        )
+        _sync_scheduled_task(
+            session,
+            name="ufiber_onu_link",
+            task_name="app.tasks.topology_ufiber_link.run_ufiber_onu_link",
+            enabled=True,
+            interval_seconds=max(ufiber_onu_link_minutes * 60, 300),
+        )
+        # Topology coverage + pipeline-health metrics export to
+        # VictoriaMetrics (per-medium E2E match-rate, feeder-task staleness).
+        # Default 15 minutes — matches the fastest feeder (topology_uisp_sync),
+        # so every feeder run is reflected without redundant recomputation.
+        topology_metrics_seconds = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "topology_metrics_interval_seconds",
+            900,
+        )
+        _sync_scheduled_task(
+            session,
+            name="topology_metrics_export",
+            task_name="app.tasks.topology_metrics.export_topology_metrics",
+            enabled=True,
+            interval_seconds=max(topology_metrics_seconds, 300),
+        )
+        network_operation_metrics_seconds = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "network_operation_metrics_interval_seconds",
+            300,
+        )
+        _sync_scheduled_task(
+            session,
+            name="network_operation_metrics",
+            task_name="app.tasks.network_operations.publish_operation_metrics",
+            enabled=True,
+            interval_seconds=max(network_operation_metrics_seconds, 60),
+        )
+        network_operation_dispatch_seconds = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "network_operation_dispatch_interval_seconds",
+            10,
+        )
+        _sync_scheduled_task(
+            session,
+            name="network_operation_dispatch",
+            task_name=(
+                "app.tasks.network_operation_dispatch."
+                "publish_network_operation_dispatches"
+            ),
+            enabled=True,
+            interval_seconds=max(network_operation_dispatch_seconds, 5),
+        )
+        # The redis dashboard stats-summary path was removed (the overview
+        # renders from the in-process global context); retire its beat row.
+        _retire_scheduled_task(
+            session, "app.tasks.app_cache.refresh_dashboard_stats_cache"
+        )
+        # Zabbix ONT snapshot / monitoring summary cache warmers retired with
+        # the native monitoring cutover; disable any existing DB rows.
+        _retire_scheduled_task(
+            session, "app.tasks.app_cache.refresh_ont_zabbix_snapshot_cache"
+        )
+        _retire_scheduled_task(
+            session, "app.tasks.monitoring_warm.warm_monitoring_caches"
         )
         _retire_scheduled_task(
             session,
@@ -1482,22 +2009,6 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(nas_backup_interval, 900),
         )
-        # Referral mirror reconcile (RFC #73). Webhooks keep the local copy of
-        # CRM referrals fresh in near-real-time; this is the backstop that repairs
-        # drift from any missed deliveries. Hourly is plenty.
-        referral_reconcile_seconds = _resolve_int(
-            session,
-            SettingDomain.subscriber,
-            "referral_reconcile_interval_seconds",
-            3600,
-        )
-        _sync_scheduled_task(
-            session,
-            name="referral_mirror_reconcile",
-            task_name="app.tasks.referrals.reconcile_referral_mirror",
-            enabled=True,
-            interval_seconds=max(referral_reconcile_seconds, 900),
-        )
         # Project/installation mirror reconcile — backstop for missed project.*
         # webhook deliveries so "where's my install?" stays accurate.
         project_reconcile_seconds = _resolve_int(
@@ -1514,7 +2025,16 @@ def build_beat_schedule() -> dict:
             interval_seconds=max(project_reconcile_seconds, 900),
         )
         # Work-order/field-service mirror reconcile — backstop for missed
-        # work_order.* webhook deliveries.
+        # work_order.* webhook deliveries. Gated by the crm.work_order_pull
+        # Native work-order authority kill switch: off means Sub
+        # is the work-order system-of-record and the CRM is no longer polled.
+        work_order_pull_enabled = _effective_bool(
+            session,
+            SettingDomain.scheduler,
+            "crm_work_order_pull_enabled",
+            "CRM_WORK_ORDER_PULL_ENABLED",
+            True,
+        )
         work_order_reconcile_seconds = _resolve_int(
             session,
             SettingDomain.subscriber,
@@ -1525,7 +2045,7 @@ def build_beat_schedule() -> dict:
             session,
             name="work_order_mirror_reconcile",
             task_name="app.tasks.work_orders.reconcile_work_order_mirror",
-            enabled=True,
+            enabled=work_order_pull_enabled,
             interval_seconds=max(work_order_reconcile_seconds, 900),
         )
         # Self-serve quote mirror reconcile — backstop for missed quote.* webhooks.
@@ -1797,6 +2317,28 @@ def build_beat_schedule() -> dict:
             "app.tasks.ont_verification.verify_ont_provisioning_state",
         )
 
+        # Durable event outbox recovery. The normal path dispatches immediately
+        # after commit; this runner claims rows left pending by a process crash.
+        event_dispatch_enabled = _resolve_bool(
+            session,
+            SettingDomain.scheduler,
+            "event_dispatch_enabled",
+            True,
+        )
+        event_dispatch_interval = _resolve_int(
+            session,
+            SettingDomain.scheduler,
+            "event_dispatch_interval_seconds",
+            60,
+        )
+        _sync_scheduled_task(
+            session,
+            name="event_dispatch_runner",
+            task_name="app.tasks.events.dispatch_pending_events",
+            enabled=event_dispatch_enabled,
+            interval_seconds=event_dispatch_interval,
+        )
+
         # Event retry - retries failed event handlers
         event_retry_enabled = _effective_bool(
             session,
@@ -1862,6 +2404,46 @@ def build_beat_schedule() -> dict:
             task_name="app.tasks.monitoring_cleanup.check_stale_infrastructure",
             enabled=stale_infra_check_enabled,
             interval_seconds=stale_infra_check_interval,
+        )
+
+        monitoring_inventory_sync_enabled = _effective_bool(
+            session,
+            SettingDomain.network_monitoring,
+            "monitoring_inventory_sync_enabled",
+            "MONITORING_INVENTORY_SYNC_ENABLED",
+            True,
+        )
+        monitoring_inventory_sync_interval = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "monitoring_inventory_sync_interval_seconds",
+            600,
+        )
+        _sync_scheduled_task(
+            session,
+            name="monitoring_inventory_sync",
+            task_name="app.tasks.monitoring_cleanup.sync_inventory_to_monitoring",
+            enabled=monitoring_inventory_sync_enabled,
+            interval_seconds=max(monitoring_inventory_sync_interval, 300),
+        )
+
+        # Device-metric retention: the task existed but was never scheduled,
+        # so device_metrics grew unbounded — and the native infrastructure
+        # poller now writes a row per ping probe, making it the table's
+        # biggest writer. Postgres keeps current state; history belongs to
+        # VictoriaMetrics (see docs/designs/OPERATIONS_MEASUREMENT_STRATEGY).
+        device_metrics_cleanup_hours = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "device_metrics_cleanup_interval_hours",
+            6,
+        )
+        _sync_scheduled_task(
+            session,
+            name="device_metrics_cleanup",
+            task_name="app.tasks.monitoring_cleanup.cleanup_old_device_metrics",
+            enabled=True,
+            interval_seconds=max(device_metrics_cleanup_hours, 1) * 3600,
         )
 
         # Event old cleanup - removes old completed events
@@ -1975,30 +2557,123 @@ def build_beat_schedule() -> dict:
                 "kwargs": {"full": True},
             }
 
-        # Nightly billing snapshot to the CRM (balance / next bill date /
-        # billing cycle on the CRM subscriber record for support agents).
-        crm_billing_push_enabled = _effective_bool(
+        # CRM-to-native sync window: while CRM is still the
+        # writer for projects/quotes/referrals, pull CRM deltas into the
+        # NATIVE tables by running the backfill importer's watermark mode in
+        # process (webhooks cover status freshness; this covers full shapes).
+        # Gated by the same crm_phase3_native_sync_enabled flag as the
+        # webhook adapter. Default OFF; retire the entry with the compatibility
+        # adapter after native ownership is verified.
+        crm_phase3_native_sync_enabled = control_registry.is_enabled(
+            session, "crm.phase3_native_sync"
+        )
+        crm_phase3_delta_interval = _effective_int(
             session,
             SettingDomain.scheduler,
-            "crm_billing_push_enabled",
-            "CRM_BILLING_PUSH_ENABLED",
-            False,
+            "crm_phase3_native_delta_interval_minutes",
+            "CRM_PHASE3_NATIVE_DELTA_INTERVAL_MINUTES",
+            5,
         )
-        if crm_billing_push_enabled:
-            schedule["crm_billing_push"] = {
-                "task": "app.tasks.crm_billing_push.push_crm_billing_snapshots",
-                "schedule": crontab(hour=2, minute=30),
+        crm_phase3_delta_interval = max(crm_phase3_delta_interval, 1)
+        if crm_phase3_native_sync_enabled:
+            schedule["crm_phase3_native_delta"] = {
+                "task": "app.tasks.crm_native_sync.pull_crm_phase3_native_delta",
+                "schedule": timedelta(minutes=crm_phase3_delta_interval),
             }
 
-        # Daily re-drive of CRM push dead-letters — a multi-hour CRM outage
-        # self-recovers without manual action. Runs whenever CRM sync is on
-        # (gated by the same ticket-pull flag, the canonical CRM-enabled
-        # signal). Cheap no-op when the dead-letter table is empty.
-        if crm_ticket_pull_enabled or crm_billing_push_enabled:
-            schedule["crm_dead_letter_redrive"] = {
-                "task": "app.tasks.crm_sync.redrive_crm_dead_letters",
-                "schedule": crontab(hour=4, minute=10),
-            }
+        # DotMac ERP outbox delivery (ERP re-home). Sweeps
+        # field_erp_sync_events → ERP's /sync/crm/* API. Master kill-switch is
+        # dotmac_erp_sync_enabled (integration domain, default OFF) so the entry
+        # is inert until a flow is cut over to sub; per-flow single-writer is
+        # further gated inside the task by sync_flow_ownership.
+        dotmac_erp_sync_enabled = _effective_bool(
+            session,
+            SettingDomain.integration,
+            "dotmac_erp_sync_enabled",
+            "DOTMAC_ERP_SYNC_ENABLED",
+            False,
+        )
+        dotmac_erp_outbox_interval = _effective_int(
+            session,
+            SettingDomain.integration,
+            "dotmac_erp_outbox_interval_seconds",
+            "DOTMAC_ERP_OUTBOX_INTERVAL_SECONDS",
+            60,
+        )
+        dotmac_erp_outbox_interval = max(dotmac_erp_outbox_interval, 30)
+        _sync_scheduled_task(
+            session,
+            name="dotmac_erp_outbox_delivery",
+            task_name="app.tasks.dotmac_erp_outbox.deliver_erp_sync_events",
+            enabled=dotmac_erp_sync_enabled,
+            interval_seconds=dotmac_erp_outbox_interval,
+        )
+
+        # Expense-claim status reconciliation. Polls ERP for
+        # in-flight claims and refreshes erp_claim_status on the source row.
+        # Same master gate (dotmac_erp_sync_enabled, default OFF) → inert until
+        # cutover; read-only against ERP, so re-running is always safe.
+        dotmac_erp_expense_refresh_interval = _effective_int(
+            session,
+            SettingDomain.integration,
+            "dotmac_erp_expense_status_refresh_interval_seconds",
+            "DOTMAC_ERP_EXPENSE_STATUS_REFRESH_INTERVAL_SECONDS",
+            300,
+        )
+        _sync_scheduled_task(
+            session,
+            name="dotmac_erp_expense_status_refresh",
+            task_name="app.tasks.dotmac_erp_outbox.refresh_expense_claim_statuses",
+            enabled=dotmac_erp_sync_enabled,
+            interval_seconds=max(dotmac_erp_expense_refresh_interval, 120),
+        )
+
+        # Material-request status reconciliation. Polls ERP for
+        # in-flight ISSUE requests and refreshes erp_material_status on the source
+        # row (flipping to fulfilled when ERP reports it). Same master gate
+        # (dotmac_erp_sync_enabled, default OFF) → inert until cutover; read-only
+        # against ERP, so re-running is always safe.
+        dotmac_erp_material_refresh_interval = _effective_int(
+            session,
+            SettingDomain.integration,
+            "dotmac_erp_material_status_refresh_interval_seconds",
+            "DOTMAC_ERP_MATERIAL_STATUS_REFRESH_INTERVAL_SECONDS",
+            300,
+        )
+        _sync_scheduled_task(
+            session,
+            name="dotmac_erp_material_status_refresh",
+            task_name="app.tasks.dotmac_erp_outbox.refresh_material_request_statuses",
+            enabled=dotmac_erp_sync_enabled,
+            interval_seconds=max(dotmac_erp_material_refresh_interval, 120),
+        )
+
+        # Purchase invoices may become eligible after their PO write-back and
+        # attachment delivery is deliberately independent from AP creation.
+        _sync_scheduled_task(
+            session,
+            name="dotmac_erp_purchase_invoice_repair",
+            task_name="app.tasks.dotmac_erp_outbox.repair_purchase_invoice_sync",
+            enabled=dotmac_erp_sync_enabled,
+            interval_seconds=max(dotmac_erp_outbox_interval, 60),
+        )
+
+        # Non-money operational context replaces ERP's legacy pull from CRM.
+        # It has a separate switch so money-flow cutovers remain independent.
+        dotmac_erp_domain_sync_enabled = _effective_bool(
+            session,
+            SettingDomain.integration,
+            "dotmac_erp_domain_sync_enabled",
+            "DOTMAC_ERP_DOMAIN_SYNC_ENABLED",
+            False,
+        )
+        _sync_scheduled_task(
+            session,
+            name="dotmac_erp_operational_domain_sync",
+            task_name="app.tasks.dotmac_erp_outbox.sync_erp_operational_domains",
+            enabled=dotmac_erp_domain_sync_enabled,
+            interval_seconds=300,
+        )
 
         # NOTE: the OLT deferred-operations queue + SSH circuit-breaker
         # subsystem was removed (it was never wired — the queue had no
@@ -2008,36 +2683,12 @@ def build_beat_schedule() -> dict:
         # (queued_olt_operations table + OLTDevice circuit_* columns) was
         # dropped in migration 162.
 
-        # Zabbix device sync - syncs OLT/NAS devices to Zabbix hosts
-        zabbix_sync_enabled_by_default = _zabbix_configured_default()
-        zabbix_device_sync_enabled = _effective_bool(
-            session,
-            SettingDomain.network_monitoring,
-            "zabbix_device_sync_enabled",
-            "ZABBIX_DEVICE_SYNC_ENABLED",
-            zabbix_sync_enabled_by_default,
-        )
-        zabbix_device_sync_interval = _resolve_int(
-            session,
-            SettingDomain.network_monitoring,
-            "zabbix_device_sync_interval_seconds",
-            300,  # 5 minutes
-        )
-        zabbix_device_sync_interval = max(
-            zabbix_device_sync_interval, 60
-        )  # Min: 1 minute
-        # Retire the old un-time-limited copy that lived in zabbix_ingestion; the
-        # surviving task in zabbix_sync carries soft/hard time limits.
+        # Zabbix device sync retired with the native monitoring cutover;
+        # disable any existing DB rows (old copy + surviving copy).
         _retire_scheduled_task(
             session, "app.tasks.zabbix_ingestion.sync_devices_to_zabbix"
         )
-        _sync_scheduled_task(
-            session,
-            name="zabbix_device_sync",
-            task_name="app.tasks.zabbix_sync.sync_devices_to_zabbix",
-            enabled=zabbix_device_sync_enabled,
-            interval_seconds=zabbix_device_sync_interval,
-        )
+        _retire_scheduled_task(session, "app.tasks.zabbix_sync.sync_devices_to_zabbix")
         _sync_scheduled_task(
             session,
             name="infrastructure_admin_alert_evaluation",
@@ -2045,6 +2696,52 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=60,
         )
+
+        # Per-channel inbound freshness + Celery queue depth for the
+        # dead-man's-switch and queue alerts. Default-on: it is a read-only
+        # observer and the freshness signal is only useful if it runs
+        # continuously. Frequent by design so a stalled channel surfaces in
+        # minutes, not hours.
+        channel_health_enabled = _effective_bool(
+            session,
+            SettingDomain.network_monitoring,
+            "channel_health_enabled",
+            "CHANNEL_HEALTH_ENABLED",
+            True,
+        )
+        channel_health_interval_seconds = max(
+            _effective_int(
+                session,
+                SettingDomain.network_monitoring,
+                "channel_health_interval_seconds",
+                "CHANNEL_HEALTH_INTERVAL_SECONDS",
+                60,
+            ),
+            30,
+        )
+        _sync_scheduled_task(
+            session,
+            name="channel_health_observer",
+            task_name="app.tasks.channel_health.observe_channel_health",
+            enabled=channel_health_enabled,
+            interval_seconds=channel_health_interval_seconds,
+        )
+
+        # Weekly NCC complaints digest — default OFF. Monday 08:00 in the
+        # configured celery timezone (Africa/Lagos in prod). The service
+        # short-circuits when disabled or already sent today, so a missed
+        # beat self-heals on the next fire without double-sending.
+        ncc_report_email_enabled = _resolve_bool(
+            session,
+            SettingDomain.notification,
+            "ncc_report_email_enabled",
+            False,
+        )
+        if ncc_report_email_enabled:
+            schedule["ncc_report_email"] = {
+                "task": "app.tasks.reports.send_scheduled_ncc_report",
+                "schedule": crontab(hour=8, minute=0, day_of_week="mon"),
+            }
 
         tasks = (
             session.query(ScheduledTask).filter(ScheduledTask.enabled.is_(True)).all()

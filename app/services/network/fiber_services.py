@@ -44,6 +44,26 @@ from app.services.query_builders import (
 logger = logging.getLogger(__name__)
 
 
+def _retired_connectivity_mutation() -> None:
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "Direct termination/segment mutation is retired; use the reviewed "
+            "network.fiber_connectivity_decisions workflow."
+        ),
+    )
+
+
+def _retired_legacy_splice_mutation() -> None:
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "Direct legacy splice mutation is retired; use the reviewed exact "
+            "network.fiber_physical_continuity workflow."
+        ),
+    )
+
+
 class FiberStrands(CRUDManager[FiberStrand]):
     model = FiberStrand
     not_found_detail = "Fiber strand not found"
@@ -62,6 +82,8 @@ class FiberStrands(CRUDManager[FiberStrand]):
             not payload.cable_name or payload.cable_name.startswith("segment-")
         ):
             data["cable_name"] = segment.name
+        if segment:
+            data["segment_id"] = segment.id
         fields_set = payload.model_fields_set
         if "status" not in fields_set:
             default_status = settings_spec.resolve_value(
@@ -72,11 +94,21 @@ class FiberStrands(CRUDManager[FiberStrand]):
                     default_status, FiberStrandStatus, "status"
                 )
         strand = FiberStrand(**data)
+        from app.services.network.fiber_plant_integrity import (
+            FiberPlantIntegrityError,
+            validate_strand_segment_capacity,
+        )
+
+        try:
+            validate_strand_segment_capacity(db, strand)
+        except FiberPlantIntegrityError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         db.add(strand)
         db.commit()
         db.refresh(strand)
-        if segment:
-            # Link segment <-> strand for callers expecting `strand.segment_id`.
+        if segment and segment.fiber_strand_id is None:
+            # Preserve the legacy scalar pointer as a compatibility projection.
+            # Exact capacity/occupancy uses FiberStrand.segment_id.
             segment.fiber_strand_id = strand.id
             db.commit()
             db.refresh(strand)
@@ -103,7 +135,7 @@ class FiberStrands(CRUDManager[FiberStrand]):
             segment = db.get(FiberSegment, segment_id)
             if not segment:
                 raise HTTPException(status_code=404, detail="Fiber segment not found")
-            query = query.filter(FiberStrand.cable_name == segment.name)
+            query = query.filter(FiberStrand.segment_id == segment.id)
         if cable_name:
             query = query.filter(FiberStrand.cable_name == cable_name)
         if status:
@@ -124,11 +156,40 @@ class FiberStrands(CRUDManager[FiberStrand]):
 
     @classmethod
     def update(cls, db: Session, strand_id: str, payload: FiberStrandUpdate):
-        return super().update(db, strand_id, payload)
+        strand = cls._get_or_404(db, strand_id)
+        changes = cls._payload_dict(payload, exclude_unset=True)
+        from app.services.network.fiber_plant_integrity import (
+            FiberPlantIntegrityError,
+            validate_strand_retirement,
+            validate_strand_segment_capacity,
+        )
+
+        try:
+            if changes.get("is_active") is False:
+                validate_strand_retirement(db, strand)
+            for key, value in changes.items():
+                setattr(strand, key, value)
+            validate_strand_segment_capacity(db, strand)
+        except FiberPlantIntegrityError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        db.commit()
+        db.refresh(strand)
+        return strand
 
     @classmethod
     def delete(cls, db: Session, strand_id: str):
-        return super().delete(db, strand_id)
+        strand = cls._get_or_404(db, strand_id)
+        from app.services.network.fiber_plant_integrity import (
+            FiberPlantIntegrityError,
+            validate_strand_retirement,
+        )
+
+        try:
+            validate_strand_retirement(db, strand)
+        except FiberPlantIntegrityError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        strand.is_active = False
+        db.commit()
 
 
 class FiberSpliceClosures(CRUDManager[FiberSpliceClosure]):
@@ -179,6 +240,11 @@ class FiberSplices(CRUDManager[FiberSplice]):
     not_found_detail = "Fiber splice not found"
     soft_delete_field = None
 
+    @classmethod
+    def create(cls, db: Session, payload, *, commit: bool = True):
+        del cls, db, payload, commit
+        _retired_legacy_splice_mutation()
+
     @staticmethod
     def list(
         db: Session,
@@ -218,11 +284,13 @@ class FiberSplices(CRUDManager[FiberSplice]):
 
     @classmethod
     def update(cls, db: Session, splice_id: str, payload: FiberSpliceUpdate):
-        return super().update(db, splice_id, payload)
+        del cls, db, splice_id, payload
+        _retired_legacy_splice_mutation()
 
     @classmethod
     def delete(cls, db: Session, splice_id: str):
-        return super().delete(db, splice_id)
+        del cls, db, splice_id
+        _retired_legacy_splice_mutation()
 
     @staticmethod
     def trace_response(
@@ -308,6 +376,11 @@ class FiberTerminationPoints(CRUDManager[FiberTerminationPoint]):
     soft_delete_field = "is_active"
     soft_delete_value = False
 
+    @classmethod
+    def create(cls, db: Session, payload, *, commit: bool = True):
+        del cls, db, payload, commit
+        _retired_connectivity_mutation()
+
     @staticmethod
     def list(
         db: Session,
@@ -339,11 +412,13 @@ class FiberTerminationPoints(CRUDManager[FiberTerminationPoint]):
 
     @classmethod
     def update(cls, db: Session, point_id: str, payload: FiberTerminationPointUpdate):
-        return super().update(db, point_id, payload)
+        del cls, db, point_id, payload
+        _retired_connectivity_mutation()
 
     @classmethod
     def delete(cls, db: Session, point_id: str):
-        return super().delete(db, point_id)
+        del cls, db, point_id
+        _retired_connectivity_mutation()
 
 
 class FiberSegments(CRUDManager[FiberSegment]):
@@ -351,6 +426,11 @@ class FiberSegments(CRUDManager[FiberSegment]):
     not_found_detail = "Fiber segment not found"
     soft_delete_field = "is_active"
     soft_delete_value = False
+
+    @classmethod
+    def create(cls, db: Session, payload, *, commit: bool = True):
+        del cls, db, payload, commit
+        _retired_connectivity_mutation()
 
     @staticmethod
     def list(
@@ -386,11 +466,13 @@ class FiberSegments(CRUDManager[FiberSegment]):
 
     @classmethod
     def update(cls, db: Session, segment_id: str, payload: FiberSegmentUpdate):
-        return super().update(db, segment_id, payload)
+        del cls, db, segment_id, payload
+        _retired_connectivity_mutation()
 
     @classmethod
     def delete(cls, db: Session, segment_id: str):
-        return super().delete(db, segment_id)
+        del cls, db, segment_id
+        _retired_connectivity_mutation()
 
 
 fiber_strands = FiberStrands()

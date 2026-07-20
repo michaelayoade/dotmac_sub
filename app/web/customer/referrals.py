@@ -1,20 +1,19 @@
-"""Customer portal Refer & Earn page (RFC #73).
+"""Native Sub customer portal Refer & Earn page (RFC #73).
 
-Server-rendered: reads the local referral mirror (fast, resilient to a CRM
-outage) and submits refer-a-friend write-throughs. Thin wrapper — all logic is
-in ``referrals_mirror``. Individual subscribers only (the customer portal is
-subscriber-scoped; reseller float wallets are never involved).
+Individual subscribers only: the customer portal is subscriber-scoped and
+reseller float wallets are never involved. CRM has no read or write role.
 """
 
 import logging
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.services import referrals_mirror
+from app.services import referrals as referrals_service
+from app.services.customer_context import optional_customer_subscriber_id
 from app.web.customer.auth import get_current_customer_from_request
 from app.web.customer.branding import get_customer_templates
 
@@ -25,6 +24,10 @@ logger = logging.getLogger(__name__)
 _LOGIN = "/portal/auth/login?next=/portal/refer-and-earn"
 
 
+def _summary(db: Session, subscriber_id: str) -> dict:
+    return referrals_service.referrals.read_for_subscriber(db, subscriber_id)
+
+
 @router.get("/refer-and-earn", response_class=HTMLResponse)
 def customer_refer_and_earn(
     request: Request, db: Session = Depends(get_db)
@@ -33,12 +36,12 @@ def customer_refer_and_earn(
     if not customer:
         return RedirectResponse(url=_LOGIN, status_code=303)
 
-    subscriber_id = str(customer.get("subscriber_id") or "")
+    subscriber_id = str(optional_customer_subscriber_id(db, customer) or "")
     context = {
         "request": request,
         "customer": customer,
         "active_page": "refer-and-earn",
-        "referrals": referrals_mirror.read_for_subscriber(db, subscriber_id),
+        "referrals": _summary(db, subscriber_id),
         "submitted": request.query_params.get("referred") == "1",
         "form_error": request.query_params.get("error"),
     }
@@ -57,17 +60,18 @@ def customer_refer_a_friend(
     if not customer:
         return RedirectResponse(url=_LOGIN, status_code=303)
 
-    subscriber_id = str(customer.get("subscriber_id") or "")
+    subscriber_id = str(optional_customer_subscriber_id(db, customer) or "")
     try:
-        referrals_mirror.refer_a_friend(
+        referrals_service.referrals.refer_a_friend(
             db,
             subscriber_id,
             name=name or None,
             email=email or None,
             phone=phone or None,
         )
-    except referrals_mirror.ReferralError as exc:
+    except HTTPException as exc:
         return RedirectResponse(
-            url=f"/portal/refer-and-earn?error={quote(exc.message)}", status_code=303
+            url=f"/portal/refer-and-earn?error={quote(str(exc.detail))}",
+            status_code=303,
         )
     return RedirectResponse(url="/portal/refer-and-earn?referred=1", status_code=303)

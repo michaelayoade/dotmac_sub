@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import builtins
 import logging
-from datetime import UTC, datetime
+from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 
 from fastapi import HTTPException
@@ -23,7 +24,7 @@ from app.models.billing import (
     Payment,
     PaymentAllocation,
 )
-from app.models.subscriber import Reseller, Subscriber
+from app.models.subscriber import Reseller, Subscriber, UserType
 from app.schemas.billing import (
     BillingAccountCreate,
     BillingAccountStatement,
@@ -40,6 +41,7 @@ from app.services.common import (
     to_decimal,
 )
 from app.services.response import ListResponseMixin
+from app.services.sync_feeds import apply_sync_page, sync_page_response
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +52,76 @@ _OPEN_INVOICE_STATUSES = (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class BillingAccountInvoiceSummary:
+    """Canonical reseller-customer invoice aggregates.
+
+    Dashboard, revenue report, and consolidated billing all consume this one
+    projection so their identical figures cannot drift through parallel query
+    clauses.
+    """
+
+    total_outstanding: Decimal
+    open_invoice_count: int
+    paid_invoice_total: Decimal
+    subscribers_with_balance: int
+
+
+def _customer_invoice_query(db: Session, billing_account: BillingAccount):
+    from app.services.subscriber import not_soft_deleted_subscriber_clause
+
+    return (
+        db.query(Invoice)
+        .join(Subscriber, Invoice.account_id == Subscriber.id)
+        .filter(Subscriber.reseller_id == billing_account.reseller_id)
+        .filter(
+            or_(
+                Subscriber.user_type.is_(None),
+                Subscriber.user_type != UserType.reseller,
+            )
+        )
+        .filter(not_soft_deleted_subscriber_clause())
+        .filter(Invoice.is_active.is_(True))
+    )
+
+
+def _invoice_summary(
+    db: Session, billing_account: BillingAccount
+) -> BillingAccountInvoiceSummary:
+    base = _customer_invoice_query(db, billing_account)
+    open_invoices = base.filter(Invoice.status.in_(_OPEN_INVOICE_STATUSES)).filter(
+        Invoice.balance_due > 0
+    )
+    open_row = open_invoices.with_entities(
+        func.coalesce(func.sum(Invoice.balance_due), Decimal("0.00")).label(
+            "total_outstanding"
+        ),
+        func.count(Invoice.id).label("open_invoice_count"),
+        func.count(func.distinct(Subscriber.id)).label("subscribers_with_balance"),
+    ).first()
+    paid_total = base.filter(Invoice.status == InvoiceStatus.paid).with_entities(
+        func.coalesce(func.sum(Invoice.total), Decimal("0.00"))
+    ).scalar() or Decimal("0.00")
+    return BillingAccountInvoiceSummary(
+        total_outstanding=round_money(
+            to_decimal(open_row.total_outstanding if open_row else 0)
+        ),
+        open_invoice_count=int(open_row.open_invoice_count if open_row else 0),
+        paid_invoice_total=round_money(to_decimal(paid_total)),
+        subscribers_with_balance=int(
+            open_row.subscribers_with_balance if open_row else 0
+        ),
+    )
+
+
 class BillingAccounts(ListResponseMixin):
+    @staticmethod
+    def invoice_summary(
+        db: Session, billing_account_id: str
+    ) -> BillingAccountInvoiceSummary:
+        """Return the one reseller-customer invoice aggregate projection."""
+        return _invoice_summary(db, BillingAccounts.get(db, billing_account_id))
+
     @staticmethod
     def list(
         db: Session,
@@ -79,6 +150,34 @@ class BillingAccounts(ListResponseMixin):
             },
         )
         return apply_pagination(query, limit, offset).all()
+
+    @staticmethod
+    def list_for_sync(
+        db: Session,
+        *,
+        reseller_id: str | None,
+        is_active: bool | None,
+        updated_since: datetime | None,
+        limit: int,
+        offset: int,
+    ) -> builtins.list[BillingAccount]:
+        query = db.query(BillingAccount)
+        if reseller_id:
+            query = query.filter(BillingAccount.reseller_id == coerce_uuid(reseller_id))
+        if is_active is not None:
+            query = query.filter(BillingAccount.is_active == is_active)
+        return apply_sync_page(
+            query,
+            BillingAccount,
+            updated_since=updated_since,
+            limit=limit,
+            offset=offset,
+        ).all()
+
+    @classmethod
+    def sync_list_response(cls, db: Session, **kwargs):
+        items = cls.list_for_sync(db, **kwargs)
+        return sync_page_response(items, limit=kwargs["limit"], offset=kwargs["offset"])
 
     @staticmethod
     def count(
@@ -188,49 +287,28 @@ class BillingAccounts(ListResponseMixin):
     ) -> BillingAccountStatement:
         ba = BillingAccounts.get(db, billing_account_id)
         search = (subscriber_search or "").strip()
+        invoice_summary = _invoice_summary(db, ba)
 
         # Aggregates: do these in SQL so they don't depend on the page being
         # rendered. The per-subscriber rows below are then a pure page-of-data.
         open_invoice_filter = (
-            db.query(Invoice)
-            .join(Subscriber, Invoice.account_id == Subscriber.id)
-            .filter(Subscriber.reseller_id == ba.reseller_id)
-            .filter(Invoice.is_active.is_(True))
+            _customer_invoice_query(db, ba)
             .filter(Invoice.status.in_(_OPEN_INVOICE_STATUSES))
             .filter(Invoice.balance_due > 0)
         )
-        total_outstanding = round_money(
-            to_decimal(
-                open_invoice_filter.with_entities(
-                    func.coalesce(func.sum(Invoice.balance_due), Decimal("0.00"))
-                ).scalar()
-                or Decimal("0.00")
-            )
-        )
-        subscribers_total = int(
-            open_invoice_filter.with_entities(
-                func.count(func.distinct(Subscriber.id))
-            ).scalar()
-            or 0
-        )
+        total_outstanding = invoice_summary.total_outstanding
+        subscribers_total = invoice_summary.subscribers_with_balance
 
-        subscriber_rows_query = (
-            db.query(
-                Subscriber.id,
-                Subscriber.first_name,
-                Subscriber.last_name,
-                Subscriber.display_name,
-                Subscriber.company_name,
-                func.count(Invoice.id).label("open_invoice_count"),
-                func.coalesce(func.sum(Invoice.balance_due), Decimal("0.00")).label(
-                    "open_balance"
-                ),
-            )
-            .join(Invoice, Invoice.account_id == Subscriber.id)
-            .filter(Subscriber.reseller_id == ba.reseller_id)
-            .filter(Invoice.is_active.is_(True))
-            .filter(Invoice.status.in_(_OPEN_INVOICE_STATUSES))
-            .filter(Invoice.balance_due > 0)
+        subscriber_rows_query = open_invoice_filter.with_entities(
+            Subscriber.id,
+            Subscriber.first_name,
+            Subscriber.last_name,
+            Subscriber.display_name,
+            Subscriber.company_name,
+            func.count(Invoice.id).label("open_invoice_count"),
+            func.coalesce(func.sum(Invoice.balance_due), Decimal("0.00")).label(
+                "open_balance"
+            ),
         )
         if search:
             pattern = f"%{search}%"
@@ -330,6 +408,8 @@ class BillingAccounts(ListResponseMixin):
             recent_payments=recent_payments,
             recent_payments_total=payments_total,
             total_outstanding=total_outstanding,
+            open_invoice_count=invoice_summary.open_invoice_count,
+            paid_invoice_total=invoice_summary.paid_invoice_total,
             unallocated_balance=round_money(to_decimal(ba.balance)),
         )
 
@@ -347,28 +427,29 @@ class BillingAccounts(ListResponseMixin):
     def credit_balance(
         db: Session, billing_account_id: str, amount: Decimal
     ) -> BillingAccount:
-        """Increment the unallocated balance on a billing account."""
-        ba = BillingAccounts.get(db, billing_account_id)
-        ba.balance = round_money(to_decimal(ba.balance) + to_decimal(amount))
-        ba.updated_at = datetime.now(UTC)
-        db.flush()
-        return ba
+        """Reject the retired projection-only consolidated credit writer."""
+        del db, billing_account_id, amount
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Consolidated credit is written only by its settlement owner with "
+                "exact billing-account ledger evidence"
+            ),
+        )
 
     @staticmethod
     def debit_balance(
         db: Session, billing_account_id: str, amount: Decimal
     ) -> BillingAccount:
-        """Decrement the unallocated balance on a billing account."""
-        ba = BillingAccounts.get(db, billing_account_id)
-        new_balance = round_money(to_decimal(ba.balance) - to_decimal(amount))
-        if new_balance < 0:
-            raise HTTPException(
-                status_code=400, detail="Insufficient billing account balance"
-            )
-        ba.balance = new_balance
-        ba.updated_at = datetime.now(UTC)
-        db.flush()
-        return ba
+        """Reject the retired projection-only consolidated debit writer."""
+        del db, billing_account_id, amount
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Consolidated credit is consumed only by its allocation owner with "
+                "exact billing-account ledger evidence"
+            ),
+        )
 
 
 billing_accounts = BillingAccounts()

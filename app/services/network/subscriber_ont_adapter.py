@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
@@ -127,7 +127,7 @@ class SubscriberOntInfo:
     service_address: str | None
     assigned_at: datetime | None
     cpe_device_id: str | None = None
-    subscription_id: str | None = None  # For future subscription-level binding
+    subscription_id: str | None = None
 
 
 @dataclass
@@ -272,18 +272,18 @@ class DefaultSubscriberOntLinker:
     ) -> LinkResult:
         """Link a subscriber to an ONT.
 
-        Creates an OntAssignment and associated CPEDevice. If the ONT is already
+        Delegates exact assignment creation to the canonical command owner. If
+        the ONT is already
         assigned to this subscriber, returns success with already_linked status.
 
         Args:
             db: Database session.
             subscriber_id: UUID of the subscriber.
             ont_id: UUID of the ONT.
-            subscription_id: Optional subscription to associate (for future use).
+            subscription_id: Exact subscription to associate.
             service_address_id: Optional service address. If not provided,
                 resolves from subscriber's primary address.
-            pon_port_id: Optional PON port. If not provided, resolves from
-                ONT's discovered board/port or autofind candidate.
+            pon_port_id: Exact modeled PON port.
             notes: Optional notes for the assignment.
 
         Returns:
@@ -307,6 +307,14 @@ class DefaultSubscriberOntLinker:
             return LinkResult.fail(
                 LinkResultStatus.subscriber_not_found,
                 f"Subscriber {subscriber_id} not found",
+                subscriber_id=subscriber_id,
+            )
+
+        if subscription_id is None or pon_port_id is None:
+            return LinkResult.fail(
+                LinkResultStatus.validation_error,
+                "Exact subscription_id and pon_port_id are required",
+                ont_id=ont_id,
                 subscriber_id=subscriber_id,
             )
 
@@ -338,44 +346,37 @@ class DefaultSubscriberOntLinker:
                     subscriber_id=subscriber_id,
                 )
 
-        # Resolve service address if not provided
-        resolved_address_id = service_address_id
-        if not resolved_address_id:
-            resolved_address_id = self._resolve_service_address(db, subscriber_id)
-
-        # Resolve PON port if not provided
-        resolved_pon_port_id = pon_port_id
-        warnings: list[str] = []
-        if not resolved_pon_port_id:
-            resolved_pon_port_id, port_warning = self._resolve_pon_port(db, ont)
-            if port_warning:
-                warnings.append(port_warning)
-
-        # Create assignment
-        assignment = OntAssignment(
-            ont_unit_id=ont_id,
-            subscriber_id=subscriber_id,
-            pon_port_id=resolved_pon_port_id,
-            service_address_id=resolved_address_id,
-            active=True,
-            assigned_at=datetime.now(UTC),
-            notes=notes,
+        from app.services import network as network_service
+        from app.services.network.ont_assignment_commands import (
+            OntAssignmentCommandError,
         )
-        db.add(assignment)
-        db.flush()
 
-        # Mark ONT as active
-        ont.is_active = True
-        db.flush()
-
-        # Create/update CPEDevice
-        cpe_device_id = self._ensure_cpe_device(
-            db,
-            ont=ont,
-            subscriber_id=subscriber_id,
-            service_address_id=resolved_address_id,
-            assigned_at=assignment.assigned_at,
-        )
+        try:
+            command = network_service.ont_assignment_commands.assign(
+                db,
+                ont_unit_id=ont_id,
+                subscription_id=subscription_id,
+                pon_port_id=pon_port_id,
+                subscriber_id=subscriber_id,
+                service_address_id=service_address_id,
+                notes=notes,
+                source="subscriber_ont_adapter",
+                commit=False,
+            )
+        except OntAssignmentCommandError as exc:
+            status = (
+                LinkResultStatus.ont_already_assigned
+                if exc.status_code == 409
+                else LinkResultStatus.validation_error
+            )
+            return LinkResult.fail(
+                status,
+                str(exc),
+                ont_id=ont_id,
+                subscriber_id=subscriber_id,
+            )
+        assignment = command.assignment
+        cpe_device_id = self._find_cpe_device_id(db, ont.serial_number)
 
         logger.info(
             "Linked subscriber %s to ONT %s (assignment=%s)",
@@ -390,7 +391,7 @@ class DefaultSubscriberOntLinker:
             ont_id=ont_id,
             subscriber_id=subscriber_id,
             cpe_device_id=cpe_device_id,
-            warnings=warnings,
+            warnings=[],
         )
 
     def unlink(
@@ -439,18 +440,33 @@ class DefaultSubscriberOntLinker:
             str(assignment.subscriber_id) if assignment.subscriber_id else None
         )
 
-        if keep_history:
-            # Deactivate assignment
-            assignment.active = False
-            db.flush()
-        else:
-            # Delete assignment
-            db.delete(assignment)
-            db.flush()
+        if not keep_history:
+            return LinkResult.fail(
+                LinkResultStatus.validation_error,
+                "ONT assignment deletion is retired; history must be retained",
+                ont_id=ont_id,
+                subscriber_id=subscriber_id,
+            )
+        from app.services import network as network_service
+        from app.services.network.ont_assignment_commands import (
+            OntAssignmentCommandError,
+        )
 
-        # Update ONT status
-        ont.is_active = False
-        db.flush()
+        try:
+            network_service.ont_assignment_commands.release(
+                db,
+                assignment_id=assignment.id,
+                reason="subscriber_unlinked",
+                source="subscriber_ont_adapter",
+                commit=False,
+            )
+        except OntAssignmentCommandError as exc:
+            return LinkResult.fail(
+                LinkResultStatus.validation_error,
+                str(exc),
+                ont_id=ont_id,
+                subscriber_id=subscriber_id,
+            )
 
         logger.info(
             "Unlinked ONT %s from subscriber %s (keep_history=%s)",
@@ -528,9 +544,37 @@ class DefaultSubscriberOntLinker:
         )
 
         # Unlink from current subscriber (if any)
+        if not new_subscription_id:
+            return LinkResult.fail(
+                LinkResultStatus.validation_error,
+                "Exact new_subscription_id is required",
+                ont_id=ont_id,
+                subscriber_id=new_subscriber_id,
+            )
+
+        savepoint = db.begin_nested()
         if current:
-            current.active = False
-            db.flush()
+            from app.services import network as network_service
+            from app.services.network.ont_assignment_commands import (
+                OntAssignmentCommandError,
+            )
+
+            try:
+                network_service.ont_assignment_commands.release(
+                    db,
+                    assignment_id=current.id,
+                    reason="subscriber_transferred",
+                    source="subscriber_ont_adapter",
+                    commit=False,
+                )
+            except OntAssignmentCommandError as exc:
+                savepoint.rollback()
+                return LinkResult.fail(
+                    LinkResultStatus.validation_error,
+                    str(exc),
+                    ont_id=ont_id,
+                    subscriber_id=new_subscriber_id,
+                )
 
         # Link to new subscriber
         result = self.link(
@@ -542,6 +586,11 @@ class DefaultSubscriberOntLinker:
             pon_port_id=pon_port_id,
             notes=notes or f"Transferred from subscriber {old_subscriber_id}",
         )
+
+        if result.success:
+            savepoint.commit()
+        else:
+            savepoint.rollback()
 
         if result.success:
             logger.info(
@@ -589,8 +638,9 @@ class DefaultSubscriberOntLinker:
 
             # Get OLT info
             olt_name = None
-            if ont.olt_id:
-                olt = db.get(OLTDevice, str(ont.olt_id))
+            ont_olt_id = getattr(ont, "olt_device_id", None)
+            if ont_olt_id:
+                olt = db.get(OLTDevice, str(ont_olt_id))
                 olt_name = olt.name if olt else None
 
             # Get PON port info
@@ -609,13 +659,15 @@ class DefaultSubscriberOntLinker:
             # Get CPE device if exists
             cpe_device_id = self._find_cpe_device_id(db, ont.serial_number)
 
+            from app.services.network.ont_status import resolve_effective_ont_status
+
             results.append(
                 SubscriberOntInfo(
                     ont_id=str(ont.id),
                     assignment_id=str(assignment.id),
                     serial_number=ont.serial_number,
                     model=ont.model,
-                    olt_status=ont.olt_status.value if ont.olt_status else None,
+                    olt_status=resolve_effective_ont_status(ont).status.value,
                     olt_name=olt_name,
                     pon_port=pon_port_str,
                     service_address=service_address_str,
@@ -731,37 +783,63 @@ class DefaultSubscriberOntLinker:
         resolved_subscription_id = subscription_id
         resolved_ont_id = ont_id
 
-        # If subscription provided, get subscriber
-        if resolved_subscription_id and not resolved_subscriber_id:
+        # An explicit subscription is authoritative for subscriber ownership.
+        if resolved_subscription_id:
             subscription = db.get(Subscription, resolved_subscription_id)
-            if subscription:
-                resolved_subscriber_id = str(subscription.subscriber_id)
-                context.subscription_id = resolved_subscription_id
-                # Also get NAS device if configured
-                if subscription.provisioning_nas_device_id:
-                    context.nas_device_id = str(subscription.provisioning_nas_device_id)
+            if subscription is None:
+                return context
+            subscription_subscriber_id = str(subscription.subscriber_id)
+            if (
+                resolved_subscriber_id
+                and str(resolved_subscriber_id) != subscription_subscriber_id
+            ):
+                return context
+            resolved_subscriber_id = subscription_subscriber_id
+            context.subscription_id = resolved_subscription_id
+            if subscription.service_address_id:
+                context.service_address_id = str(subscription.service_address_id)
+            # Also get NAS device if configured
+            if subscription.provisioning_nas_device_id:
+                context.nas_device_id = str(subscription.provisioning_nas_device_id)
 
-        # If ONT provided, get subscriber from assignment
-        if resolved_ont_id and not resolved_subscriber_id:
-            assignment = db.scalars(
-                select(OntAssignment).where(
-                    OntAssignment.ont_unit_id == resolved_ont_id,
-                    OntAssignment.active.is_(True),
+        # An explicit ONT must match the same assignment scope.
+        if resolved_ont_id:
+            assignment_query = select(OntAssignment).where(
+                OntAssignment.ont_unit_id == resolved_ont_id,
+                OntAssignment.active.is_(True),
+            )
+            if resolved_subscription_id:
+                assignment_query = assignment_query.where(
+                    OntAssignment.subscription_id == resolved_subscription_id
                 )
-            ).first()
+            assignment = db.scalars(assignment_query).first()
+            if resolved_subscription_id and assignment is None:
+                resolved_ont_id = None
             if assignment and assignment.subscriber_id:
-                resolved_subscriber_id = str(assignment.subscriber_id)
-                if assignment.service_address_id:
-                    context.service_address_id = str(assignment.service_address_id)
+                assignment_subscriber_id = str(assignment.subscriber_id)
+                if (
+                    resolved_subscriber_id
+                    and str(resolved_subscriber_id) != assignment_subscriber_id
+                ):
+                    resolved_ont_id = None
+                else:
+                    resolved_subscriber_id = assignment_subscriber_id
+                    if assignment.subscription_id and not resolved_subscription_id:
+                        resolved_subscription_id = str(assignment.subscription_id)
+                    if assignment.service_address_id:
+                        context.service_address_id = str(assignment.service_address_id)
 
         # If subscriber provided but no ONT, get ONT from assignment
         if resolved_subscriber_id and not resolved_ont_id:
-            assignment = db.scalars(
-                select(OntAssignment).where(
-                    OntAssignment.subscriber_id == resolved_subscriber_id,
-                    OntAssignment.active.is_(True),
+            assignment_query = select(OntAssignment).where(
+                OntAssignment.subscriber_id == resolved_subscriber_id,
+                OntAssignment.active.is_(True),
+            )
+            if resolved_subscription_id:
+                assignment_query = assignment_query.where(
+                    OntAssignment.subscription_id == resolved_subscription_id
                 )
-            ).first()
+            assignment = db.scalars(assignment_query).first()
             if assignment:
                 resolved_ont_id = str(assignment.ont_unit_id)
                 if assignment.service_address_id:
@@ -778,7 +856,8 @@ class DefaultSubscriberOntLinker:
             ont = db.get(OntUnit, resolved_ont_id)
             if ont:
                 context.ont_serial = ont.serial_number
-                context.olt_id = str(ont.olt_id) if ont.olt_id else None
+                ont_olt_id = getattr(ont, "olt_device_id", None)
+                context.olt_id = str(ont_olt_id) if ont_olt_id else None
 
                 # Get OLT name
                 if context.olt_id:
@@ -847,11 +926,12 @@ class DefaultSubscriberOntLinker:
         from app.models.network import OltAutofindCandidate, PonPort
 
         # Try ONT's discovered board/port
-        if ont.board is not None and ont.port is not None and ont.olt_id:
+        ont_olt_id = getattr(ont, "olt_device_id", None)
+        if ont.board is not None and ont.port is not None and ont_olt_id:
             port_name = f"{ont.board}/{ont.port}"
             pon_port = db.scalars(
                 select(PonPort).where(
-                    PonPort.olt_id == ont.olt_id,
+                    PonPort.olt_id == ont_olt_id,
                     PonPort.name.ilike(f"%{port_name}%"),
                 )
             ).first()

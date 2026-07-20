@@ -64,15 +64,45 @@ def _naive(dt: datetime) -> datetime:
     return dt.astimezone(UTC).replace(tzinfo=None)
 
 
-def _make_radacct(tmp_path, monkeypatch, *, ddl=_RADACCT_DDL):
+def _make_radacct(tmp_path, monkeypatch, *, ddl=_RADACCT_DDL, table_name="radacct"):
     url = f"sqlite:///{tmp_path / 'radacct.sqlite'}"
     engine = create_engine(url)
     with engine.begin() as conn:
-        conn.execute(text(ddl))
-    monkeypatch.setattr(usage_service, "_radius_accounting_db_url", lambda: url)
+        conn.execute(
+            text(ddl.replace("CREATE TABLE radacct", f"CREATE TABLE {table_name}"))
+        )
+    monkeypatch.setattr(
+        usage_service,
+        "_radius_accounting_target",
+        lambda _db: {"db_url": url, "radacct_table": table_name},
+    )
     # No Redis in unit tests — keeps the bandwidth-delta emit a no-op.
     monkeypatch.delenv("REDIS_URL", raising=False)
     return engine
+
+
+def test_import_uses_configured_radacct_table(
+    db_session, subscription, tmp_path, monkeypatch
+):
+    engine = _make_radacct(tmp_path, monkeypatch, table_name="custom_radacct")
+    credential = _credential(db_session, subscription)
+    start = datetime.now(UTC) - timedelta(minutes=5)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO custom_radacct "
+                "(radacctid, acctsessionid, username, acctstarttime, "
+                "acctinputoctets, acctoutputoctets) "
+                "VALUES (1, 'custom-session', :username, :started, 1, 2)"
+            ),
+            {"username": credential.username, "started": start.isoformat()},
+        )
+
+    result = usage_service.import_radius_accounting(db_session)
+
+    assert result["ok"] is True
+    assert result["processed"] == 1
+    assert _local_session(db_session, credential).session_id == "custom-session"
 
 
 def _insert_radacct_row(engine, **values):
@@ -136,6 +166,7 @@ def test_import_persists_last_update_at(
     result = usage_service.import_radius_accounting(db_session)
 
     assert result["ok"] is True
+    assert result["source_status"] == "fresh"
     assert result["processed"] == 1
     local = _local_session(db_session, credential)
     assert local.session_end is None
@@ -307,6 +338,30 @@ def test_import_survives_radacct_without_framed_ip_columns(
     assert local.framed_ip_address is None
     db_session.refresh(subscription)
     assert subscription.ipv4_address is None
+
+
+def test_import_marks_stale_external_accounting_source(
+    db_session, subscription, tmp_path, monkeypatch
+):
+    engine = _make_radacct(tmp_path, monkeypatch)
+    credential = _credential(db_session, subscription)
+    seen_at = datetime.now(UTC) - timedelta(hours=2)
+    _insert_radacct_row(
+        engine,
+        radacctid=1,
+        acctsessionid="stale-source",
+        username=credential.username,
+        acctstarttime=(seen_at - timedelta(minutes=10)).isoformat(),
+        acctupdatetime=seen_at.isoformat(),
+        acctinputoctets=1000,
+        acctoutputoctets=2000,
+    )
+
+    result = usage_service.import_radius_accounting(db_session)
+
+    assert result["ok"] is False
+    assert result["source_status"] == "stale"
+    assert int(result["source_age_seconds"]) >= 3600
 
 
 def test_stop_row_does_not_write_back_subscription_ip(

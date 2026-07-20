@@ -22,11 +22,12 @@ from app.models.network_monitoring import NetworkDevice, PopSite
 from app.models.subscriber import Address, Subscriber
 from app.models.usage import AccountingStatus, RadiusAccountingSession
 from app.services import settings_spec
+from app.services.device_operational_status import annotate_operational_status
+from app.services.network.ont_status import resolve_effective_ont_status
 from app.services.network.signal_thresholds import (
     classify_signal,
     get_signal_thresholds,
 )
-from app.services.zabbix_ont_status import get_ont_snapshots_from_zabbix
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +83,7 @@ def build_network_map_context(db: Session) -> dict:
         .order_by(PopSite.id.asc(), NetworkDevice.name.asc())
         .all()
     )
+    annotate_operational_status([device for device, _ in network_devices])
     for idx, (device, pop_site) in enumerate(network_devices):
         # Spread markers around the POP to avoid complete overlap.
         angle = (idx % 12) * (math.pi / 6.0)
@@ -96,7 +98,11 @@ def build_network_map_context(db: Session) -> dict:
                     "id": str(device.id),
                     "type": "network_device",
                     "name": device.name,
-                    "status": device.status.value if device.status else "unknown",
+                    "status": device.operational_status,
+                    "status_reason": device.operational_reason,
+                    "status_presentation": device.status_presentation.model_dump(
+                        mode="json"
+                    ),
                     "role": device.role.value if device.role else None,
                     "device_type": device.device_type.value
                     if device.device_type
@@ -247,18 +253,17 @@ def build_network_map_context(db: Session) -> dict:
     ont_offline = 0
     ont_warning = 0
     warn_threshold, crit_threshold = get_signal_thresholds(db)
-    zabbix_snapshots = get_ont_snapshots_from_zabbix(db, ont_units)
     for ont in ont_units:
-        zabbix_snapshot = zabbix_snapshots.get(str(ont.id))
-        status = zabbix_snapshot.status if zabbix_snapshot else "offline"
-        if status == "online":
+        effective_status = resolve_effective_ont_status(ont)
+        status = effective_status.status.value
+        if effective_status.is_online:
             ont_online += 1
         else:
             ont_offline += 1
         if ont.gps_longitude is None or ont.gps_latitude is None:
             continue
-        olt_rx_dbm = zabbix_snapshot.olt_rx_dbm if zabbix_snapshot else None
-        onu_rx_dbm = zabbix_snapshot.onu_rx_dbm if zabbix_snapshot else None
+        olt_rx_dbm = ont.olt_rx_signal_dbm
+        onu_rx_dbm = ont.onu_rx_signal_dbm
         signal_quality = classify_signal(
             olt_rx_dbm,
             warn_threshold=warn_threshold,
@@ -425,19 +430,23 @@ def build_network_map_context(db: Session) -> dict:
         "customers_offline": offline_count,
         "network_devices": len(network_devices),
         "network_devices_online": sum(
-            1
-            for device, _ in network_devices
-            if device.status and device.status.value == "online"
+            1 for device, _ in network_devices if device.operational_status == "up"
         ),
         "network_devices_offline": sum(
-            1
-            for device, _ in network_devices
-            if device.status and device.status.value == "offline"
+            1 for device, _ in network_devices if device.operational_status == "down"
         ),
         "network_devices_degraded": sum(
             1
             for device, _ in network_devices
-            if device.status and device.status.value in {"degraded", "maintenance"}
+            if device.operational_status == "degraded"
+        ),
+        "network_devices_maintenance": sum(
+            1
+            for device, _ in network_devices
+            if device.operational_status == "maintenance"
+        ),
+        "network_devices_retry_pending": sum(
+            1 for device, _ in network_devices if device.operational_retry_pending
         ),
         "onts": len(ont_units),
         "onts_online": ont_online,

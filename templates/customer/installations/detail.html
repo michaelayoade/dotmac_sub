@@ -1,4 +1,5 @@
 {% extends "layouts/customer.html" %}
+{% from "components/ui/macros.html" import status_presentation_badge %}
 
 {% block title %}Installation Details - Customer Portal{% endblock %}
 
@@ -18,15 +19,8 @@
             <h1 class="text-2xl font-display font-bold text-stone-900 dark:text-white">
                 Installation Appointment
             </h1>
-            <span class="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold
-                {% if appt_status == 'completed' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400
-                {% elif appt_status == 'confirmed' %}bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400
-                {% elif appt_status == 'proposed' %}bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400
-                {% elif appt_status == 'no_show' %}bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400
-                {% elif appt_status == 'canceled' %}bg-stone-100 text-stone-600 dark:bg-stone-700 dark:text-stone-400
-                {% else %}bg-stone-100 text-stone-600 dark:bg-stone-700 dark:text-stone-400{% endif %}">
-                {{ appt_status | replace('_', ' ') | capitalize if appt_status else 'Unknown' }}
-            </span>
+            {# Status semantics from the appointment presentation owner. #}
+            {{ status_presentation_badge(appointment_status_presentation(appt_status), size="sm") }}
             {% if appointment.is_self_install %}
             <span class="inline-flex items-center rounded-lg bg-violet-100 px-3 py-1.5 text-xs font-semibold text-violet-700 dark:bg-violet-900/30 dark:text-violet-400">Self-install</span>
             {% endif %}
@@ -37,16 +31,16 @@
         <div class="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm dark:border-stone-700 dark:bg-stone-800">
             <p class="text-xs font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400">Date</p>
             <p class="mt-2 text-xl font-semibold text-stone-900 dark:text-white">
-                {{ appointment.scheduled_start.strftime('%b %d, %Y') if appointment.scheduled_start else 'TBD' }}
+                {{ appointment.scheduled_start | portal_datetime('%b %d, %Y') if appointment.scheduled_start else 'TBD' }}
             </p>
         </div>
         <div class="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm dark:border-stone-700 dark:bg-stone-800">
             <p class="text-xs font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400">Time Window</p>
             <p class="mt-2 text-xl font-semibold text-stone-900 dark:text-white">
                 {% if appointment.scheduled_start and appointment.scheduled_end %}
-                {{ appointment.scheduled_start.strftime('%I:%M %p') }} &ndash; {{ appointment.scheduled_end.strftime('%I:%M %p') }}
+                {{ appointment.scheduled_start | portal_datetime('%I:%M %p') }} &ndash; {{ appointment.scheduled_end | portal_datetime('%I:%M %p') }}
                 {% elif appointment.scheduled_start %}
-                {{ appointment.scheduled_start.strftime('%I:%M %p') }}
+                {{ appointment.scheduled_start | portal_datetime('%I:%M %p') }}
                 {% else %}
                 TBD
                 {% endif %}
@@ -83,13 +77,7 @@
                     <p class="mt-0.5 text-xs font-mono text-stone-500 dark:text-stone-400">#{{ service_order.id }}</p>
                 </div>
                 <div class="flex items-center gap-3">
-                    <span class="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold
-                        {% if so_status == 'active' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400
-                        {% elif so_status == 'provisioning' %}bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400
-                        {% elif so_status == 'submitted' %}bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400
-                        {% else %}bg-stone-100 text-stone-600 dark:bg-stone-700 dark:text-stone-400{% endif %}">
-                        {{ so_status | capitalize if so_status else 'Unknown' }}
-                    </span>
+                    {{ status_presentation_badge(service_order_status_presentation(so_status), size="sm") }}
                     <a href="/portal/service-orders/{{ service_order.id }}" class="text-sm font-medium text-[var(--color-brand-600)] hover:underline dark:text-[var(--color-brand-400)]">
                         View details
                     </a>
@@ -110,7 +98,12 @@
                     <li>Ensure someone over 18 is present at the installation address.</li>
                     <li>Clear access to where the fiber cable enters the building.</li>
                     <li>Have a power outlet available near the planned router location.</li>
-                    <li>If you need to reschedule, please contact support.</li>
+                    <li>
+                        Need a different time?
+                        <a href="/portal/support/new?title=Reschedule%20installation&description=I%20need%20to%20reschedule%20appointment%20{{ appointment.id }}" class="font-semibold underline hover:no-underline">Request reschedule</a>
+                        or
+                        <a href="/portal/support/new?title=Cancel%20installation&description=I%20need%20to%20cancel%20appointment%20{{ appointment.id }}" class="font-semibold underline hover:no-underline">request cancellation</a>.
+                    </li>
                 </ul>
             </div>
         </div>

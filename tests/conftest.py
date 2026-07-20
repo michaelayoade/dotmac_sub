@@ -38,6 +38,14 @@ os.environ["RADIUS_SYNC_DB_URL"] = ""
 import sqlite3
 import uuid
 from datetime import UTC
+
+# Template filters/globals (app_datetime, presentations, brand) are attached by
+# a Jinja2Templates __init__ patch that app.main installs at import. Tests that
+# render templates with their own Jinja2Templates need the same patch.
+from app.web.brand_globals import install_brand_jinja_global  # noqa: E402
+
+install_brand_jinja_global()
+
 from typing import Any
 
 import pytest
@@ -75,11 +83,14 @@ def _patch_jose_datetime(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _disable_bundled_external_radius(monkeypatch):
-    """Do not let unit tests fall back to the deployment FreeRADIUS database."""
+def _disable_bundled_external_radius(monkeypatch, request):
+    """Do not let unit tests read the deployment's legacy bootstrap DSN."""
+    if request.node.path.name == "test_radius_dsn.py":
+        return
+
     from app.services import radius as radius_service
 
-    monkeypatch.setattr(radius_service, "_bundled_external_db_config", lambda: None)
+    monkeypatch.setattr(radius_service.radius_dsn, "resolve_radius_dsn", lambda: None)
 
 
 # Register UUID adapter for SQLite - store as string
@@ -216,6 +227,8 @@ def _enable_sqlite_spatial_admin() -> None:
     importlib.reload(geoalchemy_sqlite_admin)
 
 
+# Register the complete model graph before the shared schema fixture calls create_all.
+import app.models  # noqa: F401
 from app.models.catalog import AccessType, PriceBasis, RegionZone, ServiceType
 from app.models.subscriber import Subscriber
 from app.schemas.catalog import (
@@ -252,6 +265,21 @@ def engine():
             poolclass=StaticPool,
         )
 
+        # pysqlite emits BEGIN lazily and runs SAVEPOINT/RELEASE in autocommit
+        # mode, so releasing the outermost savepoint COMMITS the connection —
+        # breaking Session.begin_nested() (used for per-item isolation, e.g.
+        # zabbix_host_sync / uisp_sync) under the db_session fixture's
+        # connection-level transaction. Standard SQLAlchemy recipe: take over
+        # transaction control so BEGIN is emitted eagerly and savepoints nest
+        # inside a real transaction.
+        @event.listens_for(engine, "connect")
+        def _sqlite_disable_implicit_begin(dbapi_connection, _connection_record):
+            dbapi_connection.isolation_level = None
+
+        @event.listens_for(engine, "begin")
+        def _sqlite_emit_begin(conn):
+            conn.exec_driver_sql("BEGIN")
+
         @event.listens_for(engine, "connect")
         def _load_spatialite(dbapi_connection, _connection_record):
             dbapi_connection.enable_load_extension(True)
@@ -287,6 +315,39 @@ def db_session(engine):
     SessionLocal = sessionmaker(bind=connection, autoflush=False, autocommit=False)
     session = SessionLocal()
     try:
+        # The application starts only after the one-time opening-balance
+        # authority cutover. Unit tests therefore run as a fresh post-cutover
+        # installation: accounts created by a test are native accounts with a
+        # zero opening position plus their own events. Reconstruction tests
+        # explicitly remove this empty bootstrap record when exercising the
+        # migration cutover itself.
+        from datetime import datetime
+        from decimal import Decimal
+
+        from app.models.prepaid_funding import PrepaidFundingReconstructionBatch
+
+        bootstrap_at = datetime(2000, 1, 1, tzinfo=UTC)
+        session.add(
+            PrepaidFundingReconstructionBatch(
+                manifest_sha256="0" * 64,
+                manifest_payload_sha256="0" * 64,
+                attestation_sha256="0" * 64,
+                attestation_key_fingerprint_sha256="0" * 64,
+                attestation_signed_at=bootstrap_at,
+                blocker_manifest_sha256="0" * 64,
+                candidate_cohort_sha256="0" * 64,
+                source="pytest-empty-native-install-cutover",
+                evidence_ref="pytest:native-install",
+                position_at=bootstrap_at,
+                currency="NGN",
+                account_count=0,
+                total_amount=Decimal("0.00"),
+                approved_by="pytest",
+                is_authority_cutover=True,
+                approved_at=bootstrap_at,
+            )
+        )
+        session.commit()
         yield session
     finally:
         session.close()
@@ -302,10 +363,17 @@ def _unique_email() -> str:
 @pytest.fixture()
 def subscriber(db_session):
     """Unified subscriber fixture - combines identity, account, and billing."""
+    from app.services.subscriber import _default_reseller_id
+
     subscriber = Subscriber(
         first_name="Test",
         last_name="User",
         email=_unique_email(),
+        # subscribers.reseller_id is NOT NULL on Postgres (migration 116). On
+        # SQLite no House reseller is seeded so this resolves to None (the
+        # column is nullable there); on the PG integration job it resolves to
+        # House, keeping the shared fixture usable by flow tests.
+        reseller_id=_default_reseller_id(db_session),
     )
     db_session.add(subscriber)
     db_session.commit()

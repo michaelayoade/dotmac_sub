@@ -200,6 +200,22 @@ class ConnectionManager:
         # Also dispatch locally for same-instance delivery
         await self._dispatch_to_subscribers(conversation_id, event_data)
 
+    # The routing key above is really a *topic*: conversation ids are one kind,
+    # workqueue channels (``workqueue:user:…``) are another. These aliases let
+    # non-inbox features share the transport without pretending to be a
+    # conversation.
+    def subscribe_topic(self, user_id: str, topic: str):
+        """Subscribe a user to any topic."""
+        self.subscribe_conversation(user_id, topic)
+
+    def unsubscribe_topic(self, user_id: str, topic: str):
+        """Unsubscribe a user from any topic."""
+        self.unsubscribe_conversation(user_id, topic)
+
+    async def broadcast_to_topic(self, topic: str, event: WebSocketEvent):
+        """Broadcast an event to every subscriber of a topic (via Redis)."""
+        await self.broadcast_to_conversation(topic, event)
+
     async def broadcast_to_user(self, user_id: str, event: WebSocketEvent):
         """Send event directly to a specific user's connections."""
         event_data = event.model_dump(mode="json")

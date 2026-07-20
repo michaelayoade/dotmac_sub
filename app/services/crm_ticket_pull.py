@@ -14,7 +14,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models.subscriber import Subscriber
-from app.models.support import Ticket, TicketChannel, TicketComment
+from app.models.support import Ticket, TicketChannel, TicketComment, TicketStatus
 from app.services.crm_client import CRMClient, CRMClientError, get_crm_client
 from app.services.support import _coerce_uuid
 
@@ -351,7 +351,12 @@ def _apply_ticket_fields(
     ticket.ticket_type = crm_ticket.get("ticket_type")
     ticket.channel = _safe_channel(crm_ticket.get("channel"))
     ticket.tags = _clean_tags(crm_ticket.get("tags"))
-    ticket.metadata_ = _metadata(crm_ticket)
+    # Merge, never replace: sub-owned decision state on the ticket (csat,
+    # resolution confirmation, the field-visit work_order_id link) must
+    # survive a CRM pull. CRM-derived keys (crm_*, sync_source, and the CRM
+    # payload's own metadata) update in place; keys CRM knows nothing about
+    # are preserved.
+    ticket.metadata_ = {**(ticket.metadata_ or {}), **_metadata(crm_ticket)}
     ticket.attachments = _clean_attachments(crm_ticket.get("attachments"))
     ticket.due_at = _parse_datetime(crm_ticket.get("due_at"))
     ticket.resolved_at = _parse_datetime(crm_ticket.get("resolved_at"))
@@ -453,6 +458,7 @@ def sync_ticket(
         )
 
     existing = _find_existing_ticket(db, crm_ticket)
+    previous_status = existing.status if existing else None
     if existing:
         # Unchanged in the CRM since we last synced it → skip the rewrite.
         # CRM comment creation does not bump the ticket's updated_at, so the
@@ -475,6 +481,32 @@ def sync_ticket(
         outcome = "created"
 
     _apply_ticket_fields(local_ticket, crm_ticket, subscriber_id)
+
+    # Proactively notify the customer when their ticket is newly resolved
+    # (mirrors the work-order/project push). Best-effort — a push failure never
+    # breaks the sync.
+    # Ticket.status is a plain string column, and transition_ticket_status
+    # writes the enum's *value* — so compare against the string, not the member.
+    if (
+        subscriber_id
+        and local_ticket.status == TicketStatus.resolved.value
+        and previous_status != TicketStatus.resolved.value
+    ):
+        try:
+            from app.services import push as push_service
+
+            push_service.send_push(
+                db,
+                str(subscriber_id),
+                title="Support ticket resolved",
+                body="Your support ticket has been marked resolved.",
+                data={"type": "ticket", "ticket_id": str(local_ticket.id)},
+            )
+        except Exception as exc:  # noqa: BLE001 - notification is advisory
+            logger.warning(
+                "ticket_resolved_push_failed ticket=%s: %s", crm_ticket_id, exc
+            )
+
     comments_created = 0
     if sync_comments:
         comments_created = _sync_comments(db, client, local_ticket, crm_ticket_id)

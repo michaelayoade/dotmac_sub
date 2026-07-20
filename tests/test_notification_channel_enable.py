@@ -7,7 +7,11 @@ provider). Such rows can only fail at dispatch and accumulate as
 from __future__ import annotations
 
 from app.models.domain_settings import DomainSetting, SettingDomain
-from app.models.notification import Notification, NotificationChannel
+from app.models.notification import (
+    Notification,
+    NotificationChannel,
+    NotificationTemplate,
+)
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.models.subscription_engine import SettingValueType
 from app.services.events.handlers.notification import (
@@ -53,6 +57,21 @@ def _subscriber(db) -> Subscriber:
     return sub
 
 
+def _sms_template(db, *, active: bool = True) -> NotificationTemplate:
+    template = NotificationTemplate(
+        name="Subscription Suspended SMS",
+        code="subscription_suspended",
+        channel=NotificationChannel.sms,
+        subject=None,
+        body="Service suspended",
+        is_active=active,
+    )
+    db.add(template)
+    db.commit()
+    db.refresh(template)
+    return template
+
+
 def _handle(db, sub_id) -> None:
     # subscription_suspended fans out to (email, sms); active+service is allowed.
     NotificationHandler().handle(
@@ -78,6 +97,7 @@ def test_channel_disabled_helper(db_session):
 
 def test_sms_row_created_when_enabled_skipped_when_disabled(db_session):
     sub = _subscriber(db_session)
+    _sms_template(db_session)
 
     def sms_count() -> int:
         return (
@@ -98,3 +118,23 @@ def test_sms_row_created_when_enabled_skipped_when_disabled(db_session):
     _set_sms_enabled(db_session, "false")
     _handle(db_session, sub.id)
     assert sms_count() == enabled_count, "No new SMS row when sms_enabled=false"
+
+
+def test_inactive_template_suppresses_event_notification(db_session):
+    sub = _subscriber(db_session)
+    _sms_template(db_session, active=False)
+    _set_sms_enabled(db_session, "true")
+
+    before = (
+        db_session.query(Notification)
+        .filter_by(subscriber_id=sub.id, channel=NotificationChannel.sms)
+        .count()
+    )
+    _handle(db_session, sub.id)
+
+    after = (
+        db_session.query(Notification)
+        .filter_by(subscriber_id=sub.id, channel=NotificationChannel.sms)
+        .count()
+    )
+    assert after == before

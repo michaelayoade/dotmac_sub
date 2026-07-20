@@ -2,21 +2,257 @@
 
 from __future__ import annotations
 
+import json
 import logging
+from collections import Counter, defaultdict
+from collections.abc import Mapping
+from datetime import datetime
+from decimal import Decimal
 from urllib.parse import quote_plus
 
+from fastapi.encoders import jsonable_encoder
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
-from app.models.catalog import Subscription, SubscriptionStatus
+from app.models.audit import AuditActorType
+from app.models.catalog import Subscription
 from app.models.subscriber import SubscriberCategory
 from app.services import catalog as catalog_service
 from app.services import subscriber as subscriber_service
 from app.services import web_catalog_subscriptions as core
 from app.services.audit_helpers import build_audit_activities
+from app.services.subscription_lifecycle import (
+    SubscriptionCommandKind,
+    SubscriptionCommandOutcomeStatus,
+    SubscriptionEffectiveTiming,
+    SubscriptionLifecycleCommand,
+    SubscriptionLifecycleError,
+    SubscriptionLifecycleState,
+    preview_subscription_command,
+    resolve_subscription_lifecycle,
+)
+from app.services.subscription_lifecycle_batch import (
+    SubscriptionBatchOutcome,
+    SubscriptionBatchPreview,
+    SubscriptionLifecycleBatchError,
+    execute_subscription_batch,
+    preview_subscription_batch,
+)
+from app.services.subscription_lifecycle_commands import execute_subscription_command
+from app.services.subscription_lifecycle_schedules import (
+    SubscriptionLifecycleScheduleError,
+    cancel_scheduled_subscription_status_command,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def preview_lifecycle_command_response(
+    db: Session,
+    *,
+    subscription_id: str,
+    kind: SubscriptionCommandKind,
+    actor_id: str | None,
+    reason: str | None = None,
+    target_offer_id: str | None = None,
+    effective_timing: SubscriptionEffectiveTiming = (
+        SubscriptionEffectiveTiming.immediate
+    ),
+    effective_at: datetime | None = None,
+) -> tuple[dict[str, object], int]:
+    """Preview one lifecycle command using the same contract as execution."""
+    try:
+        command = SubscriptionLifecycleCommand(
+            subscription_id=subscription_id,
+            kind=kind,
+            source=f"admin:catalog:{actor_id or 'system'}",
+            effective_timing=effective_timing,
+            effective_at=effective_at,
+            target_offer_id=target_offer_id,
+            reason=reason,
+        )
+        preview = preview_subscription_command(db, command)
+    except (SubscriptionLifecycleError, ValueError) as exc:
+        missing = "not found" in str(exc).lower()
+        return (
+            {
+                "status": "rejected",
+                "message": str(exc),
+                "error_code": (
+                    "subscription_not_found" if missing else "invalid_lifecycle_command"
+                ),
+            },
+            404 if missing else 422,
+        )
+    return (
+        {
+            "status": "previewed",
+            "expected_head": preview.current.head,
+            "effective_at": preview.effective_at.isoformat(),
+            "eligible": preview.eligible,
+            "eligibility_reasons": list(preview.eligibility_reasons),
+            "requires_confirmation": preview.requires_confirmation,
+            "current": _serialize_lifecycle_state(preview.current.state),
+            "proposed": _serialize_lifecycle_state(preview.proposed),
+            "billing_impact": _json_value(preview.billing_impact),
+            "access_impact": _json_value(preview.access_impact),
+        },
+        200,
+    )
+
+
+def execute_lifecycle_command_response(
+    db: Session,
+    *,
+    subscription_id: str,
+    kind: SubscriptionCommandKind,
+    actor_id: str | None,
+    expected_head: str | None = None,
+    preview_fingerprint: str | None = None,
+    idempotency_key: str | None = None,
+    reason: str | None = None,
+    target_offer_id: str | None = None,
+    effective_timing: SubscriptionEffectiveTiming = (
+        SubscriptionEffectiveTiming.immediate
+    ),
+    effective_at: datetime | None = None,
+) -> tuple[dict[str, object], int]:
+    """Execute one reviewed admin lifecycle command and serialize its outcome."""
+    try:
+        command = SubscriptionLifecycleCommand(
+            subscription_id=subscription_id,
+            kind=kind,
+            source=f"admin:catalog:{actor_id or 'system'}",
+            effective_timing=effective_timing,
+            effective_at=effective_at,
+            target_offer_id=target_offer_id,
+            reason=reason,
+            expected_head=expected_head,
+            expected_financial_fingerprint=preview_fingerprint,
+            idempotency_key=idempotency_key,
+        )
+        if (
+            command.kind == SubscriptionCommandKind.change_plan
+            and command.effective_timing == SubscriptionEffectiveTiming.immediate
+            and not command.expected_financial_fingerprint
+        ):
+            return (
+                {
+                    "status": "rejected",
+                    "message": (
+                        "Preview the financial plan change before confirming it"
+                    ),
+                    "previous_head": expected_head,
+                    "current_head": expected_head,
+                    "artifact_ids": [],
+                    "error_code": "plan_change_preview_required",
+                },
+                422,
+            )
+        outcome = execute_subscription_command(
+            db,
+            command,
+            actor_id=actor_id,
+            actor_type=AuditActorType.user if actor_id else AuditActorType.system,
+        )
+    except (SubscriptionLifecycleError, ValueError) as exc:
+        missing = "not found" in str(exc).lower()
+        return (
+            {
+                "status": "rejected",
+                "message": str(exc),
+                "previous_head": None,
+                "current_head": None,
+                "artifact_ids": [],
+                "error_code": (
+                    "subscription_not_found" if missing else "invalid_lifecycle_command"
+                ),
+                "replayed": False,
+            },
+            404 if missing else 422,
+        )
+    status_code = {
+        "applied": 200,
+        "scheduled": 202,
+        "skipped": 200,
+        "rejected": 409,
+        "superseded": 409,
+        "failed": 500,
+    }[outcome.status.value]
+    return (
+        {
+            "status": outcome.status.value,
+            "message": outcome.message,
+            "previous_head": outcome.previous_head,
+            "current_head": outcome.current_head,
+            "artifact_ids": list(outcome.artifact_ids),
+            "error_code": outcome.error_code,
+            "replayed": outcome.replayed,
+        },
+        status_code,
+    )
+
+
+def cancel_lifecycle_schedule_response(
+    db: Session,
+    *,
+    subscription_id: str,
+    schedule_id: str,
+    actor_id: str | None,
+) -> tuple[dict[str, object], int]:
+    """Cancel one pending lifecycle status schedule."""
+    try:
+        schedule = cancel_scheduled_subscription_status_command(
+            db,
+            schedule_id,
+            subscription_id=subscription_id,
+            actor_id=actor_id,
+        )
+    except SubscriptionLifecycleScheduleError as exc:
+        missing = "not found" in str(exc).lower()
+        return (
+            {
+                "status": "rejected",
+                "schedule_id": schedule_id,
+                "message": str(exc),
+                "error_code": (
+                    "lifecycle_schedule_not_found"
+                    if missing
+                    else "lifecycle_schedule_not_cancelable"
+                ),
+            },
+            404 if missing else 409,
+        )
+    return (
+        {
+            "status": schedule.status.value,
+            "schedule_id": str(schedule.id),
+            "message": "Lifecycle schedule canceled",
+            "error_code": None,
+        },
+        200,
+    )
+
+
+def cancel_lifecycle_schedule_redirect(
+    db: Session,
+    *,
+    subscription_id: str,
+    schedule_id: str,
+    actor_id: str | None,
+) -> str:
+    """Cancel one lifecycle schedule and return to its subscription detail."""
+    payload, status_code = cancel_lifecycle_schedule_response(
+        db,
+        subscription_id=subscription_id,
+        schedule_id=schedule_id,
+        actor_id=actor_id,
+    )
+    base = f"/admin/catalog/subscriptions/{subscription_id}"
+    message = str(payload["message"])
+    query_name = "notice" if status_code == 200 else "error"
+    return f"{base}?{query_name}={quote_plus(message)}"
 
 
 def get_subscription_or_none(
@@ -62,9 +298,99 @@ def subscription_detail_page_context(
         "subscription": subscription,
         "activities": build_audit_activities(db, "subscription", str(subscription_id)),
         "offer_options": core.active_offer_options(db),
+        "scheduled_plan_change": _scheduled_plan_change_context(db, subscription_id),
+        "scheduled_status_changes": _scheduled_status_change_context(
+            db, subscription_id
+        ),
     }
     context.update(core.subscription_detail_context(db, subscription))
     return context
+
+
+def _scheduled_plan_change_context(
+    db: Session,
+    subscription_id: str,
+) -> dict[str, object] | None:
+    """Summarize the outstanding scheduled (next-cycle) plan change, if any."""
+    from app.models.catalog import CatalogOffer
+    from app.services.subscription_changes import subscription_change_requests
+
+    scheduled = subscription_change_requests.get_scheduled_for_subscription(
+        db, subscription_id
+    )
+    if scheduled is None:
+        return None
+    target_offer = db.get(CatalogOffer, scheduled.requested_offer_id)
+    return {
+        "id": str(scheduled.id),
+        "offer_name": target_offer.name if target_offer else "New plan",
+        "effective_date": scheduled.effective_date,
+    }
+
+
+def _scheduled_status_change_context(
+    db: Session,
+    subscription_id: str,
+) -> list[dict[str, object]]:
+    from sqlalchemy import select
+
+    from app.models.subscription_lifecycle_schedule import (
+        SubscriptionLifecycleSchedule,
+        SubscriptionLifecycleScheduleStatus,
+    )
+    from app.services.common import coerce_uuid
+
+    schedules = db.scalars(
+        select(SubscriptionLifecycleSchedule)
+        .where(
+            SubscriptionLifecycleSchedule.subscription_id
+            == coerce_uuid(subscription_id)
+        )
+        .where(
+            SubscriptionLifecycleSchedule.status.in_(
+                {
+                    SubscriptionLifecycleScheduleStatus.pending,
+                    SubscriptionLifecycleScheduleStatus.processing,
+                }
+            )
+        )
+        .order_by(SubscriptionLifecycleSchedule.effective_at.asc())
+    ).all()
+    return [
+        {
+            "id": str(schedule.id),
+            "kind": schedule.command_kind,
+            "status": schedule.status.value,
+            "effective_at": schedule.effective_at,
+            "reason": schedule.reason,
+            "cancelable": (
+                schedule.status == SubscriptionLifecycleScheduleStatus.pending
+            ),
+        }
+        for schedule in schedules
+    ]
+
+
+def _serialize_lifecycle_state(
+    state: SubscriptionLifecycleState,
+) -> dict[str, object]:
+    return {
+        "status": state.status,
+        "offer_id": state.offer_id,
+        "offer_name": state.offer_name,
+        "billing_mode": state.billing_mode,
+        "billing_collectible": state.billing_collectible,
+        "mrr_countable": state.mrr_countable,
+        "radius_access_state": state.radius_access_state,
+        "radius_allowed": state.radius_allowed,
+        "radius_blocked": state.radius_blocked,
+        "access_block_reason": state.access_block_reason,
+        "terminal": state.terminal,
+    }
+
+
+def _json_value(value: object) -> object:
+    return jsonable_encoder(value, custom_encoder={Decimal: str})
 
 
 def customer_detail_url_for_subscriber_id(db: Session, subscriber_id: str) -> str:
@@ -141,13 +467,39 @@ def handle_subscription_create_form(
         subscription.get("subscriber_id") or subscription.get("account_id") or ""
     )
     try:
-        core.create_subscription_with_audit(
+        created = core.create_subscription_with_audit(
             db,
             core.build_payload_data(subscription),
             form,
             request,
             actor_id,
         )
+        if form.get("activate_immediately") == "1":
+            snapshot = resolve_subscription_lifecycle(db, str(created.id))
+            command = SubscriptionLifecycleCommand(
+                subscription_id=str(created.id),
+                kind=SubscriptionCommandKind.activate,
+                source=f"admin:catalog:{actor_id or 'system'}",
+                reason="Activate after subscription creation",
+                expected_head=snapshot.head,
+                idempotency_key=f"admin-create-activate:{created.id}",
+            )
+            outcome = execute_subscription_command(
+                db,
+                command,
+                actor_id=actor_id,
+                actor_type=(AuditActorType.user if actor_id else AuditActorType.system),
+            )
+            if outcome.status not in {
+                SubscriptionCommandOutcomeStatus.applied,
+                SubscriptionCommandOutcomeStatus.skipped,
+            }:
+                return {
+                    "redirect_url": (
+                        f"/admin/catalog/subscriptions/{created.id}"
+                        f"?error={quote_plus(outcome.message)}"
+                    )
+                }
         redirect_url = (
             customer_detail_url_for_subscriber_id(db, subscriber_id)
             if subscriber_id
@@ -180,7 +532,15 @@ def handle_subscription_update_form(
 ) -> dict[str, object]:
     """Validate and update a subscription from the admin form."""
     subscription = core.parse_subscription_form(form, subscription_id=subscription_id)
-    error = core.resolve_account_id(db, subscription)
+    current = catalog_service.subscriptions.get(db, subscription_id)
+    error = None
+    if str(subscription.get("offer_id") or "") != str(current.offer_id):
+        error = (
+            "Use Change Plan from the subscription detail page so the owner "
+            "preview, confirmation, audit, and exact result are preserved."
+        )
+    if not error:
+        error = core.resolve_account_id(db, subscription)
     if not error:
         error = core.validate_subscription_form(subscription, for_create=False)
     if not error:
@@ -283,15 +643,32 @@ def admin_resume_vacation_hold_redirect(
 
     admin_ref = f"admin:{actor_id or 'unknown'}"
     try:
-        restore_subscription(
+        # ``trigger`` is matched against ALLOWED_RESTORERS by exact membership, so
+        # it must be the bare authority name. This passed the interpolated
+        # "admin:<uuid>", which is never in {"customer", "admin"} — so
+        # resolve_locks_for_trigger cleared ZERO locks, restore_subscription
+        # returned False, the return value was discarded, and the admin was told
+        # "Service resumed successfully" while the customer stayed offline.
+        # ``resolved_by`` is the free-text audit field; that is where the actor
+        # identity belongs.
+        restored = restore_subscription(
             db,
             subscription_id,
-            trigger=admin_ref,
+            trigger="admin",
             resolved_by=admin_ref,
             reason=EnforcementReason.customer_hold,
         )
         db.commit()
-        notice = "Vacation hold has been cleared. Service resumed successfully."
+        if restored:
+            notice = "Vacation hold has been cleared. Service resumed successfully."
+        else:
+            # Never claim success the owner did not give us. It declines for real
+            # reasons — another active lock it cannot clear, or an active login on
+            # the same login name.
+            notice = (
+                "Vacation hold could not be resumed. The service may still be held "
+                "by another enforcement lock — check the subscription's locks."
+            )
         query = f"notice={quote_plus(notice)}"
     except Exception as exc:
         db.rollback()
@@ -305,23 +682,107 @@ def admin_resume_vacation_hold_redirect(
     return f"/admin/catalog/subscriptions/{subscription_id}?{query}"
 
 
+def preview_bulk_lifecycle_response(
+    db: Session,
+    *,
+    subscription_ids: str,
+    kind: SubscriptionCommandKind,
+    actor_id: str | None,
+    target_offer_id: str | None = None,
+    effective_timing: SubscriptionEffectiveTiming = (
+        SubscriptionEffectiveTiming.immediate
+    ),
+    effective_at: datetime | None = None,
+    reason: str | None = None,
+) -> tuple[dict[str, object], int]:
+    """Preview a canonical subscription batch for admin confirmation."""
+    try:
+        preview = preview_subscription_batch(
+            db,
+            subscription_ids,
+            kind=kind,
+            source=f"admin:catalog:{actor_id or 'system'}",
+            target_offer_id=target_offer_id,
+            effective_timing=effective_timing,
+            effective_at=effective_at,
+            reason=reason,
+        )
+    except SubscriptionLifecycleBatchError as exc:
+        return {"status": "rejected", "message": str(exc)}, 422
+    return _batch_preview_payload(preview), 200
+
+
+def execute_bulk_lifecycle_response(
+    db: Session,
+    *,
+    subscription_ids: str,
+    kind: SubscriptionCommandKind,
+    actor_id: str | None,
+    target_offer_id: str | None = None,
+    effective_timing: SubscriptionEffectiveTiming = (
+        SubscriptionEffectiveTiming.immediate
+    ),
+    effective_at: datetime | None = None,
+    reason: str | None = None,
+    reviewed_heads: str | Mapping[str, str] | None = None,
+    idempotency_key: str | None = None,
+    require_reviewed_heads: bool = True,
+) -> tuple[dict[str, object], int]:
+    """Execute a reviewed batch and preserve every per-item outcome."""
+    try:
+        heads = _parse_reviewed_heads(reviewed_heads)
+        if require_reviewed_heads and not idempotency_key:
+            raise SubscriptionLifecycleBatchError(
+                "An Idempotency-Key is required for a reviewed lifecycle batch"
+            )
+        outcome = execute_subscription_batch(
+            db,
+            subscription_ids,
+            kind=kind,
+            source=f"admin:catalog:{actor_id or 'system'}",
+            actor_id=actor_id,
+            target_offer_id=target_offer_id,
+            effective_timing=effective_timing,
+            effective_at=effective_at,
+            reason=reason,
+            reviewed_heads=heads,
+            idempotency_key=idempotency_key,
+            require_reviewed_heads=require_reviewed_heads,
+        )
+    except SubscriptionLifecycleBatchError as exc:
+        return {"status": "rejected", "message": str(exc)}, 422
+    return _batch_outcome_payload(outcome), 200
+
+
 def bulk_activate_response(
     db: Session,
     *,
     subscription_ids: str,
     request: object,
     actor_id: str | None,
+    effective_timing: SubscriptionEffectiveTiming = (
+        SubscriptionEffectiveTiming.immediate
+    ),
+    effective_at: datetime | None = None,
+    reason: str | None = None,
+    reviewed_heads: str | Mapping[str, str] | None = None,
+    idempotency_key: str | None = None,
 ) -> dict[str, object]:
-    """Activate eligible subscriptions and return API response payload."""
-    count = core.bulk_update_status(
+    """Compatibility route backed by the canonical batch executor."""
+    del request
+    payload, _ = execute_bulk_lifecycle_response(
         db,
-        subscription_ids,
-        target_status=SubscriptionStatus.active,
-        allowed_from=[SubscriptionStatus.pending, SubscriptionStatus.suspended],
-        request=request,
+        subscription_ids=subscription_ids,
+        kind=SubscriptionCommandKind.activate,
         actor_id=actor_id,
+        effective_timing=effective_timing,
+        effective_at=effective_at,
+        reason=reason,
+        reviewed_heads=reviewed_heads,
+        idempotency_key=idempotency_key,
+        require_reviewed_heads=reviewed_heads is not None,
     )
-    return {"message": f"Activated {count} subscriptions", "count": count}
+    return payload
 
 
 def bulk_suspend_response(
@@ -330,17 +791,58 @@ def bulk_suspend_response(
     subscription_ids: str,
     request: object,
     actor_id: str | None,
+    effective_timing: SubscriptionEffectiveTiming = (
+        SubscriptionEffectiveTiming.immediate
+    ),
+    effective_at: datetime | None = None,
+    reason: str | None = None,
+    reviewed_heads: str | Mapping[str, str] | None = None,
+    idempotency_key: str | None = None,
 ) -> dict[str, object]:
-    """Suspend eligible subscriptions and return API response payload."""
-    count = core.bulk_update_status(
+    """Compatibility route backed by the canonical batch executor."""
+    del request
+    payload, _ = execute_bulk_lifecycle_response(
         db,
-        subscription_ids,
-        target_status=SubscriptionStatus.suspended,
-        allowed_from=[SubscriptionStatus.active],
-        request=request,
+        subscription_ids=subscription_ids,
+        kind=SubscriptionCommandKind.suspend,
         actor_id=actor_id,
+        effective_timing=effective_timing,
+        effective_at=effective_at,
+        reason=reason,
+        reviewed_heads=reviewed_heads,
+        idempotency_key=idempotency_key,
+        require_reviewed_heads=reviewed_heads is not None,
     )
-    return {"message": f"Suspended {count} subscriptions", "count": count}
+    return payload
+
+
+def bulk_restore_response(
+    db: Session,
+    *,
+    subscription_ids: str,
+    actor_id: str | None,
+    effective_timing: SubscriptionEffectiveTiming = (
+        SubscriptionEffectiveTiming.immediate
+    ),
+    effective_at: datetime | None = None,
+    reason: str | None = None,
+    reviewed_heads: str | Mapping[str, str] | None = None,
+    idempotency_key: str | None = None,
+) -> dict[str, object]:
+    """Restore subscriptions through the canonical batch executor."""
+    payload, _ = execute_bulk_lifecycle_response(
+        db,
+        subscription_ids=subscription_ids,
+        kind=SubscriptionCommandKind.restore,
+        actor_id=actor_id,
+        effective_timing=effective_timing,
+        effective_at=effective_at,
+        reason=reason,
+        reviewed_heads=reviewed_heads,
+        idempotency_key=idempotency_key,
+        require_reviewed_heads=reviewed_heads is not None,
+    )
+    return payload
 
 
 def bulk_cancel_response(
@@ -349,21 +851,29 @@ def bulk_cancel_response(
     subscription_ids: str,
     request: object,
     actor_id: str | None,
+    effective_timing: SubscriptionEffectiveTiming = (
+        SubscriptionEffectiveTiming.immediate
+    ),
+    effective_at: datetime | None = None,
+    reason: str | None = None,
+    reviewed_heads: str | Mapping[str, str] | None = None,
+    idempotency_key: str | None = None,
 ) -> dict[str, object]:
-    """Cancel eligible subscriptions and return API response payload."""
-    count = core.bulk_update_status(
+    """Compatibility route backed by the canonical batch executor."""
+    del request
+    payload, _ = execute_bulk_lifecycle_response(
         db,
-        subscription_ids,
-        target_status=SubscriptionStatus.canceled,
-        allowed_from=[
-            SubscriptionStatus.active,
-            SubscriptionStatus.pending,
-            SubscriptionStatus.suspended,
-        ],
-        request=request,
+        subscription_ids=subscription_ids,
+        kind=SubscriptionCommandKind.cancel,
         actor_id=actor_id,
+        effective_timing=effective_timing,
+        effective_at=effective_at,
+        reason=reason,
+        reviewed_heads=reviewed_heads,
+        idempotency_key=idempotency_key,
+        require_reviewed_heads=reviewed_heads is not None,
     )
-    return {"message": f"Canceled {count} subscriptions", "count": count}
+    return payload
 
 
 def bulk_change_plan_response(
@@ -373,13 +883,175 @@ def bulk_change_plan_response(
     target_offer_id: str,
     request: object,
     actor_id: str | None,
+    effective_timing: SubscriptionEffectiveTiming = (
+        SubscriptionEffectiveTiming.immediate
+    ),
+    effective_at: datetime | None = None,
+    reason: str | None = None,
+    reviewed_heads: str | Mapping[str, str] | None = None,
+    idempotency_key: str | None = None,
 ) -> dict[str, object]:
-    """Bulk change subscription plans and return API response payload."""
-    count = core.bulk_change_plan(
+    """Compatibility route backed by the canonical batch executor."""
+    del request
+    payload, _ = execute_bulk_lifecycle_response(
         db,
-        subscription_ids,
-        target_offer_id,
-        request=request,
+        subscription_ids=subscription_ids,
+        kind=SubscriptionCommandKind.change_plan,
+        target_offer_id=target_offer_id,
         actor_id=actor_id,
+        effective_timing=effective_timing,
+        effective_at=effective_at,
+        reason=reason,
+        reviewed_heads=reviewed_heads,
+        idempotency_key=idempotency_key,
+        require_reviewed_heads=reviewed_heads is not None,
     )
-    return {"message": f"Changed plan for {count} subscriptions", "count": count}
+    return payload
+
+
+def _batch_preview_payload(preview: SubscriptionBatchPreview) -> dict[str, object]:
+    billing_actions: Counter[str] = Counter()
+    access_actions: Counter[str] = Counter()
+    net_amounts: defaultdict[str, Decimal] = defaultdict(lambda: Decimal("0.00"))
+    for item in preview.items:
+        if not item.eligible:
+            continue
+        if item.billing_impact is not None:
+            billing_actions[item.billing_impact.action] += 1
+            currency = item.billing_impact.currency or "N/A"
+            net_amounts[currency] += item.billing_impact.net_amount
+        if item.access_impact is not None:
+            access_actions[item.access_impact.session_action.value] += 1
+    return {
+        "status": "previewed",
+        "kind": preview.kind.value,
+        "total": preview.total,
+        "eligible_count": preview.eligible_count,
+        "ineligible_count": preview.ineligible_count,
+        "reviewed_heads": preview.reviewed_heads,
+        "billing_impact": {
+            "actions": dict(billing_actions),
+            "net_amounts": _json_value(dict(net_amounts)),
+        },
+        "access_impact": {"session_actions": dict(access_actions)},
+        "items": _json_value(preview.items),
+    }
+
+
+def _batch_outcome_payload(outcome: SubscriptionBatchOutcome) -> dict[str, object]:
+    counts = {
+        status.value: outcome.count(status)
+        for status in SubscriptionCommandOutcomeStatus
+    }
+    rejected_statuses = {
+        SubscriptionCommandOutcomeStatus.rejected,
+        SubscriptionCommandOutcomeStatus.superseded,
+    }
+    changed = counts["applied"] + counts["scheduled"]
+    return {
+        "status": outcome.status,
+        "kind": outcome.kind.value,
+        "message": f"{outcome.succeeded} of {outcome.total} subscriptions succeeded",
+        "total": outcome.total,
+        "succeeded": outcome.succeeded,
+        "counts": counts,
+        "items": _json_value(outcome.items),
+        "count": changed,
+        "changed": changed,
+        "skipped_ids": [
+            item.subscription_id
+            for item in outcome.items
+            if item.status in rejected_statuses
+        ],
+        "failed_ids": [
+            item.subscription_id
+            for item in outcome.items
+            if item.status == SubscriptionCommandOutcomeStatus.failed
+        ],
+    }
+
+
+def _parse_reviewed_heads(
+    reviewed_heads: str | Mapping[str, str] | None,
+) -> dict[str, str]:
+    if reviewed_heads is None:
+        return {}
+    if isinstance(reviewed_heads, str):
+        try:
+            parsed = json.loads(reviewed_heads)
+        except json.JSONDecodeError as exc:
+            raise SubscriptionLifecycleBatchError(
+                "reviewed_heads must be a JSON object"
+            ) from exc
+    else:
+        parsed = reviewed_heads
+    if not isinstance(parsed, Mapping):
+        raise SubscriptionLifecycleBatchError("reviewed_heads must be a JSON object")
+    return {
+        str(subscription_id): str(head)
+        for subscription_id, head in parsed.items()
+        if str(subscription_id).strip() and str(head).strip()
+    }
+
+
+def cancel_scheduled_plan_change_redirect(
+    db: Session,
+    *,
+    subscription_id: str,
+    request_id: str,
+    actor_id: str | None,
+) -> str:
+    """Cancel a scheduled next-cycle plan change; return a redirect URL."""
+    from app.services.audit_adapter import record_audit_event
+    from app.services.subscription_changes import subscription_change_requests
+
+    base = f"/admin/catalog/subscriptions/{subscription_id}"
+    try:
+        subscription_change_requests.cancel_scheduled(
+            db,
+            request_id=request_id,
+            notes="Canceled via admin subscription detail",
+        )
+    except Exception as exc:
+        detail = getattr(exc, "detail", None) or str(exc)
+        return f"{base}?error={quote_plus(str(detail))}"
+    record_audit_event(
+        db,
+        action="cancel_scheduled_plan_change",
+        entity_type="subscription",
+        entity_id=subscription_id,
+        actor_id=actor_id,
+        metadata={"change_request_id": request_id},
+    )
+    return f"{base}?notice={quote_plus('Scheduled plan change canceled.')}"
+
+
+def change_plan_quote_response(
+    db: Session,
+    *,
+    subscription_id: str,
+    target_offer_id: str,
+) -> dict[str, object]:
+    """Proration quote for an admin change-plan preview.
+
+    Reuses the customer-portal quote builder so the admin modal shows the same
+    credit/charge/net numbers the change will actually produce.
+    """
+    from fastapi import HTTPException
+
+    from app.models.catalog import CatalogOffer
+    from app.services.common import coerce_uuid
+    from app.services.customer_portal_flow_changes import (
+        _build_plan_change_quote,
+        _serialize_plan_change_quote,
+    )
+
+    subscription = catalog_service.subscriptions.get(db, subscription_id)
+    target = db.get(CatalogOffer, coerce_uuid(target_offer_id))
+    if not target:
+        raise HTTPException(status_code=404, detail="Target offer not found")
+    quote = _build_plan_change_quote(db, subscription, target)
+    return {
+        "quote": _serialize_plan_change_quote(quote),
+        "target_offer_name": target.name,
+    }

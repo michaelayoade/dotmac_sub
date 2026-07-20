@@ -518,11 +518,38 @@ def _append_additional_routes(
     routes = (
         db.query(SubscriberAdditionalRoute)
         .filter(
-            SubscriberAdditionalRoute.subscriber_id == subscription.subscriber_id,
+            SubscriberAdditionalRoute.subscription_id == subscription.id,
             SubscriberAdditionalRoute.is_active.is_(True),
         )
         .all()
     )
+    if not routes:
+        from sqlalchemy import func
+
+        from app.models.catalog import SubscriptionStatus
+
+        service_count = (
+            db.query(func.count(Subscription.id))
+            .filter(
+                Subscription.subscriber_id == subscription.subscriber_id,
+                Subscription.status.in_(
+                    (SubscriptionStatus.pending, SubscriptionStatus.active)
+                ),
+            )
+            .scalar()
+            or 0
+        )
+        if service_count == 1:
+            routes = (
+                db.query(SubscriberAdditionalRoute)
+                .filter(
+                    SubscriberAdditionalRoute.subscriber_id
+                    == subscription.subscriber_id,
+                    SubscriberAdditionalRoute.subscription_id.is_(None),
+                    SubscriberAdditionalRoute.is_active.is_(True),
+                )
+                .all()
+            )
 
     seen: set[str] = set()
     for route in routes:
@@ -668,12 +695,16 @@ def build_radius_reply_attributes(
     # and additive (only when the subscriber has an assigned prefix).
     if not any(a["attribute"] == "Delegated-IPv6-Prefix" for a in attrs):
         from app.services.ipv6_pd import (
-            active_delegated_prefix_for_subscriber,
+            active_delegated_prefix_for_subscription,
             pd_enabled,
         )
 
         if pd_enabled():
-            pd = active_delegated_prefix_for_subscriber(db, subscription.subscriber_id)
+            pd = active_delegated_prefix_for_subscription(
+                db,
+                subscription.id,
+                subscriber_id=subscription.subscriber_id,
+            )
             if pd:
                 attrs.append(
                     {"attribute": "Delegated-IPv6-Prefix", "op": ":=", "value": pd}

@@ -32,6 +32,11 @@ def _form_getlist_str(form: FormData, key: str) -> list[str]:
     return [value for value in form.getlist(key) if isinstance(value, str)]
 
 
+def _actor_id(request: Request) -> str | None:
+    value = getattr(request.state, "actor_id", None)
+    return str(value) if value else None
+
+
 def _base_context(
     request: Request, db: Session, active_page: str, settings_tab: str = ""
 ) -> dict:
@@ -849,7 +854,10 @@ def add_on_new(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
 @router.post(
     "/add-ons",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("catalog:write"))],
+    dependencies=[
+        Depends(require_permission("catalog:write")),
+        Depends(require_permission("catalog:billing_write")),
+    ],
 )
 def add_on_create(
     request: Request,
@@ -861,7 +869,11 @@ def add_on_create(
 
     try:
         with form_write(db):
-            settings_svc.create_add_on_from_form(db, form=form)
+            settings_svc.create_add_on_from_form(
+                db,
+                form=form,
+                actor_id=_actor_id(request),
+            )
         return RedirectResponse("/admin/catalog/settings/add-ons", status_code=303)
     except ValidationError as exc:
         error = exc.errors()[0]["msg"]
@@ -900,7 +912,10 @@ def add_on_edit(
 @router.post(
     "/add-ons/{addon_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("catalog:write"))],
+    dependencies=[
+        Depends(require_permission("catalog:write")),
+        Depends(require_permission("catalog:billing_write")),
+    ],
 )
 def add_on_update(
     request: Request,
@@ -916,7 +931,12 @@ def add_on_update(
 
     try:
         with form_write(db):
-            settings_svc.update_add_on_from_form(db, addon_id=addon_id, form=form)
+            settings_svc.update_add_on_from_form(
+                db,
+                addon_id=addon_id,
+                form=form,
+                actor_id=_actor_id(request),
+            )
         return RedirectResponse("/admin/catalog/settings/add-ons", status_code=303)
     except ValidationError as exc:
         error = exc.errors()[0]["msg"]

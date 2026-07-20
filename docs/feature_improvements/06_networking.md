@@ -1,5 +1,7 @@
 # Section 6: legacy BSS Networking & IP Management
 
+> **Status: historical product research, not an approved requirement.** Revalidate all UI proposals against `docs/UI_INFORMATION_AND_ACTION_STANDARD.md` and the current network SOT.
+
 ## Source: legacy BSS ISP Management Platform
 
 ---

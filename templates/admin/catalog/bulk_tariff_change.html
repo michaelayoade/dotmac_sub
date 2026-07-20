@@ -59,28 +59,6 @@
                 </div>
                 {% endif %}
 
-                <div class="grid gap-6 sm:grid-cols-2">
-                    {# Start Date #}
-                    <div>
-                        <label for="start_date" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">New plan start date</label>
-                        <input type="date" id="start_date" name="start_date"
-                               value="{{ form_start_date|default(today, true) }}"
-                               class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-violet-500 focus:ring-1 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Date from which the new tariff takes effect.</p>
-                    </div>
-
-                    {# Ignore Balance #}
-                    <div class="flex items-end pb-1">
-                        <label class="flex items-center gap-3 cursor-pointer">
-                            <input type="checkbox" name="ignore_balance" class="h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700"
-                                   {% if form_ignore_balance|default(false) %}checked{% endif %}>
-                            <div>
-                                <span class="block text-sm font-medium text-slate-700 dark:text-slate-300">Ignore balance</span>
-                                <span class="block text-xs text-slate-500 dark:text-slate-400">Change plan even if subscriber has outstanding balance.</span>
-                            </div>
-                        </label>
-                    </div>
-                </div>
 
                 <div class="grid gap-6 sm:grid-cols-2">
                     {# Source Plan (migrate FROM) #}
@@ -115,6 +93,17 @@
                         </select>
                         <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Subscribers will be migrated to this plan.</p>
                     </div>
+                </div>
+
+                {# Opt-in: also migrate suspended subscriptions (default off = active-only) #}
+                <div class="flex items-start gap-3">
+                    <input type="checkbox" id="include_suspended" name="include_suspended" value="true"
+                           {% if form_include_suspended|default(false) %}checked{% endif %}
+                           class="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700">
+                    <label for="include_suspended" class="text-sm text-slate-700 dark:text-slate-300">
+                        Also change suspended subscriptions
+                        <span class="block text-xs text-slate-500 dark:text-slate-400">By default only active subscriptions are migrated.</span>
+                    </label>
                 </div>
 
                 <div class="flex justify-end">
@@ -165,13 +154,26 @@
                         </svg>
                         <div class="text-sm">
                             <p class="font-medium text-blue-800 dark:text-blue-200">
-                                {{ preview.total_count }} active subscription{{ 's' if preview.total_count != 1 else '' }} will be changed
+                                {{ preview.total_count }}
+                                {% if preview.include_suspended %}active or suspended{% else %}active{% endif %}
+                                subscription{{ 's' if preview.total_count != 1 else '' }} will be changed
                             </p>
                             <p class="mt-1 text-blue-700 dark:text-blue-300">
                                 From <span class="font-semibold">{{ preview.source_offer.name }}</span>
-                                to <span class="font-semibold">{{ preview.target_offer.name }}</span>,
-                                effective <span class="font-semibold">{{ preview.start_date }}</span>.
+                                to <span class="font-semibold">{{ preview.target_offer.name }}</span> —
+                                applied immediately on confirm.
                             </p>
+                            {% if preview.source_price or preview.target_price %}
+                            <p class="mt-1 text-blue-700 dark:text-blue-300">
+                                Price:
+                                {% if preview.source_price %}{{ preview.source_price.currency }} {{ '%,.2f'|format(preview.source_price.amount) }}{% else %}n/a{% endif %}
+                                &rarr;
+                                {% if preview.target_price %}{{ preview.target_price.currency }} {{ '%,.2f'|format(preview.target_price.amount) }}{% else %}n/a{% endif %}
+                                {% if preview.price_delta is not none %}
+                                <span class="font-semibold">({{ '+' if preview.price_delta >= 0 }}{{ '%,.2f'|format(preview.price_delta) }} per cycle)</span>
+                                {% endif %}
+                            </p>
+                            {% endif %}
                         </div>
                     </div>
                 </div>
@@ -185,8 +187,7 @@
                                 <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Subscriber</th>
                                 <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Current Plan</th>
                                 <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">New Plan</th>
-                                <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Start Date</th>
-                            </tr>
+                                                            </tr>
                         </thead>
                         <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
                             {% for sub in preview.affected_subscriptions %}
@@ -205,9 +206,6 @@
                                 </td>
                                 <td class="whitespace-nowrap px-4 py-3 text-sm font-medium text-violet-600 dark:text-violet-400">
                                     {{ preview.target_offer.name }}
-                                </td>
-                                <td class="whitespace-nowrap px-4 py-3 text-sm text-slate-600 dark:text-slate-300">
-                                    {{ preview.start_date }}
                                 </td>
                             </tr>
                             {% endfor %}
@@ -229,12 +227,9 @@
                     {% include "components/forms/csrf_input.html" %}
                     <input type="hidden" name="source_offer_id" value="{{ form_source_offer_id }}">
                     <input type="hidden" name="target_offer_id" value="{{ form_target_offer_id }}">
-                    <input type="hidden" name="start_date" value="{{ form_start_date }}">
-                    {% if form_ignore_balance %}
-                    <input type="hidden" name="ignore_balance" value="on">
-                    {% endif %}
+                    {% if form_include_suspended|default(false) %}<input type="hidden" name="include_suspended" value="true">{% endif %}
                     <button type="submit"
-                            onclick="return confirm('Are you sure you want to change {{ preview.total_count }} subscription{{ 's' if preview.total_count != 1 else '' }}? This action cannot be undone.')"
+                            onclick="return confirm('Are you sure you want to change {{ preview.total_count }} {% if preview.include_suspended %}active or suspended {% endif %}subscription{{ 's' if preview.total_count != 1 else '' }}? This action cannot be undone.')"
                             class="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800">
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
@@ -363,7 +358,14 @@
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
                         </svg>
                         <p class="text-sm font-medium text-amber-800 dark:text-amber-200">
-                            Partially completed: {{ result.changed }} changed, {{ result.errors }} failed. Check the logs for details.
+                            Partially completed: {{ result.changed }} changed, {{ result.errors }} failed.
+                            {% if result.failed_ids %}
+                            <span class="block mt-1 text-xs">Failed subscription IDs:
+                                {% for fid in result.failed_ids %}
+                                <a href="/admin/catalog/subscriptions/{{ fid }}" class="underline">{{ fid }}</a>{{ ", " if not loop.last }}
+                                {% endfor %}
+                            </span>
+                            {% endif %}
                         </p>
                     </div>
                 </div>

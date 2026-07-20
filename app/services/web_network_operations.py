@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import logging
+import secrets
 from typing import TYPE_CHECKING, Any
 
 from app.models.network_operation import (
     NetworkOperationTargetType,
 )
+from app.services.control_plane_intent import phase_for_network_operation
+from app.services.network_operation_dispatch import operation_dispatch_summary
+from app.services.network_operation_recovery import review_redrive
 from app.services.network_operations import network_operations
 
 if TYPE_CHECKING:
@@ -18,6 +22,7 @@ logger = logging.getLogger(__name__)
 OPERATION_DISPLAY: dict[str, str] = {
     "olt_ont_sync": "OLT ONT Discovery",
     "olt_pon_repair": "PON Port Repair",
+    "olt_firmware_upgrade": "OLT Firmware Upgrade",
     "ont_provision": "ONT Provision",
     "ont_authorize": "ONT Authorize",
     "ont_reboot": "ONT Reboot",
@@ -26,6 +31,9 @@ OPERATION_DISPLAY: dict[str, str] = {
     "ont_set_conn_request_creds": "Set Connection Request Credentials",
     "ont_send_conn_request": "Connection Request",
     "ont_enable_ipv6": "Enable IPv6",
+    "ont_firmware_upgrade": "ONT Firmware Upgrade",
+    "ont_return_to_inventory": "Return ONT to Inventory",
+    "ont_decommission": "Decommission ONT",
     "cpe_set_conn_request_creds": "Set Connection Request Credentials",
     "cpe_send_conn_request": "Connection Request",
     "cpe_reboot": "CPE Reboot",
@@ -38,6 +46,13 @@ OPERATION_DISPLAY: dict[str, str] = {
 
 def _operation_title(op: Any) -> str:
     op_type_val = op.operation_type.value if op.operation_type else ""
+    input_payload = getattr(op, "input_payload", None) or {}
+    if (
+        op_type_val == "olt_ont_sync"
+        and isinstance(input_payload, dict)
+        and input_payload.get("action") == "status_refresh"
+    ):
+        return "ONT Status Refresh"
     payload = getattr(op, "output_payload", None) or {}
     if (
         op_type_val == "olt_ont_sync"
@@ -126,11 +141,14 @@ def build_operation_history(
         status_val = op.status.value if op.status else "pending"
         op_type_val = op.operation_type.value if op.operation_type else ""
 
+        redrive_review = review_redrive(db, op)
+        dispatch_summary = operation_dispatch_summary(op)
         entry: dict[str, Any] = {
             "id": str(op.id),
             "title": _operation_title(op),
             "status": STATUS_DISPLAY.get(status_val, status_val),
             "status_value": status_val,
+            "control_plane_phase": phase_for_network_operation(op.status).value,
             "status_class": STATUS_CLASSES.get(status_val, STATUS_CLASSES["pending"]),
             "is_running": status_val in ("running", "pending"),
             "is_waiting": status_val == "waiting",
@@ -140,7 +158,18 @@ def build_operation_history(
             "initiated_by": op.initiated_by or "",
             "occurred_at": op.created_at,
             "duration": _format_duration(op),
-            "can_retry": status_val == "failed",
+            "can_retry": redrive_review.eligible,
+            "retry_reason": redrive_review.message,
+            "redrive_expected_head": redrive_review.expected_head,
+            "redrive_idempotency_key": (
+                secrets.token_urlsafe(24) if redrive_review.eligible else None
+            ),
+            "redrive_action_label": redrive_review.action_label,
+            "redrive_of_id": str(op.redrive_of_id) if op.redrive_of_id else None,
+            "redrive_reason": op.redrive_reason,
+            "retry_count": int(op.retry_count or 0),
+            "max_retries": int(op.max_retries or 0),
+            "dispatch": dispatch_summary,
             "operation_type": op_type_val,
             "target_type": target_type,
             "target_id": target_id,

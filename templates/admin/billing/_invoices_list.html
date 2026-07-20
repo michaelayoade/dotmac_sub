@@ -1,0 +1,98 @@
+<div class="grid gap-2 sm:grid-cols-2 xl:grid-cols-6">
+    {% for key, label in [('all', 'All'), ('draft', 'Draft'), ('issued', 'Issued'), ('partially_paid', 'Partially paid'), ('paid', 'Paid'), ('overdue', 'Overdue')] %}
+    {% set bucket = status_totals[key] %}
+    {% set href = list_query.url('/admin/billing/invoices', filters={'status': none if key == 'all' else key}) %}
+    {% set active = (not status and key == 'all') or status == key %}
+        <a href="{{ href }}" hx-get="{{ href }}" hx-target="#invoice-list" hx-push-url="true" class="rounded-xl border px-3 py-2.5 transition {% if active %}border-primary-300 bg-primary-50 text-primary-900 dark:border-primary-700 dark:bg-primary-950/40 dark:text-primary-100{% else %}border-slate-200 bg-white text-slate-700 hover:border-primary-200 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:border-primary-800{% endif %}">
+        <div class="flex items-center justify-between gap-2">
+            <span class="text-sm font-semibold">{{ label }}</span>
+            <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ bucket.count }}</span>
+        </div>
+        <p class="mt-1 truncate text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400">{{ bucket.display }}</p>
+    </a>
+    {% endfor %}
+</div>
+
+{# Filters #}
+<div class="rounded-xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+    <form id="invoice-filters"
+          method="get"
+          action="/admin/billing/invoices"
+          hx-get="/admin/billing/invoices"
+              hx-target="#invoice-list"
+          hx-trigger="submit, change from:select"
+          hx-push-url="true"
+          hx-sync="this:replace"
+          @htmx:before-request="clearSelection()"
+          class="grid gap-3 lg:grid-cols-12 lg:items-end">
+        <input type="hidden" name="page" value="1">
+        <input type="hidden" name="per_page" value="{{ list_query.per_page }}">
+        <input type="hidden" name="sort" value="{{ list_query.sort_by }}">
+        <input type="hidden" name="dir" value="{{ list_query.sort_dir }}">
+        {% if account_id %}<input type="hidden" name="account_id" value="{{ account_id }}">{% endif %}
+        <div class="lg:col-span-3">
+            <label class="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Search</label>
+            <div class="relative">
+                <svg class="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                </svg>
+                <input type="text" name="search" placeholder="Search invoices..."
+                       value="{{ search or '' }}"
+                           hx-get="/admin/billing/invoices" hx-target="#invoice-list" hx-trigger="keyup changed delay:300ms" hx-include="closest form" hx-push-url="true" hx-sync="#invoice-filters:replace"
+                       class="block w-full rounded-lg border-0 bg-slate-50 py-2 pl-9 pr-3 text-sm text-slate-900 placeholder-slate-500 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-primary-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:placeholder-slate-400 dark:focus:bg-slate-600" />
+            </div>
+        </div>
+        <div class="lg:col-span-2">
+            <label class="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Partner</label>
+            <select name="partner_id" class="block w-full rounded-lg border-0 bg-slate-50 py-2 pl-3 pr-9 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-primary-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:focus:bg-slate-600">
+                <option value="">All Partners</option>
+                {% for partner in partner_options %}
+                <option value="{{ partner.id }}" {% if selected_partner_id == partner.id %}selected{% endif %}>{{ partner.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="lg:col-span-2">
+            <label class="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Customer</label>
+            <div class="relative" data-typeahead-url="/api/v1/search/customers" data-typeahead-min="2" data-typeahead-limit="8">
+                <input type="text" data-typeahead-input
+                       placeholder="Search customers..."
+                       class="block w-full rounded-lg border-0 bg-slate-50 py-2 pl-3 pr-3 text-sm text-slate-900 placeholder-slate-500 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-primary-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:placeholder-slate-400 dark:focus:bg-slate-600" />
+                <input type="hidden" name="customer_ref" data-typeahead-hidden
+                           hx-get="/admin/billing/invoices" hx-target="#invoice-list" hx-trigger="change" hx-include="closest form" hx-push-url="true" hx-sync="#invoice-filters:replace"
+                       value="{{ customer_ref or '' }}">
+                <div data-typeahead-results></div>
+            </div>
+        </div>
+        <div class="lg:col-span-2">
+            <label class="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</label>
+            <select name="status" class="block w-full rounded-lg border-0 bg-slate-50 py-2 pl-3 pr-9 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-primary-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:focus:bg-slate-600">
+                <option value="">All Status</option>
+                <option value="draft" {% if status == 'draft' %}selected{% endif %}>Draft</option>
+                <option value="issued" {% if status == 'issued' %}selected{% endif %}>Issued</option>
+                <option value="partially_paid" {% if status == 'partially_paid' %}selected{% endif %}>Partially Paid</option>
+                <option value="paid" {% if status == 'paid' %}selected{% endif %}>Paid</option>
+                <option value="overdue" {% if status == 'overdue' %}selected{% endif %}>Overdue</option>
+                <option value="void" {% if status == 'void' %}selected{% endif %}>Void</option>
+            </select>
+        </div>
+        <div class="lg:col-span-1">
+            <label class="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Date</label>
+            <select name="date_range" class="block w-full rounded-lg border-0 bg-slate-50 py-2 pl-3 pr-9 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-primary-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:focus:bg-slate-600">
+                <option value="" {% if not date_range %}selected{% endif %}>All Time</option>
+                <option value="today" {% if date_range == 'today' %}selected{% endif %}>Today</option>
+                <option value="week" {% if date_range == 'week' %}selected{% endif %}>This Week</option>
+                <option value="month" {% if date_range == 'month' %}selected{% endif %}>This Month</option>
+                <option value="quarter" {% if date_range == 'quarter' %}selected{% endif %}>This Quarter</option>
+            </select>
+        </div>
+        <label class="flex min-w-28 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-700/50 lg:col-span-2">
+            <input type="checkbox" name="proforma_only" value="true" {% if proforma_only %}checked{% endif %} class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+            <span class="whitespace-nowrap text-sm text-slate-600 dark:text-slate-300">Proforma</span>
+        </label>
+    </form>
+</div>
+
+{# Canonical invoice table: full-page and HTMX responses share one projection. #}
+<div id="invoices-table" class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+    {% include "admin/billing/_invoices_table.html" %}
+</div>

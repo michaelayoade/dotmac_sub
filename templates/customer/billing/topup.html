@@ -1,6 +1,6 @@
 {% extends "layouts/customer.html" %}
 
-{% block title %}Add Funds - Customer Portal{% endblock %}
+{% block title %}Deposit Account Credit - Customer Portal{% endblock %}
 
 {% block content %}
 {% set topup_options = payment_options|default([
@@ -11,11 +11,11 @@
         <nav class="mb-2 flex items-center gap-2 text-sm text-stone-500 dark:text-stone-400">
             <a href="/portal/billing" class="hover:text-[var(--color-brand-600)]">Billing</a>
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-            <span class="text-stone-900 dark:text-white">Add Funds</span>
+            <span class="text-stone-900 dark:text-white">Deposit Account Credit</span>
         </nav>
-        <h1 class="text-2xl font-bold text-stone-900 dark:text-white">Add Funds</h1>
+        <h1 class="text-2xl font-bold text-stone-900 dark:text-white">Deposit Account Credit</h1>
         <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">
-            Add money to your account online. Any overdue invoices are settled first, and any remainder is kept as account credit.
+            Deposit credit for future payable invoices. This is account credit, not a wallet, and it does not add service time by itself.
         </p>
     </div>
     {% if transfer_success %}
@@ -26,13 +26,13 @@
     {% if add_card %}
     <div class="rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-sm text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-200">
         <p class="font-semibold">Adding a card</p>
-        <p class="mt-1">Pay with Paystack and we&rsquo;ll save the card for next time. Choose any amount &mdash; it&rsquo;s added to your account balance, nothing is wasted. &ldquo;Save this card&rdquo; is already ticked below.</p>
+        <p class="mt-1">Pay with Paystack and we&rsquo;ll save the card for next time. The receipt becomes evidenced account credit. &ldquo;Save this card&rdquo; is already ticked below.</p>
     </div>
     {% endif %}
     {% if pending_direct_transfer %}
     <div class="flex flex-col gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200 sm:flex-row sm:items-center sm:justify-between">
         <div>
-            <p class="font-semibold">You have a pending bank transfer top-up.</p>
+            <p class="font-semibold">You have a pending account-credit deposit.</p>
             <p class="mt-1">Reference {{ pending_direct_transfer.reference }} for {{ pending_direct_transfer.currency }} {{ "{:,.2f}".format(pending_direct_transfer.amount) }}.</p>
         </div>
         <a href="/portal/billing/topup/transfer" class="inline-flex items-center justify-center rounded-xl bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-700">
@@ -41,6 +41,17 @@
     </div>
     {% endif %}
 
+    {% if not deposit_allowed %}
+    <div class="rounded-2xl border border-amber-200 bg-amber-50 p-6 dark:border-amber-900/40 dark:bg-amber-900/20">
+        <h2 class="text-lg font-semibold text-amber-900 dark:text-amber-200">Pay your invoice balance first</h2>
+        <p class="mt-2 text-sm text-amber-800 dark:text-amber-300">
+            You have {{ eligible_unpaid_invoices|length }} eligible unpaid invoice{% if eligible_unpaid_invoices|length != 1 %}s{% endif %} totalling &#8358;{{ "{:,.2f}".format(eligible_unpaid_total) }}. Deposit Account Credit is unavailable while payable debt exists.
+        </p>
+        <a href="/portal/billing" class="mt-4 inline-flex items-center justify-center rounded-xl bg-amber-700 px-5 py-2.5 text-sm font-semibold text-white hover:bg-amber-800">
+            Review and pay invoices
+        </a>
+    </div>
+    {% else %}
     <div class="grid gap-6 lg:grid-cols-[1.5fr,1fr]">
         <div class="space-y-6">
         <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm dark:border-stone-700 dark:bg-stone-800">
@@ -52,9 +63,9 @@
                     </p>
                 </div>
                 <div class="rounded-xl bg-stone-50 px-4 py-3 text-right dark:bg-stone-900/50">
-                    <p class="text-xs font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400">Available balance</p>
-                    {% if prepaid_balance is not none %}
-                    <p class="mt-1 text-2xl font-bold text-stone-900 dark:text-white">&#8358;{{ "{:,.2f}".format(prepaid_balance) }}</p>
+                    <p class="text-xs font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400">Current account credit</p>
+                    {% if account_credit is not none %}
+                    <p class="mt-1 text-2xl font-bold text-stone-900 dark:text-white">&#8358;{{ "{:,.2f}".format(account_credit) }}</p>
                     {% else %}
                     <p class="mt-1 text-sm font-semibold text-stone-700 dark:text-stone-200">Unavailable right now</p>
                     <p class="mt-1 text-xs text-stone-500 dark:text-stone-400">Refresh later if you need your latest balance.</p>
@@ -89,9 +100,9 @@
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0"/>
                     </svg>
                     <div>
-                        <p class="text-sm font-semibold text-amber-900 dark:text-amber-200">How funds are applied</p>
+                        <p class="text-sm font-semibold text-amber-900 dark:text-amber-200">How account credit is applied</p>
                         <p class="mt-1 text-sm text-amber-800 dark:text-amber-300">
-                            If you have unpaid invoices, this payment will be applied to those first. Any remaining amount stays on your account as credit.
+                            Future eligible invoices automatically consume this credit, oldest debt first. A deposit alone does not activate or extend service.
                         </p>
                     </div>
                 </div>
@@ -165,6 +176,32 @@
 
         <div class="space-y-4">
             <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm dark:border-stone-700 dark:bg-stone-800">
+                <h2 class="text-lg font-semibold text-stone-900 dark:text-white">Deposit preview</h2>
+                <dl class="mt-5 space-y-4 text-sm">
+                    <div class="flex items-center justify-between gap-4">
+                        <dt class="text-stone-500 dark:text-stone-400">Current account credit</dt>
+                        <dd class="text-right font-semibold text-stone-900 dark:text-white">
+                            {% if account_credit is not none %}&#8358;{{ "{:,.2f}".format(account_credit) }}{% else %}Balance unavailable{% endif %}
+                        </dd>
+                    </div>
+                    <div class="flex items-center justify-between gap-4 border-t border-stone-100 pt-4 dark:border-stone-700">
+                        <dt class="text-stone-500 dark:text-stone-400">Eligible unpaid invoices</dt>
+                        <dd class="font-semibold text-stone-900 dark:text-white">None</dd>
+                    </div>
+                    <div class="flex items-center justify-between gap-4 border-t border-stone-100 pt-4 dark:border-stone-700">
+                        <dt class="text-stone-500 dark:text-stone-400">Requested deposit</dt>
+                        <dd class="font-semibold text-stone-900 dark:text-white" x-text="requestedDepositLabel()"></dd>
+                    </div>
+                    <div class="flex items-center justify-between gap-4 border-t border-stone-100 pt-4 dark:border-stone-700">
+                        <dt class="text-stone-500 dark:text-stone-400">Estimated available credit</dt>
+                        <dd class="text-right font-semibold text-stone-900 dark:text-white" x-text="projectedCreditLabel()"></dd>
+                    </div>
+                </dl>
+                <p class="mt-5 rounded-xl bg-amber-50 p-3 text-xs leading-5 text-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
+                    Future payable invoices may automatically consume this credit, oldest debt first.
+                </p>
+            </div>
+            <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm dark:border-stone-700 dark:bg-stone-800">
                 <h2 class="text-lg font-semibold text-stone-900 dark:text-white">Secure checkout</h2>
                 <p class="mt-2 text-sm text-stone-500 dark:text-stone-400">
                     Payments are processed securely by the payment method you choose.
@@ -198,7 +235,7 @@
             class="relative w-full max-w-md rounded-2xl border border-stone-200 bg-white p-6 shadow-2xl dark:border-stone-700 dark:bg-stone-900">
             <div class="flex items-start justify-between gap-4">
                 <div>
-                    <p class="text-xs font-semibold uppercase tracking-wide text-emerald-600 dark:text-emerald-400">Top-up details</p>
+                    <p class="text-xs font-semibold uppercase tracking-wide text-emerald-600 dark:text-emerald-400">Deposit details</p>
                     <h2 id="topup-help-title" class="mt-1 text-lg font-semibold text-stone-900 dark:text-white">What happens next</h2>
                 </div>
                 <button
@@ -214,10 +251,11 @@
             <ol class="mt-5 space-y-3 text-sm text-stone-600 dark:text-stone-300">
                 <li>1. Pay the amount you choose.</li>
                 <li>2. We verify the payment when you return from the gateway.</li>
-                <li>3. Any overdue invoices are paid first, then the remainder becomes account credit.</li>
+                <li>3. The receipt becomes account credit, and any invoice that became payable during checkout consumes it automatically.</li>
             </ol>
         </div>
     </div>
+    {% endif %}
 </div>
 
 <script>
@@ -232,8 +270,27 @@ function topupPage() {
         saveCard: {{ 'true' if add_card else 'false' }},
         selectedPaymentChoice: 'provider:{{ provider_type }}',
         idempotencyKey: null,
+        currentCredit: {% if account_credit is not none %}Number('{{ account_credit }}'){% else %}null{% endif %},
         minAmount: {{ min_amount | int }},
         maxAmount: {{ max_amount | int }},
+        formatNaira(value) {
+            return new Intl.NumberFormat('en-NG', {
+                style: 'currency',
+                currency: 'NGN',
+                minimumFractionDigits: 2
+            }).format(value);
+        },
+        requestedDepositLabel() {
+            const amount = this.currentAmount();
+            return amount === null ? 'Enter an amount' : this.formatNaira(amount);
+        },
+        projectedCreditLabel() {
+            const amount = this.currentAmount();
+            if (this.currentCredit === null) return 'Balance unavailable';
+            return amount === null
+                ? this.formatNaira(this.currentCredit)
+                : this.formatNaira(this.currentCredit + amount);
+        },
         syncCustomAmount() {
             this.validationError = '';
         },
@@ -268,7 +325,7 @@ function topupPage() {
             if (amount > this.maxAmount) {
                 return 'Amount must not exceed ' + this.formatCurrency(this.maxAmount) + '.';
             }
-            return 'You are adding ' + this.formatCurrency(amount) + ' to your account.';
+            return 'You are depositing ' + this.formatCurrency(amount) + ' as account credit.';
         },
         formatCurrency(amount) {
             return new Intl.NumberFormat('en-NG', {
@@ -295,7 +352,7 @@ function topupPage() {
                 return 'Processing...';
             }
             const amount = this.currentAmount();
-            return amount ? 'Add ' + this.formatCurrency(amount) : 'Enter an amount';
+            return amount ? 'Deposit ' + this.formatCurrency(amount) : 'Enter an amount';
         },
         async startPayment() {
             const amount = this.currentAmount();

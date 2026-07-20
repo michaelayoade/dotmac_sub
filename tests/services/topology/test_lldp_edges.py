@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from app.models.network_monitoring import NetworkDevice, TopologyLinkMedium
 from app.services.topology.lldp_poller import (
+    _build_match_index,
     _canonical,
     accumulate_edges,
-    build_device_index,
 )
 
 
@@ -21,7 +21,7 @@ def test_edges_build_drop_cpe_medium_and_dedup(db_session):
     spdc = _dev(db_session, "SPDC Access")
     gbb = _dev(db_session, "GBB")  # matched by identity
     switch = _dev(db_session, "SPDC-Switch", mgmt_ip="10.0.0.77")  # matched by IP
-    index = build_device_index(db_session)
+    index = _build_match_index(db_session)
 
     neighbors = [
         {"identity": "GBB", "interface": "sfp-sfpplus1", "board": "CCR2004"},  # fiber
@@ -59,7 +59,7 @@ def test_edges_build_drop_cpe_medium_and_dedup(db_session):
 
 def test_self_link_dropped(db_session):
     spdc = _dev(db_session, "SPDC Access")
-    index = build_device_index(db_session)
+    index = _build_match_index(db_session)
     edges = accumulate_edges(
         {}, spdc, [{"identity": "SPDC Access", "interface": "e1"}], index
     )
@@ -69,7 +69,7 @@ def test_self_link_dropped(db_session):
 def test_cross_node_pair_dedups(db_session):
     a = _dev(db_session, "A")
     b = _dev(db_session, "B")
-    index = build_device_index(db_session)
+    index = _build_match_index(db_session)
     edges: dict = {}
     accumulate_edges(
         edges, a, [{"identity": "B", "interface": "sfp1"}], index

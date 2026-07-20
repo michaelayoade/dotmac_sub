@@ -1,4 +1,5 @@
 import json
+import uuid
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -25,10 +26,18 @@ def _bare_request(path: str = "/admin/customers/person/x/pppoe-password") -> Req
     )
 
 
+from app.models.billing import Invoice, InvoiceStatus
 from app.models.catalog import AccessCredential, ConnectionType, SubscriptionStatus
+from app.models.crm_sync_failure import CrmSyncFailure, CrmSyncFailureStatus
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.network import SubscriberAdditionalRoute
-from app.models.subscriber import Address, Subscriber, SubscriberCategory, UserType
+from app.models.subscriber import (
+    Address,
+    Subscriber,
+    SubscriberCategory,
+    SubscriberStatus,
+    UserType,
+)
 from app.models.subscription_engine import SettingValueType
 from app.models.system_user import SystemUser, SystemUserType
 from app.services.credential_crypto import encrypt_credential
@@ -162,6 +171,86 @@ def test_customer_detail_includes_active_additional_routes(db_session, subscribe
     ]
 
 
+def test_customer_detail_includes_crm_sync_link_status(db_session, subscriber):
+    subscriber.user_type = UserType.customer
+    crm_id = uuid.uuid4()
+    subscriber.crm_subscriber_id = crm_id
+    subscriber.metadata_ = {
+        "crm_sync": {"last_success_at": "2026-07-07T12:00:00+00:00"}
+    }
+    db_session.commit()
+
+    context = build_customer_detail_snapshot(db_session, str(subscriber.id))
+
+    assert context["crm_sync_status"]["status"] == "linked"
+    assert context["crm_sync_status"]["crm_subscriber_id"] == str(crm_id)
+    assert context["crm_sync_status"]["last_success_display"] == (
+        "2026-07-07T12:00:00+00:00"
+    )
+    assert context["customer_status_presentation"].value == subscriber.status.value
+    assert (
+        context["account_status_presentations"][str(subscriber.id)]
+        == context["customer_status_presentation"]
+    )
+
+
+def test_customer_detail_exposes_invoice_status_presentations(db_session, subscriber):
+    subscriber.user_type = UserType.customer
+    invoice = Invoice(
+        account_id=subscriber.id,
+        invoice_number="INV-DETAIL-001",
+        status=InvoiceStatus.issued,
+        subtotal=Decimal("100.00"),
+        tax_total=Decimal("0.00"),
+        total=Decimal("100.00"),
+        balance_due=Decimal("100.00"),
+        is_active=True,
+    )
+    db_session.add(invoice)
+    db_session.commit()
+
+    context = build_customer_detail_snapshot(db_session, str(subscriber.id))
+
+    presentation = context["invoice_status_presentations"][str(invoice.id)]
+    assert presentation.value == "issued"
+    assert presentation.label == "Issued"
+
+
+def test_customer_detail_includes_masked_identity_profile(db_session, subscriber):
+    subscriber.user_type = UserType.customer
+    subscriber.nin = "12345678901"
+    subscriber.metadata_ = {"nin_verified": True}
+    db_session.commit()
+
+    context = build_customer_detail_snapshot(db_session, str(subscriber.id))
+
+    assert context["identity_profile"]["nin_masked"] == "123456*****"
+    assert context["identity_profile"]["nin_verified"] is True
+    assert "date_of_birth" in context["identity_profile"]["missing"]
+
+
+def test_customer_detail_includes_crm_sync_dead_letter(db_session, subscriber):
+    subscriber.user_type = UserType.customer
+    failure = CrmSyncFailure(
+        entity="subscriber",
+        external_id=str(subscriber.id),
+        external_system="selfcare",
+        payload={"status": "active"},
+        error="CRM unavailable",
+        attempts=9,
+        status=CrmSyncFailureStatus.unresolved,
+    )
+    db_session.add(failure)
+    db_session.commit()
+
+    context = build_customer_detail_snapshot(db_session, str(subscriber.id))
+
+    assert context["crm_sync_status"]["status"] == "failed"
+    assert context["crm_sync_status"]["dead_letter_id"] == str(failure.id)
+    assert context["crm_sync_status"]["error"] == "CRM unavailable"
+    assert context["crm_sync_status"]["attempts"] == 9
+
+
 def test_person_detail_exposes_pppoe_access_login(db_session, subscriber):
     subscriber.user_type = UserType.customer
     credential = AccessCredential(
@@ -196,6 +285,68 @@ def test_person_detail_hides_disabled_service_network_access(
     context = build_person_detail_snapshot(db_session, str(subscriber.id))
 
     assert context["network_access_cards"] == []
+
+
+def test_person_detail_projects_subscription_status_for_network_access(
+    db_session, subscriber, subscription
+):
+    subscriber.user_type = UserType.customer
+    subscription.status = SubscriptionStatus.suspended
+    subscription.login = "suspended-login"
+    db_session.commit()
+
+    context = build_person_detail_snapshot(db_session, str(subscriber.id))
+
+    assert len(context["network_access_cards"]) == 1
+    presentation = context["network_access_cards"][0]["status_presentation"]
+    assert presentation.value == "suspended"
+    assert presentation.tone.value == "warning"
+
+
+def test_customer_detail_enables_access_repair_for_stale_active_projection(
+    db_session, subscriber, subscription
+):
+    subscriber.user_type = UserType.customer
+    subscriber.status = SubscriberStatus.blocked
+    subscription.status = SubscriptionStatus.active
+    subscription.access_state = "suspended"
+    db_session.add(
+        AccessCredential(
+            subscriber_id=subscriber.id,
+            username="repair-detail-1",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    context = build_customer_detail_snapshot(db_session, str(subscriber.id))
+
+    assert context["access_repair_state"]["enabled"] is True
+    assert context["access_repair_state"]["needed"] is True
+    assert "Repair needed" in context["access_repair_state"]["reason"]
+
+
+def test_customer_detail_grays_access_repair_when_projection_is_active(
+    db_session, subscriber, subscription
+):
+    subscriber.user_type = UserType.customer
+    subscriber.status = SubscriberStatus.active
+    subscription.status = SubscriptionStatus.active
+    subscription.access_state = "active"
+    db_session.add(
+        AccessCredential(
+            subscriber_id=subscriber.id,
+            username="repair-detail-2",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    context = build_customer_detail_snapshot(db_session, str(subscriber.id))
+
+    assert context["access_repair_state"]["enabled"] is False
+    assert context["access_repair_state"]["needed"] is False
+    assert "No repair needed" in context["access_repair_state"]["reason"]
 
 
 def test_reveal_customer_pppoe_password_is_customer_scoped(db_session, subscriber):
@@ -439,6 +590,13 @@ def test_person_detail_stats_normalizes_usage_period(monkeypatch, db_session):
     assert captured["context"]["bandwidth_chart_initial_stats"] == {
         "current_rx_formatted": "1.20 Mbps"
     }
+
+
+def test_admin_customer_stats_templates_register_portal_datetime_filter():
+    portal_datetime = customer_routes.templates.env.filters.get("portal_datetime")
+
+    assert portal_datetime is not None
+    assert portal_datetime(None, "%b %d, %Y", "N/A") == "N/A"
 
 
 def test_customer_detail_snapshot_includes_pending_location_request(

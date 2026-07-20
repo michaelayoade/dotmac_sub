@@ -367,18 +367,35 @@ def resolve_profile_bundle_for_active_subscription(
     db: Session,
     *,
     olt_id: Any,
-    subscriber_id: Any,
+    subscriber_id: Any = None,
+    subscription_id: Any = None,
 ) -> OltProfileBundle | None:
-    """Return the active bundle for the subscriber's latest active offer on an OLT."""
-    if olt_id is None or subscriber_id is None:
+    """Return the active bundle for the ONT-bound subscription's offer."""
+    if olt_id is None:
         return None
-    subscription = db.scalars(
-        select(Subscription)
-        .where(Subscription.subscriber_id == subscriber_id)
-        .where(Subscription.status == SubscriptionStatus.active)
-        .order_by(Subscription.created_at.desc())
-        .limit(1)
-    ).first()
+    subscription = None
+    if subscription_id is not None:
+        subscription = db.get(Subscription, subscription_id)
+        if subscription is None:
+            return None
+        if subscriber_id is not None and subscription.subscriber_id != subscriber_id:
+            return None
+        if subscription.status not in {
+            SubscriptionStatus.pending,
+            SubscriptionStatus.active,
+        }:
+            return None
+    elif subscriber_id is not None:
+        candidates = list(
+            db.scalars(
+                select(Subscription)
+                .where(Subscription.subscriber_id == subscriber_id)
+                .where(Subscription.status == SubscriptionStatus.active)
+                .order_by(Subscription.created_at.desc())
+                .limit(2)
+            ).all()
+        )
+        subscription = candidates[0] if len(candidates) == 1 else None
     if subscription is None:
         return None
     return resolve_profile_bundle_for_offer(

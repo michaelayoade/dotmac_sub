@@ -11,6 +11,7 @@ from app.models.billing import (
     LedgerEntryType,
     LedgerSource,
 )
+from app.models.catalog import BillingMode
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services.billing.unwall_paid_accounts import (
     find_walled_paid_account_ids,
@@ -77,6 +78,24 @@ def test_gate_includes_paid_up_walled_excludes_owing_and_active(db_session):
     assert str(zero_suspended.id) in ids  # walled + exactly zero counts as paid up
     assert str(owing_blocked.id) not in ids  # owes money
     assert str(paid_active.id) not in ids  # not walled
+
+
+def test_prepaid_unwall_uses_canonical_threshold_not_zero(db_session):
+    underfunded = _sub(
+        db_session, status=SubscriberStatus.suspended, balance=Decimal("0.00")
+    )
+    funded = _sub(
+        db_session, status=SubscriberStatus.suspended, balance=Decimal("100.00")
+    )
+    for account in (underfunded, funded):
+        account.billing_mode = BillingMode.prepaid
+        account.min_balance = Decimal("100.00")
+    db_session.commit()
+
+    ids = find_walled_paid_account_ids(db_session)
+
+    assert str(underfunded.id) not in ids
+    assert str(funded.id) in ids
 
 
 def test_targeted_mode_skips_owing_account(db_session):

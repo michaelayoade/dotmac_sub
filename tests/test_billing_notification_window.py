@@ -69,7 +69,6 @@ def test_run_billing_notifications_skips_outside_window(monkeypatch):
     )
     assert result == {
         "invoice_reminders_sent": 0,
-        "dunning_escalations_sent": 0,
         "skipped_outside_window": True,
     }
     db.commit.assert_not_called()
@@ -84,16 +83,12 @@ def test_run_billing_notifications_emits_inside_window(monkeypatch):
     monkeypatch.setattr(
         billing_automation, "_emit_invoice_reminders", lambda db, run_at: 3
     )
-    monkeypatch.setattr(
-        billing_automation, "_emit_dunning_escalations", lambda db, run_at: 2
-    )
     db = MagicMock()
     result = billing_automation.run_billing_notifications(
         db, datetime(2026, 1, 5, 8, tzinfo=UTC)
     )
     assert result == {
         "invoice_reminders_sent": 3,
-        "dunning_escalations_sent": 2,
         "skipped_outside_window": False,
     }
     db.commit.assert_called_once()
@@ -119,7 +114,6 @@ def test_daily_invoice_cycle_fallback_uses_window_gated_notifications(
         calls.append(run_at)
         return {
             "invoice_reminders_sent": 0,
-            "dunning_escalations_sent": 0,
             "skipped_outside_window": True,
         }
 
@@ -134,4 +128,3 @@ def test_daily_invoice_cycle_fallback_uses_window_gated_notifications(
 
     assert calls == [run_at]
     assert summary["invoice_reminders_sent"] == 0
-    assert summary["dunning_escalations_sent"] == 0

@@ -15,6 +15,7 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.models.admin_alert import AdminAlert, AdminNotification
+from app.models.domain_settings import SettingDomain
 from app.models.network_monitoring import AlertSeverity, AlertStatus
 from app.models.rbac import (
     Permission,
@@ -24,6 +25,7 @@ from app.models.rbac import (
     SystemUserRole,
 )
 from app.models.system_user import SystemUser
+from app.services import settings_spec
 
 logger = logging.getLogger(__name__)
 
@@ -221,20 +223,39 @@ def alerts_context(
         .all()
     )
     counts = _alert_counts(db)
+    total_pages = max(1, (total + per_page - 1) // per_page)
     return {
         "alerts": alerts,
         "total": total,
         "page": page,
         "per_page": per_page,
+        "total_pages": total_pages,
+        "has_previous_page": page > 1,
+        "has_next_page": page < total_pages,
         "category": category or "",
         "status": status or "",
         "severity": severity or "",
         "source": source or "",
         "counts": counts,
-        "categories": ["infrastructure", "network", "application", "billing"],
+        "categories": [
+            "infrastructure",
+            "network",
+            "application",
+            "billing",
+            "cross_app_drift",
+        ],
         "statuses": list(AlertStatus),
         "severities": list(AlertSeverity),
     }
+
+
+def _int_setting(db: Session, key: str, default: int) -> int:
+    raw = settings_spec.resolve_value(db, SettingDomain.network_monitoring, key)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
 
 
 def dashboard_alert_summary(db: Session) -> dict[str, object]:
@@ -335,6 +356,21 @@ def _collect_infrastructure_findings(db: Session) -> list[AlertFinding]:
     from app.services import infrastructure_health, web_system_health
 
     findings: list[AlertFinding] = []
+    long_running_minutes = _int_setting(
+        db,
+        "celery_long_running_task_minutes",
+        30,
+    )
+    reserved_backlog_threshold = _int_setting(
+        db,
+        "celery_reserved_backlog_threshold",
+        100,
+    )
+    queue_backlog_threshold = _int_setting(
+        db,
+        "celery_queue_backlog_threshold",
+        500,
+    )
     try:
         for service in infrastructure_health.check_all_services(db):
             service_name = str(service.name or "service")
@@ -342,7 +378,14 @@ def _collect_infrastructure_findings(db: Session) -> list[AlertFinding]:
             if status == "up":
                 continue
             if service_name.lower() == "celery":
-                findings.extend(_celery_findings(service))
+                findings.extend(
+                    _celery_findings(
+                        service,
+                        long_running_minutes=long_running_minutes,
+                        reserved_backlog_threshold=reserved_backlog_threshold,
+                        queue_backlog_threshold=queue_backlog_threshold,
+                    )
+                )
                 continue
             severity = (
                 AlertSeverity.critical if status == "down" else AlertSeverity.warning
@@ -422,10 +465,348 @@ def _collect_infrastructure_findings(db: Session) -> list[AlertFinding]:
                 details=dict(task),
             )
         )
+    try:
+        findings.extend(_poll_health_findings(db))
+    except Exception:
+        logger.exception("Infrastructure poll health findings failed")
+    try:
+        findings.extend(_stale_autodetect_incident_findings(db))
+    except Exception:
+        logger.exception("Stale auto-detect incident findings failed")
     return findings
 
 
-def _celery_findings(service: object) -> list[AlertFinding]:
+def _stale_autodetect_incident_findings(db: Session) -> list[AlertFinding]:
+    """Guardrail: auto-detected incidents left open beyond the staleness bar.
+
+    The legacy auto-detect path opens operator-style incidents nothing
+    auto-resolves; once stale they keep suppressing billing notices and
+    inflating customer-impact counts (they once covered 97% of the fleet), so
+    lingering rows are an operational alarm, not background noise.
+    """
+    from datetime import timedelta
+
+    from app.models.network_monitoring import OutageIncident
+    from app.services.topology.outage import AUTO_DETECT_ACTOR, STALE_OPEN_HOURS
+
+    cutoff = datetime.now(UTC) - timedelta(hours=STALE_OPEN_HOURS)
+    stale = (
+        db.query(func.count(OutageIncident.id), func.min(OutageIncident.started_at))
+        .filter(
+            OutageIncident.status == "open",
+            OutageIncident.declared_by == AUTO_DETECT_ACTOR,
+            OutageIncident.started_at < cutoff,
+        )
+        .one()
+    )
+    count, oldest = int(stale[0] or 0), stale[1]
+    if not count:
+        return []
+    oldest_display = oldest.date().isoformat() if oldest else "unknown"
+    return [
+        AlertFinding(
+            fingerprint=f"{INFRASTRUCTURE_ALERT_PREFIX}outage:stale-autodetect",
+            category="infrastructure",
+            source="outage-hygiene",
+            severity=AlertSeverity.critical,
+            title="Stale auto-detected outage incidents left open",
+            summary=(
+                f"{count} system:outage-autodetect incidents have been open "
+                f"longer than {STALE_OPEN_HOURS}h (oldest {oldest_display}). "
+                "They no longer gate billing suppression (TTL) but must be "
+                "triaged/resolved — the auto-detect path never closes them."
+            ),
+            details={"count": count, "oldest_started_at": oldest},
+        )
+    ]
+
+
+def _radius_health_findings(db: Session) -> list[AlertFinding]:
+    """Customer-experience alarms from the RADIUS health task's heartbeat.
+
+    Reads the last completed run's counters (cache-only — never touches the
+    radius DB from the evaluator). Task staleness itself is covered by the
+    generic scheduled-task finding; these are the domain conditions:
+    accounting stopped flowing, radacct unreadable, or enforcement drift
+    (suspended customers still holding live sessions).
+    """
+    from app.services.radius_health import HEARTBEAT_TASK
+    from app.services.task_heartbeat import snapshot
+
+    beat = snapshot(HEARTBEAT_TASK)
+    if beat["last_success_age_seconds"] is None:
+        return []  # task has never run (fresh deploy) — staleness finding owns this
+    result = beat["result"]
+    prefix = f"{INFRASTRUCTURE_ALERT_PREFIX}radius:"
+    findings: list[AlertFinding] = []
+
+    freshness_alert_seconds = _int_setting(
+        db, "radius_acct_freshness_alert_seconds", 900
+    )
+    freshness = result.get("acct_freshness_seconds")
+    open_sessions = int(result.get("open_sessions") or 0)
+    if not result.get("radacct_read_ok"):
+        findings.append(
+            AlertFinding(
+                fingerprint=f"{prefix}radacct-unreachable",
+                category="infrastructure",
+                source="radius-health",
+                severity=AlertSeverity.critical,
+                title="RADIUS accounting DB unreadable",
+                summary=(
+                    "The last health pass could not read every configured "
+                    "radacct source — session state and usage accounting are "
+                    "flying blind."
+                ),
+                details=_json_safe(result),
+            )
+        )
+    elif "radacct_schema_ok" in result and not result.get("radacct_schema_ok"):
+        capacity = int(result.get("radacct_nasportid_capacity") or 0)
+        findings.append(
+            AlertFinding(
+                fingerprint=f"{prefix}radacct-schema-incompatible",
+                category="infrastructure",
+                source="radius-health",
+                severity=AlertSeverity.critical,
+                title="RADIUS accounting schema rejects valid sessions",
+                summary=(
+                    "radacct.nasportid accepts only "
+                    f"{capacity} characters; 253 are required for RADIUS "
+                    "NAS-Port-Id values. Longer vendor interface identifiers "
+                    "cause complete accounting rows to be dropped."
+                ),
+                details=_json_safe(result),
+            )
+        )
+    elif open_sessions and (
+        freshness is None or float(freshness) > freshness_alert_seconds
+    ):
+        display = "no update seen" if freshness is None else f"{int(freshness)}s ago"
+        findings.append(
+            AlertFinding(
+                fingerprint=f"{prefix}acct-stale",
+                category="infrastructure",
+                source="radius-health",
+                severity=AlertSeverity.critical,
+                title="RADIUS accounting has stopped flowing",
+                summary=(
+                    f"Newest interim update across {open_sessions} open "
+                    f"sessions: {display} (threshold "
+                    f"{freshness_alert_seconds}s). NAS accounting or the "
+                    "radius DB path is broken."
+                ),
+                details=_json_safe(result),
+            )
+        )
+
+    if int(result.get("probe_configured") or 0) and not int(
+        result.get("probe_responded") or 0
+    ):
+        findings.append(
+            AlertFinding(
+                fingerprint=f"{prefix}auth-probe-failed",
+                category="infrastructure",
+                source="radius-health",
+                severity=AlertSeverity.critical,
+                title="RADIUS auth probe not answering",
+                summary=(
+                    "The synthetic Access-Request probe got no response from "
+                    "FreeRADIUS (timeouts on every attempt) — new customer auth "
+                    "attempts are likely failing even if accounting still looks "
+                    "fresh."
+                ),
+                details=_json_safe(result),
+            )
+        )
+
+    blocked_subscriptions = int(
+        result.get("blocked_access_subscriptions")
+        or result.get("suspended_with_session")
+        or 0
+    )
+    blocked_sessions = int(
+        result.get("blocked_access_sessions") or blocked_subscriptions
+    )
+    blocked_accounts = int(
+        result.get("blocked_access_accounts") or blocked_subscriptions
+    )
+    if blocked_sessions:
+        findings.append(
+            AlertFinding(
+                fingerprint=f"{prefix}enforcement-drift",
+                category="infrastructure",
+                source="radius-health",
+                severity=AlertSeverity.warning,
+                title="Access-blocked customers still hold live sessions",
+                summary=(
+                    f"{blocked_accounts} account(s), {blocked_subscriptions} "
+                    f"subscription(s), and {blocked_sessions} session(s) "
+                    "disagree with the access resolver - enforcement is not "
+                    "landing on the NAS (CoA/disconnect path)."
+                ),
+                details=_json_safe(result),
+            )
+        )
+
+    if "writer_targets_equivalent" in result and not int(
+        result.get("writer_targets_equivalent") or 0
+    ):
+        findings.append(
+            AlertFinding(
+                fingerprint=f"{prefix}writer-target-split-brain",
+                category="infrastructure",
+                source="radius-health",
+                severity=AlertSeverity.critical,
+                title="RADIUS writers target different databases",
+                summary=(
+                    "The canonical projection DSN and an active external-sync "
+                    "target do not identify the same database. Writer cutover "
+                    "is blocked and customer auth projections may diverge."
+                ),
+                details=_json_safe(result.get("writer_equivalence_report") or result),
+            )
+        )
+    elif "writer_schema_contract_ok" in result and not int(
+        result.get("writer_schema_contract_ok") or 0
+    ):
+        findings.append(
+            AlertFinding(
+                fingerprint=f"{prefix}writer-schema-incompatible",
+                category="infrastructure",
+                source="radius-health",
+                severity=AlertSeverity.critical,
+                title="RADIUS writer table contract is incompatible",
+                summary=(
+                    "At least one active RADIUS target is unreachable or lacks "
+                    "the required radcheck, radreply, or radusergroup columns."
+                ),
+                details=_json_safe(result.get("writer_equivalence_report") or result),
+            )
+        )
+    elif int(result.get("writer_group_semantics_required") or 0):
+        findings.append(
+            AlertFinding(
+                fingerprint=f"{prefix}writer-groups-require-owner",
+                category="infrastructure",
+                source="radius-health",
+                severity=AlertSeverity.warning,
+                title="RADIUS group projection still needs an owner",
+                summary=(
+                    "radusergroup is configured or populated. The physical writer "
+                    "move must preserve group projection before legacy writers are removed."
+                ),
+                details=_json_safe(result.get("writer_equivalence_report") or result),
+            )
+        )
+
+    return findings
+
+
+def _poll_health_findings(db: Session) -> list[AlertFinding]:
+    """Dead-man switch for the native infrastructure poller.
+
+    With Zabbix retired this poller is the thing that notices device silence,
+    so its own silence must be noticed here: a stalled run, a stuck
+    single-flight lock, failing VictoriaMetrics writes, or ping data going
+    stale all raise an admin alert (and auto-resolve when healthy again).
+    """
+    from app.services.infrastructure_polling import poll_health_snapshot
+
+    snapshot = poll_health_snapshot(db)
+    interval = int(snapshot["poll_interval_seconds"])
+    stale_run_after = interval * 3
+    skip_streak_threshold = _int_setting(
+        db, "infrastructure_poll_skip_streak_threshold", 5
+    )
+    stale_ping_minutes = _int_setting(db, "infrastructure_poll_stale_ping_minutes", 10)
+    prefix = f"{INFRASTRUCTURE_ALERT_PREFIX}poll:"
+    findings: list[AlertFinding] = []
+
+    age = snapshot["last_success_age_seconds"]
+    if age is None or age > stale_run_after:
+        display = "never" if age is None else f"{int(age)}s ago"
+        findings.append(
+            AlertFinding(
+                fingerprint=f"{prefix}stalled",
+                category="infrastructure",
+                source="infrastructure-poll",
+                severity=AlertSeverity.critical,
+                title="Native infrastructure poll stalled",
+                summary=(
+                    f"Last successful poll run: {display} "
+                    f"(threshold {stale_run_after}s = 3x beat interval)."
+                ),
+                details=_json_safe(snapshot),
+            )
+        )
+
+    if snapshot["skip_streak"] >= skip_streak_threshold:
+        findings.append(
+            AlertFinding(
+                fingerprint=f"{prefix}lock-stuck",
+                category="infrastructure",
+                source="infrastructure-poll",
+                severity=AlertSeverity.critical,
+                title="Infrastructure poll runs repeatedly skipped",
+                summary=(
+                    f"{snapshot['skip_streak']} consecutive runs skipped with "
+                    "already_running — the single-flight advisory lock looks "
+                    "stuck (see pg_locks for objid 7235920)."
+                ),
+                details=_json_safe(snapshot),
+            )
+        )
+
+    if snapshot["interface_write_failed"]:
+        findings.append(
+            AlertFinding(
+                fingerprint=f"{prefix}vm-write-failed",
+                category="infrastructure",
+                source="infrastructure-poll",
+                severity=AlertSeverity.warning,
+                title="Interface counter push to VictoriaMetrics failing",
+                summary=(
+                    f"Last poll run failed to write "
+                    f"{snapshot['interface_write_failed']} counter lines — "
+                    "admin interface bandwidth graphs will go blank."
+                ),
+                details=_json_safe(snapshot),
+            )
+        )
+
+    ping_age = snapshot["newest_ping_age_seconds"]
+    if snapshot["pingable_devices"] and (
+        ping_age is None or ping_age > stale_ping_minutes * 60
+    ):
+        display = "never" if ping_age is None else f"{int(ping_age)}s ago"
+        findings.append(
+            AlertFinding(
+                fingerprint=f"{prefix}ping-stale",
+                category="infrastructure",
+                source="infrastructure-poll",
+                severity=AlertSeverity.critical,
+                title="No fresh device ping results",
+                summary=(
+                    f"Newest last_ping_at across "
+                    f"{snapshot['pingable_devices']} pingable devices: "
+                    f"{display} (threshold {stale_ping_minutes}m) — outage "
+                    "detection is flying blind."
+                ),
+                details=_json_safe(snapshot),
+            )
+        )
+
+    return findings
+
+
+def _celery_findings(
+    service: object,
+    *,
+    long_running_minutes: int,
+    reserved_backlog_threshold: int,
+    queue_backlog_threshold: int,
+) -> list[AlertFinding]:
     details = getattr(service, "details", {}) or {}
     status = str(getattr(service, "status", "unknown") or "unknown")
     if status == "down":
@@ -450,12 +831,12 @@ def _celery_findings(service: object) -> list[AlertFinding]:
                 source="celery",
                 severity=AlertSeverity.warning,
                 title="Celery has long-running tasks",
-                summary=f"{len(long_running)} task(s) have run for over 30 minutes.",
+                summary=f"{len(long_running)} task(s) have run for over {long_running_minutes} minutes.",
                 details={"tasks": long_running[:20]},
             )
         )
     reserved_count = int(details.get("reserved_tasks") or 0)
-    if reserved_count > 100:
+    if reserved_count > reserved_backlog_threshold:
         findings.append(
             AlertFinding(
                 fingerprint=f"{INFRASTRUCTURE_ALERT_PREFIX}celery:reserved-backlog",
@@ -464,13 +845,16 @@ def _celery_findings(service: object) -> list[AlertFinding]:
                 severity=AlertSeverity.warning,
                 title="Celery reserved task backlog is high",
                 summary=f"{reserved_count} reserved tasks are waiting.",
-                details={"reserved_tasks": reserved_count},
+                details={
+                    "reserved_tasks": reserved_count,
+                    "threshold": reserved_backlog_threshold,
+                },
             )
         )
     queue_lengths = dict(details.get("queue_lengths") or {})
     for queue_name, length in queue_lengths.items():
         queue_length = int(length or 0)
-        if queue_length <= 500:
+        if queue_length <= queue_backlog_threshold:
             continue
         findings.append(
             AlertFinding(
@@ -480,7 +864,11 @@ def _celery_findings(service: object) -> list[AlertFinding]:
                 severity=AlertSeverity.warning,
                 title=f"Celery queue backlog: {queue_name}",
                 summary=f"{queue_length} task(s) are waiting in {queue_name}.",
-                details={"queue": queue_name, "length": queue_length},
+                details={
+                    "queue": queue_name,
+                    "length": queue_length,
+                    "threshold": queue_backlog_threshold,
+                },
             )
         )
     return findings

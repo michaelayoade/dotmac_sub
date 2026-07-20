@@ -239,7 +239,23 @@
                                       class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition resize-none dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:placeholder:text-slate-500">{{ customer.bio if customer and customer_type == 'person' else '' }}</textarea>
                         </div>
 
-                        <div class="grid grid-cols-1 sm:grid-cols-3 gap-5">
+                        {% set nin_locked = customer and customer.metadata_ and customer.metadata_.get('nin_verified') %}
+                        {% set masked_nin = (customer.nin[:6] ~ ('*' * (customer.nin|length - 6))) if customer and customer.nin and customer.nin|length > 6 else (customer.nin if customer and customer.nin else '') %}
+                        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+                            <div>
+                                <label for="nin" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">NIN</label>
+                                <input type="text" name="nin" id="nin" inputmode="numeric" maxlength="11"
+                                       value="{{ '' if nin_locked else (customer.nin if customer and customer.nin else '') }}"
+                                       {% if nin_locked %}placeholder="{{ masked_nin }}" readonly{% endif %}
+                                       class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700" />
+                                <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                                    {% if nin_locked %}
+                                    Verified NIN is locked for standard edits.
+                                    {% else %}
+                                    11 digits, masked in detail views.
+                                    {% endif %}
+                                </p>
+                            </div>
                             <div>
                                 <label for="date_of_birth" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Date of Birth</label>
                                 <input type="date" name="date_of_birth" id="date_of_birth" value="{{ customer.date_of_birth.isoformat() if customer and customer.date_of_birth else '' }}"
@@ -461,13 +477,17 @@
                                        class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:placeholder:text-slate-500" />
                             </div>
                         </div>
-                        <div class="mt-4 flex items-center gap-3">
+                        <div x-show="customerType === 'person'" class="mt-4 flex items-start gap-3">
                             <input type="checkbox" name="captive_redirect_enabled" id="captive_redirect_enabled" value="true"
+                                   :disabled="customerType !== 'person'"
                                    {% if customer and customer.captive_redirect_enabled %}checked{% endif %}
                                    class="h-4 w-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500 dark:border-slate-600 dark:bg-slate-700" />
-                            <label for="captive_redirect_enabled" class="text-sm text-slate-700 dark:text-slate-300">
-                                Redirect to customer portal when blocked/expired (captive portal)
-                            </label>
+                            <div>
+                                <label for="captive_redirect_enabled" class="text-sm text-slate-700 dark:text-slate-300">
+                                    Allow payment portal access during a billing suspension
+                                </label>
+                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Explicit opt-in for direct-house residential customers only. All other restrictions use hard reject.</p>
+                            </div>
                         </div>
                         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
                             <div>
@@ -482,8 +502,9 @@
                             </div>
                             <div>
                                 <label for="grace_period_days" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Grace Period Days</label>
-                                <input type="number" min="0" name="grace_period_days" id="grace_period_days" :disabled="customerType !== 'person'" value="{{ billing_form.grace_period_days if billing_form else '' }}" placeholder="Not set"
+                                <input type="number" min="0" name="grace_period_days" id="grace_period_days" :disabled="customerType !== 'person'" value="{{ billing_form.grace_period_days if billing_form else '' }}" placeholder="Inherit policy/default"
                                        class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:placeholder:text-slate-500" />
+                                {% if billing_form and billing_form.effective_grace_days is defined %}<p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Effective: {{ billing_form.effective_grace_days }} day(s) from {{ billing_form.effective_grace_source }}.</p>{% endif %}
                             </div>
                             <div>
                                 <label for="min_balance" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Minimum Balance</label>
@@ -632,8 +653,9 @@
                             </div>
                             <div>
                                 <label for="org_grace_period_days" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Grace Period Days</label>
-                                <input type="number" min="0" name="grace_period_days" id="org_grace_period_days" :disabled="customerType !== 'business'" value="{{ billing_form.grace_period_days if billing_form else '' }}" placeholder="Not set"
+                                <input type="number" min="0" name="grace_period_days" id="org_grace_period_days" :disabled="customerType !== 'business'" value="{{ billing_form.grace_period_days if billing_form else '' }}" placeholder="Inherit policy/default"
                                        class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:placeholder:text-slate-500" />
+                                {% if billing_form and billing_form.effective_grace_days is defined %}<p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Effective: {{ billing_form.effective_grace_days }} day(s) from {{ billing_form.effective_grace_source }}.</p>{% endif %}
                             </div>
                             <div>
                                 <label for="org_min_balance" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Minimum Balance</label>
@@ -778,14 +800,14 @@
                                 {% endif %}
                             </div>
                             <span class="shrink-0 rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-slate-500 ring-1 ring-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:ring-slate-700">
-                                {{ activity.timestamp.strftime('%b %d') if activity.timestamp else 'Recent' }}
+                                {{ activity.timestamp | app_datetime('%b %d', 'Recent', include_tz=False) }}
                             </span>
                         </div>
                         <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
                             {% if activity.actor_name %}
                             <span>By {{ activity.actor_name }}</span>
                             {% endif %}
-                            <span>{{ activity.timestamp.strftime('%I:%M %p') if activity.timestamp else 'Unknown time' }}</span>
+                            <span>{{ activity.timestamp | app_datetime('%I:%M %p', 'Unknown time') }}</span>
                         </div>
                     </div>
                     {% endfor %}
@@ -860,6 +882,56 @@
             </button>
         </div>
     </form>
+
+    {% if customer and action == 'edit' and customer_type == 'person' %}
+    <section class="rounded-2xl border border-amber-200/70 bg-amber-50/70 p-6 shadow-sm dark:border-amber-800/50 dark:bg-amber-950/20">
+        <div class="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+            <div class="max-w-2xl">
+                <h2 class="text-base font-semibold text-slate-900 dark:text-white">Convert to business customer</h2>
+                <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">This changes the customer account type and moves the account into business customer workflows.</p>
+            </div>
+            <form method="POST" action="/admin/customers/person/{{ customer.id }}/convert-to-business" class="w-full space-y-4 lg:max-w-2xl">
+                {% include "components/forms/csrf_input.html" %}
+                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                        <label for="convert_company_name" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Business Name <span class="text-red-500">*</span></label>
+                        <input type="text" name="company_name" id="convert_company_name" required maxlength="160"
+                               class="block w-full rounded-xl border-0 bg-white px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-amber-200 placeholder:text-slate-400 focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-amber-800"
+                               placeholder="Acme Corporation" />
+                    </div>
+                    <div>
+                        <label for="convert_legal_name" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Legal Name</label>
+                        <input type="text" name="legal_name" id="convert_legal_name" maxlength="200"
+                               class="block w-full rounded-xl border-0 bg-white px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-amber-200 placeholder:text-slate-400 focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-amber-800" />
+                    </div>
+                    <div>
+                        <label for="convert_tax_id" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Tax ID</label>
+                        <input type="text" name="tax_id" id="convert_tax_id" maxlength="80"
+                               class="block w-full rounded-xl border-0 bg-white px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-amber-200 placeholder:text-slate-400 focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-amber-800" />
+                    </div>
+                    <div>
+                        <label for="convert_domain" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Domain</label>
+                        <input type="text" name="domain" id="convert_domain" maxlength="120"
+                               class="block w-full rounded-xl border-0 bg-white px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-amber-200 placeholder:text-slate-400 focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-amber-800"
+                               placeholder="example.com" />
+                    </div>
+                </div>
+                <div>
+                    <label for="convert_website" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Website</label>
+                    <input type="url" name="website" id="convert_website" maxlength="255"
+                           class="block w-full rounded-xl border-0 bg-white px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-amber-200 placeholder:text-slate-400 focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-amber-800"
+                           placeholder="https://example.com" />
+                </div>
+                <div class="flex justify-end">
+                    <button type="submit" class="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 dark:bg-amber-500 dark:text-slate-950 dark:hover:bg-amber-400">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>
+                        Convert to Business
+                    </button>
+                </div>
+            </form>
+        </div>
+    </section>
+    {% endif %}
 </div>
 
 <script>

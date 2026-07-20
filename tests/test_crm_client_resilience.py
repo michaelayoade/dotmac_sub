@@ -42,7 +42,7 @@ class _FakeRedis:
 
 
 def _client():
-    c = CRMClient("https://crm.example", "user", "pass")
+    c = CRMClient("https://crm.example", service_token="svc")
     # Pre-seed a valid token so _request() skips the login round-trip.
     c._token = "tok"
     c._token_expires_at = 10**12
@@ -50,30 +50,26 @@ def _client():
 
 
 def _seq_client(responses):
-    """Patch target for httpx.Client: each construction yields the next response.
+    """Patch target for ``app.services.crm_client._pooled_client``.
 
-    ``_request`` builds a fresh ``httpx.Client`` per attempt, so one response per
-    construction models the retry loop.
+    ``_request`` now reuses one pooled ``httpx.Client`` across a request's
+    retry attempts, so the client's ``.request`` yields the next response per
+    attempt to model the retry loop.
     """
     it = iter(responses)
+    inner = MagicMock()
+    inner.request.side_effect = lambda *_a, **_k: next(it)
 
     def factory(*_a, **_k):
-        resp = next(it)
-        inner = MagicMock()
-        inner.request.return_value = resp
-        cm = MagicMock()
-        cm.__enter__ = MagicMock(return_value=inner)
-        cm.__exit__ = MagicMock(return_value=False)
-        return cm
+        return inner
 
     return factory
 
 
 def _raise_connect(*_a, **_k):
-    cm = MagicMock()
-    cm.__enter__ = MagicMock(side_effect=httpx.ConnectError("connection refused"))
-    cm.__exit__ = MagicMock(return_value=False)
-    return cm
+    inner = MagicMock()
+    inner.request.side_effect = httpx.ConnectError("connection refused")
+    return inner
 
 
 # ---------------------------------------------------------------------------
@@ -94,14 +90,16 @@ class TestReachabilityCircuit:
     def test_open_circuit_fast_fails_without_http(self):
         _REACHABILITY_CIRCUIT.trip()
         c = _client()
-        with patch("httpx.Client") as http_client:
+        with patch("app.services.crm_client._pooled_client") as http_client:
             with pytest.raises(CRMClientError, match="circuit open"):
                 c._request("GET", "/api/v1/tickets")
         http_client.assert_not_called()  # never touched the network
 
     def test_connection_error_trips_breaker(self):
         c = _client()
-        with patch("httpx.Client", side_effect=_raise_connect):
+        with patch(
+            "app.services.crm_client._pooled_client", side_effect=_raise_connect
+        ):
             with pytest.raises(CRMClientError):
                 c.list_work_orders(subscriber_id="s1")
         assert _REACHABILITY_CIRCUIT.is_open() is True
@@ -113,16 +111,13 @@ class TestReachabilityCircuit:
         response = httpx.Response(500, request=request)
 
         def _raise_status(*_a, **_k):
-            cm = MagicMock()
             inner = MagicMock()
             inner.request.side_effect = httpx.HTTPStatusError(
                 "boom", request=request, response=response
             )
-            cm.__enter__ = MagicMock(return_value=inner)
-            cm.__exit__ = MagicMock(return_value=False)
-            return cm
+            return inner
 
-        with patch("httpx.Client", side_effect=_raise_status):
+        with patch("app.services.crm_client._pooled_client", side_effect=_raise_status):
             with pytest.raises(CRMClientError):
                 c.list_work_orders(subscriber_id="s1")
         assert _REACHABILITY_CIRCUIT.is_open() is False
@@ -130,11 +125,13 @@ class TestReachabilityCircuit:
     def test_breaker_short_circuits_fanout(self):
         """Once tripped, remaining per-account calls fast-fail (no extra HTTP)."""
         c = _client()
-        with patch("httpx.Client", side_effect=_raise_connect) as http_client:
+        with patch(
+            "app.services.crm_client._pooled_client", side_effect=_raise_connect
+        ) as http_client:
             with pytest.raises(CRMClientError):
                 c.list_work_orders(subscriber_id="s1")
             first_call_count = http_client.call_count
-            # Second account: breaker is open → no new httpx.Client construction.
+            # Second account: breaker is open → the pooled client is never asked for.
             with pytest.raises(CRMClientError):
                 c.list_work_orders(subscriber_id="s2")
         assert http_client.call_count == first_call_count
@@ -154,7 +151,7 @@ class TestRateLimitRetry:
             httpx.Response(200, json={"ok": True}, request=req),
         ]
         with (
-            patch("httpx.Client", side_effect=_seq_client(responses)),
+            patch("app.services.crm_client._pooled_client", _seq_client(responses)),
             patch("app.services.crm_client.time.sleep") as sleep,
         ):
             out = c._request("GET", "/api/v1/tickets")
@@ -168,7 +165,7 @@ class TestRateLimitRetry:
             httpx.Response(429, request=req) for _ in range(_RETRY_MAX_ATTEMPTS + 1)
         ]
         with (
-            patch("httpx.Client", side_effect=_seq_client(responses)),
+            patch("app.services.crm_client._pooled_client", _seq_client(responses)),
             patch("app.services.crm_client.time.sleep") as sleep,
         ):
             with pytest.raises(CRMClientError, match="429"):
@@ -180,10 +177,35 @@ class TestRateLimitRetry:
         req = httpx.Request("GET", "https://crm.example/api/v1/tickets")
         responses = [httpx.Response(404, request=req)]
         with (
-            patch("httpx.Client", side_effect=_seq_client(responses)),
+            patch("app.services.crm_client._pooled_client", _seq_client(responses)),
             patch("app.services.crm_client.time.sleep") as sleep,
         ):
             with pytest.raises(CRMClientError, match="404"):
+                c._request("GET", "/api/v1/tickets")
+        sleep.assert_not_called()
+
+    def test_scheduler_setting_can_disable_retries(self):
+        c = CRMClient(
+            "https://crm.example", service_token="svc", settings_db=MagicMock()
+        )
+        c._token = "tok"
+        c._token_expires_at = 10**12
+        req = httpx.Request("GET", "https://crm.example/api/v1/tickets")
+        responses = [httpx.Response(429, request=req)]
+
+        def fake_resolve_value(db, domain, key):
+            if key == "crm_retry_max_attempts":
+                return 0
+            return None
+
+        with (
+            patch(
+                "app.services.crm_client.resolve_value", side_effect=fake_resolve_value
+            ),
+            patch("app.services.crm_client._pooled_client", _seq_client(responses)),
+            patch("app.services.crm_client.time.sleep") as sleep,
+        ):
+            with pytest.raises(CRMClientError, match="429"):
                 c._request("GET", "/api/v1/tickets")
         sleep.assert_not_called()
 
@@ -270,62 +292,3 @@ class TestResponseCache:
 # ---------------------------------------------------------------------------
 # Widget chat session
 # ---------------------------------------------------------------------------
-
-
-class TestWidgetSession:
-    def test_internal_session_falls_back_to_public_widget_flow(self, monkeypatch):
-        c = _client()
-        monkeypatch.setenv("APP_URL", "https://selfcare.dotmac.io")
-        calls = []
-
-        def fake_request(method, path, params=None, json_data=None, headers=None):
-            calls.append(
-                {
-                    "method": method,
-                    "path": path,
-                    "json_data": json_data,
-                    "headers": headers,
-                }
-            )
-            if path == "/api/v1/widget/internal/session":
-                raise CRMClientError("shadowed route")
-            if path == "/api/v1/widget/cfg-123/session":
-                assert headers == {"Origin": "https://selfcare.dotmac.io"}
-                return {
-                    "session_id": "sess-1",
-                    "visitor_token": "vt-1",
-                    "conversation_id": None,
-                }
-            if path == "/api/v1/widget/session/sess-1/identify":
-                assert headers == {
-                    "Origin": "https://selfcare.dotmac.io",
-                    "X-Visitor-Token": "vt-1",
-                }
-                assert json_data == {
-                    "email": "cust@example.com",
-                    "name": "Cust Omer",
-                    "custom_fields": {
-                        "surface": "customer",
-                        "crm_subscriber_id": "crm-sub-1",
-                    },
-                }
-                return {"session_id": "sess-1", "conversation_id": "conv-1"}
-            raise AssertionError(path)
-
-        with patch.object(c, "_request", side_effect=fake_request):
-            result = c.create_widget_session(
-                config_id="cfg-123",
-                email="cust@example.com",
-                name="Cust Omer",
-                crm_subscriber_id="crm-sub-1",
-                metadata={"surface": "customer"},
-            )
-
-        assert result["session_id"] == "sess-1"
-        assert result["visitor_token"] == "vt-1"
-        assert result["conversation_id"] == "conv-1"
-        assert [call["path"] for call in calls] == [
-            "/api/v1/widget/internal/session",
-            "/api/v1/widget/cfg-123/session",
-            "/api/v1/widget/session/sess-1/identify",
-        ]

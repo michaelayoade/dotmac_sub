@@ -113,7 +113,7 @@
                             {% else %}{{ status_badge("Unknown", variant="default") }}{% endif %}
                         </td>
                         <td class="whitespace-nowrap px-6 py-4">{{ sr_status_badge(req.status.value if req.status else 'new') }}</td>
-                        <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ req.created_at.strftime('%Y-%m-%d %H:%M') if req.created_at else '—' }}</td>
+                        <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ req.created_at | app_datetime('%Y-%m-%d %H:%M', '—') }}</td>
                         <td class="whitespace-nowrap px-6 py-4 text-right">
                             <div class="flex items-center justify-end gap-2 opacity-0 transition-opacity group-hover:opacity-100">
                                 {{ row_action(href=detail_href, icon=icon_view(), title="Review", color="indigo") }}

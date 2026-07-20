@@ -3,6 +3,7 @@
 import json
 import logging
 import uuid
+from collections.abc import Mapping
 from typing import Any, Literal
 
 import anyio
@@ -27,7 +28,13 @@ from app.services import customer_portal
 from app.services import network_monitoring as network_monitoring_service
 from app.services import subscriber as subscriber_service
 from app.services import web_billing_invoices as web_billing_invoices_service
+from app.services import (
+    web_catalog_subscription_workflows as web_catalog_subscription_workflows_service,
+)
 from app.services import web_customer_actions as web_customer_actions_service
+from app.services import (
+    web_customer_bulk_actions as web_customer_bulk_actions_service,
+)
 from app.services import web_customer_details as web_customer_details_service
 from app.services import web_customer_lists as web_customer_lists_service
 from app.services import web_customer_user_access as web_customer_user_access_service
@@ -36,14 +43,20 @@ from app.services.audit_helpers import (
     build_changes_metadata,
     log_audit_event,
 )
-from app.services.auth_dependencies import require_permission
+from app.services.auth_dependencies import (
+    has_permission,
+    require_any_permission,
+    require_permission,
+)
 from app.services.bandwidth import bandwidth_samples
 from app.services.customer_portal_context import resolve_customer_subscription
 from app.services.queue_adapter import enqueue_task
+from app.web.customer.branding import register_customer_portal_filters
 from app.web.request_parsing import parse_json_body
 
 logger = logging.getLogger(__name__)
 templates = Jinja2Templates(directory="templates")
+register_customer_portal_filters(templates)
 router = APIRouter(prefix="/customers", tags=["web-admin-customers"])
 
 _NOTIFICATION_QUEUE_TASK = "app.tasks.notifications.deliver_notification_queue"
@@ -124,12 +137,50 @@ def _resolve_business_customer_id(db: Session, customer_id: str) -> str:
     return web_customer_actions_service.resolve_business_customer_id(db, customer_id)
 
 
+def _get_actor_id(request: Request) -> str | None:
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request)
+    return str(current_user.get("subscriber_id")) if current_user else None
+
+
+def _subscription_action_permission_context(
+    request: Request, db: Session
+) -> dict[str, bool]:
+    auth = getattr(getattr(request, "state", None), "auth", None) or {}
+    can_write_catalog = bool(auth) and has_permission(auth, db, "catalog:write")
+    return {
+        "can_activate_subscriptions": can_write_catalog
+        or (bool(auth) and has_permission(auth, db, "subscription:activate")),
+        "can_suspend_subscriptions": can_write_catalog
+        or (bool(auth) and has_permission(auth, db, "subscription:suspend")),
+    }
+
+
+def _workflow_changed_count(result: Mapping[str, Any]) -> int:
+    value = result.get("changed") or result.get("count") or 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        return int(value)
+    return 0
+
+
 def _load_tax_rates(db: Session):
     return web_billing_invoices_service.load_tax_rates(db)
 
 
 def _billing_form_defaults(db: Session, customer_type: str, customer) -> dict[str, str]:
-    return web_customer_actions_service.billing_form_defaults(customer)
+    values = web_customer_actions_service.billing_form_defaults(customer)
+    if customer is not None:
+        from app.services.collections.grace_policy import (
+            resolve_effective_grace_policy,
+        )
+
+        grace = resolve_effective_grace_policy(db, customer)
+        values["effective_grace_days"] = str(grace.days)
+        values["effective_grace_source"] = grace.source.replace("_", " ")
+    return values
 
 
 def _customer_audit_items(
@@ -265,30 +316,63 @@ def customers_list(
     customer_type: str | None = None,  # 'person' or 'business'
     nas_id: str | None = None,
     pop_site_id: str | None = None,
+    sort: Literal["created_at", "name", "status"] = Query("created_at"),
+    direction: Literal["asc", "desc"] = Query("desc", alias="dir"),
     page: int = Query(1, ge=1),
-    per_page: int = Query(25, ge=10, le=100),
+    per_page: str | None = Query("25"),
     db: Session = Depends(get_db),
 ):
     """List all customers with search and filtering."""
+    try:
+        list_query = web_customer_lists_service.build_customer_list_query(
+            search=search,
+            status=status,
+            customer_type=customer_type,
+            nas_id=nas_id,
+            pop_site_id=pop_site_id,
+            sort_by=sort,
+            sort_dir=direction,
+            page=page,
+            per_page=per_page,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     page_data = web_customer_lists_service.build_customers_index_context(
         db=db,
-        search=search,
-        status=status,
-        customer_type=customer_type,
-        nas_id=nas_id,
-        pop_site_id=pop_site_id,
-        page=page,
-        per_page=per_page,
+        list_query=list_query,
     )
+    subscription_action_permissions = _subscription_action_permission_context(
+        request, db
+    )
+    customer_bulk_action_contract = (
+        web_customer_bulk_actions_service.build_customer_bulk_action_contract(
+            db,
+            auth=getattr(request.state, "auth", None) or {},
+        )
+    )
+
+    effective_query = page_data["list_query"]
+    page_was_clamped = effective_query.page != page
 
     # Check if this is an HTMX request for table body only
     if request.headers.get("HX-Request"):
-        return templates.TemplateResponse(
+        response = templates.TemplateResponse(
             "admin/customers/_table.html",
             {
                 "request": request,
                 **page_data,
+                **subscription_action_permissions,
+                "customer_bulk_action_contract": customer_bulk_action_contract,
             },
+        )
+        if page_was_clamped:
+            response.headers["HX-Replace-Url"] = effective_query.url("/admin/customers")
+        return response
+
+    if page_was_clamped:
+        return RedirectResponse(
+            url=effective_query.url("/admin/customers"),
+            status_code=307,
         )
 
     # Get sidebar stats and current user
@@ -302,6 +386,8 @@ def customers_list(
         {
             "request": request,
             **page_data,
+            **subscription_action_permissions,
+            "customer_bulk_action_contract": customer_bulk_action_contract,
             **web_notifications_service.bulk_notification_setup_context(db),
             "active_page": "customers",
             "active_menu": "operations",
@@ -443,6 +529,7 @@ def customer_create(
     email: str | None = Form(None),
     email_verified: str | None = Form(None),
     phone: str | None = Form(None),
+    nin: str | None = Form(None),
     date_of_birth: str | None = Form(None),
     gender: str | None = Form(None),
     preferred_contact_method: str | None = Form(None),
@@ -497,6 +584,7 @@ def customer_create(
             "email": email,
             "email_verified": email_verified,
             "phone": phone,
+            "nin": nin,
             "date_of_birth": date_of_birth,
             "gender": gender,
             "preferred_contact_method": preferred_contact_method,
@@ -619,6 +707,13 @@ def person_detail(
 
     sidebar_stats = get_sidebar_stats(db)
     current_user = get_current_user(request)
+    auth = getattr(getattr(request, "state", None), "auth", None) or {}
+    from app.services import location_capture
+
+    can_confirm_location = bool(auth) and has_permission(auth, db, "customer:write")
+    location_capture_enabled = can_confirm_location and location_capture.prompt_enabled(
+        db
+    )
     notification_context = web_notifications_service.bulk_notification_setup_context(db)
     pppoe_access = detail_data.get("pppoe_access") or {
         "has_credential": False,
@@ -660,6 +755,7 @@ def person_detail(
             "bulk_notification_channels": notification_channels,
             "bulk_notification_templates": notification_templates,
             "current_user": current_user,
+            "location_capture_enabled": location_capture_enabled,
             "sidebar_stats": sidebar_stats,
         },
     )
@@ -1254,6 +1350,7 @@ def person_update(
     email: str | None = Form(None),
     email_verified: str | None = Form(None),
     phone: str | None = Form(None),
+    nin: str | None = Form(None),
     date_of_birth: str | None = Form(None),
     gender: str | None = Form(None),
     preferred_contact_method: str | None = Form(None),
@@ -1293,6 +1390,7 @@ def person_update(
             email=email,
             email_verified=email_verified,
             phone=phone,
+            nin=nin,
             date_of_birth=date_of_birth,
             gender=gender,
             preferred_contact_method=preferred_contact_method,
@@ -1468,6 +1566,81 @@ def business_update(
 
 
 @router.post(
+    "/person/{customer_id}/convert-to-business",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:write"))],
+)
+def person_convert_to_business(
+    request: Request,
+    customer_id: str,
+    company_name: str = Form(...),
+    legal_name: str | None = Form(None),
+    tax_id: str | None = Form(None),
+    domain: str | None = Form(None),
+    website: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    """Convert an individual customer into a business customer."""
+    try:
+        before, after = (
+            web_customer_actions_service.convert_person_to_business_customer(
+                db=db,
+                customer_id=customer_id,
+                company_name=company_name,
+                legal_name=legal_name,
+                tax_id=tax_id,
+                domain=domain,
+                website=website,
+            )
+        )
+        metadata_payload = build_changes_metadata(before, after)
+        from app.web.admin import get_current_user
+
+        current_user = get_current_user(request)
+        log_audit_event(
+            db=db,
+            request=request,
+            action="convert_to_business",
+            entity_type="subscriber",
+            entity_id=str(customer_id),
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+            metadata=metadata_payload,
+        )
+        return RedirectResponse(
+            url=f"/admin/customers/person/{customer_id}",
+            status_code=303,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        from app.web.admin import get_current_user, get_sidebar_stats
+
+        sidebar_stats = get_sidebar_stats(db)
+        current_user = get_current_user(request)
+        try:
+            customer = _get_subscriber(db=db, subscriber_id=customer_id)
+        except Exception:
+            customer = None
+        return templates.TemplateResponse(
+            "admin/customers/form.html",
+            {
+                "request": request,
+                "customer": customer,
+                "customer_type": "person",
+                "action": "edit",
+                "error": _safe_form_error(e),
+                "tax_rates": _load_tax_rates(db),
+                "billing_form": _billing_form_defaults(db, "person", customer),
+                "customer_audit_items": _customer_audit_items(db, customer),
+                "current_user": current_user,
+                "sidebar_stats": sidebar_stats,
+            },
+            status_code=400,
+        )
+
+
+@router.post(
     "/person/{customer_id}/deactivate",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("customer:write"))],
@@ -1533,6 +1706,153 @@ def business_deactivate(
         return Response(status_code=200, headers={"HX-Refresh": "true"})
     return RedirectResponse(
         url=f"/admin/customers/business/{customer_id}", status_code=303
+    )
+
+
+@router.post(
+    "/{customer_type}/{customer_id}/suspend-services",
+    response_class=HTMLResponse,
+    dependencies=[
+        Depends(require_any_permission("catalog:write", "subscription:suspend"))
+    ],
+)
+def customer_suspend_active_services(
+    request: Request,
+    customer_type: Literal["person", "business"],
+    customer_id: str,
+    db: Session = Depends(get_db),
+):
+    """Suspend all active services attached to a customer row."""
+    active_subscription_ids = web_customer_actions_service.list_active_subscription_ids(
+        db, customer_id
+    )
+    redirect_url = f"/admin/customers/{customer_type}/{customer_id}"
+    if not active_subscription_ids:
+        return _toast_response(
+            request=request,
+            redirect_url=redirect_url,
+            ok=False,
+            title="No active services",
+            message="This customer has no active services to suspend.",
+        )
+
+    result = web_catalog_subscription_workflows_service.bulk_suspend_response(
+        db,
+        subscription_ids=",".join(active_subscription_ids),
+        request=request,
+        actor_id=_get_actor_id(request),
+    )
+    changed = _workflow_changed_count(result)
+    return _toast_response(
+        request=request,
+        redirect_url=redirect_url,
+        ok=changed > 0,
+        title="Services suspended" if changed else "No services suspended",
+        message=str(result.get("message") or "Suspension completed."),
+    )
+
+
+@router.post(
+    "/{customer_type}/{customer_id}/activate-services",
+    response_class=HTMLResponse,
+    dependencies=[
+        Depends(require_any_permission("catalog:write", "subscription:activate"))
+    ],
+)
+def customer_activate_suspended_services(
+    request: Request,
+    customer_type: Literal["person", "business"],
+    customer_id: str,
+    db: Session = Depends(get_db),
+):
+    """Activate all suspended services attached to a customer row."""
+    suspended_subscription_ids = (
+        web_customer_actions_service.list_suspended_subscription_ids(db, customer_id)
+    )
+    redirect_url = f"/admin/customers/{customer_type}/{customer_id}"
+    if not suspended_subscription_ids:
+        return _toast_response(
+            request=request,
+            redirect_url=redirect_url,
+            ok=False,
+            title="No suspended services",
+            message="This customer has no suspended services to activate.",
+        )
+
+    result = web_catalog_subscription_workflows_service.bulk_restore_response(
+        db,
+        subscription_ids=",".join(suspended_subscription_ids),
+        actor_id=_get_actor_id(request),
+    )
+    changed = _workflow_changed_count(result)
+    return _toast_response(
+        request=request,
+        redirect_url=redirect_url,
+        ok=changed > 0,
+        title="Services activated" if changed else "No services activated",
+        message=str(result.get("message") or "Activation completed."),
+    )
+
+
+@router.post(
+    "/{customer_type}/{customer_id}/repair-access-state",
+    response_class=HTMLResponse,
+    dependencies=[
+        Depends(require_any_permission("customer:write", "subscription:activate"))
+    ],
+)
+def customer_repair_access_state(
+    request: Request,
+    customer_type: Literal["person", "business"],
+    customer_id: str,
+    db: Session = Depends(get_db),
+):
+    """Repair one customer's account/RADIUS projection when safe to do so."""
+    redirect_url = f"/admin/customers/{customer_type}/{customer_id}"
+    try:
+        result = web_customer_actions_service.repair_customer_access_state(
+            db, customer_id
+        )
+    except ValueError as exc:
+        db.rollback()
+        return _toast_response(
+            request=request,
+            redirect_url=redirect_url,
+            ok=False,
+            title="Access repair skipped",
+            message=str(exc),
+        )
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to repair access state for customer %s", customer_id)
+        return _toast_response(
+            request=request,
+            redirect_url=redirect_url,
+            ok=False,
+            title="Access repair failed",
+            message="The repair could not be completed. Check logs before retrying.",
+        )
+
+    log_audit_event(
+        db=db,
+        request=request,
+        action="update",
+        entity_type="subscriber",
+        entity_id=str(customer_id),
+        actor_id=_get_actor_id(request),
+        metadata={"access_state_repair": result},
+    )
+    db.commit()
+
+    return _toast_response(
+        request=request,
+        redirect_url=redirect_url,
+        ok=True,
+        title="Access state repaired",
+        message=(
+            "Recomputed account status and refreshed RADIUS for "
+            f"{result.get('active_subscriptions', 0)} active subscription(s)."
+        ),
     )
 
 
@@ -1789,6 +2109,63 @@ def geocode_primary_address(
     )
 
 
+@router.post(
+    "/profile/{customer_id}/confirm-location",
+    response_class=JSONResponse,
+    dependencies=[Depends(require_permission("customer:write"))],
+)
+def confirm_customer_location(
+    request: Request,
+    customer_id: str,
+    latitude: float = Body(...),
+    longitude: float = Body(...),
+    accuracy_m: float | None = Body(default=None),
+    claimed_state: str | None = Body(default=None),
+    claimed_lga: str | None = Body(default=None),
+    claimed_postcode: str | None = Body(default=None),
+    db: Session = Depends(get_db),
+):
+    """Agent-confirmed service location for the NCC verification ledger.
+
+    The agent, on a call with the customer, confirms or corrects the location
+    we hold. Reconciled facts land in the ledger via ``location_capture``; a
+    disagreement is flagged, not silently overwritten.
+    """
+    from app.services import location_capture
+    from app.web.admin import get_current_user
+
+    actor = get_current_user(request) or {}
+    actor_id = str(actor.get("id") or actor.get("subscriber_id") or "") or None
+    actor_name = actor.get("email") or actor.get("username")
+    try:
+        result = location_capture.capture(
+            db,
+            customer_id,
+            lat=latitude,
+            lng=longitude,
+            accuracy_m=accuracy_m,
+            source=location_capture.SOURCE_AGENT,
+            actor_id=actor_id,
+            actor_name=actor_name,
+            claimed_state=claimed_state,
+            claimed_lga=claimed_lga,
+            claimed_postcode=claimed_postcode,
+        )
+    except location_capture.LocationCaptureDisabled as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    db.commit()
+    return JSONResponse(
+        {
+            "captured": [k.value for k in result.captured_keys],
+            "needs_human": [
+                {"field": f.key.value, "note": f.note}
+                for f in result.reconciliation.needs_human
+            ],
+        }
+    )
+
+
 @router.delete(
     "/addresses/{address_id}",
     response_class=HTMLResponse,
@@ -1940,7 +2317,11 @@ def bulk_update_status(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Bulk customer status update failed")
+        raise HTTPException(
+            status_code=500,
+            detail="Bulk status update failed. Please try again.",
+        ) from e
 
 
 @router.post(
@@ -1959,7 +2340,11 @@ def bulk_update_customers(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Bulk customer update failed")
+        raise HTTPException(
+            status_code=500,
+            detail="Bulk customer update failed. Please try again.",
+        ) from e
 
 
 @router.post(
@@ -1975,11 +2360,17 @@ def bulk_send_customer_message(
         result = web_customer_actions_service.queue_bulk_message_from_payload(
             db=db, payload=data
         )
+        if result.get("preview") is True:
+            return result
         return _kick_notification_delivery(result)
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Bulk customer message queue failed")
+        raise HTTPException(
+            status_code=500,
+            detail="Bulk message queue failed. Please try again.",
+        ) from e
 
 
 @router.get(

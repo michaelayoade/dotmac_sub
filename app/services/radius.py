@@ -1,7 +1,6 @@
 import hashlib
 import logging
-import re
-import threading
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -9,24 +8,18 @@ from fastapi import HTTPException
 from sqlalchemy import (
     Column,
     Integer,
-    MetaData,
     String,
-    Table,
     case,
-    create_engine,
     delete,
     insert,
     or_,
     select,
 )
-from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
-from app.metrics import observe_job
 from app.models.catalog import (
     AccessCredential,
     NasDevice,
-    RadiusProfile,
     Subscription,
     SubscriptionStatus,
 )
@@ -50,6 +43,11 @@ from app.schemas.radius import (
     RadiusSyncJobUpdate,
 )
 from app.services import radius_dsn, settings_spec
+from app.services.access_credential_secret import (
+    AccessCredentialSecretFormat,
+    classify_access_credential_secret,
+    explicit_cleartext_value,
+)
 from app.services.common import (
     apply_ordering,
     apply_pagination,
@@ -57,41 +55,42 @@ from app.services.common import (
     validate_enum,
 )
 from app.services.credential_crypto import decrypt_credential, encrypt_credential
+from app.services.external_radius_targets import (
+    active_external_radius_targets,
+    external_radius_table,
+    get_external_engine,
+    sanitize_table_identifier,
+)
+from app.services.external_radius_targets import (
+    authoritative_external_radius_db_url as _authoritative_external_radius_db_url,
+)
+from app.services.observability import record_task_run
 from app.services.response import ListResponseMixin
 from app.services.secrets import resolve_secret
 
 logger = logging.getLogger(__name__)
 
 
-_CRYPT_PREFIXES = ("$1$", "$2a$", "$2b$", "$2y$", "$5$", "$6$")
 RADIUS_SYNC_ELIGIBLE_STATUSES = (
     SubscriptionStatus.active,
     SubscriptionStatus.suspended,
     SubscriptionStatus.canceled,
     SubscriptionStatus.expired,
 )
-_OPAQUE_RADIUS_VALUE_RE = re.compile(r"^[A-Za-z0-9+/=]+$")
-
-# Cache external FreeRADIUS engines per db_url so periodic sync jobs don't
-# rebuild a connection pool on every call. Keyed by the literal db_url string.
-_EXTERNAL_ENGINES: dict[str, Engine] = {}
-_EXTERNAL_ENGINES_LOCK = threading.Lock()
+# Compatibility aliases for read/NAS adapters. Runtime target ownership lives
+# in ``external_radius_targets``; projection writes live in radius_population.
+_get_external_engine = get_external_engine
+_external_radius_table = external_radius_table
 
 
-def _get_external_engine(db_url: str) -> Engine:
-    engine = _EXTERNAL_ENGINES.get(db_url)
-    if engine is not None:
-        return engine
-    with _EXTERNAL_ENGINES_LOCK:
-        engine = _EXTERNAL_ENGINES.get(db_url)
-        if engine is None:
-            engine = create_engine(
-                db_url,
-                pool_pre_ping=True,
-                pool_recycle=1800,
-            )
-            _EXTERNAL_ENGINES[db_url] = engine
-        return engine
+def _projection_result_count(result: dict[str, object], key: str) -> int:
+    """Read an integer counter from a structured projection result."""
+    value = result.get(key, 0)
+    return value if isinstance(value, int) else 0
+
+
+def authoritative_external_radius_db_url(db: Session) -> str | None:
+    return _authoritative_external_radius_db_url(db)
 
 
 def _safe_decrypt_credential(value: str | None, *, label: str) -> str | None:
@@ -121,26 +120,30 @@ def _external_password_row(
     secret_hash = str(credential.secret_hash or "").strip()
     if not secret_hash:
         return None
-    lowered = secret_hash.lower()
-    if lowered.startswith(("plain:", "cleartext:", "enc:")):
+    secret_format = classify_access_credential_secret(secret_hash)
+    if secret_format == AccessCredentialSecretFormat.encrypted:
         cleartext = _safe_decrypt_credential(
             secret_hash, label=f"user {credential.username}"
         )
-        if cleartext is None and lowered.startswith("enc:"):
+        if cleartext is None:
             # Undecryptable ciphertext (retired key) — skip rather than abort.
             return None
         return ("Cleartext-Password", ":=", cleartext or "")
-    if secret_hash.startswith(_CRYPT_PREFIXES):
+    if secret_format == AccessCredentialSecretFormat.explicit_cleartext:
+        return (
+            "Cleartext-Password",
+            ":=",
+            explicit_cleartext_value(secret_hash),
+        )
+    if secret_format == AccessCredentialSecretFormat.crypt_hash:
         return ("Crypt-Password", ":=", secret_hash)
-    if secret_hash.startswith("$pbkdf2-"):
+    if secret_format == AccessCredentialSecretFormat.pbkdf2_hash:
         logger.warning(
             "Skipping external RADIUS password sync for %s: unsupported legacy PBKDF2 service secret",
             credential.username,
         )
         return None
-    # Detect base64-encoded hashes from migration (no prefix, not crypt-style).
-    # These cannot be used as Cleartext-Password — they will cause auth failures.
-    if len(secret_hash) >= 20 and secret_hash.endswith("="):
+    if secret_format == AccessCredentialSecretFormat.opaque_hash:
         logger.warning(
             "Skipping external RADIUS password sync for %s: "
             "opaque hash detected (likely migration artifact, not cleartext)",
@@ -191,12 +194,10 @@ def _coerce_int_setting(value: object) -> int | None:
 
 
 def _is_opaque_radius_password(value: str | None) -> bool:
-    text = str(value or "").strip()
-    if len(text) < 20:
-        return False
-    if not _OPAQUE_RADIUS_VALUE_RE.fullmatch(text):
-        return False
-    return any(ch in text for ch in "+/=")
+    return (
+        classify_access_credential_secret(value)
+        == AccessCredentialSecretFormat.opaque_hash
+    )
 
 
 def _normalize_imported_radius_secret(
@@ -281,17 +282,6 @@ def _mask_external_radius_value(attribute: str, value: str) -> str:
             return ""
         return "••••••••"
     return text
-
-
-def _external_radius_table(name: str, *columns: Column[Any]) -> Table:
-    parts = [part.strip().strip('"') for part in str(name or "").split(".") if part]
-    if not parts:
-        raise ValueError("SQL table identifier cannot be empty.")
-    if not all(_SQL_IDENT_PART_RE.fullmatch(part) for part in parts):
-        raise ValueError(f"Invalid SQL table identifier: {name!r}")
-    if len(parts) == 1:
-        return Table(parts[0], MetaData(), *columns)
-    return Table(parts[-1], MetaData(), *columns, schema=".".join(parts[:-1]))
 
 
 def _read_external_radius_user_records(
@@ -467,9 +457,14 @@ def import_access_credentials_from_external_radius(
     *,
     config: dict | None = None,
 ) -> dict[str, Any]:
-    external_config = config or _bundled_external_db_config()
+    external_config = config
+    if external_config is None:
+        targets = active_external_radius_targets(db, capability="users")
+        external_config = targets[0] if len(targets) == 1 else None
     if not external_config:
-        raise ValueError("No external RADIUS database configuration is available.")
+        raise ValueError(
+            "Exactly one DB-configured external RADIUS user target is required."
+        )
 
     imported_rows = _read_external_radius_credentials(external_config)
 
@@ -792,6 +787,11 @@ def _radius_client_ip_for_nas(nas_device: NasDevice) -> str:
     ).strip()
 
 
+def radius_client_ip_for_nas(nas_device: NasDevice) -> str:
+    """Public RADIUS client identity projection for a NAS device."""
+    return _radius_client_ip_for_nas(nas_device)
+
+
 def _active_radius_servers(db: Session) -> list[RadiusServer]:
     return list(
         db.scalars(
@@ -802,53 +802,14 @@ def _active_radius_servers(db: Session) -> list[RadiusServer]:
     )
 
 
-# Thin re-exports — the single authority lives in app.services.radius_dsn so the
-# population sweep and the event-time sync resolve the bundled radius DB the
-# *same* way and cannot split-brain.
+# Compatibility URL helpers. Runtime target authority lives in
+# ``external_radius_targets``; these normalizers remain for API inputs.
 _normalize_external_db_url = radius_dsn.normalize_external_db_url
 _container_safe_external_db_url = radius_dsn.container_safe_external_db_url
 
 
-def _bundled_external_db_config() -> dict | None:
-    """Fallback external RADIUS DB config for the bundled Docker stack.
-
-    Resolves through ``radius_dsn.resolve_radius_dsn()`` — the same authority the
-    population sweep uses — so both writers target one radius DB.
-    """
-    db_url = radius_dsn.resolve_radius_dsn()
-    if not db_url:
-        return None
-    return {
-        "db_url": db_url,
-        "radcheck_table": "radcheck",
-        "radreply_table": "radreply",
-        "radusergroup_table": "radusergroup",
-        "nas_table": "nas",
-        "password_attribute": "Cleartext-Password",  # nosec
-        "password_op": ":=",  # nosec
-        "use_group": False,
-        "group_priority": 0,
-        "default_reply_op": ":=",
-    }
-
-
 def _active_external_sync_configs(db: Session) -> list[dict]:
-    configs: list[dict] = []
-    jobs = list(
-        db.scalars(
-            select(RadiusSyncJob)
-            .where(RadiusSyncJob.is_active.is_(True))
-            .where(RadiusSyncJob.connector_config_id.isnot(None))
-        ).all()
-    )
-    for job in jobs:
-        config = _external_db_config(db, job)
-        if config:
-            configs.append(config)
-    if configs:
-        return configs
-    fallback = _bundled_external_db_config()
-    return [fallback] if fallback else []
+    return active_external_radius_targets(db)
 
 
 def ensure_radius_clients_for_nas(db: Session, nas_device: NasDevice) -> int:
@@ -1013,26 +974,27 @@ def reconcile_subscription_connectivity(
             .where(AccessCredential.is_active.is_(True))
         ).all()
     )
-    external_configs = _active_external_sync_configs(db)
-    if external_configs:
-        nas_devices = (
-            [nas_device]
-            if subscription.provisioning_nas_device_id and nas_device
-            else []
+    nas_configs = active_external_radius_targets(db, capability="nas")
+    nas_devices = (
+        [nas_device] if subscription.provisioning_nas_device_id and nas_device else []
+    )
+    for config in nas_configs:
+        if nas_devices:
+            external_nas_synced += _external_sync_nas(config, nas_devices).get(
+                "external_nas_synced", 0
+            )
+    user_configs = active_external_radius_targets(db, capability="users")
+    if credentials and user_configs:
+        from app.services.radius_population import reconcile_usernames
+
+        result = reconcile_usernames(
+            {credential.username for credential in credentials},
+            dry_run=False,
+            source_db=db,
         )
-        for config in external_configs:
-            if nas_devices:
-                external_nas_synced += _external_sync_nas(config, nas_devices).get(
-                    "external_nas_synced", 0
-                )
-            if credentials:
-                external_credentials_synced += _external_sync_users(
-                    db, config, credentials
-                ).get("external_users_synced", 0)
-    else:
-        for credential in credentials:
-            if sync_credential_to_radius(db, credential):
-                external_credentials_synced += 1
+        external_credentials_synced = len(credentials) * _projection_result_count(
+            result, "projection_targets"
+        )
 
     return {
         "ok": True,
@@ -1043,72 +1005,19 @@ def reconcile_subscription_connectivity(
     }
 
 
-_SQL_IDENT_PART_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-
-
 def _sanitize_table_identifier(raw: object, fallback: str) -> str:
-    name = str(raw).strip() if raw is not None else fallback
-    if not name:
-        name = fallback
-    parts = [part.strip().strip('"') for part in name.split(".")]
-    if not all(_SQL_IDENT_PART_RE.fullmatch(part) for part in parts):
-        raise ValueError(f"Invalid SQL table identifier: {name!r}")
-    return ".".join(parts)
+    return sanitize_table_identifier(raw, fallback)
 
 
 def _external_db_config(db: Session, job: RadiusSyncJob) -> dict | None:
-    if not job.connector_config_id:
-        return None
-    connector = db.get(ConnectorConfig, job.connector_config_id)
-    if not connector:
-        return None
-    auth_config = dict(connector.auth_config or {})
-    metadata = dict(connector.metadata_ or {})
-    db_url = auth_config.get("db_url") or connector.base_url
-    if db_url:
-        db_url = _container_safe_external_db_url(resolve_secret(db_url))
-    if not db_url:
-        driver = auth_config.get("driver") or "postgresql+psycopg"
-        username = auth_config.get("username")
-        password = resolve_secret(auth_config.get("password"))
-        host = auth_config.get("host")
-        port = auth_config.get("port")
-        database = auth_config.get("database")
-        if not all([username, password, host, database]):
-            return None
-        port_part = f":{port}" if port else ""
-        db_url = _container_safe_external_db_url(
-            f"{driver}://{username}:{password}@{host}{port_part}/{database}"
-        )
-    return {
-        "db_url": db_url,
-        "radcheck_table": _sanitize_table_identifier(
-            metadata.get("radcheck_table"), "radcheck"
+    return next(
+        (
+            config
+            for config in active_external_radius_targets(db)
+            if config["target_id"] == str(job.id)
         ),
-        "radreply_table": _sanitize_table_identifier(
-            metadata.get("radreply_table"), "radreply"
-        ),
-        "radusergroup_table": _sanitize_table_identifier(
-            metadata.get("radusergroup_table"), "radusergroup"
-        ),
-        "nas_table": _sanitize_table_identifier(metadata.get("nas_table"), "nas"),
-        "password_attribute": metadata.get("password_attribute", "Cleartext-Password"),
-        "password_op": metadata.get("password_op", ":="),
-        "use_group": bool(metadata.get("use_group", False)),
-        "group_priority": int(metadata.get("group_priority", 0)),
-        "default_reply_op": metadata.get("default_reply_op", ":="),
-    }
-
-
-def _subscriber_captive_opted_in(db: Session, subscriber_id) -> bool:
-    """True if the subscriber opted into the soft captive walled-garden, so a
-    suspended sub gets the pay-page treatment instead of a hard reject."""
-    if not subscriber_id:
-        return False
-    from app.models.subscriber import Subscriber
-
-    subscriber = db.get(Subscriber, subscriber_id)
-    return bool(getattr(subscriber, "captive_redirect_enabled", False))
+        None,
+    )
 
 
 def _external_sync_users(
@@ -1116,207 +1025,26 @@ def _external_sync_users(
     config: dict,
     credentials: list[AccessCredential],
 ) -> dict[str, int]:
-    from app.services.connection_type_provisioning import build_radius_reply_attributes
+    """Compatibility adapter to the sole projection owner.
 
-    radcheck = config["radcheck_table"]
-    radreply = config["radreply_table"]
-    radusergroup = config["radusergroup_table"]
-    password_attr = config["password_attribute"]
-    password_op = config["password_op"]
-    use_group = config["use_group"]
-    group_priority = config["group_priority"]
-    default_reply_op = config["default_reply_op"]
+    ``config`` is intentionally ignored: one requested reconcile fans out to
+    the complete DB-configured target set atomically per target.
+    """
+    del config
+    from app.services.radius_population import reconcile_usernames
 
-    engine = _get_external_engine(config["db_url"])
-    radcheck_table = _external_radius_table(
-        radcheck,
-        Column("username", String),
-        Column("attribute", String),
-        Column("op", String),
-        Column("value", String),
-    )
-    radreply_table = _external_radius_table(
-        radreply,
-        Column("username", String),
-        Column("attribute", String),
-        Column("op", String),
-        Column("value", String),
-    )
-    radusergroup_table = _external_radius_table(
-        radusergroup,
-        Column("username", String),
-        Column("groupname", String),
-        Column("priority", Integer),
-    )
-    created = 0
-    profile_cache: dict[str, RadiusProfile | None] = {}
-    with engine.begin() as conn:
-        for credential in credentials:
-            subscription = _radius_sync_subscription_for_subscriber(
-                db, credential.subscriber_id
-            )
-            if not subscription:
-                continue
-            username = credential.username
-
-            # Status-aware sync. Suspended subs get a single
-            # `Auth-Type := Reject` row so a re-sync can't accidentally
-            # re-enable them. Active subs get the full rebuild.
-            if subscription.status != SubscriptionStatus.active:
-                conn.execute(
-                    delete(radcheck_table).where(radcheck_table.c.username == username)
-                )
-                conn.execute(
-                    delete(radreply_table).where(radreply_table.c.username == username)
-                )
-                if use_group:
-                    conn.execute(
-                        delete(radusergroup_table).where(
-                            radusergroup_table.c.username == username
-                        )
-                    )
-                captive = (
-                    subscription.status == SubscriptionStatus.suspended
-                    and _subscriber_captive_opted_in(db, subscription.subscriber_id)
-                )
-                if captive:
-                    # Opted-in suspended customer: walled-garden, not hard-reject —
-                    # a usable password plus a captive radreply (Address-List, no
-                    # routes), mirroring the authoritative sweep's captive treatment
-                    # so the two writers agree instead of flapping the customer
-                    # between the pay-page and fully-offline.
-                    password_row = _external_password_row(
-                        credential,
-                        default_attribute=password_attr,
-                        default_op=password_op,
-                    )
-                    if password_row:
-                        conn.execute(
-                            insert(radcheck_table).values(
-                                username=username,
-                                attribute=password_row[0],
-                                op=password_row[1],
-                                value=password_row[2],
-                            )
-                        )
-                    cap_profile_id = (
-                        credential.radius_profile_id or subscription.radius_profile_id
-                    )
-                    cap_profile = (
-                        db.get(RadiusProfile, cap_profile_id)
-                        if cap_profile_id
-                        else None
-                    )
-                    cap_attrs = [
-                        a
-                        for a in build_radius_reply_attributes(
-                            db, subscription, profile=cap_profile
-                        )
-                        if a["attribute"] != "Framed-Route"
-                    ]
-                    cap_attrs.append(
-                        {
-                            "attribute": "Mikrotik-Address-List",
-                            "op": ":=",
-                            "value": "suspended",
-                        }
-                    )
-                    seen_cap: set[str] = set()
-                    for attr_dict in cap_attrs:
-                        key = attr_dict["attribute"].lower()
-                        if key in seen_cap and attr_dict["op"] != "+=":
-                            continue
-                        seen_cap.add(key)
-                        conn.execute(
-                            insert(radreply_table).values(
-                                username=username,
-                                attribute=attr_dict["attribute"],
-                                op=attr_dict.get("op") or default_reply_op,
-                                value=attr_dict["value"],
-                            )
-                        )
-                    created += 1
-                    continue
-                if subscription.status == SubscriptionStatus.suspended:
-                    conn.execute(
-                        insert(radcheck_table).values(
-                            username=username,
-                            attribute="Auth-Type",
-                            op=":=",
-                            value="Reject",
-                        )
-                    )
-                # canceled/expired: leave the user with no rows -> not-found
-                created += 1
-                continue
-
-            conn.execute(
-                delete(radcheck_table).where(radcheck_table.c.username == username)
-            )
-            conn.execute(
-                delete(radreply_table).where(radreply_table.c.username == username)
-            )
-            if use_group:
-                conn.execute(
-                    delete(radusergroup_table).where(
-                        radusergroup_table.c.username == username
-                    )
-                )
-            password_row = _external_password_row(
-                credential,
-                default_attribute=password_attr,
-                default_op=password_op,
-            )
-            if password_row:
-                conn.execute(
-                    insert(radcheck_table).values(
-                        username=username,
-                        attribute=password_row[0],
-                        op=password_row[1],
-                        value=password_row[2],
-                    )
-                )
-
-            # Resolve profile from credential or subscription
-            profile_id = credential.radius_profile_id or subscription.radius_profile_id
-            profile: RadiusProfile | None = None
-            if profile_id:
-                cache_key = str(profile_id)
-                if cache_key not in profile_cache:
-                    profile_cache[cache_key] = db.get(RadiusProfile, profile_id)
-                profile = profile_cache[cache_key]
-
-            if use_group and profile:
-                conn.execute(
-                    insert(radusergroup_table).values(
-                        username=username,
-                        groupname=profile.name,
-                        priority=group_priority,
-                    )
-                )
-
-            # Build connection-type-aware RADIUS reply attributes
-            reply_attrs = build_radius_reply_attributes(
-                db,
-                subscription,
-                profile=profile,
-            )
-            seen: set[str] = set()
-            for attr_dict in reply_attrs:
-                attr_key = attr_dict["attribute"].lower()
-                if attr_key in seen and attr_dict["op"] != "+=":
-                    continue
-                seen.add(attr_key)
-                conn.execute(
-                    insert(radreply_table).values(
-                        username=username,
-                        attribute=attr_dict["attribute"],
-                        op=attr_dict.get("op") or default_reply_op,
-                        value=attr_dict["value"],
-                    )
-                )
-            created += 1
-    return {"external_users_synced": created}
+    usernames = {
+        credential.username for credential in credentials if credential.username
+    }
+    result = reconcile_usernames(usernames, dry_run=False, source_db=db)
+    return {
+        "external_users_synced": len(usernames)
+        * _projection_result_count(result, "projection_targets"),
+        "external_users_skipped_unbuildable": _projection_result_count(
+            result, "skipped_decrypt_failed"
+        )
+        + _projection_result_count(result, "skipped_no_password"),
+    }
 
 
 def _external_sync_nas(
@@ -1364,6 +1092,213 @@ def _external_sync_nas(
             )
             created += 1
     return {"external_nas_synced": created}
+
+
+def external_radius_nas_client_ips(
+    db: Session,
+    client_ips: set[str],
+) -> set[str]:
+    """Return configured external RADIUS NAS clients without reading secrets."""
+    wanted = {str(value).strip() for value in client_ips if str(value).strip()}
+    if not wanted:
+        return set()
+
+    found: set[str] = set()
+    for config in _active_external_sync_configs(db):
+        nas_table = _external_radius_table(
+            config.get("nas_table", "nas"),
+            Column("nasname", String),
+        )
+        engine = _get_external_engine(config["db_url"])
+        with engine.connect() as conn:
+            rows = conn.execute(
+                select(nas_table.c.nasname).where(nas_table.c.nasname.in_(wanted))
+            ).scalars()
+            found.update(str(value).strip() for value in rows if value)
+    return found
+
+
+@dataclass(frozen=True)
+class ExternalRadiusNasSecretInventory:
+    present_client_ips: frozenset[str]
+    recoverable_secrets: dict[str, str]
+    conflicting_client_ips: frozenset[str]
+
+
+def external_radius_nas_secret_inventory(
+    db: Session,
+    client_ips: set[str],
+) -> ExternalRadiusNasSecretInventory:
+    """Read authoritative NAS secrets and reject cross-store conflicts."""
+    wanted = {str(value).strip() for value in client_ips if str(value).strip()}
+    values: dict[str, set[str]] = {client_ip: set() for client_ip in wanted}
+    present: set[str] = set()
+    for config in _active_external_sync_configs(db):
+        nas_table = _external_radius_table(
+            config.get("nas_table", "nas"),
+            Column("nasname", String),
+            Column("secret", String),
+        )
+        engine = _get_external_engine(config["db_url"])
+        with engine.connect() as conn:
+            rows = conn.execute(
+                select(nas_table.c.nasname, nas_table.c.secret).where(
+                    nas_table.c.nasname.in_(wanted)
+                )
+            ).all()
+        for client_ip, secret in rows:
+            normalized_ip = str(client_ip or "").strip()
+            if not normalized_ip:
+                continue
+            present.add(normalized_ip)
+            normalized_secret = str(secret or "")
+            if normalized_secret:
+                values.setdefault(normalized_ip, set()).add(normalized_secret)
+
+    conflicts = {client_ip for client_ip, secrets in values.items() if len(secrets) > 1}
+    recoverable = {
+        client_ip: next(iter(secrets))
+        for client_ip, secrets in values.items()
+        if len(secrets) == 1
+    }
+    return ExternalRadiusNasSecretInventory(
+        present_client_ips=frozenset(present),
+        recoverable_secrets=recoverable,
+        conflicting_client_ips=frozenset(conflicts),
+    )
+
+
+def remove_external_radius_nas_clients(
+    db: Session,
+    client_ips: set[str],
+) -> int:
+    """Remove explicitly decommissioned NAS clients from external RADIUS stores."""
+    wanted = {str(value).strip() for value in client_ips if str(value).strip()}
+    if not wanted:
+        return 0
+
+    removed = 0
+    for config in _active_external_sync_configs(db):
+        nas_table = _external_radius_table(
+            config.get("nas_table", "nas"),
+            Column("nasname", String),
+        )
+        engine = _get_external_engine(config["db_url"])
+        with engine.begin() as conn:
+            result = conn.execute(
+                delete(nas_table).where(nas_table.c.nasname.in_(wanted))
+            )
+            removed += max(int(result.rowcount or 0), 0)
+    return removed
+
+
+@dataclass(frozen=True)
+class RadiusNasLifecycleState:
+    client_ip: str | None
+    internal_active_clients: int
+    external_present: bool
+
+
+@dataclass(frozen=True)
+class RadiusNasLifecycleResult:
+    desired_active: bool
+    internal_clients_changed: int
+    external_clients_changed: int
+
+
+def radius_nas_lifecycle_state(
+    db: Session,
+    nas_device: NasDevice,
+) -> RadiusNasLifecycleState:
+    """Resolve bounded internal/external RADIUS client lifecycle evidence."""
+    return radius_nas_lifecycle_states(db, [nas_device])[nas_device.id]
+
+
+def radius_nas_lifecycle_states(
+    db: Session,
+    nas_devices: list[NasDevice],
+) -> dict[object, RadiusNasLifecycleState]:
+    """Batch lifecycle evidence without per-device external database queries."""
+    if not nas_devices:
+        return {}
+    device_ids = [device.id for device in nas_devices]
+    active_client_ips: dict[object, set[str]] = {}
+    active_client_counts: dict[object, int] = {}
+    for device_id, client_ip in db.execute(
+        select(RadiusClient.nas_device_id, RadiusClient.client_ip)
+        .where(RadiusClient.nas_device_id.in_(device_ids))
+        .where(RadiusClient.is_active.is_(True))
+    ).all():
+        normalized_ip = str(client_ip or "").strip()
+        if device_id is None:
+            continue
+        active_client_counts[device_id] = active_client_counts.get(device_id, 0) + 1
+        if normalized_ip:
+            active_client_ips.setdefault(device_id, set()).add(normalized_ip)
+
+    candidate_ips: dict[object, set[str]] = {}
+    for device in nas_devices:
+        projected_ip = _radius_client_ip_for_nas(device)
+        candidates = set(active_client_ips.get(device.id, set()))
+        if projected_ip:
+            candidates.add(projected_ip)
+        candidate_ips[device.id] = candidates
+    external_ips = external_radius_nas_client_ips(
+        db, set().union(*candidate_ips.values()) if candidate_ips else set()
+    )
+    return {
+        device.id: RadiusNasLifecycleState(
+            client_ip=(
+                _radius_client_ip_for_nas(device)
+                or next(iter(sorted(active_client_ips.get(device.id, set()))), None)
+            ),
+            internal_active_clients=active_client_counts.get(device.id, 0),
+            external_present=bool(candidate_ips[device.id] & external_ips),
+        )
+        for device in nas_devices
+    }
+
+
+def apply_radius_nas_lifecycle(
+    db: Session,
+    nas_device: NasDevice,
+    *,
+    active: bool,
+) -> RadiusNasLifecycleResult:
+    """Project one reviewed NAS lifecycle decision into RADIUS stores."""
+    if active:
+        internal_changed = ensure_radius_clients_for_nas(db, nas_device)
+        external_changed = 0
+        for config in _active_external_sync_configs(db):
+            external_changed += int(
+                _external_sync_nas(config, [nas_device]).get("external_nas_synced", 0)
+            )
+        return RadiusNasLifecycleResult(
+            desired_active=True,
+            internal_clients_changed=internal_changed,
+            external_clients_changed=external_changed,
+        )
+
+    clients = db.scalars(
+        select(RadiusClient)
+        .where(RadiusClient.nas_device_id == nas_device.id)
+        .where(RadiusClient.is_active.is_(True))
+    ).all()
+    client_ips = {
+        normalized_ip
+        for client in clients
+        if (normalized_ip := str(client.client_ip or "").strip())
+    }
+    for client in clients:
+        client.is_active = False
+    if client_ip := _radius_client_ip_for_nas(nas_device):
+        client_ips.add(client_ip)
+    external_changed = remove_external_radius_nas_clients(db, client_ips)
+    return RadiusNasLifecycleResult(
+        desired_active=False,
+        internal_clients_changed=len(clients),
+        external_clients_changed=external_changed,
+    )
 
 
 class RadiusUsers(ListResponseMixin):
@@ -1631,8 +1566,10 @@ class RadiusSyncJobs(ListResponseMixin):
             run.details = details
             job.last_run_at = finished_at
             db.commit()
-            observe_job(
-                "radius_sync", status.value, (finished_at - started_at).total_seconds()
+            record_task_run(
+                "radius_sync",
+                status=status.value,
+                duration_seconds=(finished_at - started_at).total_seconds(),
             )
             db.refresh(run)
         return run
@@ -1698,33 +1635,12 @@ def sync_credential_to_radius(db: Session, credential: AccessCredential) -> bool
     if not subscription:
         return False
 
-    # Find all active sync jobs with external connectors
-    sync_jobs = list(
-        db.scalars(
-            select(RadiusSyncJob)
-            .where(RadiusSyncJob.is_active.is_(True))
-            .where(RadiusSyncJob.sync_users.is_(True))
-            .where(RadiusSyncJob.connector_config_id.isnot(None))
-        ).all()
-    )
+    if not active_external_radius_targets(db, capability="users"):
+        return False
+    from app.services.radius_population import reconcile_usernames
 
-    synced = False
-    for job in sync_jobs:
-        config = _external_db_config(db, job)
-        if not config:
-            continue
-        try:
-            _external_sync_users(db, config, [credential])
-            synced = True
-        except Exception:
-            # Log but don't fail - the periodic sync will catch it
-            logger.warning(
-                "Failed to sync credential %s to RADIUS job %s",
-                credential.username,
-                job.id,
-            )
-
-    return synced
+    reconcile_usernames({credential.username}, dry_run=False, source_db=db)
+    return True
 
 
 def sync_account_credentials_to_radius(db: Session, account_id) -> int:
@@ -1749,27 +1665,20 @@ def sync_account_credentials_to_radius(db: Session, account_id) -> int:
         ).all()
     )
 
-    count = 0
-    for credential in credentials:
-        if sync_credential_to_radius(db, credential):
-            count += 1
+    if not credentials or not active_external_radius_targets(db, capability="users"):
+        return 0
+    from app.services.radius_population import reconcile_usernames
 
-    return count
+    result = reconcile_usernames(
+        {credential.username for credential in credentials},
+        dry_run=False,
+        source_db=db,
+    )
+    return len(credentials) * _projection_result_count(result, "projection_targets")
 
 
 def remove_external_radius_credentials(db: Session, account_id) -> int:
-    """Remove all RADIUS credentials for an account from external RADIUS databases.
-
-    Called on subscription suspension/cancellation to prevent the subscriber
-    from authenticating until reactivated.
-
-    Args:
-        db: Database session
-        account_id: The subscriber account ID
-
-    Returns:
-        Number of credentials removed from external RADIUS
-    """
+    """Request canonical convergence for every credential on an account."""
     account_uuid = coerce_uuid(account_id)
     credentials = list(
         db.scalars(
@@ -1781,79 +1690,18 @@ def remove_external_radius_credentials(db: Session, account_id) -> int:
     if not credentials:
         return 0
 
-    external_configs = _active_external_sync_configs(db)
-    if not external_configs:
-        return 0
+    from app.services.radius_population import reconcile_usernames
 
-    removed = 0
-    for config in external_configs:
-        radcheck = config["radcheck_table"]
-        radreply = config["radreply_table"]
-        radusergroup = config.get("radusergroup_table", "radusergroup")
-        try:
-            engine = _get_external_engine(config["db_url"])
-            radcheck_table = _external_radius_table(
-                radcheck,
-                Column("username", String),
-            )
-            radreply_table = _external_radius_table(
-                radreply,
-                Column("username", String),
-            )
-            radusergroup_table = _external_radius_table(
-                radusergroup,
-                Column("username", String),
-            )
-            with engine.begin() as conn:
-                for credential in credentials:
-                    conn.execute(
-                        delete(radcheck_table).where(
-                            radcheck_table.c.username == credential.username
-                        )
-                    )
-                    conn.execute(
-                        delete(radreply_table).where(
-                            radreply_table.c.username == credential.username
-                        )
-                    )
-                    conn.execute(
-                        delete(radusergroup_table).where(
-                            radusergroup_table.c.username == credential.username
-                        )
-                    )
-                    removed += 1
-            logger.info(
-                "Removed %d credentials from external RADIUS for account %s",
-                len(credentials),
-                account_id,
-            )
-        except Exception:
-            logger.warning(
-                "Failed to remove credentials from external RADIUS for account %s",
-                account_id,
-                exc_info=True,
-            )
-
-    return removed
+    result = reconcile_usernames(
+        {credential.username for credential in credentials},
+        dry_run=False,
+        source_db=db,
+    )
+    return len(credentials) * _projection_result_count(result, "projection_targets")
 
 
 def block_external_radius_credentials(db: Session, account_id) -> int:
-    """Mark all credentials for an account as blocked in external RADIUS.
-
-    Inserts an idempotent `Auth-Type := Reject` row per user (preserving
-    their existing password / reply / group rows). Unblock is then a
-    single DELETE — restoration doesn't have to rebuild attributes from
-    the catalog. The next periodic ``_external_sync_users`` run also
-    writes the same Reject row for suspended subs, so this is safe to
-    re-run.
-
-    Args:
-        db: Database session.
-        account_id: The subscriber account ID.
-
-    Returns:
-        Number of (credential x external-target) rows blocked.
-    """
+    """Converge credentials from authoritative blocked/captive source state."""
     account_uuid = coerce_uuid(account_id)
     credentials = list(
         db.scalars(
@@ -1865,65 +1713,18 @@ def block_external_radius_credentials(db: Session, account_id) -> int:
     if not credentials:
         return 0
 
-    external_configs = _active_external_sync_configs(db)
-    if not external_configs:
-        return 0
+    from app.services.radius_population import reconcile_usernames
 
-    blocked = 0
-    for config in external_configs:
-        radcheck = config["radcheck_table"]
-        try:
-            engine = _get_external_engine(config["db_url"])
-            radcheck_table = _external_radius_table(
-                radcheck,
-                Column("username", String),
-                Column("attribute", String),
-                Column("op", String),
-                Column("value", String),
-            )
-            with engine.begin() as conn:
-                for credential in credentials:
-                    # Idempotent: clear any prior Reject row, then insert fresh.
-                    conn.execute(
-                        delete(radcheck_table).where(
-                            radcheck_table.c.username == credential.username,
-                            radcheck_table.c.attribute == "Auth-Type",
-                            radcheck_table.c.value == "Reject",
-                        )
-                    )
-                    conn.execute(
-                        insert(radcheck_table).values(
-                            username=credential.username,
-                            attribute="Auth-Type",
-                            op=":=",
-                            value="Reject",
-                        )
-                    )
-                    blocked += 1
-            logger.info(
-                "Blocked %d credentials in external RADIUS for account %s",
-                len(credentials),
-                account_id,
-            )
-        except Exception:
-            logger.warning(
-                "Failed to block credentials in external RADIUS for account %s",
-                account_id,
-                exc_info=True,
-            )
-
-    return blocked
+    result = reconcile_usernames(
+        {credential.username for credential in credentials},
+        dry_run=False,
+        source_db=db,
+    )
+    return len(credentials) * _projection_result_count(result, "projection_targets")
 
 
 def unblock_external_radius_credentials(db: Session, account_id) -> int:
-    """Remove the `Auth-Type := Reject` rows for an account, leaving the
-    original password / reply / group rows intact. Pair with a follow-up
-    ``reconcile_subscription_connectivity`` call to also refresh anything
-    that may have drifted while suspended.
-
-    Returns:
-        Number of (credential x external-target) Reject rows removed.
-    """
+    """Converge credentials from authoritative restored source state."""
     account_uuid = coerce_uuid(account_id)
     credentials = list(
         db.scalars(
@@ -1935,40 +1736,14 @@ def unblock_external_radius_credentials(db: Session, account_id) -> int:
     if not credentials:
         return 0
 
-    external_configs = _active_external_sync_configs(db)
-    if not external_configs:
-        return 0
+    from app.services.radius_population import reconcile_usernames
 
-    unblocked = 0
-    for config in external_configs:
-        radcheck = config["radcheck_table"]
-        try:
-            engine = _get_external_engine(config["db_url"])
-            radcheck_table = _external_radius_table(
-                radcheck,
-                Column("username", String),
-                Column("attribute", String),
-                Column("value", String),
-            )
-            with engine.begin() as conn:
-                for credential in credentials:
-                    result = conn.execute(
-                        delete(radcheck_table).where(
-                            radcheck_table.c.username == credential.username,
-                            radcheck_table.c.attribute == "Auth-Type",
-                            radcheck_table.c.value == "Reject",
-                        )
-                    )
-                    if (result.rowcount or 0) > 0:
-                        unblocked += 1
-        except Exception:
-            logger.warning(
-                "Failed to unblock credentials in external RADIUS for account %s",
-                account_id,
-                exc_info=True,
-            )
-
-    return unblocked
+    result = reconcile_usernames(
+        {credential.username for credential in credentials},
+        dry_run=False,
+        source_db=db,
+    )
+    return len(credentials) * _projection_result_count(result, "projection_targets")
 
 
 radius_servers = RadiusServers()

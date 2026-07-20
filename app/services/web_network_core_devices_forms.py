@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import difflib
-import logging
 import re
 import uuid
 from collections.abc import Callable
@@ -40,8 +39,12 @@ from app.schemas.catalog import NasDeviceUpdate
 from app.services import nas as nas_service
 from app.services import network as network_service
 from app.services import ping as ping_service
-
-logger = logging.getLogger(__name__)
+from app.services.brand_theme import DEFAULT_SEMANTIC_COLORS
+from app.services.device_operational_status import (
+    DEGRADED,
+    DOWN,
+    annotate_operational_status,
+)
 
 
 def _format_uptime_short(seconds: int | None) -> str | None:
@@ -239,7 +242,7 @@ def validate_values(
         try:
             snmp_port = int(snmp_port_value)
         except ValueError:
-            return None, "Zabbix SNMP port must be a valid number"
+            return None, "SNMP port must be a valid number"
     else:
         snmp_port = 161 if snmp_enabled else None
 
@@ -310,7 +313,7 @@ def validate_values(
     if ping_enabled and not host:
         return None, "Management IP or hostname is required for ping checks."
     if snmp_enabled and not host:
-        return None, "Management IP or hostname is required for Zabbix SNMP collection."
+        return None, "Management IP or hostname is required for SNMP collection."
 
     normalized = dict(values)
     normalized.update(
@@ -594,7 +597,8 @@ def list_page_data(
             | NetworkDevice.model.ilike(pattern)
         )
 
-    devices = db.scalars(stmt.order_by(NetworkDevice.name).limit(200)).all()
+    devices = list(db.scalars(stmt.order_by(NetworkDevice.name).limit(200)).all())
+    annotate_operational_status(devices)
     device_ids = [device.id for device in devices]
     pop_sites = pop_sites_for_forms(db)
     child_impacts: dict[str, dict[str, int | bool]] = {}
@@ -607,6 +611,7 @@ def list_page_data(
                 .where(NetworkDevice.is_active.is_(True))
             ).all()
         )
+        annotate_operational_status(children)
         for child in children:
             if not child.parent_device_id:
                 continue
@@ -615,9 +620,10 @@ def list_page_data(
                 key, {"total": 0, "offline": 0, "degraded": 0, "impacted": False}
             )
             bucket["total"] = int(bucket["total"]) + 1
-            if child.status == DeviceStatus.offline:
+            child_status = child.operational.status
+            if child_status == DOWN:
                 bucket["offline"] = int(bucket["offline"]) + 1
-            if child.status == DeviceStatus.degraded:
+            if child_status == DEGRADED:
                 bucket["degraded"] = int(bucket["degraded"]) + 1
             bucket["impacted"] = bool(
                 int(bucket["offline"]) > 0 or int(bucket["degraded"]) > 0
@@ -769,6 +775,7 @@ def detail_page_data(
             .order_by(NetworkDevice.name)
         ).all()
     )
+    annotate_operational_status([device, *child_devices])
 
     lineage: list[NetworkDevice] = []
     ancestor = device.parent_device
@@ -780,13 +787,14 @@ def detail_page_data(
     lineage.reverse()
     child_status_summary = {
         "total": len(child_devices),
-        "offline": sum(1 for c in child_devices if c.status == DeviceStatus.offline),
-        "degraded": sum(1 for c in child_devices if c.status == DeviceStatus.degraded),
+        "offline": sum(1 for c in child_devices if c.operational.status == DOWN),
+        "degraded": sum(1 for c in child_devices if c.operational.status == DEGRADED),
     }
     child_status_summary["impacted"] = (
         child_status_summary["offline"] + child_status_summary["degraded"]
     ) > 0
     descendants_by_parent: dict[UUID, list[NetworkDevice]] = {}
+    descendant_devices: list[NetworkDevice] = []
     descendants_frontier = [device.id]
     descendants_visited: set[UUID] = set()
     while descendants_frontier:
@@ -803,11 +811,14 @@ def detail_page_data(
             if child.id in descendants_visited:
                 continue
             descendants_visited.add(child.id)
+            descendant_devices.append(child)
             if child.parent_device_id:
                 descendants_by_parent.setdefault(child.parent_device_id, []).append(
                     child
                 )
             descendants_frontier.append(child.id)
+
+    annotate_operational_status(descendant_devices)
 
     def _tree(parent_id: UUID, depth: int = 0) -> list[dict[str, object]]:
         nodes: list[dict[str, object]] = []
@@ -1119,9 +1130,10 @@ def add_bandwidth_graph_source(
     normalized_unit = value_unit.strip()
     if normalized_unit not in {"Bps", "bps", "pps"}:
         return False, "Value unit must be Bps, bps, or pps."
-    normalized_color = color_hex.strip() or "#22c55e"
+    default_graph_color = DEFAULT_SEMANTIC_COLORS["positive"]
+    normalized_color = color_hex.strip() or default_graph_color
     if not re.fullmatch(r"#[0-9a-fA-F]{6}", normalized_color):
-        return False, "Color must be a hex value like #22c55e."
+        return False, f"Color must be a hex value like {default_graph_color}."
 
     next_order = (
         db.scalar(

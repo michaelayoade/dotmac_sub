@@ -22,15 +22,20 @@ ProjectType = str  # Fallback type alias
 
 
 class ServiceOrderBase(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     subscriber_id: UUID = Field(
         validation_alias="account_id", serialization_alias="account_id"
     )
     subscription_id: UUID | None = None
+    sales_order_id: UUID | None = None
+    sales_order_line_id: UUID | None = None
     requested_by_contact_id: UUID | None = None
     status: ServiceOrderStatus = ServiceOrderStatus.draft
     order_type: ServiceOrderType | None = None
     project_type: ProjectType | None = None
     notes: str | None = None
+    execution_context: dict | None = None
 
 
 class ServiceOrderCreate(ServiceOrderBase):
@@ -38,10 +43,14 @@ class ServiceOrderCreate(ServiceOrderBase):
 
 
 class ServiceOrderUpdate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     subscriber_id: UUID | None = Field(
         default=None, validation_alias="account_id", serialization_alias="account_id"
     )
     subscription_id: UUID | None = None
+    sales_order_id: UUID | None = None
+    sales_order_line_id: UUID | None = None
     requested_by_contact_id: UUID | None = None
     status: ServiceOrderStatus | None = None
     order_type: ServiceOrderType | None = None

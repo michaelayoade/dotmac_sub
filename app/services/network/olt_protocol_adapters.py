@@ -18,6 +18,12 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from app.services.adapters.base import AdapterResult
+from app.services.network.huawei_cli_response import (
+    HuaweiCliErrorCode,
+    HuaweiCliResource,
+    classify_huawei_cli_response,
+    is_huawei_resource_absent,
+)
 
 if TYPE_CHECKING:
     from app.models.network import OLTDevice
@@ -43,6 +49,16 @@ class OltOperationResult(AdapterResult):
 
     # For create_service_port: the assigned service-port index
     service_port_index: int | None = None
+
+    def __post_init__(self) -> None:
+        """Attach sanitized Huawei response evidence before callers project it."""
+        response = classify_huawei_cli_response(self.message)
+        if response.error_code == HuaweiCliErrorCode.NONE:
+            return
+        self.data = dict(self.data or {})
+        self.data.setdefault("huawei_cli_response", response.to_evidence())
+        if self.error_code is None:
+            self.error_code = response.error_code.value
 
 
 @runtime_checkable
@@ -307,12 +323,45 @@ class OltProtocolAdapter:
             )
 
     def deauthorize_ont(self, fsp: str, ont_id: int) -> OltOperationResult:
-        """Deauthorize ONT via SSH CLI."""
-        from app.services.network.olt_ssh_ont import deauthorize_ont
+        """Deauthorize an ONT and verify that it is absent on readback."""
+        from app.services.network.olt_ssh_ont import (
+            deauthorize_ont,
+            get_ont_status,
+        )
 
         try:
             ok, message = deauthorize_ont(self._olt, fsp, ont_id)
-            return OltOperationResult(success=ok, message=message)
+            if not ok:
+                return OltOperationResult(success=False, message=message)
+
+            read_ok, read_message, status = get_ont_status(self._olt, fsp, ont_id)
+            if read_ok and status is not None:
+                return OltOperationResult(
+                    success=False,
+                    message=(
+                        f"{message}; verification failed: ONT {ont_id} still exists "
+                        f"on {fsp}"
+                    ),
+                    data={"verified_absent": False},
+                )
+            absent = is_huawei_resource_absent(
+                read_message,
+                HuaweiCliResource.ONT,
+            )
+            if not absent:
+                return OltOperationResult(
+                    success=False,
+                    message=(
+                        f"{message}; deauthorization was accepted but absence "
+                        f"readback failed: {read_message}"
+                    ),
+                    data={"verified_absent": False},
+                )
+            return OltOperationResult(
+                success=True,
+                message=f"{message}; verified absent on OLT readback",
+                data={"verified_absent": True},
+            )
         except Exception as exc:
             logger.exception("SSH deauthorize_ont failed")
             return OltOperationResult(
@@ -499,14 +548,45 @@ class OltProtocolAdapter:
             )
 
     def delete_service_port(self, port_index: int) -> OltOperationResult:
-        """Delete service port via SSH CLI."""
+        """Delete a service port and verify that it is absent on readback."""
         from app.services.network.olt_ssh_service_ports import (
             delete_service_port as ssh_delete,
+        )
+        from app.services.network.olt_ssh_service_ports import (
+            get_service_port_by_index,
         )
 
         try:
             ok, message = ssh_delete(self._olt, port_index)
-            return OltOperationResult(success=ok, message=message)
+            if not ok:
+                return OltOperationResult(success=False, message=message)
+
+            read_ok, read_message, entry = get_service_port_by_index(
+                self._olt, port_index
+            )
+            absent = (read_ok and entry is None) or (
+                not read_ok
+                and is_huawei_resource_absent(
+                    read_message,
+                    HuaweiCliResource.SERVICE_PORT,
+                )
+            )
+            if not absent:
+                detail = (
+                    f"service-port {port_index} still exists"
+                    if entry is not None
+                    else f"absence readback failed: {read_message}"
+                )
+                return OltOperationResult(
+                    success=False,
+                    message=f"{message}; verification failed: {detail}",
+                    data={"verified_absent": False},
+                )
+            return OltOperationResult(
+                success=True,
+                message=f"{message}; verified absent on OLT readback",
+                data={"verified_absent": True},
+            )
         except Exception as exc:
             return OltOperationResult.from_exception(
                 exc,

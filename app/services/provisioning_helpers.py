@@ -6,7 +6,7 @@ from typing import cast
 from urllib.parse import urlparse
 
 from fastapi import HTTPException
-from sqlalchemy import and_
+from sqlalchemy import and_, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -14,22 +14,17 @@ from app.models.catalog import Subscription
 from app.models.connector import ConnectorConfig
 from app.models.domain_settings import SettingDomain
 from app.models.network import (
-    CPEDevice,
-    DeviceStatus,
     IPAssignment,
     IpPool,
     IPv4Address,
     IPv6Address,
     IPVersion,
-    OLTDevice,
-    OntUnit,
 )
 from app.models.provisioning import (
     ProvisioningVendor,
     ProvisioningWorkflow,
     ServiceOrder,
 )
-from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
 from app.schemas.network import IPAssignmentCreate
 from app.services import network as network_service
 from app.services import settings_spec
@@ -37,7 +32,7 @@ from app.services.common import (
     coerce_uuid,
     validate_enum,
 )
-from app.services.credential_crypto import decrypt_credential
+from app.services.provisioning_context import extend_provisioning_context
 from app.services.secrets import resolve_secret
 
 logger = logging.getLogger(__name__)
@@ -108,6 +103,24 @@ def _resolve_pool_for_version(
     pool_id: str | None,
     nas_device_id: str | None = None,
 ) -> IpPool | None:
+    nas = None
+    allowed_pool_ids: set[str] = set()
+    nas_uuid = None
+    if nas_device_id:
+        from app.models.catalog import NasDevice
+        from app.services.nas import radius_pool_ids_from_tags
+
+        try:
+            nas_uuid = coerce_uuid(nas_device_id)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=400, detail="Invalid NAS device ID."
+            ) from exc
+        nas = db.get(NasDevice, nas_uuid)
+        if nas is None:
+            raise HTTPException(status_code=404, detail="NAS device not found.")
+        allowed_pool_ids = set(radius_pool_ids_from_tags(nas.tags))
+
     if pool_id:
         try:
             pool_uuid = coerce_uuid(pool_id)
@@ -116,21 +129,32 @@ def _resolve_pool_for_version(
         pool = cast(IpPool | None, db.get(IpPool, pool_uuid))
         if not pool or pool.ip_version != ip_version:
             raise HTTPException(status_code=404, detail="IP pool not found.")
+        if nas_uuid is not None and not (
+            str(pool.id) in allowed_pool_ids or pool.nas_device_id == nas_uuid
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="IP pool is not assigned to the subscription's BNG.",
+            )
         return pool
 
-    # Prefer a pool linked to the subscriber's NAS device
-    if nas_device_id:
+    if nas_uuid is not None:
+        # NAS tags are the admin UI's many-to-many RADIUS pool assignment.
+        # The direct pool FK remains supported for legacy records. Never fall
+        # through to a global pool for a BNG-bound subscription.
+        ownership = [IpPool.nas_device_id == nas_uuid]
+        if allowed_pool_ids:
+            ownership.append(IpPool.id.in_([coerce_uuid(v) for v in allowed_pool_ids]))
         nas_pool = cast(
             IpPool | None,
             db.query(IpPool)
             .filter(IpPool.ip_version == ip_version)
             .filter(IpPool.is_active.is_(True))
-            .filter(IpPool.nas_device_id == coerce_uuid(nas_device_id))
+            .filter(or_(*ownership))
             .order_by(IpPool.name.asc())
             .first(),
         )
-        if nas_pool:
-            return nas_pool
+        return nas_pool
 
     # Fallback: first active pool (alphabetical)
     return cast(
@@ -564,14 +588,19 @@ def _ensure_ip_assignment_for_version(
         if (address.assignment and address.assignment.is_active)
         else None
     )
-    if (
-        active_assignment
-        and active_assignment.subscriber_id != subscription.subscriber_id
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail=f"{version_key} address is already assigned.",
+    if active_assignment:
+        same_subscription = active_assignment.subscription_id == subscription.id
+        legacy_same_subscriber = (
+            active_assignment.subscription_id is None
+            and active_assignment.subscriber_id == subscription.subscriber_id
         )
+        if not same_subscription and not legacy_same_subscriber:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{version_key} address is already assigned.",
+            )
+        if legacy_same_subscriber:
+            active_assignment.subscription_id = subscription.id
 
     if active_assignment:
         assignment = active_assignment
@@ -647,84 +676,7 @@ def _extend_provisioning_context(
     subscription_id: str | None,
     context: dict,
 ) -> dict:
-    if not subscription_id:
-        return context
-    subscription = db.get(Subscription, coerce_uuid(subscription_id))
-    if not subscription:
-        return context
-    device = (
-        db.query(CPEDevice)
-        .filter(CPEDevice.subscriber_id == subscription.subscriber_id)
-        .filter(CPEDevice.status == DeviceStatus.active)
-        .order_by(CPEDevice.created_at.desc())
-        .first()
-    )
-    if not device:
-        return context
-    context.update(
-        {
-            "cpe_device_id": str(device.id),
-            "cpe_serial_number": device.serial_number,
-        }
-    )
-    tr069_device = None
-    if device.id:
-        tr069_device = (
-            db.query(Tr069CpeDevice)
-            .filter(Tr069CpeDevice.cpe_device_id == device.id)
-            .first()
-        )
-    if not tr069_device and device.serial_number:
-        tr069_device = (
-            db.query(Tr069CpeDevice)
-            .filter(Tr069CpeDevice.serial_number == device.serial_number)
-            .filter(Tr069CpeDevice.is_active.is_(True))
-            .first()
-        )
-    if tr069_device:
-        context.update(
-            {
-                "tr069_cpe_device_id": str(tr069_device.id),
-                "tr069_serial_number": tr069_device.serial_number,
-                "tr069_oui": tr069_device.oui,
-                "tr069_product_class": tr069_device.product_class,
-                "tr069_acs_server_id": str(tr069_device.acs_server_id),
-            }
-        )
-        if (
-            tr069_device.oui
-            and tr069_device.product_class
-            and tr069_device.serial_number
-        ):
-            context["genieacs_device_id"] = (
-                f"{tr069_device.oui}-{tr069_device.product_class}-{tr069_device.serial_number}"
-            )
-
-    # Resolve ACS server details for ManagementServer push
-    acs_server_id = context.get("tr069_acs_server_id")
-    if not acs_server_id and context.get("ont_id"):
-        ont = db.get(OntUnit, context["ont_id"])
-        if ont and ont.olt_device_id:
-            olt = db.get(OLTDevice, str(ont.olt_device_id))
-            if olt and olt.tr069_acs_server_id:
-                acs_server_id = str(olt.tr069_acs_server_id)
-    if not acs_server_id:
-        default_id = settings_spec.resolve_value(
-            db, SettingDomain.tr069, "default_acs_server_id"
-        )
-        if default_id:
-            acs_server_id = str(default_id)
-
-    if acs_server_id:
-        acs_server = db.get(Tr069AcsServer, acs_server_id)
-        if acs_server and acs_server.cwmp_url:
-            context["acs_server"] = {
-                "cwmp_url": acs_server.cwmp_url,
-                "cwmp_username": acs_server.cwmp_username,
-                "cwmp_password": decrypt_credential(acs_server.cwmp_password),
-            }
-
-    return context
+    return extend_provisioning_context(db, subscription_id, context)
 
 
 def resolve_workflow_for_service_order(

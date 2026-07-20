@@ -22,10 +22,8 @@ from decimal import Decimal
 from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription
-from app.models.domain_settings import SettingDomain
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.subscriber import Subscriber
-from app.services import settings_spec
 from app.services.account_lifecycle import (
     SUSPENDED_EQUIVALENT,
     compute_account_status,
@@ -34,7 +32,10 @@ from app.services.account_lifecycle import (
     resolve_locks_for_trigger,
     restore_subscription,
 )
-from app.services.collections import get_available_balance, has_overdue_balance
+from app.services.collections import has_overdue_balance
+from app.services.customer_financial_position import (
+    get_native_customer_financial_balance,
+)
 
 _TRIGGER = "admin"
 _RESOLVED_BY = "stale_overdue_lock_reconcile"
@@ -62,20 +63,24 @@ class ReconcileResult:
     items: list[ReconcileItem] = field(default_factory=list)
 
 
-def _minimum_required_balance(db: Session, subscriber_id) -> Decimal:
-    account = db.get(Subscriber, subscriber_id)
-    if account is not None and account.min_balance is not None:
-        return Decimal(str(account.min_balance))
-    default = settings_spec.resolve_value(
-        db, SettingDomain.collections, "prepaid_default_min_balance"
-    )
-    return Decimal(str(default)) if default is not None else Decimal("0.00")
-
-
 def _ledger_covers_account(db: Session, subscriber_id) -> tuple[bool, Decimal, Decimal]:
-    available = Decimal(str(get_available_balance(db, str(subscriber_id))))
-    threshold = _minimum_required_balance(db, subscriber_id)
-    return available >= threshold, available, threshold
+    """Decide an overdue repair from the native signed receivable position.
+
+    The reason being reconciled is ``overdue``, so billing mode does not change
+    the decision owner. Prepaid affordability belongs to the separate prepaid
+    lock resolver. Archived Splynx transactions are never a runtime fallback.
+    """
+    account = db.get(Subscriber, subscriber_id)
+    if account is None:
+        return False, Decimal("0.00"), Decimal("0.00")
+    position = get_native_customer_financial_balance(db, account.id)
+    if not position.automation_safe:
+        return False, position.available_balance, Decimal("0.00")
+    return (
+        position.available_balance >= Decimal("0.00"),
+        position.available_balance,
+        Decimal("0.00"),
+    )
 
 
 def find_candidates(
@@ -111,9 +116,11 @@ def reconcile(
 
     Default mode restores only accounts with no overdue debt. With
     ``restore_ledger_covered=True``, accounts that still have overdue invoice
-    rows are also eligible when local available balance covers their minimum
-    required balance. That is the production repair for pre-gate dunning locks:
-    it resolves the enforcement lock without changing invoices or money.
+    rows are also eligible when the native signed financial position is
+    non-negative. That is the production repair for pre-gate dunning locks: it
+    resolves the enforcement lock without changing invoices or money. Archived
+    Splynx rows and prepaid affordability thresholds are not inputs to an
+    ``overdue``-reason repair.
     """
     candidates = find_candidates(db, sub_ids=sub_ids, limit=limit)
     result = ReconcileResult(applied=apply, candidates=0)

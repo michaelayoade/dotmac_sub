@@ -1,0 +1,33 @@
+{% extends "vendor/base.html" %}
+{% block title %}Confirm action{% endblock %}
+{% block vendor_content %}
+<div class="mx-auto max-w-2xl">
+  <a href="/vendor/projects/{{ proposal.project_id }}" class="mb-4 inline-flex text-sm font-semibold text-teal-700">← Back to project</a>
+  <section class="overflow-hidden rounded-xl border border-amber-200 bg-white shadow-sm dark:border-amber-900/60 dark:bg-slate-900">
+    <div class="border-b border-amber-200 bg-amber-50 px-6 py-5 dark:border-amber-900/60 dark:bg-amber-950/30">
+      <p class="text-xs font-bold uppercase tracking-wide text-amber-700 dark:text-amber-300">Review required</p>
+      <h1 class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{{ proposal.title }}</h1>
+      <p class="mt-2 text-sm text-slate-600 dark:text-slate-300">{{ proposal.summary }}</p>
+    </div>
+    <dl class="divide-y divide-slate-100 px-6 dark:divide-slate-800">
+      {% for label, value in proposal.details %}
+      <div class="grid gap-1 py-4 sm:grid-cols-[10rem_1fr]">
+        <dt class="text-sm font-semibold text-slate-600 dark:text-slate-300">{{ label }}</dt>
+        <dd class="text-sm text-slate-900 dark:text-white">{{ value }}</dd>
+      </div>
+      {% endfor %}
+    </dl>
+    <div class="border-t border-slate-200 px-6 py-5 dark:border-slate-800">
+      <p class="mb-4 text-sm text-slate-600 dark:text-slate-300">Confirm only if this impact is correct. If the underlying project or evidence changes, this confirmation will be rejected and must be previewed again.</p>
+      <div class="flex flex-wrap justify-end gap-3">
+        <a href="/vendor/projects/{{ proposal.project_id }}" class="rounded-md border border-slate-300 px-4 py-2 font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200">Cancel</a>
+        <form method="post" action="/vendor/projects/{{ proposal.project_id }}/submissions/confirm">
+          <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+          <input type="hidden" name="confirmation_token" value="{{ proposal.confirmation_token }}">
+          <button class="rounded-md bg-teal-600 px-5 py-2 font-semibold text-white hover:bg-teal-700">{{ proposal.confirmation_label }}</button>
+        </form>
+      </div>
+    </div>
+  </section>
+</div>
+{% endblock %}

@@ -67,6 +67,9 @@ def topology_gaps_page(
 def device_status_worklist_page(
     request: Request,
     reason: str | None = None,
+    search: str | None = None,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(25, ge=10, le=100),
     db: Session = Depends(get_db),
 ):
     """Inventory-hygiene queue: devices whose admin status conflicts with what
@@ -75,7 +78,13 @@ def device_status_worklist_page(
     from app.services.device_operational_status import mismatch_worklist
 
     context = _base_context(request, db, active_page="monitoring")
-    context["worklist"] = mismatch_worklist(db, reason=reason)
+    context["worklist"] = mismatch_worklist(
+        db,
+        reason=reason,
+        search=search,
+        page=page,
+        per_page=per_page,
+    )
     return templates.TemplateResponse(
         "admin/network/device_status_worklist.html", context
     )
@@ -183,20 +192,35 @@ def outage_impact_page(
     request: Request,
     basestation_id: str | None = None,
     node_id: str | None = None,
+    fdh_id: str | None = None,
     db: Session = Depends(get_db),
 ):
-    """Read-only outage impact preview: pick a basestation/node -> affected
+    """Read-only outage impact preview: pick infrastructure -> affected
     active subscriptions. No incident is created (that's the outage console)."""
     import uuid as _uuid
 
+    from app.models.network import FdhCabinet
     from app.models.network_monitoring import NetworkDevice, PopSite
-    from app.services.topology.affected import affected_customers, list_basestations
+    from app.services.topology.affected import (
+        affected_customers,
+        fdh_impact_branches,
+        fdh_impact_rows,
+        impact_breakdown,
+        list_basestations,
+        list_fdh_cabinets,
+        list_network_nodes,
+    )
 
     context = _base_context(request, db, active_page="monitoring")
     context["basestations"] = list_basestations(db)
+    context["fdh_cabinets"] = list_fdh_cabinets(db)
+    context["network_nodes"] = list_network_nodes(db)
     context["selected_basestation_id"] = basestation_id
+    context["selected_node_id"] = node_id
+    context["selected_fdh_id"] = fdh_id
     target = None
     result = None
+    detailed_rows = None
     try:
         if basestation_id:
             pop = db.get(PopSite, _uuid.UUID(basestation_id))
@@ -208,23 +232,37 @@ def outage_impact_page(
             if node is not None:
                 target = f"Node: {node.name}"
                 result = affected_customers(db, node=node)
+        elif fdh_id:
+            fdh = db.get(FdhCabinet, _uuid.UUID(fdh_id))
+            if fdh is not None:
+                label = fdh.code or fdh.name
+                target = f"FDH Cabinet: {label}"
+                result = affected_customers(db, fdh=fdh)
+                detailed_rows = fdh_impact_rows(db, fdh)
     except (ValueError, TypeError):
         target = None
     context["target"] = target
     if result is not None:
         context["impact_count"] = result["count"]
-        context["impact_rows"] = [
-            {
-                "id": s.id,
-                "subscriber": (
-                    f"{s.subscriber.first_name} {s.subscriber.last_name}"
-                    if s.subscriber
-                    else "—"
-                ),
-                "email": s.subscriber.email if s.subscriber else "",
-            }
-            for s in result["subscriptions"]
-        ]
+        if detailed_rows is not None:
+            context["impact_rows"] = detailed_rows
+            context["impact_detail_mode"] = "fdh"
+            context["impact_branches"] = fdh_impact_branches(detailed_rows)
+        else:
+            context["impact_rows"] = [
+                {
+                    "subscription_id": s.id,
+                    "subscriber_name": (
+                        f"{s.subscriber.first_name} {s.subscriber.last_name}"
+                        if s.subscriber
+                        else "—"
+                    ),
+                    "email": s.subscriber.email if s.subscriber else "",
+                }
+                for s in result["subscriptions"]
+            ]
+            context["impact_detail_mode"] = "basic"
+            context["impact_branches"] = impact_breakdown(db, result)
     return templates.TemplateResponse("admin/network/outage_impact.html", context)
 
 
@@ -243,25 +281,56 @@ def _actor(request: Request) -> str | None:
     dependencies=[Depends(require_permission("monitoring:read"))],
 )
 def outages_console(request: Request, db: Session = Depends(get_db)):
-    """Manual outage console: declare against a basestation, list/resolve open
+    """Manual outage console: declare against infrastructure, list/resolve open
     incidents. No auto-detection, no notification sending."""
+    from app.models.network import FdhCabinet
     from app.models.network_monitoring import NetworkDevice, PopSite
-    from app.services.topology.affected import list_basestations
-    from app.services.topology.outage import is_stale_open, list_open_incidents
+    from app.services.operational_escalation_delivery import delivery_audit_for_entity
+    from app.services.status_presentation import outage_status_presentation
+    from app.services.topology.affected import (
+        list_basestations,
+        list_fdh_cabinets,
+        list_network_nodes,
+    )
+    from app.services.topology.outage import (
+        is_stale_open,
+        list_operator_open_incidents,
+    )
+    from app.services.topology.reachability import reachability_overview
 
     context = _base_context(request, db, active_page="monitoring")
+    # Root-cause view of everything currently down: devices behind a down
+    # parent are unreachable, not independent outages (one failure, not N).
+    context["reachability"] = reachability_overview(db)
     context["basestations"] = list_basestations(db)
+    context["fdh_cabinets"] = list_fdh_cabinets(db)
+    context["network_nodes"] = list_network_nodes(db)
     rows = []
-    for inc in list_open_incidents(db):
+    for inc in list_operator_open_incidents(db):
         if inc.basestation_id is not None:
             pop = db.get(PopSite, inc.basestation_id)
             target = f"BTS: {pop.name}" if pop else "BTS"
+        elif getattr(inc, "fdh_cabinet_id", None) is not None:
+            fdh = db.get(FdhCabinet, inc.fdh_cabinet_id)
+            target = f"FDH: {fdh.code or fdh.name}" if fdh else "FDH"
         elif inc.root_node_id is not None:
             node = db.get(NetworkDevice, inc.root_node_id)
             target = f"Node: {node.name}" if node else "Node"
         else:
             target = "—"
-        rows.append({"incident": inc, "target": target, "stale": is_stale_open(inc)})
+        rows.append(
+            {
+                "incident": inc,
+                "target": target,
+                "stale": is_stale_open(inc),
+                "status_presentation": outage_status_presentation(inc.status),
+                "delivery_audit": delivery_audit_for_entity(
+                    db,
+                    entity_type="outage",
+                    entity_id=inc.id,
+                ),
+            }
+        )
     context["incidents"] = rows
     return templates.TemplateResponse("admin/network/outages.html", context)
 
@@ -272,21 +341,43 @@ def outages_console(request: Request, db: Session = Depends(get_db)):
 )
 def outages_declare(
     request: Request,
-    basestation_id: str = Form(...),
+    basestation_id: str | None = Form(default=None),
+    node_id: str | None = Form(default=None),
+    fdh_id: str | None = Form(default=None),
     note: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
     import uuid as _uuid
 
-    from app.models.network_monitoring import PopSite
+    from app.models.network import FdhCabinet
+    from app.models.network_monitoring import NetworkDevice, PopSite
     from app.services.topology.outage import declare_outage
 
+    declared = False
     try:
-        pop = db.get(PopSite, _uuid.UUID(basestation_id))
+        pop = db.get(PopSite, _uuid.UUID(basestation_id)) if basestation_id else None
     except (ValueError, TypeError):
         pop = None
     if pop is not None:
         declare_outage(db, basestation=pop, declared_by=_actor(request), note=note)
+        declared = True
+    if not declared:
+        try:
+            node = db.get(NetworkDevice, _uuid.UUID(node_id)) if node_id else None
+        except (ValueError, TypeError):
+            node = None
+        if node is not None:
+            declare_outage(db, node=node, declared_by=_actor(request), note=note)
+            declared = True
+    if not declared:
+        try:
+            fdh = db.get(FdhCabinet, _uuid.UUID(fdh_id)) if fdh_id else None
+        except (ValueError, TypeError):
+            fdh = None
+        if fdh is not None:
+            declare_outage(db, fdh=fdh, declared_by=_actor(request), note=note)
+            declared = True
+    if declared:
         db.commit()
     return RedirectResponse("/admin/network/outages", status_code=303)
 
@@ -309,6 +400,248 @@ def outages_resolve(incident_id: str, request: Request, db: Session = Depends(ge
 
 
 @router.get(
+    "/detected-outages",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
+def detected_outages_console(
+    request: Request,
+    node_id: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """Classifier-driven outage console (design §P4a).
+
+    PRIMARY source is the PERSISTED, debounced classifier incidents from the
+    §7.6 reconcile loop (suspected/confirmed/clearing) — the debounced truth,
+    not the raw live-computed verdict. The live P1/P2/P3 verdict is kept as a
+    clearly-separate SECONDARY "candidates" view (raw, un-debounced). Optional
+    ``node_id`` drills into one failure domain (per-customer P2 verdicts + P3
+    branch alerts). No operator declaration, no notification sending here."""
+    import uuid as _uuid
+
+    from app.models.network_monitoring import NetworkDevice, PopSite
+    from app.services.status_presentation import outage_status_presentation
+    from app.services.topology.outage import (
+        list_classifier_incidents,
+        mttr_so_far_seconds,
+    )
+    from app.services.topology.outage_console import (
+        active_outages,
+        network_health_summary,
+        outage_detail,
+    )
+
+    context = _base_context(request, db, active_page="monitoring")
+
+    # Primary: persisted debounced classifier incidents (newest first).
+    incident_rows = []
+    for inc in list_classifier_incidents(db):
+        node = (
+            db.get(NetworkDevice, inc.root_node_id)
+            if inc.root_node_id is not None
+            else None
+        )
+        basestation = None
+        if inc.basestation_id is not None:
+            basestation = db.get(PopSite, inc.basestation_id)
+        elif node is not None and node.pop_site_id is not None:
+            basestation = db.get(PopSite, node.pop_site_id)
+        incident_rows.append(
+            {
+                "incident": inc,
+                "state": inc.status,
+                "status_presentation": outage_status_presentation(inc.status),
+                "detection_source": inc.detection_source,
+                "affected_count": inc.affected_count,
+                "confidence": inc.confidence,
+                "classification": inc.classification,
+                "node_name": getattr(node, "name", None),
+                "basestation_name": getattr(basestation, "name", None),
+                "suspected_at": inc.suspected_at,
+                "confirmed_at": inc.confirmed_at,
+                "mttr_so_far_seconds": mttr_so_far_seconds(inc),
+            }
+        )
+    context["classifier_incidents"] = incident_rows
+
+    # Secondary: raw live-computed candidates (un-debounced) + self-heal queue.
+    context["summary"] = network_health_summary(db)
+    context["active"] = active_outages(db)
+    detail = None
+    if node_id:
+        try:
+            detail = outage_detail(db, _uuid.UUID(node_id))
+        except (ValueError, TypeError):
+            detail = None
+    context["detail"] = detail
+    return templates.TemplateResponse("admin/network/detected_outages.html", context)
+
+
+def _actor_id(request: Request):
+    """Current operator's user id (uuid) for outage-notify audit, or None."""
+    import uuid as _uuid
+
+    from app.web.admin import get_current_user
+
+    user = get_current_user(request)
+    raw = user.get("id") if isinstance(user, dict) else getattr(user, "id", None)
+    try:
+        return _uuid.UUID(str(raw)) if raw else None
+    except (ValueError, TypeError):
+        return None
+
+
+def _incident_boundary_and_subscription_ids(db: Session, incident_id: str | None):
+    """Resolve a notifiable classifier incident + affected subscription ids."""
+    import uuid as _uuid
+
+    from app.models.network import FdhCabinet
+    from app.models.network_monitoring import NetworkDevice, OutageIncident, PopSite
+    from app.services.topology.affected import affected_customers
+    from app.services.topology.outage import (
+        CLASSIFIER_CUSTOMER_VISIBLE_STATUSES,
+        CLASSIFIER_SOURCE,
+    )
+
+    try:
+        incident = (
+            db.get(OutageIncident, _uuid.UUID(incident_id)) if incident_id else None
+        )
+    except (ValueError, TypeError):
+        incident = None
+    if (
+        incident is None
+        or incident.detection_source != CLASSIFIER_SOURCE
+        or incident.status not in CLASSIFIER_CUSTOMER_VISIBLE_STATUSES
+    ):
+        return None, None, []
+    node = (
+        db.get(NetworkDevice, incident.root_node_id)
+        if incident.root_node_id is not None
+        else None
+    )
+    basestation = (
+        db.get(PopSite, incident.basestation_id)
+        if incident.basestation_id is not None
+        else None
+    )
+    fdh = (
+        db.get(FdhCabinet, incident.fdh_cabinet_id)
+        if incident.fdh_cabinet_id is not None
+        else None
+    )
+    if node is None and basestation is None and fdh is None:
+        return incident, None, []
+    impact = affected_customers(db, node=node, basestation=basestation, fdh=fdh)
+    sub_ids = [s.id for s in impact["subscriptions"]]
+    boundary = node or basestation or fdh
+    return incident, boundary, sub_ids
+
+
+@router.get(
+    "/detected-outages/notify",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
+def detected_outage_notify_preview(
+    request: Request,
+    incident_id: str,
+    db: Session = Depends(get_db),
+):
+    """Preview the outage notification plan for one boundary (design §P4).
+
+    Read-only: shows who *would* be emailed (area vs per-customer, opt-out
+    suppressed, qualifies/debounced) and the current OUTAGE_NOTIFY_ENABLED
+    state. Never sends — the confirm POST is the only dispatch path."""
+    from app.services.status_presentation import outage_status_presentation
+    from app.services.topology.outage_notifications import (
+        plan_outage_notifications,
+        recent_dispatches,
+    )
+
+    context = _base_context(request, db, active_page="monitoring")
+    incident, boundary, sub_ids = _incident_boundary_and_subscription_ids(
+        db, incident_id
+    )
+    context["incident"] = incident
+    if incident is not None:
+        context["incident_status_presentation"] = outage_status_presentation(
+            incident.status
+        )
+    context["boundary"] = boundary
+    context["incident_id"] = str(incident.id) if incident is not None else incident_id
+    if incident is None or boundary is None:
+        return templates.TemplateResponse(
+            "admin/network/detected_outages_notify.html", context, status_code=404
+        )
+    context["plan"] = plan_outage_notifications(db, sub_ids, incident_id=incident.id)
+    context["recent"] = recent_dispatches(db, incident.id)
+    return templates.TemplateResponse(
+        "admin/network/detected_outages_notify.html", context
+    )
+
+
+@router.post(
+    "/detected-outages/notify",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:write"))],
+)
+def detected_outage_notify_send(
+    request: Request,
+    incident_id: str = Form(...),
+    confirm: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+):
+    """Confirm + dispatch outage notifications for one boundary (design §P4).
+
+    The ONLY path that dispatches. Requires an explicit ``confirm=send`` (a
+    stray navigation never sends) and passes the operator's ``actor_id`` to the
+    hard-gated dispatcher, which itself no-ops unless OUTAGE_NOTIFY_ENABLED is
+    on. COMMITS the session so audit rows + the persisted debounce survive."""
+    from app.services.status_presentation import outage_status_presentation
+    from app.services.topology.outage_notifications import (
+        dispatch_outage_notifications,
+        plan_outage_notifications,
+        recent_dispatches,
+    )
+
+    incident, boundary, sub_ids = _incident_boundary_and_subscription_ids(
+        db, incident_id
+    )
+    if incident is None or boundary is None:
+        return RedirectResponse("/admin/network/detected-outages", status_code=303)
+
+    context = _base_context(request, db, active_page="monitoring")
+    context["incident"] = incident
+    context["incident_status_presentation"] = outage_status_presentation(
+        incident.status
+    )
+    context["boundary"] = boundary
+    context["incident_id"] = str(incident.id)
+    if confirm != "send":
+        # No explicit confirmation — re-show the preview, dispatch nothing.
+        context["plan"] = plan_outage_notifications(
+            db, sub_ids, incident_id=incident.id
+        )
+        context["recent"] = recent_dispatches(db, incident.id)
+        context["needs_confirm"] = True
+        return templates.TemplateResponse(
+            "admin/network/detected_outages_notify.html", context
+        )
+
+    result = dispatch_outage_notifications(
+        db, sub_ids, actor_id=_actor_id(request), incident_id=incident.id
+    )
+    db.commit()
+    context["result"] = result
+    context["plan"] = plan_outage_notifications(db, sub_ids, incident_id=incident.id)
+    context["recent"] = recent_dispatches(db, incident.id)
+    return templates.TemplateResponse(
+        "admin/network/detected_outages_notify.html", context
+    )
+
+
+@router.get(
     "/monitoring",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("monitoring:read"))],
@@ -317,6 +650,8 @@ def monitoring_page(
     request: Request,
     q: str | None = None,
     refresh: str | None = None,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=10, le=100),
     db: Session = Depends(get_db),
 ):
     force_refresh = (refresh or "").strip().lower() in {"1", "true", "yes", "on"}
@@ -330,6 +665,8 @@ def monitoring_page(
         format_duration=_format_duration,
         format_bps=_format_bps,
         query=q,
+        page=page,
+        per_page=per_page,
     )
     context = _base_context(request, db, active_page="monitoring")
     context.update(page_data)
@@ -381,12 +718,16 @@ def alarms_page(
     request: Request,
     severity: str | None = None,
     status: str | None = None,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(25, ge=10, le=100),
     db: Session = Depends(get_db),
 ):
     page_data = web_network_monitoring_service.alarms_page_data(
         db,
         severity=severity,
         status=status,
+        page=page,
+        per_page=per_page,
     )
     context = _base_context(request, db, active_page="monitoring")
     context.update(page_data)

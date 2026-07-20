@@ -94,7 +94,7 @@
                     </div>
                     <div class="rounded-xl bg-stone-50 p-4 dark:bg-stone-700/30">
                         <p class="text-xs font-medium text-stone-500 dark:text-stone-400">Next Bill</p>
-                        <p class="mt-1 text-lg font-semibold text-stone-900 dark:text-white">{{ service.next_billing_at.strftime('%b %d') if service.next_billing_at else 'N/A' }}</p>
+                        <p class="mt-1 text-lg font-semibold text-stone-900 dark:text-white">{{ service.next_billing_at | portal_datetime('%b %d', 'N/A') }}</p>
                     </div>
                 </div>
 

@@ -69,39 +69,140 @@
                 </div>
             </form>
 
-            <!-- Change Password -->
-            <form method="POST" action="/admin/system/users/profile/password" class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
-                {% include "components/forms/csrf_input.html" %}
-                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
-                    <h2 class="font-semibold text-slate-900 dark:text-white">Change Password</h2>
+            {% if device_login_eligible %}
+            <!-- Router Device Login -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="flex flex-col gap-3 border-b border-slate-200 px-6 py-4 dark:border-slate-700 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                        <h2 class="font-semibold text-slate-900 dark:text-white">Router Device Login</h2>
+                        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">MikroTik RADIUS login credentials</p>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span class="inline-flex items-center rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-800 dark:bg-blue-900/30 dark:text-blue-300">{{ device_login_tier }}</span>
+                        {% if device_login_enabled %}
+                        <span class="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800 dark:bg-green-900/30 dark:text-green-300">enabled</span>
+                        {% elif device_login_revoked_at %}
+                        <span class="inline-flex items-center rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/30 dark:text-red-300">revoked</span>
+                        {% else %}
+                        <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-400">not set</span>
+                        {% endif %}
+                    </div>
                 </div>
-                <div class="p-6 space-y-6">
-                    <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
-                        <div class="sm:col-span-2">
-                            <label for="current_password" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Current Password</label>
-                            <input type="password" name="current_password" id="current_password"
-                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <div class="p-6 space-y-5">
+                    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                        <div>
+                            <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Credential</p>
+                            <p class="mt-1 text-sm text-slate-900 dark:text-white">
+                                {% if device_login_secret_set_at %}
+                                Last rotated {{ device_login_secret_set_at | app_datetime('%B %d, %Y at %H:%M') }}
+                                {% else %}
+                                Not set
+                                {% endif %}
+                            </p>
                         </div>
                         <div>
-                            <label for="new_password" class="block text-sm font-medium text-slate-700 dark:text-slate-300">New Password</label>
-                            <input type="password" name="new_password" id="new_password"
-                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                        </div>
-                        <div>
-                            <label for="confirm_password" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Confirm New Password</label>
-                            <input type="password" name="confirm_password" id="confirm_password"
-                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">RADIUS Sync</p>
+                            <p class="mt-1 text-sm text-slate-900 dark:text-white">
+                                {% if device_login_sync_status %}
+                                {{ device_login_sync_status.status }}{% if device_login_sync_status.synced_at %} at {{ device_login_sync_status.synced_at }}{% endif %}
+                                {% else %}
+                                No sync recorded
+                                {% endif %}
+                            </p>
                         </div>
                     </div>
 
-                    <div class="flex justify-end">
-                        <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
-                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
-                            Update Password
-                        </button>
-                    </div>
+                    <form method="POST" action="/admin/system/users/profile/device-login" class="space-y-4">
+                        {% include "components/forms/csrf_input.html" %}
+                        <input type="hidden" name="device_login_action" value="set">
+                        <div>
+                            <label for="device_login_current_password" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Current Account Password</label>
+                            <input type="password" name="current_password" id="device_login_current_password" autocomplete="current-password"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+                        <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                            <div>
+                                <label for="device_login_secret" class="block text-sm font-medium text-slate-700 dark:text-slate-300">New Router Password</label>
+                                <input type="password" name="device_login_secret" id="device_login_secret" autocomplete="new-password"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            </div>
+                            <div>
+                                <label for="device_login_secret_confirm" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Confirm Router Password</label>
+                                <input type="password" name="device_login_secret_confirm" id="device_login_secret_confirm" autocomplete="new-password"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            </div>
+                        </div>
+                        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
+                            {% if device_login_enabled %}
+                            <span class="text-xs text-slate-500 dark:text-slate-400">Saving rotates the active router password.</span>
+                            {% endif %}
+                            <button type="submit" class="inline-flex items-center justify-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                                {{ 'Rotate Router Password' if device_login_enabled else 'Set Router Password' }}
+                            </button>
+                        </div>
+                    </form>
+
+                    {% if device_login_enabled %}
+                    <form method="POST" action="/admin/system/users/profile/device-login" class="border-t border-slate-200 pt-5 dark:border-slate-700">
+                        {% include "components/forms/csrf_input.html" %}
+                        <input type="hidden" name="device_login_action" value="revoke">
+                        <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                            <div class="sm:max-w-sm">
+                                <label for="device_login_revoke_current_password" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Current Account Password</label>
+                                <input type="password" name="current_password" id="device_login_revoke_current_password" autocomplete="current-password"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            </div>
+                            <button type="submit" class="inline-flex items-center justify-center rounded-lg border border-red-300 bg-white px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 dark:border-red-700 dark:bg-transparent dark:text-red-400 dark:hover:bg-red-900/20">
+                                Revoke Router Login
+                            </button>
+                        </div>
+                    </form>
+                    {% endif %}
                 </div>
-            </form>
+            </div>
+            {% endif %}
+
+            <!-- Active Sessions -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="flex flex-col gap-3 border-b border-slate-200 px-6 py-4 dark:border-slate-700 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                        <h2 class="font-semibold text-slate-900 dark:text-white">Active Sessions</h2>
+                        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ active_sessions | length }} active</p>
+                    </div>
+                    {% if other_session_count > 0 %}
+                    <form method="POST" action="/admin/system/users/profile/sessions/sign-out-others">
+                        {% include "components/forms/csrf_input.html" %}
+                        <button type="submit" class="inline-flex items-center justify-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-100 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300 dark:hover:bg-red-900/30">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H9m4 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
+                            Sign out other sessions
+                        </button>
+                    </form>
+                    {% endif %}
+                </div>
+                <div class="divide-y divide-slate-200 dark:divide-slate-700">
+                    {% for session in active_sessions %}
+                    <div class="px-6 py-4">
+                        <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                            <div class="min-w-0">
+                                <div class="flex flex-wrap items-center gap-2">
+                                    <p class="font-mono text-xs text-slate-500 dark:text-slate-400">{{ session.ip_address or 'Unknown IP' }}</p>
+                                    {% if session.is_current %}
+                                    <span class="inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800 dark:bg-green-900/30 dark:text-green-400">Current</span>
+                                    {% endif %}
+                                </div>
+                                <p class="mt-1 truncate text-sm text-slate-900 dark:text-white">{{ session.user_agent or 'Unknown device' }}</p>
+                            </div>
+                            <div class="shrink-0 text-left text-xs text-slate-500 dark:text-slate-400 sm:text-right">
+                                <p>Last seen {{ session.last_seen_at | app_datetime('%b %d, %Y %H:%M', 'Never') }}</p>
+                                <p>Expires {{ session.expires_at | app_datetime('%b %d, %Y %H:%M', '-') }}</p>
+                            </div>
+                        </div>
+                    </div>
+                    {% else %}
+                    <div class="px-6 py-8 text-center text-sm text-slate-500 dark:text-slate-400">No active sessions</div>
+                    {% endfor %}
+                </div>
+            </div>
         </div>
 
         <!-- Sidebar -->
@@ -137,12 +238,12 @@
                             </div>
                             <div>
                                 <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Member Since</p>
-                                <p class="text-sm text-slate-900 dark:text-white">{{ person.created_at.strftime('%B %d, %Y') if person and person.created_at else '-' }}</p>
+                                <p class="text-sm text-slate-900 dark:text-white">{{ person.created_at | app_datetime('%B %d, %Y', include_tz=False) if person and person.created_at else '-' }}</p>
                             </div>
                             {% if credential %}
                             <div>
                                 <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Last Login</p>
-                                <p class="text-sm text-slate-900 dark:text-white">{{ credential.last_login_at.strftime('%B %d, %Y at %H:%M') if credential.last_login_at else 'Never' }}</p>
+                                <p class="text-sm text-slate-900 dark:text-white">{{ credential.last_login_at | app_datetime('%B %d, %Y at %H:%M', 'Never') }}</p>
                             </div>
                             {% endif %}
                         </div>

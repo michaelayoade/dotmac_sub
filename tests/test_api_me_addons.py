@@ -1,9 +1,9 @@
 """Customer self-service add-on purchase (app/services/customer_portal_flow_addons).
 
-There is no add-on data in any live environment, so the wallet-charge logic is
-verified here against SQLite: an add-on offered for the subscription's offer is
-quoted and bought from the wallet credit balance, and an over-budget purchase is
-rejected without any write.
+There is no add-on data in any live environment, so the prepaid-debit contract
+is verified here against SQLite: a purchase confirms a server-owned preview,
+links its entitlement to exact adjustment/ledger evidence, and rejects stale or
+unfunded confirmation without a write.
 """
 
 from __future__ import annotations
@@ -12,8 +12,15 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
+from fastapi import HTTPException
 
-from app.models.billing import LedgerEntry, LedgerEntryType, LedgerSource
+from app.models.audit import AuditEvent
+from app.models.billing import (
+    AccountAdjustment,
+    LedgerEntry,
+    LedgerEntryType,
+    LedgerSource,
+)
 from app.models.catalog import (
     AccessType,
     AddOn,
@@ -112,7 +119,7 @@ def _make_addon(
     return add_on
 
 
-def _seed_wallet_credit(db_session, subscriber, amount: Decimal) -> None:
+def _seed_prepaid_funding(db_session, subscriber, amount: Decimal) -> None:
     db_session.add(
         LedgerEntry(
             account_id=subscriber.id,
@@ -124,6 +131,35 @@ def _seed_wallet_credit(db_session, subscriber, amount: Decimal) -> None:
         )
     )
     db_session.commit()
+
+
+def _quote_and_purchase(
+    db_session,
+    customer,
+    subscription,
+    add_on,
+    *,
+    quantity: int = 1,
+    idempotency_key: str = "addon-purchase-test-0001",
+):
+    quote = addons.get_addon_quote(
+        db_session,
+        customer,
+        str(subscription.id),
+        str(add_on.id),
+        quantity,
+    )
+    assert quote is not None
+    result = addons.purchase_addon(
+        db_session,
+        customer,
+        str(subscription.id),
+        str(add_on.id),
+        quantity,
+        preview_fingerprint=str(quote["preview_fingerprint"]),
+        idempotency_key=idempotency_key,
+    )
+    return quote, result
 
 
 @pytest.fixture()
@@ -148,23 +184,36 @@ def test_list_available_shows_offer_addon(_setup, db_session):
 
 def test_quote_computes_charge_and_affordability(_setup, db_session, subscriber):
     _subscriber, sub, add_on, customer = _setup
-    _seed_wallet_credit(db_session, subscriber, Decimal("5000.00"))
+    _seed_prepaid_funding(db_session, subscriber, Decimal("5000.00"))
     quote = addons.get_addon_quote(db_session, customer, str(sub.id), str(add_on.id), 2)
     assert quote["charge"] == Decimal("4000.00")
-    assert quote["current_balance"] == Decimal("5000.00")
+    assert quote["prepaid_funding_before"] == Decimal("5000.00")
+    assert quote["prepaid_funding_after"] == Decimal("1000.00")
+    assert quote["postpaid_receivables"] == Decimal("0.00")
     assert quote["shortfall"] == Decimal("0.00")
     assert quote["can_afford"] is True
+    assert quote["allowed"] is True
+    assert quote["ledger_entry_type"] == LedgerEntryType.debit
+    assert quote["ledger_source"] == LedgerSource.adjustment
+    assert len(str(quote["preview_fingerprint"])) == 64
 
 
-def test_purchase_charges_wallet_and_links_addon(_setup, db_session, subscriber):
+def test_purchase_debits_prepaid_funding_and_links_exact_evidence(
+    _setup, db_session, subscriber
+):
     _subscriber, sub, add_on, customer = _setup
-    _seed_wallet_credit(db_session, subscriber, Decimal("5000.00"))
+    _seed_prepaid_funding(db_session, subscriber, Decimal("5000.00"))
 
-    result = addons.purchase_addon(db_session, customer, str(sub.id), str(add_on.id), 2)
+    quote, result = _quote_and_purchase(
+        db_session,
+        customer,
+        sub,
+        add_on,
+        quantity=2,
+    )
     assert result["success"] is True
     assert result["charge"] == Decimal("4000.00")
-    # 5000 credit - 4000 debit = 1000 left
-    assert result["new_balance"] == Decimal("1000.00")
+    assert result["prepaid_funding_after"] == Decimal("1000.00")
     assert get_account_credit_balance(db_session, str(subscriber.id)) == Decimal(
         "1000.00"
     )
@@ -175,12 +224,25 @@ def test_purchase_charges_wallet_and_links_addon(_setup, db_session, subscriber)
     )
     assert len(links) == 1
     assert links[0].quantity == 2
+    assert links[0].purchase_preview_fingerprint == quote["preview_fingerprint"]
+    adjustment = db_session.get(AccountAdjustment, links[0].account_adjustment_id)
+    assert adjustment is not None
+    assert str(adjustment.id) == result["account_adjustment_id"]
+    assert str(adjustment.ledger_entry_id) == result["ledger_entry_id"]
+    assert adjustment.prepaid_funding_before == Decimal("5000.00")
+    assert adjustment.prepaid_funding_after == Decimal("1000.00")
+    assert adjustment.ledger_entry.entry_type == LedgerEntryType.debit
+    assert adjustment.ledger_entry.source == LedgerSource.adjustment
+    audits = db_session.query(AuditEvent).filter(
+        AuditEvent.entity_id.in_([str(adjustment.id), str(links[0].id)])
+    )
+    assert audits.count() == 2
 
 
 def test_cancel_addon_ends_it(_setup, db_session, subscriber):
     _subscriber, sub, add_on, customer = _setup
-    _seed_wallet_credit(db_session, subscriber, Decimal("5000.00"))
-    bought = addons.purchase_addon(db_session, customer, str(sub.id), str(add_on.id), 1)
+    _seed_prepaid_funding(db_session, subscriber, Decimal("5000.00"))
+    _, bought = _quote_and_purchase(db_session, customer, sub, add_on)
     said = bought["subscription_add_on_id"]
 
     assert addons.cancel_addon(db_session, customer, str(sub.id), said) is True
@@ -202,10 +264,14 @@ def test_cancel_addon_rejects_foreign(_setup, db_session, subscriber):
 
 def test_purchase_is_idempotent_on_key(_setup, db_session, subscriber):
     _subscriber, sub, add_on, customer = _setup
-    _seed_wallet_credit(db_session, subscriber, Decimal("5000.00"))
+    _seed_prepaid_funding(db_session, subscriber, Decimal("5000.00"))
 
-    first = addons.purchase_addon(
-        db_session, customer, str(sub.id), str(add_on.id), 1, idempotency_key="k1"
+    quote, first = _quote_and_purchase(
+        db_session,
+        customer,
+        sub,
+        add_on,
+        idempotency_key="addon-idempotent-test-0001",
     )
     assert first["success"] is True
     assert get_account_credit_balance(db_session, str(subscriber.id)) == Decimal(
@@ -214,7 +280,13 @@ def test_purchase_is_idempotent_on_key(_setup, db_session, subscriber):
 
     # Replay with the same key — no second charge, same add-on returned.
     again = addons.purchase_addon(
-        db_session, customer, str(sub.id), str(add_on.id), 1, idempotency_key="k1"
+        db_session,
+        customer,
+        str(sub.id),
+        str(add_on.id),
+        1,
+        preview_fingerprint=str(quote["preview_fingerprint"]),
+        idempotency_key="addon-idempotent-test-0001",
     )
     assert again["success"] is True
     assert again["replayed"] is True
@@ -232,12 +304,20 @@ def test_purchase_is_idempotent_on_key(_setup, db_session, subscriber):
 
 def test_different_keys_purchase_independently(_setup, db_session, subscriber):
     _subscriber, sub, add_on, customer = _setup
-    _seed_wallet_credit(db_session, subscriber, Decimal("5000.00"))
-    addons.purchase_addon(
-        db_session, customer, str(sub.id), str(add_on.id), 1, idempotency_key="a"
+    _seed_prepaid_funding(db_session, subscriber, Decimal("5000.00"))
+    _quote_and_purchase(
+        db_session,
+        customer,
+        sub,
+        add_on,
+        idempotency_key="addon-independent-test-0001",
     )
-    addons.purchase_addon(
-        db_session, customer, str(sub.id), str(add_on.id), 1, idempotency_key="b"
+    _quote_and_purchase(
+        db_session,
+        customer,
+        sub,
+        add_on,
+        idempotency_key="addon-independent-test-0002",
     )
     assert (
         db_session.query(SubscriptionAddOn)
@@ -252,9 +332,13 @@ def test_different_keys_purchase_independently(_setup, db_session, subscriber):
 
 def test_idempotency_key_is_scoped_to_the_account(_setup, db_session, subscriber):
     _subscriber, sub, add_on, customer = _setup
-    _seed_wallet_credit(db_session, subscriber, Decimal("5000.00"))
-    addons.purchase_addon(
-        db_session, customer, str(sub.id), str(add_on.id), 1, idempotency_key="shared"
+    _seed_prepaid_funding(db_session, subscriber, Decimal("5000.00"))
+    _quote_and_purchase(
+        db_session,
+        customer,
+        sub,
+        add_on,
+        idempotency_key="addon-shared-test-0001",
     )
 
     from app.models.catalog import CatalogOffer
@@ -265,28 +349,27 @@ def test_idempotency_key_is_scoped_to_the_account(_setup, db_session, subscriber
     db_session.commit()
     offer = db_session.get(CatalogOffer, sub.offer_id)
     other_sub = _make_subscription(db_session, other, offer)
-    _seed_wallet_credit(db_session, other, Decimal("5000.00"))
+    _seed_prepaid_funding(db_session, other, Decimal("5000.00"))
     other_customer = {"account_id": str(other.id), "subscriber_id": str(other.id)}
 
     # Another account reusing the same key must NOT replay the first's purchase.
     with pytest.raises(ValueError, match="already used"):
-        addons.purchase_addon(
+        _quote_and_purchase(
             db_session,
             other_customer,
-            str(other_sub.id),
-            str(add_on.id),
-            1,
-            idempotency_key="shared",
+            other_sub,
+            add_on,
+            idempotency_key="addon-shared-test-0001",
         )
 
 
 def test_purchase_rejected_when_balance_insufficient(_setup, db_session, subscriber):
     _subscriber, sub, add_on, customer = _setup
-    _seed_wallet_credit(db_session, subscriber, Decimal("1000.00"))  # < 2000
+    _seed_prepaid_funding(db_session, subscriber, Decimal("1000.00"))  # < 2000
 
-    result = addons.purchase_addon(db_session, customer, str(sub.id), str(add_on.id), 1)
+    _, result = _quote_and_purchase(db_session, customer, sub, add_on)
     assert result["success"] is False
-    assert result["reason"] == "insufficient_balance"
+    assert result["reason"] == "insufficient_prepaid_funding"
     assert result["shortfall"] == Decimal("1000.00")
     # nothing written
     assert (
@@ -305,7 +388,15 @@ def test_purchase_foreign_addon_rejected(_setup, db_session):
     import uuid
 
     with pytest.raises(ValueError, match="not available"):
-        addons.purchase_addon(db_session, customer, str(sub.id), str(uuid.uuid4()), 1)
+        addons.purchase_addon(
+            db_session,
+            customer,
+            str(sub.id),
+            str(uuid.uuid4()),
+            1,
+            preview_fingerprint="0" * 64,
+            idempotency_key="addon-foreign-test-0001",
+        )
 
 
 def test_not_owner_returns_none(_setup, db_session):
@@ -316,16 +407,16 @@ def test_not_owner_returns_none(_setup, db_session):
 
 def test_purchase_rejected_when_subscription_not_active(_setup, db_session, subscriber):
     _subscriber, sub, add_on, customer = _setup
-    _seed_wallet_credit(db_session, subscriber, Decimal("5000.00"))
+    _seed_prepaid_funding(db_session, subscriber, Decimal("5000.00"))
     sub.status = SubscriptionStatus.suspended
     db_session.commit()
 
-    result = addons.purchase_addon(db_session, customer, str(sub.id), str(add_on.id), 1)
+    _, result = _quote_and_purchase(db_session, customer, sub, add_on)
 
     assert result["success"] is False
     assert result["reason"] == "subscription_not_active"
     assert result["subscription_status"] == "suspended"
-    # nothing written: no add-on link, no wallet debit
+    # Nothing written: no add-on link and no prepaid-funding debit.
     assert (
         db_session.query(SubscriptionAddOn)
         .filter(SubscriptionAddOn.subscription_id == sub.id)
@@ -335,3 +426,26 @@ def test_purchase_rejected_when_subscription_not_active(_setup, db_session, subs
     assert get_account_credit_balance(db_session, str(subscriber.id)) == Decimal(
         "5000.00"
     )
+
+
+def test_purchase_rejects_stale_funding_preview(_setup, db_session, subscriber):
+    _subscriber, sub, add_on, customer = _setup
+    _seed_prepaid_funding(db_session, subscriber, Decimal("5000.00"))
+    quote = addons.get_addon_quote(db_session, customer, str(sub.id), str(add_on.id), 1)
+    assert quote is not None
+    _seed_prepaid_funding(db_session, subscriber, Decimal("500.00"))
+
+    with pytest.raises(HTTPException, match="preview again") as exc:
+        addons.purchase_addon(
+            db_session,
+            customer,
+            str(sub.id),
+            str(add_on.id),
+            1,
+            preview_fingerprint=str(quote["preview_fingerprint"]),
+            idempotency_key="addon-stale-test-0001",
+        )
+
+    assert exc.value.status_code == 409
+    assert db_session.query(SubscriptionAddOn).count() == 0
+    assert db_session.query(AccountAdjustment).count() == 0

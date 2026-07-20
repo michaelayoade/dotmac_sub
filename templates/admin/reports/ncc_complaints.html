@@ -1,0 +1,104 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, stats_card %}
+
+{% block title %}NCC Complaints - Reports{% endblock %}
+
+{% block content %}
+{{ ambient_background("amber", "orange") }}
+
+<div class="relative space-y-8">
+  {% call page_header(
+      title="NCC Complaints (Quarterly)",
+      subtitle="Complaint records, categories, SLA outcome and the filing workbook",
+      icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>',
+      color="amber",
+      color2="orange"
+  ) %}{% endcall %}
+
+  {% if request.query_params.get("saved") %}
+  <div class="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-900/10 dark:text-emerald-300">
+    Email settings saved.
+  </div>
+  {% endif %}
+
+  <form method="GET" action="/admin/reports/ncc-complaints"
+        class="rounded-2xl border border-slate-200/70 bg-white p-6 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <label class="text-sm">From
+        <input type="date" name="date_from" value="{{ date_from }}"
+               class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900"/>
+      </label>
+      <label class="text-sm">To
+        <input type="date" name="date_to" value="{{ date_to }}"
+               class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900"/>
+      </label>
+      <div class="flex items-end gap-2">
+        <button type="submit" class="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white">Apply</button>
+        <a href="/admin/reports/ncc-complaints/export?date_from={{ date_from }}&date_to={{ date_to }}"
+           class="rounded-lg border border-slate-300 px-4 py-2 text-sm dark:border-slate-600">Download workbook (.xlsx)</a>
+      </div>
+    </div>
+  </form>
+
+  <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+    {{ stats_card("Complaints", report.total_complaints, color="amber") }}
+    {{ stats_card("Not yet filable", not_filable, color="red" if not_filable else "emerald") }}
+    {{ stats_card("Unclassified", report.unclassified_count, color="amber") }}
+  </div>
+
+  {% if not_filable %}
+  <div class="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-900/10 dark:text-red-300">
+    <strong>{{ not_filable }}</strong> of {{ report.total_complaints }} rows are not yet filable
+    (missing required fields such as LGA/Town). Capture the missing data before submitting to the NCC.
+  </div>
+  {% endif %}
+
+  <div class="overflow-x-auto rounded-2xl border border-slate-200/70 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+    <table class="min-w-full text-left text-sm">
+      <thead class="border-b border-slate-200 text-xs uppercase text-slate-500 dark:border-slate-700">
+        <tr>
+          <th class="px-3 py-2">Status</th>
+          {% for col in columns %}<th class="px-3 py-2 whitespace-nowrap">{{ col }}</th>{% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr class="border-b border-slate-100 dark:border-slate-700/50 {{ 'bg-red-50 dark:bg-red-900/10' if not row.ok }}">
+          <td class="px-3 py-2 text-xs">
+            {% if row.ok %}<span class="text-emerald-600">OK</span>
+            {% else %}<span class="text-red-600" title="{{ row.validation }}">FAIL</span>{% endif %}
+          </td>
+          {% for col in columns %}<td class="px-3 py-2 whitespace-nowrap">{{ row.record.get(col, "") }}</td>{% endfor %}
+        </tr>
+        {% else %}
+        <tr><td colspan="{{ columns|length + 1 }}" class="px-3 py-6 text-center text-slate-500">No complaints in this window.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {# ── Weekly email digest settings ─────────────────────────── #}
+  <form method="POST" action="/admin/reports/ncc-email-settings"
+        class="rounded-2xl border border-slate-200/70 bg-white p-6 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+    <h3 class="mb-4 text-sm font-semibold">Weekly digest email</h3>
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <label class="flex items-center gap-2 text-sm">
+        <input type="checkbox" name="enabled" value="true"/> Enabled (Monday 08:00, Africa/Lagos)
+      </label>
+      <label class="text-sm">Recipient
+        <input type="email" name="recipient"
+               class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900"/>
+      </label>
+      <label class="text-sm">Subject
+        <input type="text" name="subject" value="Weekly NCC Report"
+               class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900"/>
+      </label>
+      <label class="text-sm">Lookback days
+        <input type="number" name="lookback_days" value="7" min="1"
+               class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900"/>
+      </label>
+    </div>
+    <button type="submit" class="mt-4 rounded-lg bg-slate-700 px-4 py-2 text-sm font-medium text-white">Save</button>
+  </form>
+</div>
+{% endblock %}

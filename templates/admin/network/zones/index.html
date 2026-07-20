@@ -2,7 +2,7 @@
 {% from "components/ui/macros.html" import
     ambient_background, page_header, stats_card, card,
     table_head, table_row, row_actions, row_action,
-    icon_view, icon_edit, empty_state, animation_styles
+    icon_view, icon_edit, empty_state, animation_styles, pagination as table_pagination
 %}
 
 {% block title %}Network Zones - Admin{% endblock %}
@@ -31,15 +31,6 @@
             {"label": "Zones"}
         ]
     ) %}
-        <form method="GET" action="/admin/network/zones" class="contents">
-            <select id="status" name="status"
-                onchange="this.form.submit()"
-                class="block appearance-none rounded-xl border border-slate-200 bg-slate-50/50 px-4 py-2.5 pr-10 text-sm text-slate-900 transition-all focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-700/50 dark:text-white dark:focus:border-blue-500">
-                <option value="all" {% if status_filter == 'all' %}selected{% endif %}>All Status</option>
-                <option value="active" {% if status_filter == 'active' %}selected{% endif %}>Active</option>
-                <option value="inactive" {% if status_filter == 'inactive' %}selected{% endif %}>Inactive</option>
-            </select>
-        </form>
         <a href="/admin/network/zones/new" class="group inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-blue-500 to-cyan-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-blue-500/25 transition-all hover:shadow-xl hover:shadow-blue-500/30 hover:-translate-y-0.5">
             <svg class="h-4 w-4 transition-transform group-hover:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>
             Add Zone
@@ -61,6 +52,27 @@
             color="slate"
         ) }}
     </div>
+
+    <form method="GET" action="/admin/network/zones" class="flex flex-col gap-3 border-y border-slate-200/70 py-4 sm:flex-row sm:items-end dark:border-slate-700/70">
+        <div class="min-w-0 flex-1">
+            <label for="zone-search" class="mb-1 block text-xs font-medium text-slate-700 dark:text-slate-300">Search</label>
+            <input id="zone-search" type="search" name="search" value="{{ search }}" placeholder="Name or description"
+                   class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+        </div>
+        <div class="w-full sm:w-44">
+            <label for="zone-status" class="mb-1 block text-xs font-medium text-slate-700 dark:text-slate-300">Status</label>
+            <select id="zone-status" name="status" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                <option value="all" {% if status_filter == 'all' %}selected{% endif %}>All statuses</option>
+                <option value="active" {% if status_filter == 'active' %}selected{% endif %}>Active</option>
+                <option value="inactive" {% if status_filter == 'inactive' %}selected{% endif %}>Inactive</option>
+            </select>
+        </div>
+        <input type="hidden" name="per_page" value="{{ pagination.per_page }}">
+        <button type="submit" class="inline-flex h-[38px] items-center justify-center rounded-lg bg-primary-600 px-4 text-sm font-semibold text-white hover:bg-primary-700">Filter</button>
+        {% if search or status_filter != 'all' %}
+        <a href="/admin/network/zones" class="inline-flex h-[38px] items-center justify-center rounded-lg border border-slate-300 px-4 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-800">Clear</a>
+        {% endif %}
+    </form>
 
     {# ── Zones Table ── #}
     {% call card(color="blue", padding=False) %}
@@ -147,6 +159,15 @@
                 </tbody>
             </table>
         </div>
+        {{ table_pagination(
+            pagination.page,
+            pagination.total_pages,
+            pagination.total,
+            pagination.per_page,
+            "/admin/network/zones",
+            extra_params="&status=" ~ status_filter ~ "&search=" ~ (search | urlencode),
+            item_label="zones"
+        ) }}
     {% endcall %}
 </div>
 

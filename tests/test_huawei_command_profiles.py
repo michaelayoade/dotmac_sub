@@ -21,6 +21,9 @@ def test_ma5608t_v800r013_uses_space_separated_display_ont_info():
         == "display ont optical-info 0 1 7 5"
     )
     assert profile.display_ont_info_all("0/1") == "display ont info 0 1 all"
+    assert (
+        profile.display_ont_status_inventory("0/1/12") == "display ont info 0 1 12 all"
+    )
     with pytest.raises(ValueError):
         profile.display_ont_info("0/1", 0)
 
@@ -37,6 +40,10 @@ def test_ma5800_v100r019_uses_slash_fsp_display_ont_info():
     assert profile.requires_slow_send is False
     assert profile.display_ont_info("0/1", 0) == "display ont info 0/1 0"
     assert profile.display_ont_info_all("0/1") == "display ont info 0/1 all"
+    assert (
+        profile.display_ont_status_inventory("0/2/1")
+        == "display ont info summary 0/2/1"
+    )
     assert profile.display_ont_info("0/1/0", 5) == "display ont info 0/1 0 5"
     assert (
         profile.display_ont_optical_info("0/1/0", 5)

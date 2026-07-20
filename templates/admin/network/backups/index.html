@@ -106,7 +106,7 @@
                             <span>{{ row.port }}</span>
                         </td>
                         <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">
-                            {{ row.last_backup_at.strftime('%Y-%m-%d %H:%M:%S') if row.last_backup_at else "-" }}
+                            {{ row.last_backup_at | app_datetime('%Y-%m-%d %H:%M:%S', '-') }}
                         </td>
                         <td class="px-4 py-3 text-xs text-slate-600 dark:text-slate-400">{{ row.last_message }}</td>
                         <td class="px-4 py-3">

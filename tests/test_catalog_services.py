@@ -1,14 +1,22 @@
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+
 from starlette.datastructures import FormData
 
 from app.models.catalog import (
     AccessType,
     BillingCycle,
+    BillingMode,
     CatalogOffer,
     NasVendor,
+    OfferPrice,
     OfferStatus,
     PlanCategory,
     PriceBasis,
+    PriceType,
     ServiceType,
+    Subscription,
+    SubscriptionStatus,
 )
 from app.models.network import OLTDevice, OltProfileBundle, OltProfileSyncTask
 from app.schemas.catalog import (
@@ -309,6 +317,51 @@ def test_update_offer_with_audit_stages_profile_sync_task_for_existing_bundle(
     assert task.preview_payload["download_kbps"] == 150_000
 
 
+def test_offer_plan_family_edit_preserves_null_price_unit_with_live_subscription(
+    db_session, subscriber, catalog_offer
+) -> None:
+    price = OfferPrice(
+        offer_id=catalog_offer.id,
+        price_type=PriceType.recurring,
+        amount=Decimal("100.00"),
+        currency="NGN",
+        billing_cycle=BillingCycle.monthly,
+        unit=None,
+        is_active=True,
+    )
+    subscription = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=catalog_offer.id,
+        status=SubscriptionStatus.active,
+        billing_mode=BillingMode.prepaid,
+        start_at=datetime.now(UTC) - timedelta(days=5),
+        next_billing_at=datetime.now(UTC) + timedelta(days=25),
+    )
+    db_session.add_all([price, subscription])
+    db_session.commit()
+
+    offer_data, _ = web_catalog_offers_service.offer_edit_form_data(
+        db_session, str(catalog_offer.id), catalog_offer
+    )
+    assert offer_data["price_unit"] == ""
+    offer_data["plan_family"] = "unlimited"
+
+    updated = web_catalog_offers_service.update_offer_with_audit(
+        db_session,
+        str(catalog_offer.id),
+        catalog_offer,
+        offer_data,
+        FormData([]),
+        request=None,
+        actor_id="admin@example.test",
+    )
+    db_session.commit()
+
+    db_session.refresh(price)
+    assert updated.plan_family == "unlimited"
+    assert price.unit is None
+
+
 def test_offer_form_context_exposes_full_billing_cycle_set(db_session):
     context = web_catalog_offers_service.offer_form_context(
         db_session,
@@ -386,3 +439,32 @@ def test_plan_family_values_settings_driven(db_session):
         "home_flex",
         "business_fiber",
     ]
+
+
+def test_new_offer_visibility_defaults_off(db_session):
+    # A fresh offer must not silently land on the customer portal (the "~40
+    # e2e offers went customer-visible" incident) — default OFF.
+    form = web_catalog_offers_service.default_offer_form(db_session)
+    assert form["show_on_customer_portal"] is False
+    assert form["available_for_services"] is False
+
+
+def test_new_offer_visibility_opt_in_setting(db_session):
+    from app.models.domain_settings import DomainSetting, SettingDomain
+    from app.models.subscription_engine import SettingValueType
+
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.catalog,
+            key="new_offer_visible_by_default",
+            value_type=SettingValueType.boolean,
+            value_text="true",
+            value_json=True,
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    form = web_catalog_offers_service.default_offer_form(db_session)
+    assert form["show_on_customer_portal"] is True
+    assert form["available_for_services"] is True

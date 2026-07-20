@@ -44,10 +44,11 @@ class WebhookEventType(enum.Enum):
     invoice_paid = "invoice.paid"
     invoice_overdue = "invoice.overdue"
 
-    # Billing - Payment events (3)
+    # Billing - Payment events (4)
     payment_received = "payment.received"
     payment_failed = "payment.failed"
     payment_refunded = "payment.refunded"
+    payment_reversed = "payment.reversed"
 
     # Usage events (4)
     usage_recorded = "usage.recorded"
@@ -100,6 +101,9 @@ class WebhookEndpoint(Base):
     )
     secret: Mapped[str | None] = mapped_column(String(512))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    delivery_timeout_seconds: Mapped[int | None] = mapped_column(Integer)
+    max_retries: Mapped[int | None] = mapped_column(Integer)
+    retry_backoff_seconds: Mapped[int | None] = mapped_column(Integer)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)

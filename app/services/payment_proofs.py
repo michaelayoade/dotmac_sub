@@ -1,4 +1,4 @@
-"""Bank-transfer proof flow: upload -> staff verify -> wallet/invoice credit.
+"""Bank-transfer proof flow: upload -> staff verify -> account/invoice credit.
 
 Verification creates a real Payment (status=succeeded, paid_at from the
 claimed transfer date) through the standard billing service, optionally
@@ -11,20 +11,30 @@ from __future__ import annotations
 
 import logging
 import uuid as uuid_mod
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from fastapi import HTTPException, UploadFile
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.billing import BillingAccount, Invoice, InvoiceStatus, PaymentStatus
+from app.models.billing import (
+    BillingAccount,
+    Invoice,
+    InvoiceStatus,
+    PaymentSettlementOrigin,
+    PaymentStatus,
+    TopupIntent,
+)
 from app.models.payment_proof import (
     PaymentProof,
     PaymentProofStatus,
     WithholdingTaxRecord,
     WithholdingTaxStatus,
 )
+from app.services.billing.consolidated_payments import consolidated_settlement_key
 from app.services.common import apply_pagination, coerce_uuid, round_money, to_decimal
 
 logger = logging.getLogger(__name__)
@@ -39,6 +49,48 @@ _MEDIA_TYPES = {
     ".webp": "image/webp",
     ".pdf": "application/pdf",
 }
+
+
+class PaymentProofReviewError(HTTPException):
+    """Typed command rejection that web adapters can project without guessing."""
+
+    def __init__(
+        self,
+        *,
+        status_code: int,
+        detail: str,
+        code: str,
+        field: str | None = None,
+    ) -> None:
+        super().__init__(status_code=status_code, detail=detail)
+        self.code = code
+        self.field = field
+
+
+@dataclass(frozen=True, slots=True)
+class PaymentProofReviewEligibility:
+    """Read-side eligibility from the owner that executes proof review."""
+
+    verify_allowed: bool
+    verify_unavailable_reason: str | None
+    reject_allowed: bool
+    reject_unavailable_reason: str | None
+
+
+def _initialize_wht_lifecycle(
+    db: Session,
+    record_id,
+    *,
+    actor_id: str | None,
+) -> None:
+    """Append initial evidence in the same transaction as source creation."""
+    from app.services import tax_accounting
+
+    tax_accounting.initialize_withholding_tax_lifecycle(
+        db,
+        record_id,
+        actor_id=actor_id,
+    )
 
 
 async def save_proof_file(file: UploadFile) -> str:
@@ -117,6 +169,46 @@ def find_duplicate_proofs(db: Session, proof: PaymentProof) -> list[PaymentProof
     )
 
 
+def review_eligibility(
+    proof: PaymentProof,
+    duplicates: list[PaymentProof] | tuple[PaymentProof, ...] = (),
+) -> PaymentProofReviewEligibility:
+    """Project the review actions that the command owner will accept.
+
+    Execution still locks and rechecks these rules.  This projection exists so
+    clients do not recreate lifecycle or duplicate-reference policy.
+    """
+
+    if proof.status != PaymentProofStatus.submitted:
+        reason = f"This proof was already {proof.status.value}."
+        return PaymentProofReviewEligibility(
+            verify_allowed=False,
+            verify_unavailable_reason=reason,
+            reject_allowed=False,
+            reject_unavailable_reason=reason,
+        )
+    verified_duplicate = next(
+        (item for item in duplicates if item.status == PaymentProofStatus.verified),
+        None,
+    )
+    if verified_duplicate is not None:
+        return PaymentProofReviewEligibility(
+            verify_allowed=False,
+            verify_unavailable_reason=(
+                "This transfer reference already backs verified proof "
+                f"{verified_duplicate.id}. Reject this submission as a duplicate."
+            ),
+            reject_allowed=True,
+            reject_unavailable_reason=None,
+        )
+    return PaymentProofReviewEligibility(
+        verify_allowed=True,
+        verify_unavailable_reason=None,
+        reject_allowed=True,
+        reject_unavailable_reason=None,
+    )
+
+
 def resolve_proof_file(proof: PaymentProof) -> tuple[Path, str]:
     """Return the (path, media_type) for a proof's receipt file.
 
@@ -161,7 +253,14 @@ def submit_proof(
         raise HTTPException(status_code=400, detail="Amount must be greater than 0")
 
     gross_value = round_money(to_decimal(gross_amount)) if gross_amount else None
-    rate_value = to_decimal(wht_rate) if wht_rate not in (None, "") else None
+    rate_value = (
+        round_money(to_decimal(wht_rate)) if wht_rate not in (None, "") else None
+    )
+    if rate_value is not None and not (Decimal("0") <= rate_value < Decimal("100")):
+        raise HTTPException(
+            status_code=400,
+            detail="WHT rate must be at least 0 and less than 100 percent",
+        )
     # Derive gross from rate when only a rate was supplied (net = gross·(1−rate)).
     if gross_value is None and rate_value and rate_value > 0:
         gross_value = round_money(value / (Decimal("1") - rate_value / Decimal("100")))
@@ -175,6 +274,16 @@ def submit_proof(
         wht_value = round_money(gross_value - value)
         if rate_value is None and gross_value > 0:
             rate_value = round_money(wht_value / gross_value * Decimal("100"))
+        elif rate_value is not None:
+            expected_wht = round_money(gross_value * rate_value / Decimal("100"))
+            if expected_wht != wht_value:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Gross amount, transferred amount, and WHT rate "
+                        "do not reconcile"
+                    ),
+                )
 
     proof = PaymentProof(
         account_id=coerce_uuid(account_id) if account_id else None,
@@ -294,9 +403,17 @@ def verify_proof(
     """
     proof = db.get(PaymentProof, coerce_uuid(proof_id))
     if proof is None:
-        raise HTTPException(status_code=404, detail="Payment proof not found")
+        raise PaymentProofReviewError(
+            status_code=404,
+            detail="Payment proof not found",
+            code="payment_proof_not_found",
+        )
     if proof.status != PaymentProofStatus.submitted:
-        raise HTTPException(status_code=400, detail="Proof already reviewed")
+        raise PaymentProofReviewError(
+            status_code=400,
+            detail="Proof already reviewed",
+            code="payment_proof_already_reviewed",
+        )
 
     # Reseller consolidated transfer (credits a billing account, may carry WHT).
     if proof.billing_account_id is not None:
@@ -319,15 +436,27 @@ def verify_proof(
     lock_account(db, str(proof.account_id))
     db.refresh(proof)
     if proof.status != PaymentProofStatus.submitted:
-        raise HTTPException(status_code=400, detail="Proof already reviewed")
+        raise PaymentProofReviewError(
+            status_code=400,
+            detail="Proof already reviewed",
+            code="payment_proof_already_reviewed",
+        )
 
     try:
         value = round_money(to_decimal(amount if amount is not None else proof.amount))
     except (InvalidOperation, ValueError) as exc:
-        raise HTTPException(status_code=400, detail="Invalid verified amount") from exc
+        raise PaymentProofReviewError(
+            status_code=400,
+            detail="Invalid verified amount",
+            code="invalid_verified_amount",
+            field="amount",
+        ) from exc
     if value <= Decimal("0.00"):
-        raise HTTPException(
-            status_code=400, detail="Verified amount must be greater than 0"
+        raise PaymentProofReviewError(
+            status_code=400,
+            detail="Verified amount must be greater than 0",
+            code="verified_amount_non_positive",
+            field="amount",
         )
 
     duplicates = find_duplicate_proofs(db, proof)
@@ -335,34 +464,74 @@ def verify_proof(
         (d for d in duplicates if d.status == PaymentProofStatus.verified), None
     )
     if verified_dup is not None:
-        raise HTTPException(
+        raise PaymentProofReviewError(
             status_code=409,
             detail=(
                 f"Reference '{proof.reference}' was already verified on another "
                 f"proof ({verified_dup.id}) and paid. Reject this submission as "
                 "a duplicate instead."
             ),
+            code="duplicate_transfer_reference",
         )
 
-    allocations = (
-        _open_invoice_allocations(db, proof.account_id, value)
-        if auto_allocate
-        else None
+    deposit_intent = db.scalar(
+        select(TopupIntent).where(
+            TopupIntent.account_id == proof.account_id,
+            TopupIntent.reference == proof.reference,
+            TopupIntent.purpose == "account_credit_deposit",
+        )
     )
-    payment = billing_service.payments.create(
-        db,
-        PaymentCreate(
-            account_id=proof.account_id,
-            amount=value,
-            currency=proof.currency,
-            status=PaymentStatus.succeeded,
-            paid_at=proof.paid_at or datetime.now(UTC),
-            external_id=(proof.reference or "")[:120] or None,
-            memo=f"Bank transfer (proof {proof.id})",
-            allocations=allocations or None,
-        ),
-        auto_allocate=auto_allocate,
-    )
+    if deposit_intent is not None:
+        from app.services.account_credit_deposits import (
+            AccountCreditDeposits,
+            DepositEligibilityError,
+        )
+        from app.services.payment_gateway_adapter import PaymentGatewayTransaction
+
+        try:
+            settlement = AccountCreditDeposits.settle_verified(
+                db,
+                intent_id=deposit_intent.id,
+                transaction=PaymentGatewayTransaction(
+                    provider_type=deposit_intent.provider_type,
+                    external_id=f"proof:{proof.id}",
+                    amount=value,
+                    currency=proof.currency,
+                    metadata={"topup_intent_id": str(deposit_intent.id)},
+                    memo_prefix="Bank transfer",
+                ),
+                origin=PaymentSettlementOrigin.manual,
+                commit=False,
+            )
+        except DepositEligibilityError as exc:
+            raise PaymentProofReviewError(
+                status_code=409,
+                detail=str(exc),
+                code=exc.code,
+            ) from exc
+        payment = settlement.payment
+    else:
+        allocations = (
+            _open_invoice_allocations(db, proof.account_id, value)
+            if auto_allocate
+            else None
+        )
+        payment = billing_service.payments.create(
+            db,
+            PaymentCreate(
+                account_id=proof.account_id,
+                amount=value,
+                currency=proof.currency,
+                status=PaymentStatus.succeeded,
+                paid_at=proof.paid_at or datetime.now(UTC),
+                external_id=(proof.reference or "")[:120] or None,
+                memo=f"Bank transfer (proof {proof.id})",
+                allocations=allocations or None,
+            ),
+            auto_allocate=auto_allocate,
+            # Keep the account lock until proof and payment commit together.
+            commit=False,
+        )
     proof.status = PaymentProofStatus.verified
     proof.verified_amount = value
     proof.verified_by = str(verified_by)
@@ -404,30 +573,90 @@ def _verify_consolidated_proof(
     ``amount`` (reviewer-confirmed) is the *net cash* received; the account is
     credited ``net + wht`` so the withheld tax stays a tracked, reclaimable
     receivable rather than vanishing from the reseller's balance."""
-    from app.schemas.billing import PaymentCreate
+    from sqlalchemy import select
+
     from app.services import billing as billing_service
 
-    ba = db.get(BillingAccount, proof.billing_account_id)
+    # Serialize concurrent reviews of this proof, then re-check its status under
+    # the lock — exactly what the subscriber path does, and what this one never did.
+    #
+    # The status check before the dispatch is an UNLOCKED read, so two reviewers
+    # clicking Verify at the same time both passed it and both created a succeeded
+    # Payment for the gross value: the reseller's balance was credited TWICE, with
+    # two WithholdingTaxRecord rows to match. No database constraint caught it
+    # either — uq_payments_active_external_id only fires when provider_id IS NOT
+    # NULL, and a proof-backed payment has none.
+    #
+    # Lock the billing account this credits (the subscriber path locks the
+    # subscriber it credits) so the loser of the race sees "already reviewed".
+    ba = db.scalar(
+        select(BillingAccount)
+        .where(BillingAccount.id == proof.billing_account_id)
+        .with_for_update()
+    )
     if ba is None:
-        raise HTTPException(status_code=404, detail="Billing account not found")
+        raise PaymentProofReviewError(
+            status_code=404,
+            detail="Billing account not found",
+            code="billing_account_not_found",
+        )
+
+    db.refresh(proof)
+    if proof.status != PaymentProofStatus.submitted:
+        raise PaymentProofReviewError(
+            status_code=400,
+            detail="Proof already reviewed",
+            code="payment_proof_already_reviewed",
+        )
 
     try:
         net_value = round_money(
             to_decimal(amount if amount is not None else proof.amount)
         )
     except (InvalidOperation, ValueError) as exc:
-        raise HTTPException(status_code=400, detail="Invalid verified amount") from exc
+        raise PaymentProofReviewError(
+            status_code=400,
+            detail="Invalid verified amount",
+            code="invalid_verified_amount",
+            field="amount",
+        ) from exc
     if net_value <= Decimal("0.00"):
-        raise HTTPException(
-            status_code=400, detail="Verified amount must be greater than 0"
+        raise PaymentProofReviewError(
+            status_code=400,
+            detail="Verified amount must be greater than 0",
+            code="verified_amount_non_positive",
+            field="amount",
         )
 
-    wht_value = (
-        round_money(to_decimal(proof.wht_amount))
-        if proof.wht_amount
-        else Decimal("0.00")
+    source_gross = (
+        round_money(to_decimal(proof.gross_amount))
+        if proof.gross_amount is not None
+        else None
     )
-    gross_value = round_money(net_value + wht_value)
+    if source_gross is not None:
+        if source_gross < net_value:
+            raise PaymentProofReviewError(
+                status_code=400,
+                detail="Verified net amount exceeds the submitted gross amount",
+                code="verified_net_exceeds_gross",
+                field="amount",
+            )
+        gross_value = source_gross
+        wht_value = round_money(gross_value - net_value)
+    else:
+        # Legacy proofs may predate explicit gross capture. Their stored WHT is
+        # retained as evidence and gross is reconstructed once at verification.
+        wht_value = (
+            round_money(to_decimal(proof.wht_amount))
+            if proof.wht_amount
+            else Decimal("0.00")
+        )
+        gross_value = round_money(net_value + wht_value)
+    effective_wht_rate = (
+        round_money(wht_value / gross_value * Decimal("100"))
+        if wht_value > Decimal("0.00") and gross_value > Decimal("0.00")
+        else None
+    )
 
     verified_dup = next(
         (
@@ -438,28 +667,34 @@ def _verify_consolidated_proof(
         None,
     )
     if verified_dup is not None:
-        raise HTTPException(
+        raise PaymentProofReviewError(
             status_code=409,
             detail=(
                 f"Reference '{proof.reference}' was already verified on another "
                 f"proof ({verified_dup.id}). Reject this submission as a duplicate."
             ),
+            code="duplicate_transfer_reference",
         )
 
-    payment = billing_service.payments.create(
+    from app.schemas.billing import BillingAccountPaymentPreviewRequest
+
+    payment = billing_service.consolidated_payment_settlements.settle_verified(
         db,
-        PaymentCreate(
-            billing_account_id=ba.id,
+        str(ba.id),
+        BillingAccountPaymentPreviewRequest(
             amount=gross_value,
             currency=proof.currency,
-            status=PaymentStatus.succeeded,
             paid_at=proof.paid_at or datetime.now(UTC),
             external_id=(proof.reference or "")[:120] or None,
             memo=f"Reseller bank transfer (proof {proof.id})",
             allocations=None,
+            auto_allocate=False,
         ),
-        auto_allocate=False,
-    )
+        idempotency_key=consolidated_settlement_key("payment-proof", str(proof.id)),
+        origin=PaymentSettlementOrigin.manual,
+        actor_id=str(verified_by),
+        commit=False,
+    ).payment
     proof.status = PaymentProofStatus.verified
     proof.verified_amount = net_value
     proof.verified_by = str(verified_by)
@@ -476,12 +711,13 @@ def _verify_consolidated_proof(
             gross_amount=gross_value,
             net_amount=net_value,
             wht_amount=wht_value,
-            wht_rate=proof.wht_rate,
+            wht_rate=effective_wht_rate,
             currency=proof.currency,
             status=WithholdingTaxStatus.pending,
         )
         db.add(record)
         db.flush()
+        _initialize_wht_lifecycle(db, record.id, actor_id=verified_by)
         wht_record_id = str(record.id)
 
     db.commit()
@@ -564,11 +800,24 @@ def reject_proof(
 ) -> dict:
     proof = db.get(PaymentProof, coerce_uuid(proof_id))
     if proof is None:
-        raise HTTPException(status_code=404, detail="Payment proof not found")
+        raise PaymentProofReviewError(
+            status_code=404,
+            detail="Payment proof not found",
+            code="payment_proof_not_found",
+        )
     if proof.status != PaymentProofStatus.submitted:
-        raise HTTPException(status_code=400, detail="Proof already reviewed")
+        raise PaymentProofReviewError(
+            status_code=400,
+            detail="Proof already reviewed",
+            code="payment_proof_already_reviewed",
+        )
     if not (review_notes or "").strip():
-        raise HTTPException(status_code=400, detail="A rejection reason is required")
+        raise PaymentProofReviewError(
+            status_code=400,
+            detail="A rejection reason is required",
+            code="rejection_reason_required",
+            field="review_notes",
+        )
     proof.status = PaymentProofStatus.rejected
     proof.verified_by = str(verified_by)
     proof.review_notes = review_notes.strip()
@@ -652,7 +901,7 @@ def _notify(db: Session, proof: PaymentProof, *, approved: bool) -> None:
                 continue
             for channel in (NotificationChannel.push, NotificationChannel.email):
                 try:
-                    notifications_svc.create(
+                    notifications_svc.create_customer_notification(
                         db,
                         NotificationCreate(
                             channel=channel,

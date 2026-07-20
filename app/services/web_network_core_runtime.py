@@ -114,11 +114,23 @@ def _maybe_trigger_olt_retry(
 
 def _bounded_max_workers(max_workers: int) -> int:
     try:
-        configured = int(os.getenv("NETWORK_MONITORING_MAX_WORKERS", ""))
+        configured = int(os.getenv("NETWORK_MONITORING_MAX_WORKERS", "4"))
     except ValueError:
-        configured = 0
+        configured = 4
     effective = configured or max_workers
     return max(1, min(effective, 12))
+
+
+def _release_postgres_read_transaction(db: Session) -> None:
+    """Release a read transaction only where long idle transactions hurt us.
+
+    Test sessions commonly run inside a SQLite transaction fixture; rolling
+    that back here erases fixture data and expires caller-visible ORM objects.
+    The production issue this protects against is PostgreSQL-specific.
+    """
+    bind = db.get_bind()
+    if bind.dialect.name.startswith("postgres"):
+        db.rollback()
 
 
 @dataclass
@@ -134,7 +146,7 @@ def refresh_devices_health(
     devices: list[NetworkDevice],
     *,
     include_snmp: bool = False,
-    max_workers: int = 12,
+    max_workers: int = 4,
 ) -> dict[str, int]:
     """Refresh ping and vendor-backed monitoring health for a list of devices.
 
@@ -160,7 +172,12 @@ def refresh_devices_health(
         return totals
 
     workers = max(1, min(_bounded_max_workers(max_workers), len(targets)))
-    with ThreadPoolExecutor(max_workers=workers) as pool:
+    # The caller's session is only used to build the primitive target list.
+    # Release the read transaction before the long ping/SNMP fan-out; each
+    # worker opens and commits its own short-lived session.
+    _release_postgres_read_transaction(db)
+    pool = ThreadPoolExecutor(max_workers=workers)
+    try:
         futures = [
             pool.submit(_refresh_device_health_worker, device_id, do_ping, do_snmp)
             for device_id, do_ping, do_snmp in targets
@@ -170,6 +187,13 @@ def refresh_devices_health(
                 future.result()
             except Exception:
                 logger.exception("Core-device refresh worker crashed unexpectedly.")
+    finally:
+        # cancel_futures: on an abnormal exit (Celery soft time limit) drop the
+        # queued backlog and wait only for the <= `workers` in-flight probes. A
+        # plain context-manager exit waits for the ENTIRE backlog, which turned
+        # soft kills into hard kills mid-cleanup and leaked the poll task's
+        # advisory lock into a pooled DB connection.
+        pool.shutdown(wait=True, cancel_futures=True)
     return totals
 
 
@@ -181,11 +205,14 @@ def refresh_stale_devices_health(
     snmp_interval_seconds: int,
     include_snmp: bool = True,
     force: bool = False,
-    max_workers: int = 12,
+    max_workers: int = 4,
+    max_devices: int | None = None,
 ) -> dict[str, int]:
     """Refresh only devices whose ping or vendor-backed monitoring checks are stale.
 
     `force=True` refreshes all eligible devices regardless of recency.
+    `max_devices` caps one call to the N longest-unchecked stale devices so a
+    scheduled sweep always fits its time budget; the next run picks up the rest.
     """
     now = datetime.now(UTC)
     ping_interval_seconds = max(10, int(ping_interval_seconds or 0))
@@ -199,7 +226,12 @@ def refresh_stale_devices_health(
         ping_stale = False
         snmp_stale = False
 
-        if device.ping_enabled:
+        # A check that can never produce a result must not count as stale:
+        # ping_device early-returns without stamping last_ping_at when there
+        # is no mgmt_ip, so a ping-enabled hostname-only device stays "stale"
+        # forever — and under a max_devices cap those permanently-stale
+        # devices monopolise every batch and starve the real ones.
+        if device.ping_enabled and device.mgmt_ip:
             if force or device.last_ping_at is None:
                 ping_stale = True
             else:
@@ -210,7 +242,7 @@ def refresh_stale_devices_health(
                     now - last_ping_at
                 ).total_seconds() >= ping_interval_seconds
 
-        if include_snmp and device.snmp_enabled:
+        if include_snmp and device.snmp_enabled and (device.mgmt_ip or device.hostname):
             if force or device.last_snmp_at is None:
                 snmp_stale = True
             else:
@@ -226,6 +258,17 @@ def refresh_stale_devices_health(
 
     if not stale_targets:
         return {"checked": 0, "ping": 0, "snmp": 0}
+    if max_devices is not None and len(stale_targets) > max_devices:
+        _epoch = datetime(1970, 1, 1, tzinfo=UTC)
+
+        def _last_checked(device: NetworkDevice) -> datetime:
+            checked = device.last_ping_at or device.last_snmp_at
+            if checked is None:
+                return _epoch
+            return checked if checked.tzinfo else checked.replace(tzinfo=UTC)
+
+        stale_targets.sort(key=_last_checked)
+        stale_targets = stale_targets[:max_devices]
     return refresh_devices_health(
         db,
         stale_targets,

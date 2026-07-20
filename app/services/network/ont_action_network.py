@@ -22,6 +22,7 @@ from app.services.network.ont_action_common import (
     ActionResult,
     build_tr069_params,
     detect_data_model_root,
+    genieacs_error_result,
     get_ont_client_or_error,
     persist_data_model_root,
     read_param_from_cache,
@@ -59,6 +60,42 @@ _LAN_CONFIG_PATHS = {
         "refresh": "LANDevice.1.LANHostConfigManagement.",
     },
 }
+
+_LAN_PORT_PATHS = {
+    "Device": "Ethernet.Interface.{port}.Enable",
+    "InternetGatewayDevice": "LANDevice.1.LANEthernetInterfaceConfig.{port}.Enable",
+}
+
+
+def toggle_lan_port(
+    db: Session,
+    ont_id: str,
+    port: int,
+    enabled: bool,
+) -> ActionResult:
+    """Compatibility writer for LAN ports pending their reconciler slice."""
+    if port < 1 or port > 4:
+        return ActionResult(
+            success=False, message="Port number must be between 1 and 4."
+        )
+    resolved, error = get_ont_client_or_error(db, ont_id)
+    if error or resolved is None:
+        return error or ActionResult(success=False, message="ONT resolution failed.")
+    ont, client, device_id = resolved
+    root = detect_data_model_root(db, ont, client, device_id)
+    path = _LAN_PORT_PATHS[root].format(port=port)
+    params = build_tr069_params(root, {path: "true" if enabled else "false"})
+    try:
+        result = set_and_verify(client, device_id, params)
+    except GenieACSError as exc:
+        return genieacs_error_result(exc, "Failed to update LAN port")
+    action_word = "enabled" if enabled else "disabled"
+    logger.info("LAN port %d %s on ONT %s", port, action_word, ont.serial_number)
+    return ActionResult(
+        success=True,
+        message=f"LAN port {port} {action_word}.",
+        data=result,
+    )
 
 
 def _igd_ip_wan_details(
@@ -920,7 +957,7 @@ def set_lan_config(
         )
     except GenieACSError as exc:
         logger.error("Set LAN config failed for ONT %s: %s", ont.serial_number, exc)
-        return ActionResult(success=False, message=f"Failed to set LAN config: {exc}")
+        return genieacs_error_result(exc, "Failed to set LAN config")
 
 
 def set_connection_request_credentials(
@@ -981,9 +1018,8 @@ def set_connection_request_credentials(
             ont.serial_number,
             exc,
         )
-        return ActionResult(
-            success=False,
-            message=f"Failed to set connection request credentials: {exc}",
+        return genieacs_error_result(
+            exc, "Failed to set connection request credentials"
         )
 
 

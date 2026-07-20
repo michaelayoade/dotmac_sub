@@ -1,0 +1,138 @@
+from __future__ import annotations
+
+from copy import deepcopy
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+import pytest
+import yaml
+
+from app.models.domain_settings import SettingDomain
+from app.models.team_inbox import InboxChannelType
+from app.services import channel_health_contracts
+from app.services.settings_spec import get_spec
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _contracts():
+    return channel_health_contracts.parse_channel_health_contracts(
+        deepcopy(channel_health_contracts.DEFAULT_CHANNEL_HEALTH_CONTRACTS)
+    )
+
+
+def _contract(channel: str):
+    return next(item for item in _contracts() if item.channel == channel)
+
+
+def test_default_registry_covers_every_external_inbox_channel_once():
+    actual = {contract.channel for contract in _contracts()}
+    expected = {
+        channel.value
+        for channel in InboxChannelType
+        if channel != InboxChannelType.note
+    }
+
+    assert actual == expected
+    assert all(
+        contract.enabled or contract.disabled_reason for contract in _contracts()
+    )
+    spec = get_spec(SettingDomain.network_monitoring, "channel_health_contracts")
+    assert spec is not None
+    assert spec.env_var is None
+    assert spec.default == channel_health_contracts.DEFAULT_CHANNEL_HEALTH_CONTRACTS
+
+
+def test_registry_rejects_missing_and_implicitly_disabled_channels():
+    missing = deepcopy(channel_health_contracts.DEFAULT_CHANNEL_HEALTH_CONTRACTS)
+    missing["channels"] = missing["channels"][:-1]
+    with pytest.raises(
+        channel_health_contracts.ChannelHealthContractError,
+        match="Missing channel health contracts",
+    ):
+        channel_health_contracts.parse_channel_health_contracts(missing)
+
+    implicit = deepcopy(channel_health_contracts.DEFAULT_CHANNEL_HEALTH_CONTRACTS)
+    implicit["channels"][0].pop("disabled_reason")
+    with pytest.raises(
+        channel_health_contracts.ChannelHealthContractError,
+        match="requires a reason",
+    ):
+        channel_health_contracts.parse_channel_health_contracts(implicit)
+
+
+def test_active_window_uses_lagos_time_and_does_not_charge_closed_hours():
+    whatsapp = replace(
+        _contract("whatsapp"),
+        enabled=True,
+        disabled_reason=None,
+    )
+    open_time = datetime(2026, 7, 20, 7, 10, tzinfo=UTC)  # 08:10 WAT
+    active, elapsed = channel_health_contracts.active_window_elapsed_seconds(
+        whatsapp,
+        now=open_time,
+    )
+
+    assert active is True
+    assert elapsed == 4_200
+    assert (
+        channel_health_contracts.effective_age_seconds(
+            whatsapp,
+            observed_at=open_time - timedelta(days=1),
+            now=open_time,
+        )
+        == 4_200
+    )
+
+    closed_time = datetime(2026, 7, 20, 23, 0, tzinfo=UTC)  # 00:00 WAT
+    assert channel_health_contracts.active_window_elapsed_seconds(
+        whatsapp,
+        now=closed_time,
+    ) == (False, 0.0)
+
+
+def test_continuous_contract_never_resets_silence_at_midnight():
+    email = replace(_contract("email"), enabled=True, disabled_reason=None)
+    now = datetime(2026, 7, 20, 23, 30, tzinfo=UTC)
+
+    assert channel_health_contracts.active_window_elapsed_seconds(
+        email,
+        now=now,
+    ) == (True, None)
+    assert (
+        channel_health_contracts.effective_age_seconds(
+            email,
+            observed_at=now - timedelta(hours=5),
+            now=now,
+        )
+        == 18_000
+    )
+
+
+def test_alert_rules_enforce_contract_signals_at_both_severities():
+    rules_path = PROJECT_ROOT / "deploy/observability/channel_observability.rules.yml"
+    payload = yaml.safe_load(rules_path.read_text(encoding="utf-8"))
+    rules = payload["groups"][0]["rules"]
+    by_name = {rule["alert"]: rule for rule in rules}
+
+    expected = {
+        "ChannelNaturalIngestionSilentCritical",
+        "ChannelNaturalIngestionSilentWarning",
+        "ChannelSyntheticProbeStaleCritical",
+        "ChannelSyntheticProbeStaleWarning",
+        "ChannelHealthContractInvalid",
+        "ChannelObserverMissing",
+    }
+    assert expected.issubset(by_name)
+    for name in expected - {"ChannelHealthContractInvalid", "ChannelObserverMissing"}:
+        expression = by_name[name]["expr"]
+        assert "monitoring_active" in expression
+        assert "severity_critical" in expression
+        assert by_name[name]["labels"]["owner"] == "communications-team-inbox"
+        assert by_name[name]["annotations"]["runbook"].endswith(
+            "CHANNEL_OBSERVABILITY.md"
+        )
+    assert 'seconds_since_last_inbound"} > 3600' not in rules_path.read_text(
+        encoding="utf-8"
+    )

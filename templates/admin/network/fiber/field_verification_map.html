@@ -1,0 +1,206 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Fiber Field Verification Map - Admin{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+<style>
+    #field-verification-map { height: min(68vh, 760px); min-height: 520px; }
+    .field-map-popup { min-width: 260px; max-width: 380px; }
+    .field-map-popup code { overflow-wrap: anywhere; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+            <nav class="mb-2 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+                <a href="/admin/network/fiber-plant" class="hover:text-indigo-600">Fiber plant</a><span>/</span><a href="/admin/network/fiber-field-verification" class="hover:text-indigo-600">Field verification</a><span>/</span><span>Exact map</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Fiber field-verification map</h1>
+            <p class="mt-1 max-w-4xl text-sm text-slate-500 dark:text-slate-400">A complete read-only overlay of the field-verification worklist on exact staged source GeoJSON. Color represents only the worklist owner’s evidence priority. The overlay never repairs or snaps geometry, infers identity or endpoints, creates jobs or observations, mutates topology, or claims cutover readiness.</p>
+        </div>
+        <a href="/admin/network/fiber-field-verification" class="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700">Open worklist</a>
+    </div>
+
+    <section class="rounded-xl border border-indigo-200 bg-indigo-50 p-4 dark:border-indigo-800 dark:bg-indigo-950/30">
+        <div class="grid gap-4 lg:grid-cols-[1fr_auto]">
+            <div>
+                <p class="font-semibold text-indigo-900 dark:text-indigo-200">Complete staged-source cohort</p>
+                <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ field_map.staged_feature_count }} latest feature(s) from {{ field_map.source_batch_count }} source batch(es): {{ field_map.needs_follow_up_count }} need evidence follow-up and {{ field_map.current_agreement_count }} currently agree.</p>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ field_map.geometry_presentation_counts.exact_geojson }} exact source geometries can be presented. {{ field_map.geometry_presentation_counts.source_geometry_unrenderable }} blocked or malformed source geometries remain in the complete report but are not repaired for display.</p>
+            </div>
+            <dl class="space-y-2 text-xs text-slate-500 dark:text-slate-400">
+                <div><dt class="font-semibold text-slate-700 dark:text-slate-300">Overlay SHA-256</dt><dd class="mt-1 max-w-sm break-all font-mono">{{ field_map.overlay_sha256 }}</dd></div>
+                <div><dt class="font-semibold text-slate-700 dark:text-slate-300">Worklist SHA-256</dt><dd class="mt-1 max-w-sm break-all font-mono">{{ field_map.worklist_report_sha256 }}</dd></div>
+            </dl>
+        </div>
+    </section>
+
+    <section class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="flex flex-col gap-4 border-b border-slate-200 p-4 dark:border-slate-700 xl:flex-row xl:items-end xl:justify-between">
+            <div>
+                <h2 class="font-semibold text-slate-900 dark:text-white">Exact staged geometry</h2>
+                <p id="field-map-visible-count" class="mt-1 text-xs text-slate-500 dark:text-slate-400">Preparing complete overlay…</p>
+            </div>
+            <div class="grid gap-3 sm:grid-cols-3">
+                <label class="text-xs font-medium text-slate-600 dark:text-slate-300">Priority
+                    <select id="field-map-priority" class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900">
+                        <option value="">All priorities</option>
+                        {% for priority, count in field_map.priority_counts.items() %}<option value="{{ priority }}">{{ priority | replace('_', ' ') | title }} ({{ count }})</option>{% endfor %}
+                    </select>
+                </label>
+                <label class="text-xs font-medium text-slate-600 dark:text-slate-300">Evidence state
+                    <select id="field-map-state" class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900">
+                        <option value="">All states</option>
+                        {% for state, count in field_map.state_counts.items() %}<option value="{{ state }}">{{ state | replace('_', ' ') | title }} ({{ count }})</option>{% endfor %}
+                    </select>
+                </label>
+                <label class="text-xs font-medium text-slate-600 dark:text-slate-300">Source asset
+                    <select id="field-map-asset" class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900">
+                        <option value="">All asset types</option>
+                        {% for asset_type, count in field_map.asset_type_counts.items() %}<option value="{{ asset_type }}">{{ asset_type | replace('_', ' ') | title }} ({{ count }})</option>{% endfor %}
+                    </select>
+                </label>
+            </div>
+        </div>
+        <div class="grid gap-0 xl:grid-cols-[1fr_250px]">
+            <div id="field-verification-map" class="z-0" data-testid="fiber-field-verification-map"></div>
+            <aside class="border-t border-slate-200 p-4 dark:border-slate-700 xl:border-l xl:border-t-0">
+                <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Evidence priority</h3>
+                <p class="mt-1 text-xs text-slate-500">Presentation colors come only from the worklist projection.</p>
+                <ul class="mt-4 space-y-3 text-xs text-slate-600 dark:text-slate-300">
+                    <li class="flex items-center gap-2"><span class="h-3 w-3 rounded-full bg-rose-700"></span>P0 evidence drift</li>
+                    <li class="flex items-center gap-2"><span class="h-3 w-3 rounded-full bg-rose-500"></span>P1 conflicting observations</li>
+                    <li class="flex items-center gap-2"><span class="h-3 w-3 rounded-full bg-orange-500"></span>P2 current conflict</li>
+                    <li class="flex items-center gap-2"><span class="h-3 w-3 rounded-full bg-amber-500"></span>P3 superseded source</li>
+                    <li class="flex items-center gap-2"><span class="h-3 w-3 rounded-full bg-yellow-400"></span>P4 unobserved</li>
+                    <li class="flex items-center gap-2"><span class="h-3 w-3 rounded-full bg-sky-500"></span>P5 inconclusive</li>
+                    <li class="flex items-center gap-2"><span class="h-3 w-3 rounded-full bg-emerald-500"></span>P6 current agreement</li>
+                </ul>
+                <div class="mt-5 border-t border-slate-200 pt-4 text-xs text-slate-500 dark:border-slate-700">
+                    <p>Current-source jobs: <span class="font-semibold text-slate-800 dark:text-slate-200">{{ field_map.rows_with_current_work_orders }}</span></p>
+                    <p class="mt-1">Superseded-source jobs: <span class="font-semibold text-slate-800 dark:text-slate-200">{{ field_map.rows_with_superseded_work_orders }}</span></p>
+                    <p class="mt-3">Filters change only this browser view. They do not change the complete report or its hashes.</p>
+                </div>
+            </aside>
+        </div>
+    </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/vendor/leaflet/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+(function() {
+    const featureCollection = {{ field_map.feature_collection | tojson | safe }};
+    const reportBbox = {{ field_map.bbox | tojson | safe }};
+    const priorityColors = {
+        p0_evidence_drift: '#be123c',
+        p1_conflicting_observations: '#f43f5e',
+        p2_current_conflict: '#f97316',
+        p3_superseded_source: '#f59e0b',
+        p4_unobserved: '#facc15',
+        p5_inconclusive: '#0ea5e9',
+        p6_current_agreement: '#10b981'
+    };
+    const map = L.map('field-verification-map', {preferCanvas: true}).setView([9.0765, 7.3986], 11);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap contributors',
+        maxZoom: 19
+    }).addTo(map);
+    const overlay = L.featureGroup().addTo(map);
+    const prioritySelect = document.getElementById('field-map-priority');
+    const stateSelect = document.getElementById('field-map-state');
+    const assetSelect = document.getElementById('field-map-asset');
+    const visibleCount = document.getElementById('field-map-visible-count');
+
+    function escapeHtml(value) {
+        return String(value ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    function label(value) {
+        return String(value || '').replace(/_/g, ' ');
+    }
+
+    function jobs(title, values) {
+        if (!Array.isArray(values) || values.length === 0) return '';
+        return '<div class="mt-2"><strong>' + escapeHtml(title) + '</strong><br>' +
+            values.map(function(job) { return escapeHtml(job.work_order_public_id); }).join('<br>') + '</div>';
+    }
+
+    function popup(feature) {
+        const p = feature.properties || {};
+        return '<div class="field-map-popup text-xs">' +
+            '<div class="text-sm font-semibold">' + escapeHtml(p.display_name || p.external_id || p.staged_feature_id) + '</div>' +
+            '<div class="mt-1 text-slate-500">' + escapeHtml(label(p.asset_type)) + ' · ' + escapeHtml(p.source_system) + '/' + escapeHtml(p.source_profile) + '</div>' +
+            '<div class="mt-2"><strong>Priority:</strong> ' + escapeHtml(label(p.priority)) + '<br><strong>Evidence:</strong> ' + escapeHtml(label(p.verification_state)) + '</div>' +
+            jobs('Current-source work orders', p.current_work_orders) +
+            jobs('Superseded-source work orders', p.superseded_work_orders) +
+            '<div class="mt-2"><strong>Next evidence step</strong><br>' + escapeHtml(p.next_evidence_step) + '</div>' +
+            '<div class="mt-3 space-y-1 font-mono text-[10px] text-slate-500">' +
+            '<div>content ' + escapeHtml(p.content_sha256) + '</div>' +
+            '<div>geometry ' + escapeHtml(p.geometry_sha256) + '</div>' +
+            '<div>worklist row ' + escapeHtml(p.row_sha256) + '</div>' +
+            '<div>map feature ' + escapeHtml(p.map_feature_sha256) + '</div></div></div>';
+    }
+
+    function matches(feature) {
+        const p = feature.properties || {};
+        return (!prioritySelect.value || p.priority === prioritySelect.value) &&
+            (!stateSelect.value || p.verification_state === stateSelect.value) &&
+            (!assetSelect.value || p.asset_type === assetSelect.value);
+    }
+
+    function render() {
+        overlay.clearLayers();
+        let visible = 0;
+        let unrenderable = 0;
+        featureCollection.features.forEach(function(feature) {
+            const p = feature.properties || {};
+            if (!matches(feature)) return;
+            if (p.geometry_presentation_state !== 'exact_geojson') {
+                unrenderable += 1;
+                return;
+            }
+            const color = priorityColors[p.priority];
+            if (!color) return;
+            try {
+                const layer = L.geoJSON(feature, {
+                    pointToLayer: function(_feature, latlng) {
+                        return L.circleMarker(latlng, {radius: 6, color: color, fillColor: color, fillOpacity: 0.85, weight: 2});
+                    },
+                    style: function() {
+                        return {color: color, fillColor: color, fillOpacity: 0.16, opacity: 0.9, weight: 3};
+                    },
+                    onEachFeature: function(sourceFeature, sourceLayer) {
+                        sourceLayer.bindPopup(popup(sourceFeature));
+                    }
+                });
+                overlay.addLayer(layer);
+                visible += 1;
+            } catch (_error) {
+                unrenderable += 1;
+            }
+        });
+        visibleCount.textContent = visible + ' exact source feature(s) displayed from the complete ' + featureCollection.features.length + '-feature report' + (unrenderable ? '; ' + unrenderable + ' selected source geometry item(s) cannot be presented unchanged.' : '.');
+    }
+
+    [prioritySelect, stateSelect, assetSelect].forEach(function(select) {
+        select.addEventListener('change', render);
+    });
+    render();
+    if (reportBbox && reportBbox.length === 4) {
+        map.fitBounds([[reportBbox[1], reportBbox[0]], [reportBbox[3], reportBbox[2]]], {padding: [30, 30], maxZoom: 17});
+    }
+})();
+</script>
+{% endblock %}

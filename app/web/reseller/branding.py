@@ -53,45 +53,53 @@ def _update_branding_cache(stats: dict, portal_name: str, favicon: str) -> None:
         _branding_cache["favicon"] = favicon
 
 
-def reseller_branding_context(_request: Request) -> dict[str, object]:
+def reseller_branding_context(request: Request) -> dict[str, object]:
     """Build branding context (favicon, portal name) for reseller portal templates."""
     # Check cache first to avoid unnecessary session creation
     cached = _get_cached_branding()
     if cached is not None:
         stats, portal_name, favicon = cached
-        return {
-            "sidebar_stats": stats,
-            "branding_favicon_url": favicon,
-            "portal_name": portal_name,
-        }
 
-    db = db_session_adapter.create_session()
-    try:
-        from app.services import web_admin as web_admin_service
+    else:
+        db = db_session_adapter.create_session()
+        try:
+            from app.services import web_admin as web_admin_service
 
-        stats = web_admin_service.get_sidebar_stats(db)
-    except Exception:
-        logger.debug("Failed to load sidebar stats for reseller branding context")
-        stats = {}
+            stats = web_admin_service.get_sidebar_stats(db)
+            portal_name = str(stats.get("app_name") or "")
+            favicon = str(stats.get("favicon_url") or "").strip()
+            _update_branding_cache(stats, portal_name, favicon)
+        except Exception:
+            logger.debug("Failed to load reseller platform branding context")
+            stats, portal_name, favicon = {}, "", ""
+        finally:
+            db.close()
 
-    portal_name = ""
-    try:
-        from app.services.web_system_company_info import get_company_info
-
-        info = get_company_info(db)
-        portal_name = info.get("company_name") or ""
-    except Exception:
-        logger.debug("Failed to load company name for reseller branding")
-    finally:
-        db.close()
-
-    favicon = str(stats.get("favicon_url") or "").strip()
-    _update_branding_cache(stats, portal_name, favicon)
+    cached_brand = stats.get("brand") if isinstance(stats, dict) else None
+    resolved_brand: dict[str, object] | None = (
+        dict(cached_brand) if isinstance(cached_brand, dict) else None
+    )
+    request_brand = getattr(request.state, "reseller_brand", None)
+    if isinstance(request_brand, dict):
+        try:
+            resolved_brand = dict(request_brand)
+            stats = {
+                **stats,
+                "sidebar_logo_url": str(request_brand.get("logo_url") or ""),
+                "sidebar_logo_dark_url": str(request_brand.get("dark_logo_url") or ""),
+                "favicon_url": str(request_brand.get("favicon_url") or ""),
+                "app_name": str(request_brand.get("product_name") or ""),
+            }
+            portal_name = str(request_brand.get("product_name") or "")
+            favicon = str(request_brand.get("favicon_url") or "")
+        except Exception:
+            logger.debug("Failed to resolve reseller-scoped branding")
 
     return {
         "sidebar_stats": stats,
         "branding_favicon_url": favicon,
         "portal_name": portal_name,
+        **({"brand": resolved_brand} if resolved_brand else {}),
     }
 
 

@@ -2,15 +2,16 @@ from __future__ import annotations
 
 import builtins
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
-from typing import cast
+from typing import Any, TypeVar, cast
 
 from fastapi import HTTPException
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.models.network import FdhCabinet, OLTDevice, OntUnit, OnuOnlineStatus, PonPort
+from app.models.network import FdhCabinet, OLTDevice, OntUnit, PonPort
 from app.models.network_monitoring import (
     Alert,
     AlertEvent,
@@ -21,6 +22,7 @@ from app.models.network_monitoring import (
     DeviceInterface,
     DeviceMetric,
     DeviceType,
+    InterfaceStatus,
     MetricType,
     NetworkDevice,
     PopSite,
@@ -52,6 +54,18 @@ from app.services.common import (
 from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
+T = TypeVar("T")
+
+
+def _commit(db: Session, action: Callable[[], T]) -> T:
+    """Run a monitoring mutation and own the transaction boundary."""
+    try:
+        result = action()
+        db.commit()
+        return result
+    except Exception:
+        db.rollback()
+        raise
 
 
 def _round_percent(value: Decimal) -> Decimal:
@@ -114,16 +128,16 @@ def _alert_intervals_by_device(
 def _pon_availability_items(db: Session, window_seconds: int) -> list[UptimeReportItem]:
     """Per-PON-port availability, *derived* from the current ONT-online ratio.
 
-    PON ports have no Zabbix host and no uptime ``Alert`` source, so unlike the
+    PON ports have no monitored host and no uptime ``Alert`` source, so unlike the
     other dimensions this is not measured from downtime intervals. We approximate
     a port's health as the fraction of its ONTs currently reporting ``online``
     (``offline``/``unknown`` ONTs count against it). Rows are flagged
     ``derived=True`` so the UI labels them estimates, not contractual SLA.
     Ports with no ONTs are reported with ``uptime_percent=None`` (no signal).
     """
-    online_count = func.count(
-        case((OntUnit.olt_status == OnuOnlineStatus.online, OntUnit.id))
-    )
+    from app.services.network.ont_status import effective_ont_online_clause
+
+    online_count = func.count(case((effective_ont_online_clause(), OntUnit.id)))
     rows = (
         db.query(
             PonPort.id,
@@ -163,6 +177,155 @@ def _pon_availability_items(db: Session, window_seconds: int) -> list[UptimeRepo
             )
         )
     return items
+
+
+def bandwidth_summary(db: Session, *, window_seconds: int = 600) -> dict[str, float]:
+    """Aggregate current downstream throughput across monitored devices.
+
+    Canonical read owner for the overview's live bandwidth figure: sums the most
+    recent ``rx_bps`` device metrics within the window. Returns raw bits/second;
+    unit formatting (Gbps/Mbps/Kbps) is a presentation concern for the caller.
+    """
+    cutoff = datetime.now(UTC) - timedelta(seconds=window_seconds)
+    total_bps = db.scalar(
+        select(func.coalesce(func.sum(DeviceMetric.value), 0)).where(
+            DeviceMetric.metric_type == MetricType.rx_bps,
+            DeviceMetric.recorded_at > cutoff,
+            DeviceMetric.value > 0,
+        )
+    )
+    return {"total_bps": float(total_bps or 0)}
+
+
+_PON_NAME_PATTERNS = ("%pon%", "%gpon%", "%epon%", "%xgpon%", "%xgs%")
+
+
+def _pon_interface_clause():
+    """SQL clause classifying monitoring interfaces as PON-facing."""
+    clauses = []
+    for pattern in _PON_NAME_PATTERNS:
+        clauses.append(
+            func.lower(func.coalesce(DeviceInterface.name, "")).like(pattern)
+        )
+        clauses.append(
+            func.lower(func.coalesce(DeviceInterface.description, "")).like(pattern)
+        )
+    return or_(*clauses)
+
+
+def pon_interface_summary(db: Session) -> dict[str, int]:
+    """Canonical up/down/unknown counts for PON-facing monitoring interfaces."""
+    counts = (
+        db.query(
+            func.count(DeviceInterface.id).label("total"),
+            func.count(DeviceInterface.id)
+            .filter(DeviceInterface.status == InterfaceStatus.up)
+            .label("up"),
+            func.count(DeviceInterface.id)
+            .filter(DeviceInterface.status == InterfaceStatus.down)
+            .label("down"),
+        )
+        .join(NetworkDevice, NetworkDevice.id == DeviceInterface.device_id)
+        .filter(NetworkDevice.is_active.is_(True))
+        .filter(_pon_interface_clause())
+        .one()
+    )
+    total = counts.total or 0
+    up = counts.up or 0
+    down = counts.down or 0
+    return {"up": up, "down": down, "unknown": total - up - down, "total": total}
+
+
+def pon_outages(db: Session, limit: int = 10) -> list[dict]:
+    """PON-facing interfaces currently down, most recently changed first."""
+    rows = (
+        db.query(
+            DeviceInterface.id,
+            DeviceInterface.name,
+            DeviceInterface.description,
+            DeviceInterface.updated_at,
+            NetworkDevice.id.label("device_id"),
+            NetworkDevice.name.label("device_name"),
+        )
+        .join(NetworkDevice, NetworkDevice.id == DeviceInterface.device_id)
+        .filter(NetworkDevice.is_active.is_(True))
+        .filter(_pon_interface_clause())
+        .filter(DeviceInterface.status == InterfaceStatus.down)
+        .order_by(DeviceInterface.updated_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "id": str(row.id),
+            "name": row.name,
+            "description": row.description or "",
+            "olt_id": str(row.device_id),
+            "olt_name": row.device_name or "Unknown OLT",
+            "down_since": row.updated_at,
+        }
+        for row in rows
+    ]
+
+
+def network_health_summary(
+    db: Session,
+    *,
+    warn_pct: int = 90,
+    crit_pct: int = 70,
+    fallback_stats: dict | None = None,
+) -> dict[str, object]:
+    """Fleet-level network health: OLT/ONT counts and the health-ring status.
+
+    Owns the healthy/warning/critical decision for the overview ring. When no
+    OLTs are defined, falls back to the monitoring-device stats supplied by
+    ``network_devices.get_dashboard_stats`` so a monitoring-only deployment
+    still reports health. Threshold percentages are configuration supplied by
+    the caller's settings resolution.
+    """
+    olt_total = db.query(func.count(OLTDevice.id)).scalar() or 0
+    olt_online = (
+        db.query(func.count(OLTDevice.id))
+        .filter(OLTDevice.is_active.is_(True))
+        .scalar()
+        or 0
+    )
+    ont_total = db.query(func.count(OntUnit.id)).scalar() or 0
+    ont_active = (
+        db.query(func.count(OntUnit.id)).filter(OntUnit.is_active.is_(True)).scalar()
+        or 0
+    )
+
+    stats = fallback_stats or {}
+    if olt_total == 0 and (stats.get("total_count") or 0) > 0:
+        olts_total = int(stats["total_count"])
+        olts_online = int(
+            (stats.get("online_count") or 0)
+            + (stats.get("degraded_count") or 0)
+            + (stats.get("maintenance_count") or 0)
+        )
+    else:
+        olts_total = olt_total
+        olts_online = olt_online
+
+    health_pct = int((olts_online / olts_total) * 100) if olts_total > 0 else 0
+    if health_pct >= warn_pct:
+        health_status = "healthy"
+    elif health_pct >= crit_pct:
+        health_status = "warning"
+    else:
+        health_status = "critical"
+
+    return {
+        "olt_total": olt_total,
+        "olt_online": olt_online,
+        "ont_total": ont_total,
+        "ont_active": ont_active,
+        "olts_total": olts_total,
+        "olts_online": olts_online,
+        "health_pct": health_pct,
+        "health_status": health_status,
+    }
 
 
 def uptime_report(db: Session, payload: UptimeReportRequest) -> UptimeReportResponse:
@@ -543,6 +706,10 @@ class PopSites(ListResponseMixin):
         return site
 
     @staticmethod
+    def create_committed(db: Session, payload: PopSiteCreate):
+        return _commit(db, lambda: PopSites.create(db, payload))
+
+    @staticmethod
     def get(db: Session, site_id: str):
         site = db.get(PopSite, site_id)
         if not site:
@@ -584,12 +751,20 @@ class PopSites(ListResponseMixin):
         return site
 
     @staticmethod
+    def update_committed(db: Session, site_id: str, payload: PopSiteUpdate):
+        return _commit(db, lambda: PopSites.update(db, site_id, payload))
+
+    @staticmethod
     def delete(db: Session, site_id: str):
         site = db.get(PopSite, site_id)
         if not site:
             raise HTTPException(status_code=404, detail="PoP site not found")
         site.is_active = False
         db.flush()
+
+    @staticmethod
+    def delete_committed(db: Session, site_id: str):
+        return _commit(db, lambda: PopSites.delete(db, site_id))
 
 
 class NetworkDevices(ListResponseMixin):
@@ -600,6 +775,10 @@ class NetworkDevices(ListResponseMixin):
         db.flush()
         db.refresh(device)
         return device
+
+    @staticmethod
+    def create_committed(db: Session, payload: NetworkDeviceCreate):
+        return _commit(db, lambda: NetworkDevices.create(db, payload))
 
     @staticmethod
     def get(db: Session, device_id: str):
@@ -646,12 +825,20 @@ class NetworkDevices(ListResponseMixin):
         return device
 
     @staticmethod
+    def update_committed(db: Session, device_id: str, payload: NetworkDeviceUpdate):
+        return _commit(db, lambda: NetworkDevices.update(db, device_id, payload))
+
+    @staticmethod
     def delete(db: Session, device_id: str):
         device = db.get(NetworkDevice, device_id)
         if not device:
             raise HTTPException(status_code=404, detail="Network device not found")
         device.is_active = False
         db.flush()
+
+    @staticmethod
+    def delete_committed(db: Session, device_id: str):
+        return _commit(db, lambda: NetworkDevices.delete(db, device_id))
 
     @staticmethod
     def get_dashboard_stats(db: Session) -> dict:
@@ -707,7 +894,7 @@ class NetworkDevices(ListResponseMixin):
         device_status_chart = {
             "labels": ["Online", "Degraded", "Offline", "Maintenance"],
             "values": [online_count, degraded_count, offline_count, maintenance_count],
-            "colors": ["#10b981", "#f59e0b", "#f43f5e", "#94a3b8"],
+            "tones": ["positive", "warning", "negative", "neutral"],
         }
 
         # Alarm counts using SQL aggregation
@@ -785,28 +972,75 @@ class NetworkDevices(ListResponseMixin):
         from sqlalchemy import func as sa_func
         from sqlalchemy import or_ as sa_or
 
-        from app.models.network_monitoring import DeviceStatus as DStatus
         from app.models.network_monitoring import MetricType as MT
         from app.models.usage import AccountingStatus, RadiusAccountingSession
+        from app.services.device_operational_status import (
+            DEGRADED,
+            DOWN,
+            MAINTENANCE,
+            UP,
+            OperationalStatus,
+            annotate_operational_status,
+        )
 
         filter_value = (query or "").strip().lower()
 
         # ---- Device counts (always from all devices for accurate stats) ----
         base_query = db.query(NetworkDevice).filter(NetworkDevice.is_active.is_(True))
         devices = base_query.order_by(NetworkDevice.name).all()
-        olt_statuses = {DStatus.online, DStatus.degraded, DStatus.maintenance}
-        devices_online = sum(1 for d in devices if d.status in olt_statuses)
-        devices_offline = sum(1 for d in devices if d.status == DStatus.offline)
-
-        online_count = sum(1 for d in devices if d.status == DStatus.online)
-        degraded_count = sum(1 for d in devices if d.status == DStatus.degraded)
-        offline_count = devices_offline
-        maintenance_count = sum(1 for d in devices if d.status == DStatus.maintenance)
+        annotate_operational_status(devices)
+        operational_by_id = {
+            device.id: cast(
+                OperationalStatus,
+                cast(Any, device).operational,
+            )
+            for device in devices
+        }
+        online_count = len(
+            [
+                device
+                for device in devices
+                if operational_by_id[device.id].status == UP
+                and not operational_by_id[device.id].retry_pending
+            ]
+        )
+        degraded_count = len(
+            [
+                device
+                for device in devices
+                if operational_by_id[device.id].status == DEGRADED
+                and not operational_by_id[device.id].retry_pending
+            ]
+        )
+        offline_count = len(
+            [
+                device
+                for device in devices
+                if operational_by_id[device.id].status == DOWN
+                and not operational_by_id[device.id].retry_pending
+            ]
+        )
+        maintenance_count = len(
+            [
+                device
+                for device in devices
+                if operational_by_id[device.id].status == MAINTENANCE
+            ]
+        )
+        retry_pending_count = len(
+            [device for device in devices if operational_by_id[device.id].retry_pending]
+        )
 
         device_status_chart = {
-            "labels": ["Online", "Degraded", "Offline", "Maintenance"],
-            "values": [online_count, degraded_count, offline_count, maintenance_count],
-            "colors": ["#10b981", "#f59e0b", "#f43f5e", "#94a3b8"],
+            "labels": ["Up", "Degraded", "Down", "Refresh pending", "Maintenance"],
+            "values": [
+                online_count,
+                degraded_count,
+                offline_count,
+                retry_pending_count,
+                maintenance_count,
+            ],
+            "tones": ["positive", "warning", "negative", "warning", "neutral"],
         }
 
         # ---- Alarms ----
@@ -902,6 +1136,7 @@ class NetworkDevices(ListResponseMixin):
 
         device_health = []
         for device in filtered_devices:
+            operational = operational_by_id[device.id]
             dm = metrics_by_device.get(str(device.id), {})
             cpu_m = dm.get(MT.cpu)
             mem_m = dm.get(MT.memory)
@@ -912,7 +1147,9 @@ class NetworkDevices(ListResponseMixin):
                     "name": device.name,
                     "hostname": device.hostname,
                     "mgmt_ip": device.mgmt_ip,
-                    "status": device.status.value if device.status else "unknown",
+                    "status": operational.status,
+                    "status_reason": operational.reason,
+                    "status_presentation": operational.presentation,
                     "health_status": device.health_status.value
                     if device.health_status
                     else "unknown",
@@ -927,8 +1164,12 @@ class NetworkDevices(ListResponseMixin):
 
         return {
             "stats": {
-                "devices_online": devices_online,
-                "devices_offline": devices_offline,
+                "devices_total": len(devices),
+                "devices_online": online_count,
+                "devices_offline": offline_count,
+                "devices_degraded": degraded_count,
+                "devices_maintenance": maintenance_count,
+                "devices_retry_pending": retry_pending_count,
                 "alarms_open": alarms_open,
                 "subscribers_online": subscribers_online,
             },
@@ -954,6 +1195,10 @@ class DeviceInterfaces(ListResponseMixin):
         db.flush()
         db.refresh(interface)
         return interface
+
+    @staticmethod
+    def create_committed(db: Session, payload: DeviceInterfaceCreate):
+        return _commit(db, lambda: DeviceInterfaces.create(db, payload))
 
     @staticmethod
     def get(db: Session, interface_id: str):
@@ -995,12 +1240,22 @@ class DeviceInterfaces(ListResponseMixin):
         return interface
 
     @staticmethod
+    def update_committed(
+        db: Session, interface_id: str, payload: DeviceInterfaceUpdate
+    ):
+        return _commit(db, lambda: DeviceInterfaces.update(db, interface_id, payload))
+
+    @staticmethod
     def delete(db: Session, interface_id: str):
         interface = db.get(DeviceInterface, interface_id)
         if not interface:
             raise HTTPException(status_code=404, detail="Device interface not found")
         db.delete(interface)
         db.flush()
+
+    @staticmethod
+    def delete_committed(db: Session, interface_id: str):
+        return _commit(db, lambda: DeviceInterfaces.delete(db, interface_id))
 
 
 class DeviceMetrics(ListResponseMixin):
@@ -1013,6 +1268,10 @@ class DeviceMetrics(ListResponseMixin):
         db.flush()
         db.refresh(metric)
         return metric
+
+    @staticmethod
+    def create_committed(db: Session, payload: DeviceMetricCreate):
+        return _commit(db, lambda: DeviceMetrics.create(db, payload))
 
     @staticmethod
     def get(db: Session, metric_id: str):
@@ -1060,12 +1319,20 @@ class DeviceMetrics(ListResponseMixin):
         return metric
 
     @staticmethod
+    def update_committed(db: Session, metric_id: str, payload: DeviceMetricUpdate):
+        return _commit(db, lambda: DeviceMetrics.update(db, metric_id, payload))
+
+    @staticmethod
     def delete(db: Session, metric_id: str):
         metric = db.get(DeviceMetric, metric_id)
         if not metric:
             raise HTTPException(status_code=404, detail="Device metric not found")
         db.delete(metric)
         db.flush()
+
+    @staticmethod
+    def delete_committed(db: Session, metric_id: str):
+        return _commit(db, lambda: DeviceMetrics.delete(db, metric_id))
 
 
 class AlertRules(ListResponseMixin):
@@ -1076,6 +1343,10 @@ class AlertRules(ListResponseMixin):
         db.flush()
         db.refresh(rule)
         return rule
+
+    @staticmethod
+    def create_committed(db: Session, payload: AlertRuleCreate):
+        return _commit(db, lambda: AlertRules.create(db, payload))
 
     @staticmethod
     def get(db: Session, rule_id: str):
@@ -1145,12 +1416,20 @@ class AlertRules(ListResponseMixin):
         return rule
 
     @staticmethod
+    def update_committed(db: Session, rule_id: str, payload: AlertRuleUpdate):
+        return _commit(db, lambda: AlertRules.update(db, rule_id, payload))
+
+    @staticmethod
     def delete(db: Session, rule_id: str):
         rule = db.get(AlertRule, rule_id)
         if not rule:
             raise HTTPException(status_code=404, detail="Alert rule not found")
         rule.is_active = False
         db.flush()
+
+    @staticmethod
+    def delete_committed(db: Session, rule_id: str):
+        return _commit(db, lambda: AlertRules.delete(db, rule_id))
 
     @staticmethod
     def bulk_update(db: Session, payload: AlertRuleBulkUpdateRequest) -> int:
@@ -1171,6 +1450,12 @@ class AlertRules(ListResponseMixin):
     def bulk_update_response(db: Session, payload: AlertRuleBulkUpdateRequest) -> dict:
         updated = AlertRules.bulk_update(db, payload)
         return {"updated": updated}
+
+    @staticmethod
+    def bulk_update_response_committed(
+        db: Session, payload: AlertRuleBulkUpdateRequest
+    ) -> dict:
+        return _commit(db, lambda: AlertRules.bulk_update_response(db, payload))
 
 
 class Alerts(ListResponseMixin):
@@ -1236,6 +1521,12 @@ class Alerts(ListResponseMixin):
         return alert
 
     @staticmethod
+    def acknowledge_committed(
+        db: Session, alert_id: str, payload: AlertAcknowledgeRequest
+    ):
+        return _commit(db, lambda: Alerts.acknowledge(db, alert_id, payload))
+
+    @staticmethod
     def resolve(db: Session, alert_id: str, payload: AlertResolveRequest):
         alert = db.get(Alert, alert_id)
         if not alert:
@@ -1251,6 +1542,10 @@ class Alerts(ListResponseMixin):
         db.flush()
         db.refresh(alert)
         return alert
+
+    @staticmethod
+    def resolve_committed(db: Session, alert_id: str, payload: AlertResolveRequest):
+        return _commit(db, lambda: Alerts.resolve(db, alert_id, payload))
 
     @staticmethod
     def bulk_acknowledge(
@@ -1283,6 +1578,14 @@ class Alerts(ListResponseMixin):
         return {"updated": updated}
 
     @staticmethod
+    def bulk_acknowledge_response_committed(
+        db: Session, alert_ids: builtins.list[str], payload: AlertAcknowledgeRequest
+    ) -> dict[str, int]:
+        return _commit(
+            db, lambda: Alerts.bulk_acknowledge_response(db, alert_ids, payload)
+        )
+
+    @staticmethod
     def bulk_resolve(
         db: Session, alert_ids: builtins.list[str], payload: AlertResolveRequest
     ) -> int:
@@ -1312,6 +1615,12 @@ class Alerts(ListResponseMixin):
         updated = Alerts.bulk_resolve(db, alert_ids, payload)
         return {"updated": updated}
 
+    @staticmethod
+    def bulk_resolve_response_committed(
+        db: Session, alert_ids: builtins.list[str], payload: AlertResolveRequest
+    ) -> dict[str, int]:
+        return _commit(db, lambda: Alerts.bulk_resolve_response(db, alert_ids, payload))
+
 
 class AlertEvents(ListResponseMixin):
     @staticmethod
@@ -1337,83 +1646,41 @@ class AlertEvents(ListResponseMixin):
 
 
 def get_onu_status_summary(db: Session, *, refresh: bool = False) -> dict[str, int]:
-    """Aggregate binary ONT monitoring status directly from Zabbix.
-
-    ``refresh=True`` forces a live per-OLT fetch (used by the background warmer)
-    instead of reading the per-OLT summary cache. With ``refresh=False`` (the
-    request path) the read is strictly cache-only: a cold per-OLT cache yields
-    no counts for that OLT rather than a live Zabbix fan-out on the request
-    thread — the warmer fills the cache on its own cadence.
+    """Aggregate binary ONT monitoring status.
 
     Returns:
         Dictionary with total, online, offline, low_signal counts.
     """
+    del refresh
     from sqlalchemy import func as sa_func
 
-    from app.models.network import OLTDevice, OntUnit
-    from app.services.zabbix_ont_status import (
-        get_olt_ont_snapshot_from_zabbix,
-        get_olt_ont_summary_from_zabbix,
-    )
+    from app.models.network import OntUnit
+    from app.services.network.ont_status import effective_ont_online_clause
 
     inventory_total = (
         db.query(sa_func.count(OntUnit.id)).filter(OntUnit.is_active.is_(True)).scalar()
         or 0
     )
-    online = 0
-    offline = 0
-    low_signal = 0
-
-    olts = (
-        db.query(OLTDevice)
-        .filter(OLTDevice.is_active.is_(True))
-        .filter(OLTDevice.zabbix_host_id.isnot(None))
-        .all()
+    online = (
+        db.query(sa_func.count(OntUnit.id))
+        .filter(OntUnit.is_active.is_(True), effective_ont_online_clause())
+        .scalar()
+        or 0
     )
-    monitored_ont_ids: set[str] = set()
-    for olt in olts:
-        onts = (
-            db.query(OntUnit)
-            .filter(OntUnit.is_active.is_(True))
-            .filter(OntUnit.olt_device_id == olt.id)
-            .all()
+    offline = max(inventory_total - online, 0)
+    low_signal = (
+        db.query(sa_func.count(OntUnit.id))
+        .filter(
+            OntUnit.is_active.is_(True),
+            OntUnit.olt_rx_signal_dbm.isnot(None),
+            OntUnit.olt_rx_signal_dbm < -27,
         )
-        ont_ids = [str(ont.id) for ont in onts]
-        # On the request path (refresh=False) read cache only; the warmer
-        # (refresh=True) is the sole live fetcher, so a user never blocks on a
-        # per-OLT Zabbix round trip.
-        cached_only = not refresh
-        summary = get_olt_ont_summary_from_zabbix(
-            olt, onts, refresh=refresh, cached_only=cached_only
-        )
-        if summary.get("total_count", 0):
-            monitored_ont_ids.update(ont_ids)
-            online += int(summary.get("online_count", 0) or 0)
-            offline += int(summary.get("offline_count", 0) or 0)
-            low_signal += int(summary.get("low_signal_count", 0) or 0)
-            continue
-        if cached_only:
-            # Cold cache on the request path — skip the live snapshot walk; the
-            # warmer will populate it shortly. Leave these ONTs OUT of
-            # monitored_ont_ids so unmonitored_total counts them as offline
-            # rather than dropping them from the totals entirely.
-            continue
-
-        monitored_ont_ids.update(ont_ids)
-        snapshot = get_olt_ont_snapshot_from_zabbix(olt, onts)
-        online += sum(1 for item in snapshot.values() if item.online)
-        offline += sum(1 for item in snapshot.values() if not item.online)
-        low_signal += sum(
-            1
-            for item in snapshot.values()
-            if item.olt_rx_dbm is not None and item.olt_rx_dbm < -25
-        )
-
-    unmonitored_total = max(inventory_total - len(monitored_ont_ids), 0)
-    offline += unmonitored_total
+        .scalar()
+        or 0
+    )
 
     return {
-        "total": online + offline,
+        "total": inventory_total,
         "online": online,
         "offline": offline,
         "low_signal": low_signal,
@@ -1421,7 +1688,7 @@ def get_onu_status_summary(db: Session, *, refresh: bool = False) -> dict[str, i
 
 
 def get_onu_olt_status_summary(db: Session) -> dict[str, int]:
-    """Aggregate raw ONT link status directly from Zabbix."""
+    """Aggregate effective binary ONT link status."""
     return get_onu_status_summary(db)
 
 
@@ -1441,7 +1708,6 @@ def get_pon_outage_summary(db: Session) -> list[dict]:
         OntUnit,
         PonPort,
     )
-    from app.services.zabbix_ont_status import get_ont_snapshots_from_zabbix
 
     assignments = (
         db.query(OntAssignment)
@@ -1452,10 +1718,7 @@ def get_pon_outage_summary(db: Session) -> list[dict]:
     ont_ids = [assignment.ont_unit_id for assignment in assignments]
     onts = db.query(OntUnit).filter(OntUnit.id.in_(ont_ids)).all() if ont_ids else []
     ont_by_id = {ont.id: ont for ont in onts}
-    # Page-render path: read cached snapshots only. A cold cache returns no
-    # outages rather than blocking the dashboard on a per-OLT live Zabbix
-    # fan-out; the cache is warmed by the snapshot/refresh paths.
-    snapshots = get_ont_snapshots_from_zabbix(db, onts, cached_only=True)
+    from app.services.network.ont_status import resolve_effective_ont_status
 
     port_offline: dict[str, list[dict]] = {}
     total_per_port: dict[str, int] = {}
@@ -1466,8 +1729,10 @@ def get_pon_outage_summary(db: Session) -> list[dict]:
             continue
         total_per_port[port_key] = total_per_port.get(port_key, 0) + 1
         ont = ont_by_id.get(assignment.ont_unit_id)
-        snapshot = snapshots.get(str(assignment.ont_unit_id))
-        if snapshot and snapshot.online:
+        if ont is None:
+            continue
+        effective = resolve_effective_ont_status(ont)
+        if effective.is_online or effective.retry_pending:
             continue
         reason = getattr(ont, "offline_reason", None)
         last_seen = getattr(ont, "last_seen_at", None)

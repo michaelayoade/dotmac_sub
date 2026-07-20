@@ -1,32 +1,26 @@
 from __future__ import annotations
 
 import uuid
-from types import SimpleNamespace
 
 from sqlalchemy import select
 
+from app.models.network import OntUnit
 from app.models.network_operation import (
     NetworkOperation,
+    NetworkOperationDispatch,
+    NetworkOperationDispatchStatus,
     NetworkOperationTargetType,
     NetworkOperationType,
 )
-from app.services.network_operations import network_operations
-from app.tasks.ont_provisioning import (
-    _queue_post_authorization_bootstrap_follow_up,
+from app.services.network.ont_provisioning_commands import (
+    request_bootstrap_verification,
 )
+from app.services.network_operations import network_operations
 
 
 def test_queue_post_authorization_bootstrap_follow_up_creates_child_operation(
-    db_session, monkeypatch
+    db_session,
 ):
-    queued_calls: list[tuple[str, dict[str, object]]] = []
-
-    def fake_enqueue_task(task_name: str, **kwargs: object) -> SimpleNamespace:
-        queued_calls.append((task_name, kwargs))
-        return SimpleNamespace(queued=True, task_id="task-123")
-
-    monkeypatch.setattr("app.services.queue_adapter.enqueue_task", fake_enqueue_task)
-
     parent = network_operations.start(
         db_session,
         NetworkOperationType.ont_authorize,
@@ -37,8 +31,11 @@ def test_queue_post_authorization_bootstrap_follow_up_creates_child_operation(
     )
     network_operations.mark_running(db_session, str(parent.id))
 
-    ont_id = str(uuid.uuid4())
-    result = _queue_post_authorization_bootstrap_follow_up(
+    ont = OntUnit(serial_number="BOOTSTRAP-CHILD-COMMAND")
+    db_session.add(ont)
+    db_session.flush()
+    ont_id = str(ont.id)
+    result = request_bootstrap_verification(
         db_session,
         ont_id=ont_id,
         parent_operation_id=str(parent.id),
@@ -51,26 +48,23 @@ def test_queue_post_authorization_bootstrap_follow_up_creates_child_operation(
             NetworkOperation.correlation_key == f"tr069_bootstrap:{ont_id}"
         )
     ).one()
+    dispatch = db_session.scalars(
+        select(NetworkOperationDispatch).where(
+            NetworkOperationDispatch.operation_id == child.id
+        )
+    ).one()
 
-    assert result == {
-        "queued": True,
-        "operation_id": str(child.id),
-        "task_id": "task-123",
-        "duplicate": False,
-        "error": None,
-    }
+    assert result.accepted is True
+    assert result.operation_id == str(child.id)
+    assert result.dispatch_id == str(dispatch.id)
+    assert result.duplicate is False
     assert child.operation_type == NetworkOperationType.tr069_bootstrap
     assert child.target_type == NetworkOperationTargetType.ont
     assert str(child.target_id) == ont_id
     assert str(child.parent_id) == str(parent.id)
     assert child.initiated_by == "tester"
-    assert queued_calls == [
-        (
-            "app.tasks.tr069.wait_for_ont_bootstrap",
-            {
-                "args": [ont_id, str(child.id), 0],
-                "correlation_id": f"tr069_bootstrap:{ont_id}",
-                "source": "ont_authorization_follow_up",
-            },
-        )
-    ]
+    assert dispatch.dispatch_key == "attempt:0"
+    assert dispatch.command_name == "ont_bootstrap_verify.v1"
+    assert dispatch.task_name == "app.tasks.tr069.wait_for_ont_bootstrap"
+    assert dispatch.args_payload == [ont_id, str(child.id), 0]
+    assert dispatch.status == NetworkOperationDispatchStatus.pending

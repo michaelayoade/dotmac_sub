@@ -117,7 +117,11 @@ class WorkOrderItem(BaseModel):
     scheduled_end: str | None = None
     estimated_arrival_at: str | None = None
     estimated_duration_minutes: int | None = None
+    started_at: str | None = None
+    paused_at: str | None = None
+    resumed_at: str | None = None
     completed_at: str | None = None
+    total_active_seconds: int | None = None
     created_at: str | None = None
 
 
@@ -220,3 +224,37 @@ class QuoteDepositVerifyResponse(BaseModel):
     paid: bool
     reference: str
     quote: QuoteItem | None = None
+
+
+# ── Technician live map + rating ─────────────────────────────────────────────
+
+
+class TechnicianLocation(BaseModel):
+    """Live technician position for an in-progress work order.
+
+    ``available`` is False (with a ``reason``) when the map should be hidden:
+    outside the Start work to End work window, sharing off, or no fix yet.
+    """
+
+    available: bool = False
+    reason: str | None = None
+    work_order_id: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+    accuracy_m: float | None = None
+    updated_at: str | None = None
+    estimated_arrival_at: str | None = None
+
+
+class TechnicianRatingRequest(BaseModel):
+    """Rate the technician after a completed work order."""
+
+    rating: int = Field(..., ge=1, le=5, description="1-5 star rating")
+    comment: str | None = Field(default=None, max_length=2000)
+
+
+class TechnicianRatingResponse(BaseModel):
+    ok: bool = True
+    already_rated: bool = False
+    rating: int | None = None
+    work_order_id: str | None = None

@@ -109,8 +109,19 @@ class SqlAlchemySessionAdapter:
         if not isinstance(timeout_ms, int) or timeout_ms < 0 or timeout_ms > 300000:
             timeout_ms = 5000
 
-        db = SessionLocal()
+        # PIN one connection for the whole lock lifetime. Advisory locks are
+        # SESSION-level (they belong to one Postgres backend), but a plain
+        # Session releases its pooled connection at every commit/rollback the
+        # caller performs — so under pool contention the final unlock can land
+        # on a DIFFERENT connection, silently return false ("you don't own
+        # this lock"), and strand the lock on a connection that goes back to
+        # the pool holding it forever (bit the infrastructure poller in prod).
+        # Binding the Session to an explicitly checked-out Connection
+        # guarantees lock and unlock hit the same backend.
+        conn = SessionLocal.kw["bind"].connect()
+        db = Session(bind=conn, autoflush=False)
         acquired = False
+        unlocked = False
         lock_fn = "pg_try_advisory_lock_shared" if shared else "pg_try_advisory_lock"
         unlock_fn = "pg_advisory_unlock_shared" if shared else "pg_advisory_unlock"
         try:
@@ -131,11 +142,21 @@ class SqlAlchemySessionAdapter:
         finally:
             if acquired:
                 try:
-                    db.execute(text(f"SELECT {unlock_fn}(:key)"), {"key": lock_key})
+                    unlocked = bool(
+                        db.execute(
+                            text(f"SELECT {unlock_fn}(:key)"), {"key": lock_key}
+                        ).scalar()
+                    )
                     db.commit()
                 except Exception:
                     db.rollback()
             db.close()
+            if acquired and not unlocked:
+                # Could not prove the unlock happened: kill the raw DBAPI
+                # connection rather than return it to the pool still holding
+                # the session-level lock.
+                conn.invalidate()
+            conn.close()
 
 
 db_session_adapter = SqlAlchemySessionAdapter()

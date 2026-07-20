@@ -1,6 +1,29 @@
 # DotMac Sub — UI/UX Master Plan
 
+> **Status: historical module inventory, not a current specification.** Page,
+> KPI, chart, table, card-grid, and action proposals below must be revalidated
+> against `UI_INFORMATION_AND_ACTION_STANDARD.md`, the current domain SOT, and
+> `PRODUCTION_UI_BRIEF.md` before implementation. This document does not
+> authorize a new metric, business calculation, action, or data owner.
+
 ## Architecture Principles
+
+### Branding Owns Color
+
+Palette names in the module specifications below are historical design
+references, not implementation sources of truth. New and touched surfaces use
+branding-generated `primary-*` and `accent-*` identity tokens and the shared
+`status-*` semantic roles. Services and API payloads emit semantic roles or
+categorical keys, never literal colors; web and mobile theme adapters resolve
+those roles. Categorical chart palettes are likewise centralized in the theme
+layer.
+
+On web, `/branding/theme.css` remaps legacy non-neutral Tailwind palette names
+to configured branding roles and exposes `data-1` through `data-7` for charts
+and maps. Flutter theme owners expose the same brand-derived categorical order.
+New slices use primary, accent, semantic, or data tokens directly. Structural
+neutral surfaces, text, borders, shadows, white, and black remain in the shared
+design-system foundation and are not tenant identity colors.
 
 ### Centralized Service Layer
 
@@ -124,6 +147,13 @@ class DashboardStats:
 ---
 
 ## 2. SUBSCRIBERS MODULE (`/admin/subscribers`)
+
+> **Target-state design, not a current route contract.** The production list is
+> `/admin/customers`; `app.web.admin.subscribers` and the subscriber Playwright
+> page object are backward-compatible facades. Current list behavior is governed
+> by `docs/FRONTEND_SPEC.md` and `docs/SOT_RELATIONSHIP_MAP.md`. Implementing a
+> distinct subscriber screen requires a new approved product boundary rather
+> than copying the customer list.
 
 **Accent color:** indigo
 **Purpose:** Complete subscriber lifecycle management.
@@ -385,7 +415,30 @@ Subscriber | Amount Owed | Days Overdue | Dunning Step | Last Action | Next Acti
 
 ### 3j. Tax Rates (`/admin/billing/tax-rates`)
 
-CRUD table: Name, Rate %, Type (inclusive/exclusive/exempt), Active, Actions
+CRUD table: Name, Code, Rate %, Active, Actions. Inclusive/exclusive/exempt is
+selected on invoice or credit-note lines; it is not a property of the tax-rate
+record.
+
+### Tax Accounting Report (`/admin/reports/tax`)
+
+- Date-filtered output tax recognized from issued invoice documents
+- Issued credit-note tax adjustments and net output-tax liability per currency
+- Credit-note periods use the persisted first-issuance tax point; automated
+  cancellation credits retain the source line's configured tax treatment
+- Totals separated by currency; never label issued tax as cash collected
+- WHT gross settlement, net cash, total withheld, and outstanding receivable
+- `app.services.tax_accounting` owns the projection; the route and template do
+  not query invoices or reconstruct WHT status meaning
+- The report remains the canonical source-document tax-register projection.
+  Dotmac ERP separately owns configurable TaxCode account mappings, balanced
+  journals, tax transactions, tax returns, and financial statements.
+- `/admin/billing/tax-accounting` owns the Sub operator experience for the WHT
+  evidence lifecycle. It provides server-side search, status filters, counts,
+  newest-first ordering, and pagination; it has no account-mapping or posting
+  controls.
+- Invoice/credit-note tax treatment and payment WHT facts flow through bounded
+  sync projections to the existing ERP pull integration. ERP fails closed when
+  an effective account mapping is missing or ambiguous.
 
 ### 3k. Payment Channels (`/admin/billing/payment-channels`)
 
@@ -2110,8 +2163,9 @@ class ResellerPortalService:
 | Stat Card | `data/stats_card.html` | KPI cards on all dashboards |
 | Data Table | `data/table_interactive.html` | All list pages |
 | Pagination | `data/table_pagination.html` | All list pages |
+| List interaction standard | Per-resource query/projection owner plus product-native components | Global Dotmac standard: Carbon table/filter/search/pagination behavior with WCAG 2.2 AA as the accessibility floor; no Carbon visual-theme requirement |
 | Empty State | `data/empty_state.html` | All list pages when no data |
-| Status Badge | macro in `ui/macros.html` | Every status display |
+| Status Badge | `status_presentation_badge` in `ui/macros.html`; `StatusChip`/`StatusPill` in Flutter | Account, subscription, invoice, payment, outage-incident, device operational, customer connection-health, support-ticket, and field work-order displays consume the server semantic contract; concrete role colors come only from branding/theme tokens |
 | Chart Container | `charts/*.html` | All dashboard charts |
 | Toast Container | `feedback/toast_container.html` | All pages (notifications) |
 | Confirm Modal | `modals/confirm_modal.html` | Delete/suspend actions |

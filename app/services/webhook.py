@@ -26,20 +26,9 @@ from app.services.common import (
     validate_enum,
 )
 from app.services.response import ListResponseMixin
+from app.services.webhook_deliveries import create_manual_delivery, update_delivery
 
 logger = logging.getLogger(__name__)
-
-
-def _delivery_extra(delivery: WebhookDelivery) -> dict[str, object]:
-    return {
-        "event": "webhook_delivery",
-        "delivery_id": str(delivery.id),
-        "subscription_id": str(delivery.subscription_id),
-        "endpoint_id": str(delivery.endpoint_id),
-        "event_type": delivery.event_type.value if delivery.event_type else None,
-        "delivery_status": delivery.status.value if delivery.status else None,
-        "response_status": delivery.response_status,
-    }
 
 
 class WebhookEndpoints(ListResponseMixin):
@@ -252,23 +241,7 @@ class WebhookSubscriptions(ListResponseMixin):
 class WebhookDeliveries(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: WebhookDeliveryCreate):
-        subscription = db.get(WebhookSubscription, coerce_uuid(payload.subscription_id))
-        if not subscription:
-            raise HTTPException(
-                status_code=404, detail="Webhook subscription not found"
-            )
-        delivery = WebhookDelivery(
-            subscription_id=subscription.id,
-            endpoint_id=subscription.endpoint_id,
-            event_type=payload.event_type,
-            status=WebhookDeliveryStatus.pending,
-            payload=payload.payload,
-        )
-        db.add(delivery)
-        db.commit()
-        db.refresh(delivery)
-        logger.info("webhook_delivery_created", extra=_delivery_extra(delivery))
-        return delivery
+        return create_manual_delivery(db, payload)
 
     @staticmethod
     def get(db: Session, delivery_id: str):
@@ -321,15 +294,7 @@ class WebhookDeliveries(ListResponseMixin):
 
     @staticmethod
     def update(db: Session, delivery_id: str, payload: WebhookDeliveryUpdate):
-        delivery = db.get(WebhookDelivery, coerce_uuid(delivery_id))
-        if not delivery:
-            raise HTTPException(status_code=404, detail="Webhook delivery not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
-            setattr(delivery, key, value)
-        db.commit()
-        db.refresh(delivery)
-        logger.info("webhook_delivery_updated", extra=_delivery_extra(delivery))
-        return delivery
+        return update_delivery(db, delivery_id, payload)
 
 
 webhook_endpoints = WebhookEndpoints()

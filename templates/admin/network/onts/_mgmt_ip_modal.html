@@ -70,7 +70,7 @@
                             <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ available_mgmt_ips|length }} available IP(s) in pool</p>
                         </div>
                         <div x-show="useManual" x-cloak>
-                            <input type="text" name="mgmt_ip_address_manual" id="mgmt_ip_address_manual"
+                            <input type="text" id="mgmt_ip_address_manual"
                                    value="{{ mgmt_ip_address or '' }}"
                                    @input="$el.form.querySelector('[name=mgmt_ip_address]').value = $el.value"
                                    class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono text-slate-900 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"

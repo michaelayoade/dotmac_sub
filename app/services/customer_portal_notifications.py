@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import Any
 
 from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
@@ -11,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.models.comms import CustomerNotificationEvent, CustomerNotificationStatus
 from app.models.notification import Notification, NotificationStatus
 from app.models.subscriber import Subscriber
-from app.services.common import coerce_uuid
+from app.services.customer_context import resolve_customer_context
 from app.services.customer_notification_policy import (
     get_subscriber_notification_preferences,
     is_notification_enabled_for_subscriber,
@@ -19,10 +21,83 @@ from app.services.customer_notification_policy import (
 )
 from app.services.email_template import html_to_text
 
+_READ_METADATA_KEY = "portal_read_notification_keys"
+
+
+def _notification_key(source: str, item_id: object) -> str:
+    return f"{source}:{item_id}"
+
+
+def _read_keys(subscriber: Subscriber | None) -> set[str]:
+    if subscriber is None:
+        return set()
+    raw = (subscriber.metadata_ or {}).get(_READ_METADATA_KEY) or []
+    if not isinstance(raw, list):
+        return set()
+    return {str(item) for item in raw if str(item)}
+
+
+def _ordered_read_keys(subscriber: Subscriber | None) -> list[str]:
+    """Return the stored keys in write order, without invalid or duplicate rows."""
+    if subscriber is None:
+        return []
+    raw = (subscriber.metadata_ or {}).get(_READ_METADATA_KEY) or []
+    if not isinstance(raw, list):
+        return []
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        key = str(item).strip()
+        if key and key not in seen:
+            seen.add(key)
+            ordered.append(key)
+    return ordered
+
+
+def _store_read_keys(
+    db: Session,
+    *,
+    subscriber: Subscriber,
+    read_keys: list[str],
+) -> int:
+    """Canonical writer for recipient read state stored on the subscriber.
+
+    ``read_keys`` must be ordered oldest-to-newest. Keeping insertion order makes
+    the 500-key bound retain the most recent inbox state rather than an arbitrary
+    UUID sort order.
+    """
+    # Multiple devices can mark different items simultaneously. Refresh under
+    # a row lock so the second writer merges the first writer's committed keys
+    # instead of replacing them from a stale Subscriber instance.
+    subscriber = (
+        db.query(Subscriber)
+        .filter(Subscriber.id == subscriber.id)
+        .populate_existing()
+        .with_for_update()
+        .one()
+    )
+    current = _ordered_read_keys(subscriber)
+    current_set = set(current)
+    additions: list[str] = []
+    for key in read_keys:
+        if key and key not in current_set:
+            current_set.add(key)
+            additions.append(key)
+    if not additions:
+        return 0
+    metadata = dict(subscriber.metadata_ or {})
+    metadata[_READ_METADATA_KEY] = (current + additions)[-500:]
+    subscriber.metadata_ = metadata
+    db.commit()
+    return len(additions)
+
 
 def _normalize_portal_notification(item: object) -> SimpleNamespace:
     if isinstance(item, CustomerNotificationEvent):
+        key = _notification_key("customer_event", item.id)
         return SimpleNamespace(
+            id=str(item.id),
+            read_key=key,
             channel=item.channel,
             created_at=item.created_at,
             entity_type=item.entity_type,
@@ -34,6 +109,7 @@ def _normalize_portal_notification(item: object) -> SimpleNamespace:
         )
 
     notification = item
+    key = _notification_key("notification", getattr(notification, "id", ""))
     template = getattr(notification, "template", None)
     event_type = getattr(notification, "event_type", None) or getattr(
         template,
@@ -46,6 +122,8 @@ def _normalize_portal_notification(item: object) -> SimpleNamespace:
         or ""
     )
     return SimpleNamespace(
+        id=str(getattr(notification, "id", "")),
+        read_key=key,
         channel=getattr(
             getattr(notification, "channel", None),
             "value",
@@ -66,12 +144,8 @@ def _resolve_notification_context(
     db: Session,
     customer: dict,
 ) -> tuple[Subscriber | None, list[str]]:
-    subscriber_id = customer.get("subscriber_id") or customer.get("session", {}).get(
-        "subscriber_id"
-    )
-    subscriber = (
-        db.get(Subscriber, coerce_uuid(subscriber_id)) if subscriber_id else None
-    )
+    context = resolve_customer_context(db, customer)
+    subscriber = context.subscriber or context.account
 
     recipients: list[str] = []
     if subscriber:
@@ -181,6 +255,16 @@ def _load_notifications(
     return merged
 
 
+def _apply_read_state(
+    notifications: list[SimpleNamespace],
+    *,
+    read_keys: set[str],
+) -> list[SimpleNamespace]:
+    for item in notifications:
+        item.is_read = item.read_key in read_keys
+    return notifications
+
+
 def _count_notification_candidates(
     db: Session,
     *,
@@ -244,15 +328,17 @@ def get_notifications_preview(
         db,
         subscriber=subscriber,
         recipients=recipients,
-        candidate_limit=max(limit * 2, limit),
     )
+    read_keys = _read_keys(subscriber)
+    _apply_read_state(notifications, read_keys=read_keys)
     total = _count_notification_candidates(
         db, subscriber=subscriber, recipients=recipients
     )
+    unread_count = sum(1 for item in notifications if not item.is_read)
     return {
         "recent_notifications": notifications[:limit],
         "recent_notifications_total": total,
-        "unread_notifications_count": total,
+        "unread_notifications_count": unread_count,
         "has_recent_notifications": total > 0,
     }
 
@@ -266,9 +352,12 @@ def get_notifications_page(
 ) -> dict[str, object]:
     subscriber, recipients = _resolve_notification_context(db, customer)
     merged = _load_notifications(db, subscriber=subscriber, recipients=recipients)
+    read_keys = _read_keys(subscriber)
+    _apply_read_state(merged, read_keys=read_keys)
     total = len(merged)
     offset = (page - 1) * per_page
     notifications = merged[offset : offset + per_page]
+    unread_count = sum(1 for item in merged if not item.is_read)
 
     preferences = get_subscriber_notification_preferences(subscriber)
     return {
@@ -278,5 +367,87 @@ def get_notifications_page(
         "total": total,
         "billing_notifications_enabled": preferences["billing_notifications"],
         "sms_updates_enabled": preferences["sms_updates"],
-        "unread_notifications_count": total,
+        "push_notifications_enabled": preferences["push_notifications"],
+        "unread_notifications_count": unread_count,
     }
+
+
+def mark_notifications_read(
+    db: Session,
+    customer: dict,
+    *,
+    read_key: str | None = None,
+    all_visible: bool = False,
+) -> int:
+    subscriber, recipients = _resolve_notification_context(db, customer)
+    if subscriber is None:
+        return 0
+    visible = _load_notifications(db, subscriber=subscriber, recipients=recipients)
+    visible_keys = {item.read_key for item in visible}
+    if all_visible:
+        # _load_notifications returns newest first; the writer expects oldest
+        # first so its bounded tail keeps the newest read state.
+        keys_to_mark = [item.read_key for item in reversed(visible[:500])]
+    else:
+        candidate = str(read_key or "").strip()
+        keys_to_mark = [candidate] if candidate in visible_keys else []
+    if not keys_to_mark:
+        return 0
+    return _store_read_keys(db, subscriber=subscriber, read_keys=keys_to_mark)
+
+
+def apply_notification_read_state(
+    db: Session,
+    *,
+    subscriber_id: str,
+    notifications: list[Any],
+) -> list[Any]:
+    """Project canonical recipient read state onto customer API feed rows."""
+    subscriber = db.get(Subscriber, subscriber_id)
+    read_keys = _read_keys(subscriber)
+    for notification in notifications:
+        notification.is_read = (
+            _notification_key("notification", getattr(notification, "id", ""))
+            in read_keys
+        )
+    return notifications
+
+
+def mark_api_notifications_read(
+    db: Session,
+    *,
+    subscriber_id: str,
+    notification_ids: Sequence[object],
+    all_visible: bool = False,
+) -> int:
+    """Mark only active notification rows owned by the signed-in subscriber.
+
+    This is also the migration boundary for legacy device-local read IDs. IDs
+    belonging to another account (or no longer visible) are ignored.
+    """
+    subscriber = db.get(Subscriber, subscriber_id)
+    if subscriber is None:
+        return 0
+
+    query = (
+        db.query(Notification)
+        .filter(Notification.subscriber_id == subscriber.id)
+        .filter(Notification.is_active.is_(True))
+    )
+    if all_visible:
+        # Bound storage to the newest 500 visible rows, matching the canonical
+        # metadata retention limit. Reverse to persist oldest-to-newest.
+        visible = query.order_by(Notification.created_at.desc()).limit(500).all()
+        visible.reverse()
+    else:
+        requested = [item for item in notification_ids if str(item)]
+        if not requested:
+            return 0
+        visible = (
+            query.filter(Notification.id.in_(requested))
+            .order_by(Notification.created_at.asc())
+            .all()
+        )
+
+    keys = [_notification_key("notification", item.id) for item in visible]
+    return _store_read_keys(db, subscriber=subscriber, read_keys=keys)

@@ -783,9 +783,23 @@ def olt_firmware_upgrade(
     request: Request,
     olt_id: str,
     firmware_image_id: str = Form(""),
+    confirm_olt_name: str = Form(""),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     """Trigger firmware upgrade on OLT via SSH."""
+    olt = get_olt_or_none(db, olt_id)
+    if not olt:
+        msg = quote_plus("OLT not found")
+        return RedirectResponse(
+            f"/admin/network/olts?sync_status=error&sync_message={msg}",
+            status_code=303,
+        )
+    if confirm_olt_name.strip() != olt.name:
+        msg = quote_plus("Type the exact OLT name to confirm firmware upgrade")
+        return RedirectResponse(
+            f"/admin/network/olts/{olt_id}?sync_status=error&sync_message={msg}",
+            status_code=303,
+        )
     if not firmware_image_id:
         msg = quote_plus("No firmware image selected")
         return RedirectResponse(

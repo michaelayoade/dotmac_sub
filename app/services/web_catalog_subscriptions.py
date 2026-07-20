@@ -9,19 +9,21 @@ from bisect import bisect_left
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, selectinload
 from starlette.datastructures import FormData
 
+from app.models.audit import AuditActorType
 from app.models.billing import InvoiceStatus, TaxRate
 from app.models.catalog import (
     AccessCredential,
     AddOn,
     AddOnPrice,
     AddOnType,
+    BillingCycle,
     BillingMode,
     ContractTerm,
     NasDevice,
@@ -32,6 +34,7 @@ from app.models.catalog import (
     Subscription,
     SubscriptionAddOn,
     SubscriptionStatus,
+    billing_cycle_suffix,
 )
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
@@ -54,7 +57,6 @@ from app.models.radius import (
 )
 from app.models.radius_error import RadiusAuthError
 from app.models.subscriber import Address, ChannelType, Subscriber
-from app.models.usage import RadiusAccountingSession
 from app.schemas.catalog import SubscriptionCreate, SubscriptionUpdate
 from app.schemas.network import IPAssignmentCreate, IPAssignmentUpdate
 from app.schemas.subscriber import SubscriberAccountCreate
@@ -78,6 +80,9 @@ from app.services.billing_adapter import (
 )
 from app.services.billing_settings import resolve_payment_due_days
 from app.services.credential_crypto import decrypt_credential
+from app.services.network.radius_sessions import (
+    latest_open_accounting_session_for_subscription,
+)
 from app.timezone import APP_TIMEZONE_NAME, format_in_app_timezone
 
 logger = logging.getLogger(__name__)
@@ -89,11 +94,13 @@ POOL_IPV4_SELECTOR_PREFIX = "pool:"
 UNSPECIFIED_IPV4 = ipaddress.IPv4Address(0)
 
 
-def _format_offer_price_summary(amount: object | None) -> str:
+def _format_offer_price_summary(
+    amount: object | None, cycle: BillingCycle | None = None
+) -> str:
     value = _coerce_setting_decimal(amount)
     if value is None:
         return ""
-    return f"₦{value:,.0f}/mo"
+    return f"₦{value:,.0f}{billing_cycle_suffix(cycle)}"
 
 
 def _offer_option(offer: object) -> dict[str, str]:
@@ -101,7 +108,8 @@ def _offer_option(offer: object) -> dict[str, str]:
     name = str(getattr(offer, "name", "") or "")
     prices = getattr(offer, "prices", None) or []
     amount = getattr(prices[0], "amount", None) if prices else None
-    price_summary = _format_offer_price_summary(amount)
+    cycle = getattr(prices[0], "billing_cycle", None) if prices else None
+    price_summary = _format_offer_price_summary(amount, cycle)
     label = name
     if price_summary:
         label = f"{name} - {price_summary}"
@@ -119,25 +127,24 @@ def _offer_options(
     offer_ids = [
         getattr(offer, "id", None) for offer in offers if getattr(offer, "id", None)
     ]
-    first_amount_by_offer_id: dict[str, object] = {}
+    first_price_by_offer_id: dict[str, tuple[object, BillingCycle | None]] = {}
     if include_prices and offer_ids:
         price_rows = (
-            db.query(OfferPrice.offer_id, OfferPrice.amount)
+            db.query(OfferPrice.offer_id, OfferPrice.amount, OfferPrice.billing_cycle)
             .filter(OfferPrice.offer_id.in_(offer_ids))
             .filter(OfferPrice.is_active.is_(True))
             .order_by(OfferPrice.created_at.asc())
             .all()
         )
-        for offer_id, amount in price_rows:
-            first_amount_by_offer_id.setdefault(str(offer_id), amount)
+        for offer_id, amount, cycle in price_rows:
+            first_price_by_offer_id.setdefault(str(offer_id), (amount, cycle))
 
     options: list[dict[str, str]] = []
     for offer in offers:
         offer_id = str(getattr(offer, "id", "") or "")
         name = str(getattr(offer, "name", "") or "")
-        price_summary = _format_offer_price_summary(
-            first_amount_by_offer_id.get(offer_id)
-        )
+        amount, cycle = first_price_by_offer_id.get(offer_id, (None, None))
+        price_summary = _format_offer_price_summary(amount, cycle)
         label = f"{name} - {price_summary}" if price_summary else name
         options.append(
             {
@@ -538,6 +545,20 @@ def parse_subscription_form(
     }
     if subscription_id:
         data["id"] = subscription_id
+    else:
+        # Creation establishes technical and commercial intent only. Lifecycle
+        # facts are owned by subscription_lifecycle_commands after the record
+        # and its provisioning inputs have been staged.
+        data.update(
+            {
+                "status": SubscriptionStatus.pending.value,
+                "start_at": "",
+                "end_at": "",
+                "next_billing_at": "",
+                "canceled_at": "",
+                "cancel_reason": "",
+            }
+        )
     return data
 
 
@@ -1323,6 +1344,7 @@ def send_subscription_credentials(
     )
     from html import escape
 
+    from app.services.brand_profiles import resolve_brand
     from app.services.email_template import wrap_email_html
 
     body_html = wrap_email_html(
@@ -1333,6 +1355,7 @@ def send_subscription_credentials(
             "<p>Please keep these details secure.</p>"
         ),
         subject=subject,
+        brand=resolve_brand(db, subscriber_id=subscriber.id).to_dict(),
     )
 
     email_sent = 0
@@ -1767,23 +1790,54 @@ def _sync_ipv4_assignments_for_subscription(
 def _additional_route_form_rows(
     db: Session,
     *,
-    subscriber_id,
+    subscription_id,
 ) -> tuple[list[str], list[str]]:
-    if not subscriber_id:
+    if not subscription_id:
         return [""], [""]
-    routes = (
-        db.query(SubscriberAdditionalRoute)
-        .filter(SubscriberAdditionalRoute.subscriber_id == subscriber_id)
-        .filter(SubscriberAdditionalRoute.is_active.is_(True))
-        .order_by(SubscriberAdditionalRoute.cidr.asc())
-        .all()
+    subscription = db.get(Subscription, subscription_id)
+    query = db.query(SubscriberAdditionalRoute).filter(
+        SubscriberAdditionalRoute.subscription_id == subscription_id
     )
+    routes = query.filter(SubscriberAdditionalRoute.is_active.is_(True)).all()
+    if (
+        not routes
+        and subscription is not None
+        and _legacy_route_scope_is_unambiguous(db, subscription)
+    ):
+        routes = (
+            db.query(SubscriberAdditionalRoute)
+            .filter(
+                SubscriberAdditionalRoute.subscriber_id == subscription.subscriber_id,
+                SubscriberAdditionalRoute.subscription_id.is_(None),
+                SubscriberAdditionalRoute.is_active.is_(True),
+            )
+            .all()
+        )
+    routes.sort(key=lambda route: str(route.cidr or ""))
     if not routes:
         return [""], [""]
     return (
         [str(route.cidr or "") for route in routes],
         [str(route.metric or 1) for route in routes],
     )
+
+
+def _legacy_route_scope_is_unambiguous(
+    db: Session,
+    subscription_obj: Subscription,
+) -> bool:
+    count = (
+        db.query(func.count(Subscription.id))
+        .filter(
+            Subscription.subscriber_id == subscription_obj.subscriber_id,
+            Subscription.status.in_(
+                (SubscriptionStatus.pending, SubscriptionStatus.active)
+            ),
+        )
+        .scalar()
+        or 0
+    )
+    return count == 1
 
 
 def normalize_additional_routes(
@@ -1886,19 +1940,32 @@ def _validate_additional_routes_available(
                 f"Additional routed IP block {desired} cannot start at .0."
             )
 
+    legacy_scope = _legacy_route_scope_is_unambiguous(db, subscription_obj)
     assigned_networks = _active_route_networks(
         db,
-        current_subscriber_id=subscription_obj.subscriber_id,
+        current_subscriber_id=(
+            subscription_obj.subscriber_id if legacy_scope else None
+        ),
+        current_subscription_id=subscription_obj.id,
     )
     current_subscriber_routes: list[ipaddress.IPv4Network] = []
     current_routes = (
         db.query(SubscriberAdditionalRoute)
-        .filter(
-            SubscriberAdditionalRoute.subscriber_id == subscription_obj.subscriber_id
-        )
+        .filter(SubscriberAdditionalRoute.subscription_id == subscription_obj.id)
         .filter(SubscriberAdditionalRoute.is_active.is_(True))
         .all()
     )
+    if not current_routes and legacy_scope:
+        current_routes = (
+            db.query(SubscriberAdditionalRoute)
+            .filter(
+                SubscriberAdditionalRoute.subscriber_id
+                == subscription_obj.subscriber_id,
+                SubscriberAdditionalRoute.subscription_id.is_(None),
+                SubscriberAdditionalRoute.is_active.is_(True),
+            )
+            .all()
+        )
     for route in current_routes:
         try:
             route_network = ipaddress.ip_network(str(route.cidr), strict=False)
@@ -2073,6 +2140,23 @@ def _priced_public_ip_addons_for_routes(
     return addons
 
 
+def _public_ip_addon_has_recurring_price(db: Session, add_on_id: str | None) -> bool:
+    if not add_on_id:
+        return False
+    try:
+        selected_uuid = UUID(str(add_on_id))
+    except ValueError:
+        return False
+    return (
+        db.query(AddOnPrice.id)
+        .filter(AddOnPrice.add_on_id == selected_uuid)
+        .filter(AddOnPrice.is_active.is_(True))
+        .filter(AddOnPrice.price_type == PriceType.recurring)
+        .first()
+        is not None
+    )
+
+
 def sync_additional_routes_for_subscription(
     db: Session,
     *,
@@ -2108,29 +2192,45 @@ def sync_additional_routes_for_subscription(
     )
     existing = (
         db.query(SubscriberAdditionalRoute)
-        .filter(
-            SubscriberAdditionalRoute.subscriber_id == subscription_obj.subscriber_id
-        )
+        .filter(SubscriberAdditionalRoute.subscription_id == subscription_obj.id)
         .all()
     )
+    if not existing and _legacy_route_scope_is_unambiguous(db, subscription_obj):
+        existing = (
+            db.query(SubscriberAdditionalRoute)
+            .filter(
+                SubscriberAdditionalRoute.subscriber_id
+                == subscription_obj.subscriber_id,
+                SubscriberAdditionalRoute.subscription_id.is_(None),
+            )
+            .all()
+        )
+        for route in existing:
+            route.subscription_id = subscription_obj.id
     existing_by_cidr = {str(route.cidr): route for route in existing}
-    # Only NEW routes require a priced /30 public IP add-on. Existing routes
-    # (already provisioned, possibly migrated/legacy reserved guard rows) are
-    # grandfathered so an admin can re-save the subscription form without an
-    # add-on being required for a route that already exists.
-    new_desired = [
-        (cidr, prefix_length, metric)
-        for cidr, prefix_length, metric in desired
-        if cidr not in existing_by_cidr
-    ]
-    _priced_public_ip_addons_for_routes(db, new_desired)
+    # Routed blocks are provisioning state. A recurring public-IP charge is
+    # created only when an explicit public-IP billing add-on is selected.
+    # Existing routes are otherwise preserved/grandfathered.
+    if str(add_on_id or "").strip():
+        new_desired = [
+            (cidr, prefix_length, metric)
+            for cidr, prefix_length, metric in desired
+            if cidr not in existing_by_cidr
+        ]
+        if new_desired and not _public_ip_addon_has_recurring_price(db, add_on_id):
+            _cidr, prefix_length, _metric = new_desired[0]
+            raise ValueError(
+                f"Additional routed IP block {_cidr} requires an active "
+                f"/{prefix_length} public IP add-on with a recurring price."
+            )
 
     for cidr, (prefix_length, metric) in desired_map.items():
-        route = existing_by_cidr.get(cidr)
-        if route is None:
+        existing_route = existing_by_cidr.get(cidr)
+        if existing_route is None:
             db.add(
                 SubscriberAdditionalRoute(
                     subscriber_id=subscription_obj.subscriber_id,
+                    subscription_id=subscription_obj.id,
                     cidr=cidr,
                     prefix_length=prefix_length,
                     metric=metric,
@@ -2139,11 +2239,11 @@ def sync_additional_routes_for_subscription(
                 )
             )
             continue
-        route.prefix_length = prefix_length
-        route.metric = metric
-        route.is_active = True
-        if not route.source:
-            route.source = "admin_subscription_form"
+        existing_route.prefix_length = prefix_length
+        existing_route.metric = metric
+        existing_route.is_active = True
+        if not existing_route.source:
+            existing_route.source = "admin_subscription_form"
 
     for route in existing:
         if str(route.cidr) not in desired_map and route.is_active:
@@ -2285,6 +2385,7 @@ def _active_route_networks(
     db: Session,
     *,
     current_subscriber_id: object | None = None,
+    current_subscription_id: object | None = None,
 ) -> list[ipaddress.IPv4Network]:
     query = db.query(SubscriberAdditionalRoute).filter(
         SubscriberAdditionalRoute.is_active.is_(True)
@@ -2292,6 +2393,13 @@ def _active_route_networks(
     if current_subscriber_id:
         query = query.filter(
             SubscriberAdditionalRoute.subscriber_id != current_subscriber_id
+        )
+    if current_subscription_id:
+        query = query.filter(
+            or_(
+                SubscriberAdditionalRoute.subscription_id.is_(None),
+                SubscriberAdditionalRoute.subscription_id != current_subscription_id,
+            )
         )
     networks: list[ipaddress.IPv4Network] = []
     for route in query.all():
@@ -2794,18 +2902,24 @@ def ensure_ipv4_blocks_allocatable(
 def apply_create_quick_options(
     payload_data: dict[str, object], form: FormData
 ) -> tuple[bool, bool, bool]:
-    """Apply create quick options and return flags."""
+    """Return create follow-up flags without bypassing lifecycle ownership."""
     activate_immediately = form.get("activate_immediately") == "1"
     generate_invoice = form.get("generate_invoice") == "1"
     send_welcome_email = form.get("send_welcome_email") == "1"
     if activate_immediately:
-        payload_data["status"] = "active"
-        if not payload_data.get("start_at"):
-            payload_data["start_at"] = datetime.now(UTC).isoformat()
+        payload_data["status"] = SubscriptionStatus.pending.value
+        for field in (
+            "start_at",
+            "end_at",
+            "next_billing_at",
+            "canceled_at",
+            "cancel_reason",
+        ):
+            payload_data.pop(field, None)
     return activate_immediately, generate_invoice, send_welcome_email
 
 
-def create_subscription(db: Session, payload_data: dict[str, object]):
+def create_subscription(db: Session, payload_data: dict[str, object]) -> Subscription:
     """Create subscription."""
     return catalog_service.subscriptions.create(
         db=db, payload=SubscriptionCreate.model_validate(payload_data)
@@ -2814,7 +2928,7 @@ def create_subscription(db: Session, payload_data: dict[str, object]):
 
 def update_subscription(
     db: Session, subscription_id: str, payload_data: dict[str, object]
-):
+) -> Subscription:
     """Update subscription."""
     return catalog_service.subscriptions.update(
         db=db,
@@ -2889,7 +3003,7 @@ def edit_form_data(db: Session, subscription_obj: Subscription) -> dict[str, obj
     )
     additional_route_cidrs, additional_route_metrics = _additional_route_form_rows(
         db,
-        subscriber_id=subscription_obj.subscriber_id,
+        subscription_id=subscription_obj.id,
     )
     ip_addon_id, ip_addon_quantity = _subscription_public_ip_addon_form_row(
         db,
@@ -3344,24 +3458,11 @@ def _subscription_connection_status(
             "identifier": None,
         }
 
-    query = db.query(RadiusAccountingSession).filter(
-        RadiusAccountingSession.session_end.is_(None)
+    session = latest_open_accounting_session_for_subscription(
+        db,
+        subscription.id,
+        access_credential_id=credential.id if credential else None,
     )
-    if credential:
-        query = query.filter(
-            or_(
-                RadiusAccountingSession.subscription_id == subscription.id,
-                RadiusAccountingSession.access_credential_id == credential.id,
-            )
-        )
-    else:
-        query = query.filter(RadiusAccountingSession.subscription_id == subscription.id)
-
-    session = query.order_by(
-        RadiusAccountingSession.last_update_at.desc().nullslast(),
-        RadiusAccountingSession.session_start.desc().nullslast(),
-        RadiusAccountingSession.created_at.desc(),
-    ).first()
     if not session:
         return {
             "state": "offline",
@@ -3820,6 +3921,7 @@ def subscriptions_list_page_data(
     return {
         "subscriptions": subscriptions,
         "offers": offers,
+        "offer_options": _offer_options(db, list(offers), include_prices=False),
         "status": status,
         "page": page,
         "per_page": per_page,
@@ -3835,49 +3937,49 @@ def bulk_update_status(
     allowed_from: list[SubscriptionStatus],
     request: object,
     actor_id: str | None,
-) -> int:
-    """Bulk-update subscription statuses, logging audit events.
+) -> dict[str, Any]:
+    """Compatibility adapter for canonical lifecycle command execution."""
+    from app.services.subscription_lifecycle import SubscriptionCommandKind
+    from app.services.subscription_lifecycle_commands import (
+        execute_subscription_command_batch,
+    )
 
-    Only transitions subscriptions whose current status is in *allowed_from*.
-    Returns the number of subscriptions successfully updated.
-    """
     action_labels = {
         SubscriptionStatus.active: "activate",
         SubscriptionStatus.suspended: "suspend",
         SubscriptionStatus.canceled: "cancel",
     }
-    action = action_labels.get(target_status, "update")
-    count = 0
+    action = action_labels.get(target_status)
+    if action is None:
+        raise ValueError(f"Unsupported bulk lifecycle status {target_status.value}")
 
-    for sub_id in subscription_ids_csv.split(","):
-        sub_id = sub_id.strip()
-        if not sub_id:
-            continue
-        try:
-            sub = catalog_service.subscriptions.get(db, sub_id)
-            if sub and sub.status in allowed_from:
-                payload_kwargs: dict[str, Any] = {"status": target_status}
-                if target_status == SubscriptionStatus.canceled:
-                    payload_kwargs["canceled_at"] = datetime.now(UTC)
-                payload = SubscriptionUpdate(**payload_kwargs)
-                catalog_service.subscriptions.update(
-                    db=db, subscription_id=sub_id, payload=payload
-                )
-                record_audit_event(
-                    db,
-                    action=action,
-                    entity_type="subscription",
-                    entity_id=sub_id,
-                    actor_id=actor_id,
-                )
-                count += 1
-        except Exception as exc:
-            logger.error(
-                "Bulk status update failed for subscription %s: %s", sub_id, exc
-            )
-            continue
+    command_kind_by_status: dict[SubscriptionStatus, SubscriptionCommandKind] = {}
+    for status in allowed_from:
+        if target_status == SubscriptionStatus.active:
+            if status == SubscriptionStatus.pending:
+                command_kind_by_status[status] = SubscriptionCommandKind.activate
+            elif status in {
+                SubscriptionStatus.blocked,
+                SubscriptionStatus.suspended,
+                SubscriptionStatus.stopped,
+            }:
+                command_kind_by_status[status] = SubscriptionCommandKind.restore
+        elif target_status == SubscriptionStatus.suspended:
+            command_kind_by_status[status] = SubscriptionCommandKind.suspend
+        elif target_status == SubscriptionStatus.canceled:
+            command_kind_by_status[status] = SubscriptionCommandKind.cancel
 
-    return count
+    result = execute_subscription_command_batch(
+        db,
+        subscription_ids_csv.split(","),
+        command_kind_by_status=command_kind_by_status,
+        source=f"admin:catalog_bulk:{action}:{actor_id or 'system'}",
+        idempotency_key=_bulk_lifecycle_operation_key(request, action=action),
+        actor_id=actor_id,
+        actor_type=AuditActorType.user if actor_id else AuditActorType.system,
+        reason=f"Bulk {action} requested from the admin catalog",
+    )
+    return result.as_dict()
 
 
 def bulk_change_plan(
@@ -3886,46 +3988,102 @@ def bulk_change_plan(
     target_offer_id: str,
     request: object,
     actor_id: str | None,
-) -> int:
-    """Bulk-change plan/offer for subscriptions, logging audit events.
+    effective_timing: str = "instant",
+    include_suspended: bool = False,
+    preview_fingerprint: str | None = None,
+    preview_effective_at: datetime | None = None,
+    idempotency_key: str | None = None,
+) -> dict[str, Any]:
+    """Compatibility adapter for canonical plan-change command execution.
 
-    Only changes active subscriptions. Returns count of updated subscriptions.
+    Only changes active subscriptions by default; when ``include_suspended`` is
+    true, suspended subscriptions are eligible too. Returns ``{changed,
+    skipped_ids, failed_ids}`` so callers can surface partial success.
+
+    ``effective_timing`` selects when the change lands:
+
+    - ``instant`` (default): accept one owner-previewed change and execute it
+      through the subscription lifecycle command owner.
+    - ``next_cycle``: record an approved scheduled change effective at each
+      subscription's next billing date; the applier task swaps the offer at the
+      boundary with no immediate financial transaction. This is the only bulk
+      mode until a batch owner can preview each subscription separately.
     """
     from app.models.catalog import CatalogOffer
+    from app.services.prepaid_plan_changes import resolve_prepaid_plan_change
+    from app.services.subscription_lifecycle import (
+        SubscriptionCommandKind,
+        SubscriptionEffectiveTiming,
+    )
+    from app.services.subscription_lifecycle_commands import (
+        execute_subscription_command_batch,
+    )
 
     target_offer = db.get(CatalogOffer, target_offer_id)
     if not target_offer:
         raise ValueError("Target offer not found")
 
-    count = 0
-    for sub_id in subscription_ids_csv.split(","):
-        sub_id = sub_id.strip()
-        if not sub_id:
-            continue
-        try:
-            sub = catalog_service.subscriptions.get(db, sub_id)
-            if sub and sub.status == SubscriptionStatus.active:
-                payload = SubscriptionUpdate(offer_id=UUID(target_offer_id))
-                catalog_service.subscriptions.update(
-                    db=db, subscription_id=sub_id, payload=payload
-                )
-                record_audit_event(
-                    db,
-                    action="change_plan",
-                    entity_type="subscription",
-                    entity_id=sub_id,
-                    actor_id=actor_id,
-                    metadata={
-                        "new_offer_id": target_offer_id,
-                        "offer_name": target_offer.name,
-                    },
-                )
-                count += 1
-        except Exception as exc:
-            logger.error("Bulk plan change failed for subscription %s: %s", sub_id, exc)
-            continue
+    if effective_timing not in ("instant", "next_cycle"):
+        raise ValueError("Invalid effective_timing")
+    subscription_ids = [
+        value.strip() for value in subscription_ids_csv.split(",") if value.strip()
+    ]
+    if effective_timing == "instant":
+        if len(subscription_ids) != 1:
+            raise ValueError(
+                "Immediate plan changes require one preview per subscription"
+            )
+        if not (preview_fingerprint or "").strip():
+            raise ValueError("Preview the immediate plan change before confirming it")
+        if not (idempotency_key or "").strip():
+            raise ValueError("Plan-change idempotency key is required")
 
-    return count
+        subscription = catalog_service.subscriptions.get(db, subscription_ids[0])
+        decision = resolve_prepaid_plan_change(
+            db,
+            subscription,
+            target_offer_id,
+            effective_at=preview_effective_at,
+        )
+        if decision.fingerprint != preview_fingerprint:
+            raise ValueError("Financial state changed after preview; preview again")
+    allowed_from = {SubscriptionStatus.active}
+    if include_suspended:
+        allowed_from.add(SubscriptionStatus.suspended)
+    timing = (
+        SubscriptionEffectiveTiming.immediate
+        if effective_timing == "instant"
+        else SubscriptionEffectiveTiming.next_cycle
+    )
+    result = execute_subscription_command_batch(
+        db,
+        subscription_ids,
+        command_kind_by_status=dict.fromkeys(
+            allowed_from, SubscriptionCommandKind.change_plan
+        ),
+        source=f"admin:catalog_bulk:change_plan:{actor_id or 'system'}",
+        idempotency_key=(
+            str(idempotency_key)
+            if effective_timing == "instant"
+            else _bulk_lifecycle_operation_key(request, action="change_plan")
+        ),
+        actor_id=actor_id,
+        actor_type=AuditActorType.user if actor_id else AuditActorType.system,
+        reason="Bulk plan change requested from the admin catalog",
+        target_offer_id=target_offer_id,
+        effective_timing=timing,
+        effective_at=(preview_effective_at if effective_timing == "instant" else None),
+    )
+    return result.as_dict()
+
+
+def _bulk_lifecycle_operation_key(request: object, *, action: str) -> str:
+    headers = getattr(request, "headers", None)
+    supplied = headers.get("Idempotency-Key") if headers is not None else None
+    state = getattr(request, "state", None)
+    request_id = getattr(state, "request_id", None) if state is not None else None
+    root = str(supplied or request_id or uuid4())
+    return f"admin-catalog-bulk:{action}:{root}"
 
 
 def force_subscription_reauth(
@@ -4006,13 +4164,13 @@ def create_subscription_with_audit(
     form: FormData,
     request: object,
     actor_id: str | None,
-) -> object:
+) -> Subscription:
     """Create subscription with quick-options, invoice, welcome email, and audit.
 
     Returns the created subscription ORM object.
     """
-    _, generate_invoice, send_welcome_email = apply_create_quick_options(
-        payload_data, form
+    activate_immediately, generate_invoice, send_welcome_email = (
+        apply_create_quick_options(payload_data, form)
     )
     created = create_subscription(db, payload_data)
 
@@ -4020,9 +4178,9 @@ def create_subscription_with_audit(
     if subscriber:
         pppoe_auto_generate = _pppoe_auto_generate_enabled(db)
         existing_credential = _current_access_credential(db, created.subscriber_id)
-        if (
-            not existing_credential
-            and str(getattr(created, "status", "") or "").strip().lower() == "active"
+        if not existing_credential and (
+            activate_immediately
+            or str(getattr(created, "status", "") or "").strip().lower() == "active"
         ):
             try:
                 from app.services.pppoe_credentials import (
@@ -4089,6 +4247,8 @@ def create_subscription_with_audit(
     additional_route_metrics = [
         str(value).strip() for value in form.getlist("additional_route_metrics")
     ]
+    selected_ip_addon_id = str(form.get("ip_addon_id") or "").strip()
+    selected_ip_addon_quantity = str(form.get("ip_addon_quantity") or "1")
     desired_additional_routes = normalize_additional_routes(
         additional_route_cidrs,
         additional_route_metrics,
@@ -4112,23 +4272,23 @@ def create_subscription_with_audit(
         subscription_obj=created,
         cidrs=additional_route_cidrs,
         metrics=additional_route_metrics,
-        add_on_id=str(form.get("ip_addon_id") or ""),
-        quantity=str(form.get("ip_addon_quantity") or "1"),
+        add_on_id=selected_ip_addon_id,
+        quantity=selected_ip_addon_quantity,
     )
     route_fields_supplied = bool(additional_route_cidrs)
     if desired_additional_routes or route_fields_supplied:
-        public_ip_addon_ids = sync_public_ip_addons_for_routes(
+        public_ip_addon_id = sync_public_ip_addon_for_subscription(
             db,
             subscription_obj=created,
-            routes=desired_additional_routes,
+            add_on_id=selected_ip_addon_id if desired_additional_routes else "",
+            quantity=selected_ip_addon_quantity,
         )
-        public_ip_addon_id = next(iter(public_ip_addon_ids.values()), None)
     else:
         public_ip_addon_id = sync_public_ip_addon_for_subscription(
             db,
             subscription_obj=created,
-            add_on_id=str(form.get("ip_addon_id") or ""),
-            quantity=str(form.get("ip_addon_quantity") or "1"),
+            add_on_id=selected_ip_addon_id,
+            quantity=selected_ip_addon_quantity,
         )
 
     if subscriber:
@@ -4212,6 +4372,21 @@ def update_subscription_with_audit(
     Returns the updated subscription ORM object.
     """
     before = catalog_service.subscriptions.get(db=db, subscription_id=subscription_id)
+    # Generic edits own technical metadata only; lifecycle and commercial facts
+    # change through subscription_lifecycle_commands.
+    payload_data = dict(payload_data)
+    payload_data.update(
+        {
+            "offer_id": before.offer_id,
+            "status": before.status,
+            "billing_mode": before.billing_mode,
+            "start_at": before.start_at,
+            "end_at": before.end_at,
+            "next_billing_at": before.next_billing_at,
+            "canceled_at": before.canceled_at,
+            "cancel_reason": before.cancel_reason,
+        }
+    )
     update_subscription(db, subscription_id, payload_data)
     after = catalog_service.subscriptions.get(db=db, subscription_id=subscription_id)
     manage_ipv4_assignment = ipv4_assignment_submitted or bool(
@@ -4249,12 +4424,12 @@ def update_subscription_with_audit(
     public_ip_addon_id: str | None = None
     public_ip_addon_supplied = ip_addon_id is not None
     if additional_routes_supplied:
-        public_ip_addon_ids = sync_public_ip_addons_for_routes(
+        public_ip_addon_id = sync_public_ip_addon_for_subscription(
             db,
             subscription_obj=after,
-            routes=desired_additional_routes,
+            add_on_id=ip_addon_id if desired_additional_routes else "",
+            quantity=ip_addon_quantity,
         )
-        public_ip_addon_id = next(iter(public_ip_addon_ids.values()), None)
     elif ip_addon_id is not None:
         public_ip_addon_id = sync_public_ip_addon_for_subscription(
             db,

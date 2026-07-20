@@ -13,8 +13,9 @@ Provisioning is staged so live OLT writes only happen after the shared foundatio
 | 3. Connectivity and protocol validation | Test and operate against OLTs via SSH, NETCONF, and REST where supported. SNMP collection is owned by Zabbix. Huawei SSH CLI remains the primary write path, with protocol adapters selecting the backend. | `app/services/network/olt_protocol_adapters.py`, `app/services/network/olt_ssh.py`, `app/services/network/olt_ssh_session.py`, `app/services/network/olt_ssh_pool.py`, `app/services/network/olt_netconf.py`, `app/services/network/olt_rest_client.py`, `app/services/network/olt_vendor_adapters.py` |
 | 4. Config-pack readiness | Validate that the OLT has authorization profiles, internet and management VLANs, a management IP pool, ACS assignment, and an OLT-local TR-069 profile ID. | `app/services/network/olt_config_pack.py`, `app/services/network/olt_readiness_validator.py`, `app/services/network/acs_reachability.py`, `app/services/network/olt_profile_resolution.py` |
 | 5. Inventory and topology sync | Model shelves, cards, ports, PON interfaces, SFPs, power units, hardware inventory, linked monitoring devices, and topology views. Hardware inventory reads SNMP Entity MIB data collected by Zabbix. | `app/services/network/olt_inventory.py`, `app/services/network/olt_hardware_discovery.py`, `app/services/network/olt_web_topology.py`, `app/web/admin/network_pon_interfaces.py`, `app/web/admin/network_olts_profiles.py`, `app/tasks/olt_hardware_discovery.py` |
-| 6. ONT authorization and provisioning | Authorize ONTs only after readiness passes. Authorization runs synchronously and waits for ACS bootstrap when TR-069 is configured. | `app/services/network/ont_authorization.py`, `app/services/network/acs_foundation.py`, `app/services/network/ont_provision_steps.py`, `app/services/network/ont_provisioning/orchestrator.py` |
-| 7. Backup, config audit, and drift checks | Capture OLT running-config backups over SSH, audit backups and live config-pack assumptions against intended state, and retry failed compensation entries. Drift checks are read-only guardrails by default. | `app/tasks/olt_config_backup.py`, `app/services/network/olt_config_audit.py`, `app/services/network/olt_config_pack_live_audit.py`, `app/tasks/provisioning.py` |
+| 6. Customer-service assignment | Bind one exact subscription and modeled PON to an ONT through the normal assignment command owner. UISP, RADIUS, ACS, authorization, and topology imports provide observations or candidates; they never infer this customer decision. | `app/services/network/ont_assignment_commands.py`, `app/services/web_network_ont_assignments.py`, `app/services/field_equipment.py` |
+| 7. ONT authorization and provisioning | Authorize ONTs only after readiness passes. Authorization records verified device/topology state and waits for ACS bootstrap when TR-069 is configured, but it does not create customer assignments. | `app/services/network/ont_authorization.py`, `app/services/network/acs_foundation.py`, `app/services/network/ont_provision_steps.py`, `app/services/network/ont_provisioning/orchestrator.py` |
+| 8. Backup, config audit, and drift checks | Capture OLT running-config backups over SSH, audit backups and live config-pack assumptions against intended state, and retry failed compensation entries. Drift checks are read-only guardrails by default. | `app/tasks/olt_config_backup.py`, `app/services/network/olt_config_audit.py`, `app/services/network/olt_config_pack_live_audit.py`, `app/tasks/provisioning.py` |
 
 ## Polling, Monitoring, and Status
 
@@ -49,7 +50,8 @@ Main modules: `app/services/network/olt_polling.py`, `app/services/network/olt_p
 │  │    ├─ Delete existing registration (if force_reauthorize)                       │ │
 │  │    ├─ Authorize via protocol adapter                                            │ │
 │  │    ├─ Create or update ONT inventory state                                      │ │
-│  │    ├─ Link PON assignment and allocate management IP                            │ │
+│  │    ├─ Record verified device/PON state and allocate management IP               │ │
+│  │    ├─ Never infer or create the customer-service assignment                     │ │
 │  │    └─ Apply ACS foundation and wait for ACS bootstrap when TR-069 is configured │ │
 │  └────────────────────────────────┬───────────────────────────────────────────────┘ │
 └───────────────────────────────────┼─────────────────────────────────────────────────┘
@@ -228,8 +230,9 @@ User clicks "Authorize"
         → Resolve line/service/TR-069 profile and VLAN defaults
         → olt_protocol_adapters.authorize_ont()
             → olt_ssh_ont/lifecycle.authorize_ont() [via SSH]
-        → Create or update OntUnit record in DB
+        → Create or update OntUnit inventory and observed topology in DB
         → Allocate management IP and apply ACS foundation
+        → Leave customer-service assignment to ont_assignment_commands
         → Wait for ACS bootstrap when TR-069 is configured
 ```
 
@@ -264,6 +267,7 @@ OntUnit
 | Layer | Key Files | Lines | Purpose |
 |-------|-----------|-------|---------|
 | **Authorization** | `ont_authorization.py` | ~2,000 | Readiness-gated ONT authorization |
+| **Assignment owner** | `ont_assignment_commands.py` | — | Exact subscription/PON assignment, release, and verified move projection |
 | **Protocol** | `olt_protocol_adapters.py` | 1,991 | SSH/NETCONF/REST |
 | **SSH Core** | `olt_ssh.py` | 1,567 | Low-level CLI |
 | **SSH Pool** | `olt_ssh_pool.py` | ~300 | Connection reuse |
@@ -283,7 +287,8 @@ OntUnit
 | `OLTDevices` | `olt.py` | CRUD for OLT devices, credential management |
 | `PonPorts` | `olt.py` | PON port infrastructure, capacity tracking |
 | `OntUnits` | `olt.py` | ONT inventory with advanced filtering |
-| `OntAssignments` | `olt.py` | ONT-to-customer mapping via PON ports |
+| `OntAssignmentCommands` | `ont_assignment_commands.py` | Canonical exact ONT-to-subscription assignment, release, and PON-move projection |
+| `OntAssignments` | `ont_assignment_crud.py` | Compatibility reads and non-identity metadata updates; identity writes delegate or reject |
 | `olt_ssh` | `olt_ssh.py` | Low-level SSH CLI execution |
 | `olt_ssh_pool` | `olt_ssh_pool.py` | Connection pooling (TTL 5min, max 100 reuses) |
 | `olt_operations` | `olt_operations.py` | High-level ops (backup, firmware, diagnostics) |

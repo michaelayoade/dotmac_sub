@@ -17,6 +17,16 @@ from app.services.events.types import Event, EventType
 
 logger = logging.getLogger(__name__)
 
+HANDLED_EVENT_TYPES = frozenset(
+    {
+        EventType.subscription_activated,
+        EventType.subscription_resumed,
+        EventType.service_order_assigned,
+        EventType.provisioning_completed,
+        EventType.provisioning_failed,
+    }
+)
+
 
 class ProvisioningHandler:
     """Handler that triggers provisioning workflows on key events."""

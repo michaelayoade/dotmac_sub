@@ -517,6 +517,7 @@
             "pages": [
                 {"label": "Fiber Plant View", "url": "/admin/network/fiber-plant"},
                 {"label": "Fiber Map", "url": "/admin/network/fiber-map"},
+                {"label": "ONT Identity Review", "url": "/admin/network/ont-identity-reviews"},
                 {"label": "Fiber Strands", "url": "/admin/network/fiber-strands"},
                 {"label": "Splice Closures", "url": "/admin/network/fiber-splice-closures"},
                 {"label": "Change Requests", "url": "/admin/network/fiber-change-requests"}
@@ -574,10 +575,11 @@
         },
         {
             "name": "Network Topology",
-            "description": "Topology graph and device links",
+            "description": "Topology graph, device links, and operational weather map",
             "route_file": "app/web/admin/network_weathermap.py",
             "pages": [
-                {"label": "Network Topology", "url": "/admin/network/topology"}
+                {"label": "Network Topology", "url": "/admin/network/topology"},
+                {"label": "Network Weather Map", "url": "/admin/network/weathermap"}
             ]
         }
     ]
@@ -633,7 +635,7 @@
             "pages": [
                 {"label": "Reports Hub", "url": "/admin/reports/hub"},
                 {"label": "Revenue Report", "url": "/admin/reports/revenue"},
-                {"label": "Subscribers Report", "url": "/admin/reports/subscribers"},
+                {"label": "Customer Report", "url": "/admin/reports/customers"},
                 {"label": "Subscriptions Report", "url": "/admin/reports/subscriptions"},
                 {"label": "Network Report", "url": "/admin/reports/network"},
                 {"label": "Usage Report", "url": "/admin/reports/usage"},

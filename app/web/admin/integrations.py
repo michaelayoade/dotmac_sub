@@ -48,8 +48,6 @@ def integrations_overview(request: Request, db: Session = Depends(get_db)):
     """Main integrations page with connector inventory and integration actions."""
     state = web_integrations_service.build_connectors_list_data(db)
 
-    from app.services import crm_sync_failures
-
     context = _base_context(request, db, active_page="integrations")
     context.update(
         {
@@ -58,30 +56,11 @@ def integrations_overview(request: Request, db: Session = Depends(get_db)):
             "page_subtitle": "Manage integrations, connectors, syncs, and external system access",
             "table_title": "Connectors",
             "recent_activities": recent_activity_for_paths(db, ["/admin/integrations"]),
-            "crm_dead_letter_count": crm_sync_failures.unresolved_count(db),
-            "crm_dead_letters": crm_sync_failures.list_failures(db, limit=25),
         }
     )
     return templates.TemplateResponse(
         "admin/integrations/connectors/index.html", context
     )
-
-
-@router.post(
-    "/crm-dead-letters/redrive",
-    dependencies=[Depends(require_permission("system:settings:write"))],
-)
-def crm_dead_letters_redrive(failure_id: str = Form(""), db: Session = Depends(get_db)):
-    """Re-enqueue CRM push dead-letters — one by id, or all unresolved."""
-    from fastapi.responses import RedirectResponse
-
-    from app.services import crm_sync_failures
-
-    if failure_id.strip():
-        crm_sync_failures.redrive(db, failure_id.strip())
-    else:
-        crm_sync_failures.redrive_all(db)
-    return RedirectResponse(url="/admin/integrations/", status_code=303)
 
 
 # ==================== Syncs ====================
@@ -92,9 +71,18 @@ def crm_dead_letters_redrive(failure_id: str = Form(""), db: Session = Depends(g
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("system:settings:read"))],
 )
-def syncs_list(request: Request, db: Session = Depends(get_db)):
+def syncs_list(
+    request: Request,
+    direction: str | None = None,
+    active: str | None = None,
+    db: Session = Depends(get_db),
+):
     """Generic sync profiles across external systems."""
-    state = web_integration_syncs_service.build_syncs_index_data(db)
+    state = web_integration_syncs_service.build_syncs_index_data(
+        db,
+        direction=direction,
+        active=active in ("1", "true", "on", "yes"),
+    )
     context = _base_context(request, db, active_page="syncs")
     context.update(
         {
@@ -131,8 +119,13 @@ def sync_detail(request: Request, job_id: str, db: Session = Depends(get_db)):
     "/syncs/{job_id}/run",
     dependencies=[Depends(require_permission("system:settings:write"))],
 )
-def sync_run(job_id: str):
-    """Queue a manual sync run."""
+def sync_run(job_id: str, db: Session = Depends(get_db)):
+    """Queue a manual sync run (disabled jobs are refused)."""
+    job = integration_service.integration_jobs.get(db, job_id)
+    if not job.is_active:
+        return RedirectResponse(
+            url=f"/admin/integrations/syncs/{job_id}?error=disabled", status_code=303
+        )
     web_integration_syncs_service.trigger_sync_job(job_id)
     return RedirectResponse(
         url=f"/admin/integrations/syncs/{job_id}?queued=1", status_code=303
@@ -268,24 +261,6 @@ def integrations_installed_bulk(
             connector_ids=connector_ids,
             enabled=(action == "enable"),
         )
-    return RedirectResponse("/admin/integrations/installed?saved=1", status_code=303)
-
-
-@router.post(
-    "/installed/{connector_id}/relay",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:settings:write"))],
-)
-def integrations_installed_relay_toggle(
-    connector_id: str,
-    relay_to_portal: bool = Form(False),
-    db: Session = Depends(get_db),
-):
-    web_integrations_service.set_relay_to_portal(
-        db,
-        connector_id=connector_id,
-        relay=relay_to_portal,
-    )
     return RedirectResponse("/admin/integrations/installed?saved=1", status_code=303)
 
 
@@ -722,6 +697,7 @@ def job_create(
     interval_minutes: str | None = Form(None),
     adapter_key: str | None = Form(None),
     action: str | None = Form(None),
+    adapter_action: str | None = Form(None),
     entity_type: str | None = Form(None),
     direction: str | None = Form(None),
     trigger_mode: str | None = Form(None),
@@ -732,6 +708,21 @@ def job_create(
     is_active: bool = Form(False),
     db: Session = Depends(get_db),
 ):
+    # The form submits a single supported adapter:action combo; free-form
+    # adapter/action values used to no-op or fail only at run time.
+    if adapter_action is not None:
+        adapter_key, _, action = adapter_action.partition(":")
+        adapter_key = adapter_key or None
+        action = action or None
+    supported = {("crm", "pull_tickets"), (None, None)}
+    if (adapter_key, action) not in supported:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"No sync adapter registered for {adapter_key}:{action} — "
+                "supported: crm:pull_tickets (or blank for record-keeping only)"
+            ),
+        )
     try:
         job = web_integrations_service.create_job(
             db,
@@ -815,8 +806,13 @@ def job_detail(request: Request, job_id: str, db: Session = Depends(get_db)):
     "/jobs/{job_id}/run",
     dependencies=[Depends(require_permission("system:settings:write"))],
 )
-def job_run(job_id: str):
-    """Queue a manual integration job run."""
+def job_run(job_id: str, db: Session = Depends(get_db)):
+    """Queue a manual integration job run (disabled jobs are refused)."""
+    job = integration_service.integration_jobs.get(db, job_id)
+    if not job.is_active:
+        return RedirectResponse(
+            url=f"/admin/integrations/jobs/{job_id}?error=disabled", status_code=303
+        )
     web_integration_syncs_service.trigger_sync_job(job_id)
     return RedirectResponse(
         url=f"/admin/integrations/jobs/{job_id}?queued=1", status_code=303
@@ -877,6 +873,7 @@ def hooks_create(
     event_filters_csv: str | None = Form(None),
     retry_max: int = Form(3),
     retry_backoff_ms: int = Form(500),
+    timeout_seconds: int | None = Form(None),
     notes: str | None = Form(None),
     is_enabled: bool = Form(False),
     db: Session = Depends(get_db),
@@ -901,6 +898,7 @@ def hooks_create(
             event_filters=_split_csv(event_filters_csv),
             retry_max=retry_max,
             retry_backoff_ms=retry_backoff_ms,
+            timeout_seconds=timeout_seconds,
             notes=notes,
             is_enabled=is_enabled,
         )
@@ -919,14 +917,15 @@ def hooks_create(
                     "url": url or "",
                     "http_method": (http_method or "POST").upper(),
                     "auth_type": auth_type or "none",
-                    "auth_bearer_token": auth_bearer_token or "",
+                    "auth_bearer_token": "",
                     "auth_basic_username": auth_basic_username or "",
-                    "auth_basic_password": auth_basic_password or "",
-                    "auth_hmac_secret": auth_hmac_secret or "",
+                    "auth_basic_password": "",
+                    "auth_hmac_secret": "",
                     "auth_config_json": auth_config_json or "",
                     "event_filters_csv": event_filters_csv or "",
                     "retry_max": retry_max,
                     "retry_backoff_ms": retry_backoff_ms,
+                    "timeout_seconds": timeout_seconds or "",
                     "notes": notes or "",
                     "is_enabled": is_enabled,
                 },
@@ -959,16 +958,18 @@ def hooks_edit(request: Request, hook_id: str, db: Session = Depends(get_db)):
         "url": hook.url or "",
         "http_method": hook.http_method,
         "auth_type": hook.auth_type.value,
-        "auth_bearer_token": _auth_value(hook.auth_config, "token"),
+        "auth_bearer_token": "",
         "auth_basic_username": _auth_value(hook.auth_config, "username"),
-        "auth_basic_password": _auth_value(hook.auth_config, "password"),
-        "auth_hmac_secret": _auth_value(hook.auth_config, "secret"),
+        "auth_basic_password": "",
+        "auth_hmac_secret": "",
         "auth_config_json": json.dumps(
-            _decrypted_auth_config(hook.auth_config), indent=2
+            integration_hooks_service.public_hook_auth_config(hook.auth_config),
+            indent=2,
         ),
         "event_filters_csv": ", ".join(hook.event_filters or []),
         "retry_max": hook.retry_max,
         "retry_backoff_ms": hook.retry_backoff_ms,
+        "timeout_seconds": hook.timeout_seconds or "",
         "notes": hook.notes or "",
         "is_enabled": hook.is_enabled,
         "id": str(hook.id),
@@ -1011,6 +1012,7 @@ def hooks_update(
     event_filters_csv: str | None = Form(None),
     retry_max: int = Form(3),
     retry_backoff_ms: int = Form(500),
+    timeout_seconds: int | None = Form(None),
     notes: str | None = Form(None),
     is_enabled: bool = Form(False),
     db: Session = Depends(get_db),
@@ -1032,10 +1034,15 @@ def hooks_update(
                 auth_basic_password=auth_basic_password,
                 auth_hmac_secret=auth_hmac_secret,
                 auth_config_json=auth_config_json,
+                existing_auth_config=integration_hooks_service.get_hook(
+                    db, hook_id
+                ).auth_config,
+                preserve_blank_secrets=True,
             ),
             event_filters=_split_csv(event_filters_csv),
             retry_max=retry_max,
             retry_backoff_ms=retry_backoff_ms,
+            timeout_seconds=timeout_seconds,
             notes=notes,
             is_enabled=is_enabled,
         )
@@ -1055,14 +1062,15 @@ def hooks_update(
                     "url": url or "",
                     "http_method": (http_method or "POST").upper(),
                     "auth_type": auth_type or "none",
-                    "auth_bearer_token": auth_bearer_token or "",
+                    "auth_bearer_token": "",
                     "auth_basic_username": auth_basic_username or "",
-                    "auth_basic_password": auth_basic_password or "",
-                    "auth_hmac_secret": auth_hmac_secret or "",
+                    "auth_basic_password": "",
+                    "auth_hmac_secret": "",
                     "auth_config_json": auth_config_json or "",
                     "event_filters_csv": event_filters_csv or "",
                     "retry_max": retry_max,
                     "retry_backoff_ms": retry_backoff_ms,
+                    "timeout_seconds": timeout_seconds or "",
                     "notes": notes or "",
                     "is_enabled": is_enabled,
                 },
@@ -1134,6 +1142,12 @@ def webhook_new(request: Request, db: Session = Depends(get_db)):
     """New webhook endpoint form."""
     context = _base_context(request, db, active_page="webhooks")
     context.update(web_integrations_service.webhook_form_options(db))
+    context.update(
+        {
+            "action_url": "/admin/integrations/webhooks",
+            "submit_label": "Create Webhook",
+        }
+    )
     return templates.TemplateResponse("admin/integrations/webhooks/new.html", context)
 
 
@@ -1149,6 +1163,9 @@ def webhook_create(
     connector_config_id: str | None = Form(None),
     secret: str | None = Form(None),
     event_types: list[str] | None = Form(None),
+    delivery_timeout_seconds: str | None = Form(None),
+    max_retries: str | None = Form(None),
+    retry_backoff_seconds: str | None = Form(None),
     is_active: bool = Form(False),
     db: Session = Depends(get_db),
 ):
@@ -1160,6 +1177,9 @@ def webhook_create(
             connector_config_id=connector_config_id,
             secret=secret,
             event_types=event_types,
+            delivery_timeout_seconds=delivery_timeout_seconds,
+            max_retries=max_retries,
+            retry_backoff_seconds=retry_backoff_seconds,
             is_active=is_active,
         )
     except Exception as exc:
@@ -1173,6 +1193,9 @@ def webhook_create(
                     connector_config_id=connector_config_id,
                     secret=secret,
                     event_types=event_types,
+                    delivery_timeout_seconds=delivery_timeout_seconds,
+                    max_retries=max_retries,
+                    retry_backoff_seconds=retry_backoff_seconds,
                     is_active=is_active,
                 ),
                 "error": str(exc),
@@ -1183,6 +1206,156 @@ def webhook_create(
         )
     return RedirectResponse(
         url=f"/admin/integrations/webhooks/{endpoint.id}", status_code=303
+    )
+
+
+@router.get("/webhooks/{endpoint_id}/edit", response_class=HTMLResponse)
+def webhook_edit(request: Request, endpoint_id: str, db: Session = Depends(get_db)):
+    """Edit webhook endpoint form."""
+    try:
+        state = web_integrations_service.build_webhook_edit_data(
+            db,
+            endpoint_id=endpoint_id,
+        )
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
+        context = _base_context(request, db, active_page="webhooks")
+        context["message"] = "The webhook endpoint you are looking for does not exist."
+        return templates.TemplateResponse(
+            "admin/errors/404.html", context, status_code=404
+        )
+    context = _base_context(request, db, active_page="webhooks")
+    context.update(state)
+    return templates.TemplateResponse("admin/integrations/webhooks/new.html", context)
+
+
+@router.post(
+    "/webhooks/{endpoint_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def webhook_update(
+    request: Request,
+    endpoint_id: str,
+    name: str = Form(...),
+    url: str = Form(...),
+    connector_config_id: str | None = Form(None),
+    secret: str | None = Form(None),
+    event_types: list[str] | None = Form(None),
+    delivery_timeout_seconds: str | None = Form(None),
+    max_retries: str | None = Form(None),
+    retry_backoff_seconds: str | None = Form(None),
+    is_active: bool = Form(False),
+    db: Session = Depends(get_db),
+):
+    try:
+        endpoint = web_integrations_service.update_webhook_endpoint(
+            db,
+            endpoint_id=endpoint_id,
+            name=name,
+            url=url,
+            connector_config_id=connector_config_id,
+            secret=secret,
+            event_types=event_types,
+            delivery_timeout_seconds=delivery_timeout_seconds,
+            max_retries=max_retries,
+            retry_backoff_seconds=retry_backoff_seconds,
+            is_active=is_active,
+        )
+    except Exception as exc:
+        context = _base_context(request, db, active_page="webhooks")
+        context.update(
+            {
+                **web_integrations_service.webhook_error_state(
+                    db,
+                    name=name,
+                    url=url,
+                    connector_config_id=connector_config_id,
+                    secret=None,
+                    event_types=event_types,
+                    delivery_timeout_seconds=delivery_timeout_seconds,
+                    max_retries=max_retries,
+                    retry_backoff_seconds=retry_backoff_seconds,
+                    is_active=is_active,
+                ),
+                "endpoint": None,
+                "action_url": f"/admin/integrations/webhooks/{endpoint_id}",
+                "submit_label": "Save Webhook",
+                "error": str(exc),
+            }
+        )
+        return templates.TemplateResponse(
+            "admin/integrations/webhooks/new.html", context, status_code=400
+        )
+    return RedirectResponse(
+        url=f"/admin/integrations/webhooks/{endpoint.id}?saved=1", status_code=303
+    )
+
+
+@router.post(
+    "/webhooks/{endpoint_id}/enable",
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def webhook_enable(endpoint_id: str, db: Session = Depends(get_db)):
+    web_integrations_service.set_webhook_endpoint_active(
+        db, endpoint_id=endpoint_id, is_active=True
+    )
+    return RedirectResponse(
+        url=f"/admin/integrations/webhooks/{endpoint_id}?saved=1", status_code=303
+    )
+
+
+@router.post(
+    "/webhooks/{endpoint_id}/disable",
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def webhook_disable(endpoint_id: str, db: Session = Depends(get_db)):
+    web_integrations_service.set_webhook_endpoint_active(
+        db, endpoint_id=endpoint_id, is_active=False
+    )
+    return RedirectResponse(
+        url=f"/admin/integrations/webhooks/{endpoint_id}?saved=1", status_code=303
+    )
+
+
+@router.post(
+    "/webhooks/{endpoint_id}/rotate-secret",
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def webhook_rotate_secret(endpoint_id: str, db: Session = Depends(get_db)):
+    web_integrations_service.rotate_webhook_endpoint_secret(db, endpoint_id=endpoint_id)
+    return RedirectResponse(
+        url=f"/admin/integrations/webhooks/{endpoint_id}?secret=rotated",
+        status_code=303,
+    )
+
+
+@router.post(
+    "/webhooks/{endpoint_id}/test",
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def webhook_test(endpoint_id: str, db: Session = Depends(get_db)):
+    try:
+        web_integrations_service.queue_webhook_test_delivery(
+            db, endpoint_id=endpoint_id
+        )
+        query = "test=queued"
+    except Exception:
+        query = "test=failed"
+    return RedirectResponse(
+        url=f"/admin/integrations/webhooks/{endpoint_id}?{query}", status_code=303
+    )
+
+
+@router.post(
+    "/webhooks/{endpoint_id}/delete",
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def webhook_delete(endpoint_id: str, db: Session = Depends(get_db)):
+    web_integrations_service.delete_webhook_endpoint(db, endpoint_id=endpoint_id)
+    return RedirectResponse(
+        url="/admin/integrations/webhooks?deleted=1", status_code=303
     )
 
 
@@ -1447,18 +1620,29 @@ def _build_hook_auth_config(
     auth_basic_password: str | None,
     auth_hmac_secret: str | None,
     auth_config_json: str | None,
+    existing_auth_config: object | None = None,
+    preserve_blank_secrets: bool = False,
 ) -> dict | None:
     auth_type_value = (auth_type or "none").strip().lower()
+    existing = existing_auth_config if isinstance(existing_auth_config, dict) else {}
     result: dict[str, str] = {}
-    if auth_type_value == "bearer" and auth_bearer_token and auth_bearer_token.strip():
-        result["token"] = auth_bearer_token.strip()
+    if auth_type_value == "bearer":
+        if auth_bearer_token and auth_bearer_token.strip():
+            result["token"] = auth_bearer_token.strip()
+        elif preserve_blank_secrets and existing.get("token"):
+            result["token"] = str(existing["token"])
     elif auth_type_value == "basic":
         if auth_basic_username and auth_basic_username.strip():
             result["username"] = auth_basic_username.strip()
         if auth_basic_password and auth_basic_password.strip():
             result["password"] = auth_basic_password.strip()
-    elif auth_type_value == "hmac" and auth_hmac_secret and auth_hmac_secret.strip():
-        result["secret"] = auth_hmac_secret.strip()
+        elif preserve_blank_secrets and existing.get("password"):
+            result["password"] = str(existing["password"])
+    elif auth_type_value == "hmac":
+        if auth_hmac_secret and auth_hmac_secret.strip():
+            result["secret"] = auth_hmac_secret.strip()
+        elif preserve_blank_secrets and existing.get("secret"):
+            result["secret"] = str(existing["secret"])
     extra = _parse_json_object(auth_config_json) or {}
     result.update(extra)
     return result or None
@@ -1510,6 +1694,7 @@ def _hook_form_defaults(
         "event_filters_csv": "",
         "retry_max": 3,
         "retry_backoff_ms": 500,
+        "timeout_seconds": "",
         "notes": "",
         "is_enabled": True,
     }
@@ -1530,6 +1715,7 @@ def _hook_form_defaults(
                 "retry_backoff_ms": int(
                     template.get("retry_backoff_ms") or defaults["retry_backoff_ms"]
                 ),
+                "timeout_seconds": int(template.get("timeout_seconds") or 10),
             }
         )
     return defaults

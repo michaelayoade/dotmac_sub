@@ -94,9 +94,9 @@ def _critical_notification_filter():
 
 def notification_delivery_health(db: Session) -> EnforcementHealth:
     """Return whether critical billing notifications are drainable."""
-    if not _setting_bool(
-        db, SettingDomain.notification, "notification_queue_enabled", default=True
-    ):
+    from app.services import control_registry
+
+    if not control_registry.is_enabled(db, "notifications.queue"):
         return EnforcementHealth(
             ok=False,
             reasons=["notification_queue_disabled"],
@@ -258,6 +258,11 @@ def payment_channel_health(db: Session) -> EnforcementHealth:
                     PaymentWebhookDeadLetterStatus.received,
                     PaymentWebhookDeadLetterStatus.failed,
                     PaymentWebhookDeadLetterStatus.rejected,
+                    # Legacy replay marked rows resolved without proving that
+                    # a Payment was posted. New successful replays delete the
+                    # insurance row; retained ``replayed`` rows remain unsafe
+                    # until they are reprocessed through the fixed owner.
+                    PaymentWebhookDeadLetterStatus.replayed,
                 ]
             )
         )

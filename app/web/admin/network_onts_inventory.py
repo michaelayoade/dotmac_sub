@@ -25,7 +25,7 @@ from app.services import web_network_ont_autofind as web_network_ont_autofind_se
 from app.services import web_network_onts as web_network_onts_service
 from app.services import web_network_operations as web_network_operations_service
 from app.services.audit_helpers import build_audit_activities
-from app.services.auth_dependencies import require_permission
+from app.services.auth_dependencies import has_permission, require_permission
 from app.services.network import ont_web_forms as ont_web_forms_service
 from app.services.network.ont_scope import filter_manageable_ont_ids_from_request
 from app.web.request_parsing import parse_form_data_sync
@@ -40,12 +40,15 @@ def _form_str(form: FormData, key: str, default: str = "") -> str:
 
 
 def _base_context(request: Request, db: Session, active_page: str) -> dict:
+    auth = getattr(request.state, "auth", None) or {}
     return {
         "request": request,
         "active_page": active_page,
         "active_menu": "network",
         "current_user": web_admin_service.get_current_user(request),
         "sidebar_stats": web_admin_service.get_sidebar_stats(db),
+        "can_redrive_network_operations": bool(auth)
+        and has_permission(auth, db, "network:operation:redrive"),
     }
 
 
@@ -491,6 +494,7 @@ def ont_assign_create(request: Request, ont_id: str, db: Session = Depends(get_d
         db,
         ont_id,
         form,
+        actor_id=web_admin_service.get_actor_id(request),
     )
     if result.not_found:
         return templates.TemplateResponse(
@@ -669,12 +673,22 @@ def ont_assignment_remove(
         db,
         ont_id=ont_id,
         assignment_id=assignment_id,
+        actor_id=web_admin_service.get_actor_id(request),
     )
     if result.not_found:
         return templates.TemplateResponse(
             "admin/errors/404.html",
             {"request": request, "message": result.not_found_message},
             status_code=404,
+        )
+
+    if result.error:
+        assert result.ont is not None
+        return _ont_redirect(
+            str(result.ont.id),
+            tab="operations",
+            status="error",
+            message=result.error,
         )
 
     assert result.ont is not None

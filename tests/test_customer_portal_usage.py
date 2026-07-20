@@ -12,7 +12,6 @@ class TestCustomerPortalUsagePage:
         customer = {"subscription_id": str(subscription.id)}
 
         with (
-            patch("app.services.zabbix_engine.get_zabbix_engine") as get_engine,
             patch(
                 "app.services.customer_portal_flow_services._daily_bandwidth_usage"
             ) as daily_bandwidth_usage,
@@ -23,8 +22,6 @@ class TestCustomerPortalUsagePage:
                 "app.services.customer_portal_flow_services._get_fup_status"
             ) as get_fup_status,
         ):
-            get_engine.return_value.get_cached_customer_usage.return_value = None
-
             page = get_usage_page(
                 db_session,
                 customer,
@@ -80,6 +77,61 @@ class TestCustomerPortalUsagePage:
         assert out["chart_records"][0]["upload_value"] == 1.0
         assert out["chart_records"][1]["value"] == 2.0
 
+    def test_get_usage_history_aggregates_account_subscriptions(
+        self, db_session, subscriber, subscription, catalog_offer
+    ) -> None:
+        from datetime import date
+
+        from app.models.catalog import Subscription, SubscriptionStatus
+        from app.models.usage import SubscriberDailyUsage
+        from app.services.customer_portal_flow_services import get_usage_history
+
+        subscription.created_at = datetime(2020, 1, 1, tzinfo=UTC)
+        subscription.start_at = datetime(2020, 1, 1, tzinfo=UTC)
+        previous_subscription = Subscription(
+            subscriber_id=subscriber.id,
+            offer_id=catalog_offer.id,
+            status=SubscriptionStatus.canceled,
+            created_at=datetime(2024, 12, 14, tzinfo=UTC),
+            start_at=datetime(2024, 12, 14, tzinfo=UTC),
+            canceled_at=datetime(2025, 1, 1, tzinfo=UTC),
+        )
+        db_session.add(previous_subscription)
+        db_session.flush()
+
+        gb = 1024**3
+        db_session.add_all(
+            [
+                SubscriberDailyUsage(
+                    subscription_id=subscription.id,
+                    splynx_service_id=8101,
+                    usage_date=date(2026, 1, 5),
+                    upload_bytes=1 * gb,
+                    download_bytes=2 * gb,
+                ),
+                SubscriberDailyUsage(
+                    subscription_id=previous_subscription.id,
+                    splynx_service_id=8102,
+                    usage_date=date(2026, 1, 6),
+                    upload_bytes=3 * gb,
+                    download_bytes=4 * gb,
+                ),
+            ]
+        )
+        db_session.commit()
+
+        out = get_usage_history(
+            db_session,
+            {"account_id": str(subscriber.id), "subscription_id": str(subscription.id)},
+            months=12,
+        )
+
+        assert out["has_history"] is True
+        assert out["total_gb"] == 10.0
+        assert out["chart_records"][0]["value"] == 10.0
+        assert out["chart_records"][0]["download_value"] == 6.0
+        assert out["chart_records"][0]["upload_value"] == 4.0
+
     def test_get_usage_history_empty_without_history(
         self, db_session, subscription
     ) -> None:
@@ -126,7 +178,6 @@ class TestCustomerPortalUsagePage:
         ]
 
         with (
-            patch("app.services.zabbix_engine.get_zabbix_engine") as get_engine,
             patch(
                 "app.services.customer_portal_flow_services._daily_bandwidth_usage_records",
                 return_value=chart_source_records,
@@ -145,8 +196,6 @@ class TestCustomerPortalUsagePage:
                 return_value=None,
             ),
         ):
-            get_engine.return_value.get_cached_customer_usage.return_value = None
-
             page = get_usage_page(
                 db_session,
                 customer,
@@ -157,6 +206,9 @@ class TestCustomerPortalUsagePage:
         daily_records.assert_called_once()
         assert len(page["usage_records"]) == 2
         assert [record.amount for record in page["usage_records"]] == [1.25, 2.5]
+        # Period total is summed over the full record set (7.5), never the
+        # paginated page (which would be 1.25 + 2.5 = 3.75).
+        assert page["period_total_gb"] == 7.5
         assert len(page["chart_records"]) == 3
         assert [record["label"] for record in page["chart_records"]] == [
             "May 01",
@@ -166,6 +218,71 @@ class TestCustomerPortalUsagePage:
         assert page["chart_records"][-1]["value"] == 3.75
         assert page["chart_records"][0]["download_value"] == 0.75
         assert page["chart_records"][0]["upload_value"] == 0.5
+
+    def test_get_usage_page_uses_all_account_subscriptions(
+        self, db_session, subscriber, subscription, catalog_offer
+    ) -> None:
+        from app.models.catalog import Subscription, SubscriptionStatus
+        from app.services.customer_portal_flow_services import get_usage_page
+
+        subscription.created_at = datetime(2020, 1, 1, tzinfo=UTC)
+        subscription.start_at = datetime(2020, 1, 1, tzinfo=UTC)
+        previous_subscription = Subscription(
+            subscriber_id=subscriber.id,
+            offer_id=catalog_offer.id,
+            status=SubscriptionStatus.canceled,
+            created_at=datetime(2024, 12, 14, tzinfo=UTC),
+            start_at=datetime(2024, 12, 14, tzinfo=UTC),
+            canceled_at=datetime(2025, 1, 1, tzinfo=UTC),
+        )
+        db_session.add(previous_subscription)
+        db_session.commit()
+
+        chart_source_records = [
+            SimpleNamespace(
+                recorded_at=datetime(2026, 5, 1, tzinfo=UTC),
+                amount=5.0,
+                usage_amount=5.0,
+                download_amount=3.0,
+                upload_amount=2.0,
+                unit="GB",
+            )
+        ]
+
+        with (
+            patch(
+                "app.services.customer_portal_flow_services._daily_bandwidth_usage_records",
+                return_value=chart_source_records,
+            ) as daily_records,
+            patch(
+                "app.services.customer_portal_flow_services._usage_summary_stats",
+                return_value={
+                    "average_daily_usage_gb": 5.0,
+                    "average_speed_mbps": 0.0,
+                    "average_download_mbps": 0.0,
+                    "average_upload_mbps": 0.0,
+                },
+            ) as usage_summary_stats,
+            patch(
+                "app.services.customer_portal_flow_services._get_fup_status",
+                return_value=None,
+            ),
+        ):
+            page = get_usage_page(
+                db_session,
+                {"account_id": str(subscriber.id)},
+                page=1,
+                per_page=10,
+            )
+
+        expected_ids = {str(subscription.id), str(previous_subscription.id)}
+        assert set(daily_records.call_args.kwargs["subscription_ids"]) == expected_ids
+        assert (
+            set(usage_summary_stats.call_args.kwargs["subscription_ids"])
+            == expected_ids
+        )
+        assert page["usage_source"] == "postgres"
+        assert page["chart_records"][0]["value"] == 5.0
 
     def test_daily_bandwidth_usage_batches_bandwidth_lookup(self) -> None:
         from app.services.customer_portal_flow_services import _daily_bandwidth_usage

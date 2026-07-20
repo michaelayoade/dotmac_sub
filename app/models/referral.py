@@ -1,9 +1,8 @@
-"""Local mirror of CRM referral data (RFC #73).
+"""Retained historical CRM referral mirror rows (RFC #73).
 
-The CRM owns referrals; these tables are a read-optimised local copy so the
-customer app/web render instantly and keep working during a CRM outage. The
-mirror is hydrated by CRM webhooks (referral.captured/qualified/rewarded) and a
-periodic reconcile pull (the backstop for missed deliveries).
+Native referral tables are authoritative. These legacy rows are read-only
+migration/retention evidence: no customer surface, webhook, task, or service
+hydrates them or derives a native referral decision from them.
 """
 
 import uuid
@@ -19,7 +18,7 @@ from app.db import Base
 
 
 class ReferralMirror(Base):
-    """One CRM referral attributed to one of our subscribers (local copy)."""
+    """One retained historical CRM referral snapshot."""
 
     __tablename__ = "referral_mirror"
 
@@ -62,10 +61,7 @@ class ReferralMirror(Base):
 
 
 class ReferralProgramCache(Base):
-    """Per-subscriber cached referral code, share link, and program terms.
-
-    The code is stable once minted; ``synced_at`` drives the lazy-refresh TTL.
-    """
+    """Retained historical per-subscriber referral program snapshot."""
 
     __tablename__ = "referral_program_cache"
 

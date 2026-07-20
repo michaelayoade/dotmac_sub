@@ -1,5 +1,10 @@
 # SmartOLT UI Implementation Plan
 
+> **Status: historical comparative plan.** SmartOLT patterns are research input,
+> not Dotmac requirements. Revalidate every proposed field, chart, action, and
+> workflow against `UI_INFORMATION_AND_ACTION_STANDARD.md`, the current network
+> SOT, and `PRODUCTION_UI_BRIEF.md` before implementation.
+
 **Date**: 2026-04-22
 **Last Updated**: 2026-04-22
 **Status**: Planning

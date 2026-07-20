@@ -65,6 +65,26 @@ class SubscriberValidator(Protocol):
         """
         ...
 
+    def resolve_assignment_subscription(
+        self,
+        db: Session,
+        *,
+        subscription_id: object,
+        subscriber_id: object | None,
+    ) -> tuple[object, object]:
+        """Validate a catalog subscription binding and return its owner."""
+        ...
+
+    def apply_subscription_device_intent(
+        self,
+        db: Session,
+        *,
+        subscription_id: object,
+        ont: Any,
+    ) -> bool:
+        """Apply staged provisioning intent to an ONT desired-state row."""
+        ...
+
     def augment_ont_search(
         self,
         stmt: Select,

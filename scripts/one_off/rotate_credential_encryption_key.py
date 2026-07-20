@@ -16,7 +16,6 @@ from app.db import SessionLocal
 from app.services.credential_crypto import generate_encryption_key, get_encryption_key
 from app.services.credential_key_rotation import (
     rotate_credential_encryption_material,
-    update_openbao_credential_encryption_key,
 )
 
 
@@ -45,7 +44,7 @@ def main() -> int:
     parser.add_argument(
         "--update-openbao",
         action="store_true",
-        help="After data rotation, write the new key to OpenBao settings/auth.",
+        help="Deprecated; direct activation is disabled in favor of scheduled rotation.",
     )
     parser.add_argument(
         "--print-key",
@@ -53,6 +52,20 @@ def main() -> int:
         help="Include the new key in stdout output. Use with care because this exposes secret material.",
     )
     args = parser.parse_args()
+
+    if args.apply:
+        _emit_json(
+            {
+                "ok": False,
+                "error": (
+                    "Direct key activation is disabled. Use the scheduled "
+                    "credential rotation task so OpenBao stages both current and "
+                    "previous keys before stored values are rewritten."
+                ),
+            },
+            stream=sys.stderr,
+        )
+        return 1
 
     old_key = get_encryption_key()
     if not old_key:
@@ -126,11 +139,6 @@ def main() -> int:
                 },
                 stream=sys.stderr,
             )
-        if args.apply and args.update_openbao:
-            success = update_openbao_credential_encryption_key(new_key)
-            _emit_json({"ok": success, "openbao_updated": success})
-            if not success:
-                return 3
     finally:
         session.close()
     return 0

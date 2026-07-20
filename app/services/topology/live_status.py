@@ -1,10 +1,25 @@
-"""Topology live-status warmer (Phase 3).
+"""Topology live-status warmer.
 
-Batch-fetches Zabbix host availability + active triggers for the reconciled
-nodes and writes a coarse ``live_status`` (up/down/problem/unknown) into the
-network_devices cache. The Network Path panel reads that cache — Zabbix is
-NEVER called on the request path (same warm-and-store pattern as
-``monitoring_warm``). Severity order: down > problem > up.
+Derives a coarse ``live_status`` (up/down/unknown) for reconciled topology
+nodes from the native poll columns the infrastructure poller maintains
+(``last_ping_*`` / ``last_snmp_*``, see ``services.infrastructure_polling``)
+and writes it into the network_devices cache. A failed ping is always the
+primary outage signal; ping success is the primary healthy signal; SNMP
+reachability is used only when there is no fresh ping result. The Network
+Path panel reads that cache — no probe ever runs on the request path (same
+warm-and-store pattern the retired monitoring warmers used).
+
+Formerly this warmer batch-fetched Zabbix host availability for reconciled
+(``source == zabbix_reconcile``) nodes; the derived statuses, heartbeat key
+and SLA availability bridge are unchanged, but the data source moved to the
+native poll columns and the population is now source-agnostic: every active
+*pollable* device (same predicate as the poll sweep) gets a live_status,
+however its row was created. Unpollable devices keep a NULL live_status so
+surfaces with their own fallbacks (e.g. linked-router status) still apply
+them. The old ``uisp.status`` trapper fallback is gone: radio/CPE health
+feeds the outage pipeline natively via ``CPEDevice.last_uisp_status``
+(uisp_sync), and a pollable node with neither a fresh ping nor SNMP result
+reads ``unknown``, which every consumer already treats conservatively.
 """
 
 from __future__ import annotations
@@ -14,15 +29,19 @@ from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
-from app.models.network_monitoring import NetworkDevice
-from app.services.topology.zabbix_reconcile import SOURCE
+from app.models.network_monitoring import DeviceStatus, NetworkDevice
+from app.services.infrastructure_polling import pollable_device_criteria
 
 UP = "up"
 DOWN = "down"
 PROBLEM = "problem"
 UNKNOWN = "unknown"
 
-_CHUNK = 200
+# A poll result older than this no longer proves anything about the device —
+# the poller has stopped covering it (disabled checks, poller down), so the
+# node degrades to unknown instead of freezing on its last state. Generous
+# multiple of the default 60s ping staleness window.
+STALE_POLL_AFTER_SECONDS = 900
 
 # Heartbeat written on every warm run so the customer-facing connection-status
 # reader can tell whether live_status is being refreshed. If the warmer dies,
@@ -73,87 +92,63 @@ def _coverage():
         return None
 
 
-def _chunks(items: list, size: int):
-    for i in range(0, len(items), size):
-        yield items[i : i + size]
+def _fresh(checked_at: datetime | None, now: datetime, window_seconds: int) -> bool:
+    if checked_at is None:
+        return False
+    if checked_at.tzinfo is None:
+        checked_at = checked_at.replace(tzinfo=UTC)
+    return (now - checked_at).total_seconds() <= window_seconds
 
 
-def _availability(zhost: dict) -> str:
-    """Map Zabbix availability to up/down/unknown.
+def derive_live_status(
+    node: NetworkDevice,
+    *,
+    now: datetime | None = None,
+    stale_after_seconds: int = STALE_POLL_AFTER_SECONDS,
+) -> str:
+    """Map a node's native poll columns to up/down/unknown.
 
-    Prefers an explicit host-level ``available`` (1 up, 2 down); falls back to
-    interface availability (main interface first) for Zabbix 6+ where host-level
-    availability was removed.
-
-    A host Zabbix isn't actively monitoring — disabled (``status==1``) or in
-    maintenance (``maintenance_status==1``) — can't be trusted to report real
-    reachability; its ``available`` is stale, so we return ``unknown`` rather
-    than reading a leftover "up". Otherwise a host we deliberately disabled
-    (e.g. a deactivated device) would surface to customers as healthy.
+    A device in operator ``maintenance`` can't be trusted to report real
+    reachability (mirrors the old Zabbix maintenance handling): it reads
+    ``unknown`` rather than surfacing a deliberate shutdown to customers as an
+    outage. Ping is authoritative when fresh; SNMP reachability only fills in
+    for ping-disabled devices.
     """
-    if str(zhost.get("status")) == "1":  # 0=enabled, 1=disabled
+    now = now or _now()
+    if node.status == DeviceStatus.maintenance:
         return UNKNOWN
-    if str(zhost.get("maintenance_status")) == "1":
-        return UNKNOWN
-    top = str(zhost.get("available") or "")
-    if top == "1":
-        return UP
-    if top == "2":
-        return DOWN
-    ifaces = zhost.get("interfaces", []) or []
-    main = next((i for i in ifaces if str(i.get("main")) == "1"), None)
-    candidates = [main] if main else ifaces
-    vals = {str(i.get("available")) for i in candidates if i}
-    if "2" in vals and "1" not in vals:
-        return DOWN
-    if "1" in vals:
-        return UP
+    if (
+        node.ping_enabled
+        and node.last_ping_ok is not None
+        and _fresh(node.last_ping_at, now, stale_after_seconds)
+    ):
+        return UP if node.last_ping_ok else DOWN
+    if (
+        node.snmp_enabled
+        and node.last_snmp_ok is not None
+        and _fresh(node.last_snmp_at, now, stale_after_seconds)
+    ):
+        return UP if node.last_snmp_ok else DOWN
     return UNKNOWN
 
 
-def _derive(avail: str, has_problem: bool) -> str:
-    if avail == DOWN:
-        return DOWN
-    if has_problem:
-        return PROBLEM
-    if avail == UP:
-        return UP
-    return UNKNOWN
-
-
-def warm_topology_status(session: Session, client) -> dict:
-    """Refresh live_status for every reconciled, Zabbix-linked node."""
-    nodes = (
-        session.query(NetworkDevice)
-        .filter(
-            NetworkDevice.source == SOURCE,
-            NetworkDevice.zabbix_hostid.isnot(None),
-            NetworkDevice.is_active.is_(True),
-        )
-        .all()
-    )
-    host_ids = [n.zabbix_hostid for n in nodes if n.zabbix_hostid]
-    if not host_ids:
+def warm_topology_status(
+    session: Session,
+    *,
+    now: datetime | None = None,
+    stale_after_seconds: int = STALE_POLL_AFTER_SECONDS,
+) -> dict:
+    """Refresh live_status for every active pollable device."""
+    nodes = session.query(NetworkDevice).filter(*pollable_device_criteria()).all()
+    if not nodes:
         return {"nodes": 0}
 
-    avail: dict[str, str] = {}
-    problems: set[str] = set()
-    for chunk in _chunks(host_ids, _CHUNK):
-        for h in client.get_hosts(host_ids=chunk):
-            avail[str(h.get("hostid"))] = _availability(h)
-        for t in client.get_triggers(host_ids=chunk, active_only=True, limit=10000):
-            for hh in t.get("hosts", []):
-                problems.add(str(hh.get("hostid")))
-
-    now = _now()
+    now = now or _now()
     sla_logging = _sla_log_enabled()
     coverage = _coverage() if sla_logging else None
     counts: Counter = Counter()
     for n in nodes:
-        hid = n.zabbix_hostid
-        if hid is None:  # filtered in the query; narrows for the type checker
-            continue
-        status = _derive(avail.get(hid, UNKNOWN), hid in problems)
+        status = derive_live_status(n, now=now, stale_after_seconds=stale_after_seconds)
         # Stamp live_status_at only when the state CHANGES, so it marks when the
         # node entered its current state — the dwell clock the customer-facing
         # connection-status debounce relies on (see topology.selfcare).
@@ -161,7 +156,7 @@ def warm_topology_status(session: Session, client) -> dict:
             # Bridge the transition into an uptime Alert interval so the SLA
             # report has real downtime to merge (flag-gated, additive — never
             # alters live_status). Skip devices with no monitoring path: their
-            # "down" is a blind spot, not real downtime (Phase 3). See
+            # "down" is a blind spot, not real downtime. See
             # availability_log / monitoring_coverage / INFRASTRUCTURE_SLA.
             if sla_logging and (
                 coverage is None or coverage.covers(getattr(n, "mgmt_ip", None))

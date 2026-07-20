@@ -8,9 +8,9 @@ from datetime import UTC, datetime, timedelta
 
 from app.celery_app import celery_app
 from app.logging import get_logger
-from app.metrics import observe_job
 from app.models.oauth_token import OAuthToken
 from app.services.db_session_adapter import db_session_adapter
+from app.services.observability import record_task_run
 
 logger = get_logger(__name__)
 
@@ -93,7 +93,7 @@ def refresh_expiring_tokens(buffer_days: int = 7):
     finally:
         session.close()
         duration = time.monotonic() - start
-        observe_job("oauth_token_refresh", status, duration)
+        record_task_run("oauth_token_refresh", status=status, duration_seconds=duration)
 
 
 def _refresh_meta_token(session, token: OAuthToken) -> None:

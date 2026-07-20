@@ -40,17 +40,20 @@ What the planner doesn't do
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from .actions import (
     AcsAddObject,
     AcsDeleteObject,
     AcsSetDhcpServer,
+    AcsSetIpv6,
     AcsSetManagementServer,
     AcsSetNatEnabled,
     AcsSetPppoe,
-    AcsSetWifiPassword,
-    AcsSetWifiSsid,
+    AcsSetRemoteAccess,
+    AcsSetWanIp,
+    AcsSetWifiConfig,
     Action,
     OltAuthorize,
     OltClearIphost,
@@ -71,8 +74,11 @@ from .state import (
     OntDesiredState,
     OntObservedState,
     ReconcileMode,
+    Tr069RemoteAccessParameterPaths,
+    Tr069WifiParameterPaths,
     WriteSurface,
 )
+from .wifi_paths import wifi_paths_for_instance
 
 # ── Plan ────────────────────────────────────────────────────────────────────
 
@@ -97,12 +103,46 @@ class Plan:
         return not self.actions
 
 
+@dataclass(frozen=True)
+class _WifiChanges:
+    enabled: bool | None
+    ssid: str | None
+    channel: int | None
+    security_mode: str | None
+    drifts: tuple[tuple[str, object, object], ...]
+
+    @property
+    def has_values(self) -> bool:
+        return any(
+            value is not None
+            for value in (self.enabled, self.ssid, self.channel, self.security_mode)
+        )
+
+
 # ── compute_plan ────────────────────────────────────────────────────────────
 
 # Fields a narrow WiFi UI edit may touch. When an operator's proposed change is
 # confined to these, the plan is scoped to the matching ACS writes so unrelated
 # OLT drift doesn't block the action.
-_WIFI_ONLY_FIELDS = frozenset({"wifi_ssid", "wifi_password_ref"})
+_WIFI_ONLY_FIELDS = frozenset(
+    {
+        "wifi_ssid",
+        "wifi_password_ref",
+        "wifi_enabled",
+        "wifi_channel",
+        "wifi_security_mode",
+    }
+)
+_REMOTE_ACCESS_ONLY_FIELDS = frozenset(
+    {
+        "wan_remote_access_enabled",
+        "wan_remote_access_expires_at",
+        "wan_remote_access_source_cidrs",
+        "wan_remote_access_ssh_port",
+    }
+)
+_ACS_ENDPOINT_FIELDS = frozenset({"acs_url", "acs_username", "acs_password_ref"})
+_TR069_PROFILE_ONLY_FIELDS = frozenset({"tr069_profile_id"})
 
 
 def _is_wifi_only_change(mode: ReconcileMode, proposed_fields: frozenset[str]) -> bool:
@@ -110,6 +150,26 @@ def _is_wifi_only_change(mode: ReconcileMode, proposed_fields: frozenset[str]) -
         mode == "sync"
         and bool(proposed_fields)
         and proposed_fields <= _WIFI_ONLY_FIELDS
+    )
+
+
+def _is_remote_access_only_change(
+    mode: ReconcileMode, proposed_fields: frozenset[str]
+) -> bool:
+    return (
+        mode == "sync"
+        and bool(proposed_fields)
+        and proposed_fields <= _REMOTE_ACCESS_ONLY_FIELDS
+    )
+
+
+def _is_tr069_profile_only_change(
+    mode: ReconcileMode, proposed_fields: frozenset[str]
+) -> bool:
+    return (
+        mode == "sync"
+        and bool(proposed_fields)
+        and proposed_fields <= _TR069_PROFILE_ONLY_FIELDS
     )
 
 
@@ -136,23 +196,29 @@ def compute_plan(
     drifts: list[Drift] = []
     proposed_fields = proposed_fields or frozenset()
     wifi_only_change = _is_wifi_only_change(mode, proposed_fields)
+    remote_only_change = _is_remote_access_only_change(mode, proposed_fields)
+    tr069_profile_only_change = _is_tr069_profile_only_change(mode, proposed_fields)
 
-    if wifi_only_change:
+    if tr069_profile_only_change:
+        _plan_tr069_profile_only(desired, observed, actions, drifts)
+        omci_wan_planned = False
+    elif wifi_only_change or remote_only_change:
         omci_wan_planned = False
     else:
         _plan_olt_side(desired, observed, mode, actions, drifts)
         omci_wan_planned = _plan_olt_omci_wan(desired, observed, mode, actions, drifts)
         _append_reset_if_needed(desired, actions)
-    _plan_acs_side(
-        desired,
-        observed,
-        mode,
-        actions,
-        drifts,
-        omci_wan_planned,
-        proposed_fields,
-        force_proposed_writes,
-    )
+    if not tr069_profile_only_change:
+        _plan_acs_side(
+            desired,
+            observed,
+            mode,
+            actions,
+            drifts,
+            omci_wan_planned,
+            proposed_fields,
+            force_proposed_writes,
+        )
 
     required_surfaces = frozenset(a.surface for a in actions)
     return Plan(
@@ -163,6 +229,33 @@ def compute_plan(
 
 
 # ── OLT-side planning ───────────────────────────────────────────────────────
+
+
+def _plan_tr069_profile_only(
+    desired: OntDesiredState,
+    observed: OntObservedState,
+    actions: list[Action],
+    drifts: list[Drift],
+) -> None:
+    """Plan only the requested OLT TR-069 profile binding."""
+    if observed.olt.olt_tr069_profile_id == desired.tr069_profile_id:
+        return
+    actions.append(
+        OltTr069ServerConfig(
+            fsp=desired.fsp,
+            ont_id=desired.olt_ont_id,
+            profile_id=desired.tr069_profile_id,
+        )
+    )
+    drifts.append(
+        Drift(
+            field="olt_tr069_profile_id",
+            surface="olt",
+            desired=desired.tr069_profile_id,
+            observed=observed.olt.olt_tr069_profile_id,
+            repairable=True,
+        )
+    )
 
 
 def _plan_olt_side(
@@ -255,6 +348,24 @@ def _plan_olt_side(
                 )
             )
 
+        if _observed_differs(olt_obs.olt_tr069_profile_id, desired.tr069_profile_id):
+            actions.append(
+                OltTr069ServerConfig(
+                    fsp=desired.fsp,
+                    ont_id=desired.olt_ont_id,
+                    profile_id=desired.tr069_profile_id,
+                )
+            )
+            drifts.append(
+                Drift(
+                    field="olt_tr069_profile_id",
+                    surface="olt",
+                    desired=desired.tr069_profile_id,
+                    observed=olt_obs.olt_tr069_profile_id,
+                    repairable=True,
+                )
+            )
+
     # 2. Service-port repair — strict, system-managed. Stale ports removed,
     # missing ports created.
     _plan_service_ports(desired, observed, actions, drifts)
@@ -296,9 +407,8 @@ def _plan_olt_side(
                 )
             )
 
-    # 4. TR-069 binding. We re-emit on every fresh authorize because the
-    # observed-side doesn't yet parse the TR-069 profile (parser TODO in
-    # the OLT reader).
+    # 4. Fresh authorization always needs the TR-069 binding. Existing ONTs
+    # are handled by the observed-profile diff above.
     if not olt_obs.olt_present:
         actions.append(
             OltTr069ServerConfig(
@@ -452,43 +562,111 @@ def _plan_acs_side(
     device_id = _acs_device_id(desired)
 
     wifi_only_change = _is_wifi_only_change(mode, proposed_fields)
+    remote_only_change = _is_remote_access_only_change(mode, proposed_fields)
 
     # TR-069 WAN PPP — skipped when OMCI owns the WAN.
-    if not wifi_only_change and desired.wan_mode == "pppoe" and not omci_wan_planned:
+    narrow_feature_change = wifi_only_change or remote_only_change
+    if (
+        not narrow_feature_change
+        and desired.wan_mode == "pppoe"
+        and not omci_wan_planned
+    ):
         _plan_acs_wan_ppp(desired, observed, device_id, actions, drifts)
 
-    # WiFi SSID — observable. Push when the read value differs OR when this
-    # is a fresh bring-up (no ACS record yet — we have to seed it).
-    push_ssid = _observed_differs(
-        observed.acs.acs_observed_ssid, desired.wifi_ssid
-    ) or (not observed.acs.acs_present)
-    if push_ssid:
-        actions.append(AcsSetWifiSsid(device_id=device_id, ssid=desired.wifi_ssid))
+    if not narrow_feature_change and desired.wan_mode in {"dhcp", "static"}:
+        if not observed.acs.acs_present or _wan_ip_differs(desired, observed):
+            actions.append(
+                AcsSetWanIp(
+                    device_id=device_id,
+                    data_model_root=(
+                        observed.acs.acs_data_model_root
+                        or desired.tr069_data_model_root
+                        or "InternetGatewayDevice"
+                    ),
+                    wcd_index=desired.wan_pppoe_wcd_index,
+                    instance_index=desired.wan_pppoe_instance_index,
+                    mode=desired.wan_mode,
+                    vlan=desired.wan_vlan or 0,
+                    nat_enabled=desired.nat_enabled,
+                    ip_address=desired.wan_static_ip,
+                    subnet_mask=desired.wan_static_subnet,
+                    gateway=desired.wan_static_gateway,
+                    dns_servers=desired.wan_static_dns,
+                    tr181_paths=desired.tr181_wan_paths,
+                )
+            )
+            drifts.append(
+                Drift(
+                    field="wan_ip_mode",
+                    surface="acs",
+                    desired=desired.wan_mode,
+                    observed=observed.acs.acs_observed_wan_addressing_type,
+                    repairable=True,
+                )
+            )
+
+    push_password = False
+    wifi_changes = _WifiChanges(None, None, None, None, ())
+    if not remote_only_change:
+        push_password = _should_push_wifi_password(
+            mode,
+            observed,
+            proposed_fields,
+            force_proposed_writes,
+        )
+        wifi_changes = _wifi_changes(
+            desired,
+            observed,
+            proposed_fields=proposed_fields,
+            force_proposed_writes=force_proposed_writes,
+        )
+    wifi_paths = desired.wifi_paths or _standard_wifi_paths(
+        observed.acs.acs_data_model_root or desired.tr069_data_model_root
+    )
+    if observed.acs.acs_observed_wifi_instance_index is not None:
+        wifi_paths = wifi_paths_for_instance(
+            wifi_paths,
+            observed.acs.acs_data_model_root or desired.tr069_data_model_root,
+            observed.acs.acs_observed_wifi_instance_index,
+        )
+    for field, desired_value, observed_value in wifi_changes.drifts:
         drifts.append(
             Drift(
-                field="wifi_ssid",
+                field=field,
                 surface="acs",
-                desired=desired.wifi_ssid,
-                observed=observed.acs.acs_observed_ssid,
-                repairable=True,
+                desired=desired_value,
+                observed=observed_value,
+                repairable=wifi_paths is not None,
             )
         )
 
-    # WiFi password — unobservable, mode-gated (Hole 3 resolution).
-    if _should_push_wifi_password(
-        mode,
-        observed,
-        proposed_fields,
-        force_proposed_writes,
-    ):
+    # WiFi fields share one CWMP transaction. Password remains mode-gated
+    # because it is write-only on deployed Huawei firmware.
+    if wifi_paths is not None and (wifi_changes.has_values or push_password):
         actions.append(
-            AcsSetWifiPassword(
+            AcsSetWifiConfig(
                 device_id=device_id,
-                password_ref=desired.wifi_password_ref,
+                paths=wifi_paths,
+                enabled=wifi_changes.enabled,
+                ssid=wifi_changes.ssid,
+                password_ref=(desired.wifi_password_ref if push_password else None),
+                channel=wifi_changes.channel,
+                security_mode=wifi_changes.security_mode,
             )
         )
 
-    if wifi_only_change:
+    if not wifi_only_change:
+        _plan_remote_access(
+            desired,
+            observed,
+            device_id,
+            actions,
+            drifts,
+            proposed_fields=proposed_fields,
+            force_proposed_writes=force_proposed_writes,
+        )
+
+    if narrow_feature_change:
         return
 
     # Defensive NAT on routed mode (Fix #4 follow-up).
@@ -531,6 +709,32 @@ def _plan_acs_side(
                 )
             )
 
+    if not wifi_only_change and (
+        not observed.acs.acs_present or _ipv6_differs(desired, observed)
+    ):
+        data_model_root = (
+            observed.acs.acs_data_model_root or desired.tr069_data_model_root
+        )
+        repairable = data_model_root == "Device"
+        drifts.append(
+            Drift(
+                field="ipv6_enabled",
+                surface="acs",
+                desired=desired.ipv6_enabled,
+                observed=observed.acs.acs_observed_ipv6_enabled,
+                repairable=repairable,
+            )
+        )
+        if repairable:
+            actions.append(
+                AcsSetIpv6(
+                    device_id=device_id,
+                    interface_index=desired.wan_pppoe_instance_index,
+                    enabled=desired.ipv6_enabled,
+                    request_prefixes=desired.ipv6_enabled,
+                )
+            )
+
     # DHCP server — push the whole block when any field differs.
     if _dhcp_differs(desired, observed):
         actions.append(
@@ -555,13 +759,33 @@ def _plan_acs_side(
     # ManagementServer (CR creds + inform interval) — last in the ACS
     # sequence. Critical for the next reconcile's NBI calls to deliver
     # synchronously.
-    if _management_server_differs(desired, observed):
+    force_endpoint_write = bool(proposed_fields & _ACS_ENDPOINT_FIELDS) and (
+        force_proposed_writes
+    )
+    if force_endpoint_write or _management_server_differs(desired, observed):
         actions.append(
             AcsSetManagementServer(
                 device_id=device_id,
                 cr_username=desired.cr_username or "admin",
                 cr_password_ref=desired.cr_password_ref or "",
                 inform_interval_sec=desired.periodic_inform_interval_sec,
+                data_model_root=(
+                    observed.acs.acs_data_model_root
+                    or desired.tr069_data_model_root
+                    or "InternetGatewayDevice"
+                ),
+                acs_url=desired.acs_url,
+                acs_username=desired.acs_username,
+                acs_password_ref=desired.acs_password_ref,
+            )
+        )
+        drifts.append(
+            Drift(
+                field="acs_management_server",
+                surface="acs",
+                desired="configured",
+                observed="diverged",
+                repairable=True,
             )
         )
 
@@ -639,6 +863,227 @@ def _observed_differs(observed_value, desired_value) -> bool:
     return observed_value != desired_value
 
 
+def _wifi_changes(
+    desired: OntDesiredState,
+    observed: OntObservedState,
+    *,
+    proposed_fields: frozenset[str],
+    force_proposed_writes: bool,
+) -> _WifiChanges:
+    """Return observable WiFi drift and values for one batched write."""
+    acs = observed.acs
+    root = acs.acs_data_model_root or desired.tr069_data_model_root
+    desired_security = _normalise_wifi_security_mode(desired.wifi_security_mode, root)
+    observed_security = _normalise_wifi_security_mode(
+        acs.acs_observed_wifi_security_mode, root
+    )
+    candidates = (
+        ("wifi_ssid", "ssid", desired.wifi_ssid, acs.acs_observed_ssid),
+        (
+            "wifi_enabled",
+            "enabled",
+            desired.wifi_enabled,
+            acs.acs_observed_wifi_enabled,
+        ),
+        (
+            "wifi_channel",
+            "channel",
+            desired.wifi_channel,
+            acs.acs_observed_wifi_channel,
+        ),
+        (
+            "wifi_security_mode",
+            "security_mode",
+            desired_security,
+            observed_security,
+        ),
+    )
+    values: dict[str, object] = {}
+    drifts: list[tuple[str, object, object]] = []
+    for field, action_key, desired_value, observed_value in candidates:
+        if desired_value is None:
+            continue
+        forced = force_proposed_writes and field in proposed_fields
+        differs = _observed_differs(observed_value, desired_value)
+        fresh = not acs.acs_present
+        if not (forced or differs or fresh):
+            continue
+        values[action_key] = desired_value
+        drifts.append((field, desired_value, observed_value))
+    enabled = values.get("enabled")
+    ssid = values.get("ssid")
+    channel = values.get("channel")
+    security_mode = values.get("security_mode")
+    return _WifiChanges(
+        enabled=enabled if isinstance(enabled, bool) else None,
+        ssid=ssid if isinstance(ssid, str) else None,
+        channel=channel if isinstance(channel, int) else None,
+        security_mode=security_mode if isinstance(security_mode, str) else None,
+        drifts=tuple(drifts),
+    )
+
+
+def _normalise_wifi_security_mode(value: str | None, root: str | None) -> str | None:
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if root != "InternetGatewayDevice":
+        return text
+    aliases = {
+        "none": "None",
+        "open": "None",
+        "wep": "Basic",
+        "basic": "Basic",
+        "wpa": "WPA",
+        "wpa-personal": "WPA",
+        "wpapsk": "WPA",
+        "wpa-psk": "WPA",
+        "wpa2": "11i",
+        "wpa2-personal": "11i",
+        "wpa2psk": "11i",
+        "wpa2-psk": "11i",
+        "11i": "11i",
+        "wpa-wpa2": "WPAand11i",
+        "wpa-wpa2-personal": "WPAand11i",
+        "wpa/wpa2": "WPAand11i",
+        "wpa2/wpa": "WPAand11i",
+        "wpaand11i": "WPAand11i",
+        "mixed": "WPAand11i",
+    }
+    return aliases.get(text.lower(), text)
+
+
+def _plan_remote_access(
+    desired: OntDesiredState,
+    observed: OntObservedState,
+    device_id: str,
+    actions: list[Action],
+    drifts: list[Drift],
+    *,
+    proposed_fields: frozenset[str],
+    force_proposed_writes: bool,
+) -> None:
+    """Plan one atomic SSH/Telnet support-access transaction."""
+    acs = observed.acs
+    explicit_toggle = "wan_remote_access_enabled" in proposed_fields
+    strict_readback = desired.wan_remote_access_enabled or explicit_toggle
+    force_toggle = force_proposed_writes and explicit_toggle
+
+    ssh_differs = (
+        acs.acs_observed_remote_ssh_enabled != desired.wan_remote_access_enabled
+        if strict_readback
+        else _observed_differs(
+            acs.acs_observed_remote_ssh_enabled,
+            desired.wan_remote_access_enabled,
+        )
+    )
+    port_differs = desired.wan_remote_access_enabled and (
+        acs.acs_observed_remote_ssh_port != desired.wan_remote_access_ssh_port
+    )
+    telnet_differs = (
+        acs.acs_observed_remote_telnet_enabled is not False
+        if strict_readback
+        else acs.acs_observed_remote_telnet_enabled is True
+    )
+
+    paths = desired.remote_access_paths or _standard_remote_access_paths(
+        acs.acs_data_model_root or desired.tr069_data_model_root
+    )
+    changes: list[tuple[str, object, object]] = []
+    if force_toggle or ssh_differs:
+        changes.append(
+            (
+                "wan_remote_access_enabled",
+                desired.wan_remote_access_enabled,
+                acs.acs_observed_remote_ssh_enabled,
+            )
+        )
+    if port_differs:
+        changes.append(
+            (
+                "wan_remote_access_ssh_port",
+                desired.wan_remote_access_ssh_port,
+                acs.acs_observed_remote_ssh_port,
+            )
+        )
+    if telnet_differs:
+        changes.append(
+            (
+                "wan_remote_telnet_disabled",
+                False,
+                acs.acs_observed_remote_telnet_enabled,
+            )
+        )
+    for field, desired_value, observed_value in changes:
+        drifts.append(
+            Drift(
+                field=field,
+                surface="acs",
+                desired=desired_value,
+                observed=observed_value,
+                repairable=paths is not None,
+            )
+        )
+    if not changes or paths is None:
+        return
+
+    actions.append(
+        AcsSetRemoteAccess(
+            device_id=device_id,
+            paths=paths,
+            ssh_enabled=(
+                desired.wan_remote_access_enabled
+                if force_toggle or ssh_differs
+                else None
+            ),
+            ssh_port=(desired.wan_remote_access_ssh_port if port_differs else None),
+            # Enabling support access always carries the Telnet-off guard in
+            # the same CWMP request, even when the cached value is already off.
+            telnet_enabled=(
+                False if telnet_differs or desired.wan_remote_access_enabled else None
+            ),
+        )
+    )
+
+
+def _standard_wifi_paths(root: str | None) -> Tr069WifiParameterPaths:
+    if root == "Device":
+        return Tr069WifiParameterPaths(
+            enabled="Device.WiFi.SSID.1.Enable",
+            ssid="Device.WiFi.SSID.1.SSID",
+            psk_path="Device.WiFi.AccessPoint.1.Security.KeyPassphrase",
+            channel="Device.WiFi.Radio.1.Channel",
+            security_mode="Device.WiFi.AccessPoint.1.Security.ModeEnabled",
+        )
+    return Tr069WifiParameterPaths(
+        enabled="InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.Enable",
+        ssid="InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID",
+        psk_path=(
+            "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1."
+            "PreSharedKey.1.PreSharedKey"
+        ),
+        channel="InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.Channel",
+        security_mode=(
+            "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.BeaconType"
+        ),
+    )
+
+
+def _standard_remote_access_paths(
+    root: str | None,
+) -> Tr069RemoteAccessParameterPaths:
+    prefix = "Device" if root == "Device" else "InternetGatewayDevice"
+    base = f"{prefix}.X_HW_UserInterface"
+    return Tr069RemoteAccessParameterPaths(
+        ssh_enabled=f"{base}.SSHEnable",
+        ssh_port=f"{base}.SSHPort",
+        telnet_enabled=f"{base}.TelnetEnable",
+        telnet_port=f"{base}.TelnetPort",
+    )
+
+
 def _iphost_differs(desired: OntDesiredState, observed: OntObservedState) -> bool:
     olt = observed.olt
     if olt.olt_mgmt_ip is not None and olt.olt_mgmt_ip != desired.mgmt_ip:
@@ -664,6 +1109,65 @@ def _wan_ppp_differs(desired: OntDesiredState, observed: OntObservedState) -> bo
     if not acs.acs_present:
         return True
     return False
+
+
+def _wan_ip_differs(desired: OntDesiredState, observed: OntObservedState) -> bool:
+    acs = observed.acs
+    expected_type = "DHCP" if desired.wan_mode == "dhcp" else "Static"
+    strict = (
+        desired.tr181_wan_paths is not None
+        and (acs.acs_data_model_root or desired.tr069_data_model_root) == "Device"
+    )
+
+    def differs(observed_value, desired_value) -> bool:
+        return (
+            observed_value != desired_value
+            if strict
+            else _observed_differs(observed_value, desired_value)
+        )
+
+    if differs(acs.acs_observed_wan_ip_enable, True):
+        return True
+    if differs(acs.acs_observed_wan_addressing_type, expected_type):
+        return True
+    if differs(acs.acs_observed_wan_vlan, desired.wan_vlan):
+        return True
+    if differs(acs.acs_observed_nat_enabled, desired.nat_enabled):
+        return True
+    if desired.wan_mode == "static":
+        return any(
+            (
+                differs(acs.acs_observed_wan_ip_address, desired.wan_static_ip),
+                differs(acs.acs_observed_wan_subnet_mask, desired.wan_static_subnet),
+                differs(acs.acs_observed_wan_gateway, desired.wan_static_gateway),
+                differs(
+                    _normalise_dns_servers(acs.acs_observed_wan_dns_servers),
+                    _normalise_dns_servers(desired.wan_static_dns),
+                ),
+            )
+        )
+    return False
+
+
+def _normalise_dns_servers(value: str | None) -> str | None:
+    if value is None:
+        return None
+    servers = [item for item in re.split(r"[\s,]+", value) if item]
+    return ",".join(servers) or None
+
+
+def _ipv6_differs(desired: OntDesiredState, observed: OntObservedState) -> bool:
+    acs = observed.acs
+    values = [acs.acs_observed_ipv6_enabled]
+    if desired.tr069_data_model_root == "Device" or acs.acs_data_model_root == "Device":
+        values.extend(
+            [
+                acs.acs_observed_dhcpv6_enabled,
+                acs.acs_observed_dhcpv6_request_prefixes,
+                acs.acs_observed_ra_enabled,
+            ]
+        )
+    return any(_observed_differs(value, desired.ipv6_enabled) for value in values)
 
 
 def _observed_wan_ppp_locations(
@@ -767,6 +1271,12 @@ def _management_server_differs(
     desired: OntDesiredState, observed: OntObservedState
 ) -> bool:
     acs = observed.acs
+    if desired.acs_url and acs.acs_observed_url != desired.acs_url:
+        return True
+    if desired.acs_url and acs.acs_observed_username != (desired.acs_username or ""):
+        return True
+    if desired.acs_password_ref and not acs.acs_observed_password_set:
+        return True
     if (
         acs.acs_observed_periodic_inform_interval_sec
         != desired.periodic_inform_interval_sec

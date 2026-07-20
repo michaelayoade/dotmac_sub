@@ -18,9 +18,25 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.schemas.billing import (
+    BillingAccountCreditAllocationConfirm,
+    BillingAccountCreditAllocationPreviewRead,
+    BillingAccountCreditAllocationPreviewRequest,
+    BillingAccountCreditAllocationResultRead,
+)
 from app.schemas.chat import ChatSessionResponse
+from app.schemas.portal import (
+    TechnicianLocation,
+    TechnicianRatingRequest,
+    TechnicianRatingResponse,
+)
 from app.services import chat_session as chat_session_service
-from app.services import quotes_mirror, reseller_crm_views, reseller_portal
+from app.services import (
+    quotes_mirror,
+    reseller_crm_views,
+    reseller_portal,
+    work_orders_mirror,
+)
 from app.services.auth_dependencies import require_user_auth
 
 router = APIRouter(prefix="/reseller", tags=["reseller"])
@@ -97,14 +113,19 @@ def _reseller_id(db: Session, principal: dict) -> str:
 def my_reseller_chat_session(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
+    ticket_id: str | None = None,
+    project_id: str | None = None,
 ):
     """Open (or resume) a live-chat session with DotMac support.
 
     Reseller chats land in the same general support pool as customer chats; the
-    session is tagged with the reseller for agent context only.
+    session is tagged with the reseller for agent context only. Pass
+    ``ticket_id``/``project_id`` to scope the chat to a customer's record.
     """
     reseller_id = _reseller_id(db, principal)
-    return chat_session_service.broker_reseller_session(db, reseller_id, principal)
+    return chat_session_service.broker_reseller_session(
+        db, reseller_id, principal, ticket_id=ticket_id, project_id=project_id
+    )
 
 
 @router.get("/dashboard")
@@ -118,7 +139,7 @@ def my_reseller_dashboard(
     reseller_id = _reseller_id(db, principal)
     summary = reseller_portal.get_dashboard_summary(db, reseller_id, limit, offset)
     # Open-ticket count mirrors the web dashboard: best-effort against the
-    # external CRM (0 when unreachable), bounded to the page's accounts.
+    # external CRM (None when unreachable), bounded to the page's accounts.
     from app.services import crm_portal
 
     try:
@@ -129,7 +150,7 @@ def my_reseller_dashboard(
             db, reseller_id, account_ids
         )
     except Exception:
-        summary["open_tickets"] = 0
+        summary["open_tickets"] = None
     return summary
 
 
@@ -179,6 +200,59 @@ def my_reseller_account(
     if detail is None:
         raise HTTPException(status_code=404, detail="Account not found")
     return detail
+
+
+@router.get(
+    "/accounts/{account_id}/work-orders/{work_order_id}/technician-location",
+    response_model=TechnicianLocation,
+)
+def reseller_work_order_technician_location(
+    account_id: str,
+    work_order_id: str,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> TechnicianLocation:
+    """Live technician position for a managed account's in-progress work order
+    (poll for the map). 404 if the account isn't one of the caller's."""
+    reseller_id = _reseller_id(db, principal)
+    account = reseller_portal.owned_account(db, reseller_id, account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="Account not found")
+    data = work_orders_mirror.technician_location(db, str(account.id), work_order_id)
+    return TechnicianLocation.model_validate(data)
+
+
+@router.post(
+    "/accounts/{account_id}/work-orders/{work_order_id}/rate-technician",
+    response_model=TechnicianRatingResponse,
+)
+def reseller_rate_technician(
+    account_id: str,
+    work_order_id: str,
+    payload: TechnicianRatingRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> TechnicianRatingResponse:
+    """Rate the technician on a managed account's completed work order."""
+    reseller_id = _reseller_id(db, principal)
+    account = reseller_portal.owned_account(db, reseller_id, account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="Account not found")
+    try:
+        data = work_orders_mirror.rate_technician(
+            db,
+            str(account.id),
+            work_order_id,
+            rating=payload.rating,
+            comment=payload.comment,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="Work order not found") from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409, detail="Work order is not completed"
+        ) from exc
+    return TechnicianRatingResponse.model_validate(data)
 
 
 @router.get("/profile")
@@ -268,11 +342,16 @@ def my_reseller_billing(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ) -> dict:
-    """Consolidated billing statement for the caller's reseller account."""
+    """Consolidated billing statement + account-activity ledger for the caller's
+    reseller account (mobile parity with the reseller web billing page)."""
     from app.services import reseller_portal_billing
 
     reseller_id = _reseller_id(db, principal)
-    return reseller_portal_billing.get_billing_account_summary(db, reseller_id)
+    summary = reseller_portal_billing.get_billing_account_summary(db, reseller_id)
+    summary["account_activity"] = reseller_portal_billing.account_activity(
+        db, reseller_id, summary
+    )
+    return summary
 
 
 @router.post("/billing/pay/intent")
@@ -367,19 +446,50 @@ def my_reseller_pay_verify(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/billing/subscribers/{subscriber_id}/allocate")
-def my_reseller_allocate_subscriber(
+@router.post(
+    "/billing/subscribers/{subscriber_id}/allocation/preview",
+    response_model=BillingAccountCreditAllocationPreviewRead,
+)
+def my_reseller_allocate_subscriber_preview(
     subscriber_id: str,
+    payload: BillingAccountCreditAllocationPreviewRequest,
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
-) -> dict:
-    """Allocate unallocated reseller funds to one managed subscriber."""
+) -> BillingAccountCreditAllocationPreviewRead:
+    """Preview exact consolidated-credit and subscriber-ledger effects."""
     from app.services import reseller_portal_billing
 
     reseller_id = _reseller_id(db, principal)
     try:
-        return reseller_portal_billing.allocate_unallocated_to_subscriber(
-            db, reseller_id, subscriber_id
+        return reseller_portal_billing.preview_unallocated_to_subscriber(
+            db, reseller_id, subscriber_id, amount=payload.amount
+        )["preview"]
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/billing/subscribers/{subscriber_id}/allocation/confirm",
+    response_model=BillingAccountCreditAllocationResultRead,
+)
+def my_reseller_allocate_subscriber_confirm(
+    subscriber_id: str,
+    payload: BillingAccountCreditAllocationConfirm,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> BillingAccountCreditAllocationResultRead:
+    """Confirm a preview and return its exact resulting ledger evidence."""
+    from app.services import reseller_portal_billing
+
+    reseller_id = _reseller_id(db, principal)
+    actor_id = principal.get("principal_id") or principal.get("subscriber_id")
+    try:
+        return reseller_portal_billing.confirm_unallocated_to_subscriber(
+            db,
+            reseller_id,
+            subscriber_id,
+            payload,
+            actor_id=str(actor_id) if actor_id else None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -396,205 +506,6 @@ def my_reseller_fiber_map(
     from app.services import web_network_fiber
 
     return web_network_fiber.get_fiber_plant_map_data(db)
-
-
-# --- VAS (bill payments) — reseller float wallet + sell-for-customer -------------
-#
-# Same vas.enabled flag as the customer surfaces (404 when off). Reseller
-# responses use VasResellerTransactionRead, which structurally excludes the
-# owner-side economics (override invisibility).
-
-
-def _vas_reseller_wallet(db: Session, principal: dict):
-    from app.services import vas_wallet
-
-    reseller_id = _reseller_id(db, principal)
-    return reseller_id, vas_wallet.get_or_create_reseller_wallet(db, reseller_id)
-
-
-def _reseller_txn_read(db: Session, txn):
-    from decimal import ROUND_DOWN, Decimal
-
-    from app.schemas.vas import VasResellerTransactionRead
-    from app.services import vas_purchases
-
-    commission = None
-    if txn.reseller_rate_pct is not None:
-        commission = (
-            Decimal(str(txn.amount)) * Decimal(str(txn.reseller_rate_pct)) / 100
-        ).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
-    return VasResellerTransactionRead(
-        id=txn.id,
-        status=txn.status,
-        service_name=txn.service.name if txn.service else None,
-        identifier=txn.identifier,
-        variation_code=txn.variation_code,
-        amount=txn.amount,
-        commission_rate_pct=txn.reseller_rate_pct,
-        commission_amount=commission,
-        token=vas_purchases.transaction_token(txn),
-        error=txn.error,
-        created_at=txn.created_at,
-        delivered_at=txn.delivered_at,
-    )
-
-
-@router.get("/vas/wallet")
-def my_reseller_vas_wallet(
-    db: Session = Depends(get_db),
-    principal: dict = Depends(require_user_auth),
-) -> dict:
-    """Reseller float wallet: balance + recent entries."""
-    from app.schemas.vas import VasWalletEntryRead
-    from app.services import vas_wallet
-    from app.services.vas_wallet import wallet_balance
-
-    vas_wallet.require_enabled(db)
-    _, wallet = _vas_reseller_wallet(db, principal)
-    entries = vas_wallet.wallet_entries(db, wallet.id, limit=20)
-    return {
-        "balance": wallet_balance(db, wallet.id),
-        "currency": "NGN",
-        "entries": [
-            VasWalletEntryRead.model_validate(entry).model_dump() for entry in entries
-        ],
-    }
-
-
-@router.post("/vas/wallet/topup/initiate")
-def my_reseller_vas_topup_initiate(
-    payload: dict,
-    db: Session = Depends(get_db),
-    principal: dict = Depends(require_user_auth),
-) -> dict:
-    from decimal import Decimal as _Decimal
-
-    from app.services import vas_wallet
-
-    reseller_id = _reseller_id(db, principal)
-    return {
-        key: str(value) if isinstance(value, _Decimal) else value
-        for key, value in vas_wallet.initiate_reseller_topup(
-            db, reseller_id, _Decimal(str(payload.get("amount") or "0"))
-        ).items()
-    }
-
-
-@router.post("/vas/wallet/topup/verify")
-def my_reseller_vas_topup_verify(
-    payload: dict,
-    db: Session = Depends(get_db),
-    principal: dict = Depends(require_user_auth),
-) -> dict:
-    from decimal import Decimal as _Decimal
-
-    from app.services import vas_wallet
-
-    reseller_id = _reseller_id(db, principal)
-    result = vas_wallet.verify_reseller_topup(
-        db,
-        reseller_id,
-        str(payload.get("reference") or ""),
-        provider=payload.get("provider"),
-    )
-    return {
-        key: str(value) if isinstance(value, _Decimal) else value
-        for key, value in result.items()
-    }
-
-
-@router.get("/vas/catalog")
-def my_reseller_vas_catalog(
-    db: Session = Depends(get_db),
-    principal: dict = Depends(require_user_auth),
-):
-    from app.services import vas_purchases
-
-    _reseller_id(db, principal)
-    return vas_purchases.customer_catalog(db)
-
-
-@router.post("/vas/verify")
-def my_reseller_vas_verify(
-    payload: dict,
-    db: Session = Depends(get_db),
-    principal: dict = Depends(require_user_auth),
-) -> dict:
-    from app.services import vas_purchases
-
-    _reseller_id(db, principal)
-    result = vas_purchases.verify_identifier(
-        db,
-        service_id=str(payload.get("service_id") or ""),
-        identifier=str(payload.get("identifier") or ""),
-        variation_type=payload.get("variation_type"),
-    )
-    return {
-        "customer_name": result.get("customer_name"),
-        "address": result.get("address"),
-    }
-
-
-@router.post("/vas/purchases", status_code=201)
-def my_reseller_vas_purchase(
-    payload: dict,
-    db: Session = Depends(get_db),
-    principal: dict = Depends(require_user_auth),
-):
-    """Sell airtime/data/bills to a walk-in customer from the float wallet."""
-    from decimal import Decimal as _Decimal
-
-    from app.services import vas_purchases
-
-    reseller_id = _reseller_id(db, principal)
-    raw_amount = payload.get("amount")
-    txn = vas_purchases.reseller_purchase(
-        db,
-        reseller_id=reseller_id,
-        service_id=str(payload.get("service_id") or ""),
-        identifier=str(payload.get("identifier") or ""),
-        variation_code=payload.get("variation_code") or None,
-        amount=_Decimal(str(raw_amount)) if raw_amount is not None else None,
-        phone=payload.get("phone") or None,
-        confirm_duplicate=bool(payload.get("confirm_duplicate")),
-    )
-    return _reseller_txn_read(db, txn)
-
-
-@router.get("/vas/purchases")
-def my_reseller_vas_purchases(
-    limit: int = Query(default=50, ge=1, le=200),
-    db: Session = Depends(get_db),
-    principal: dict = Depends(require_user_auth),
-):
-    from app.services import vas_purchases
-
-    reseller_id = _reseller_id(db, principal)
-    return [
-        _reseller_txn_read(db, txn)
-        for txn in vas_purchases.list_reseller_transactions(
-            db, reseller_id, limit=limit
-        )
-    ]
-
-
-@router.get("/vas/commission-statement")
-def my_reseller_vas_commission_statement(
-    db: Session = Depends(get_db),
-    principal: dict = Depends(require_user_auth),
-):
-    from app.schemas.vas import VasCommissionStatementResponse, VasWalletEntryRead
-    from app.services import vas_wallet
-
-    vas_wallet.require_enabled(db)
-    _, wallet = _vas_reseller_wallet(db, principal)
-    summary = vas_wallet.commission_summary(db, wallet.id)
-    return VasCommissionStatementResponse(
-        total_earned=summary["total"],
-        entries=[
-            VasWalletEntryRead.model_validate(entry) for entry in summary["entries"]
-        ],
-    )
 
 
 @router.post("/service-requests")
@@ -757,8 +668,9 @@ def my_reseller_quotes(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ) -> dict:
-    """Self-serve installation quotes across all the reseller's customers
-    (aggregated from the local CRM mirror; each row tagged with its account)."""
+    """Self-serve installation quotes across all the reseller's customers,
+    each row tagged with its account. Served from the local CRM mirror, or
+    natively behind the ``quotes_native_read_enabled`` ownership flag."""
     reseller_id = _reseller_id(db, principal)
     return reseller_crm_views.quotes_for_reseller(db, reseller_id)
 
@@ -769,7 +681,8 @@ def my_reseller_projects(
     principal: dict = Depends(require_user_auth),
 ) -> dict:
     """Installation/projects across all the reseller's customers (stage +
-    progress), from the local mirror."""
+    progress). Served from the local mirror, or natively behind
+    the ``projects_native_read_enabled`` ownership flag."""
     reseller_id = _reseller_id(db, principal)
     return reseller_crm_views.projects_for_reseller(db, reseller_id)
 
@@ -793,11 +706,26 @@ def my_reseller_quote_request(
     principal: dict = Depends(require_user_auth),
 ) -> dict:
     """Request a map-pinned installation quote on a managed customer's behalf.
-    404 if the account isn't one of the reseller's (no IDOR)."""
+    404 if the account isn't one of the reseller's (no IDOR). Behind the
+    ``quotes_native_write_enabled`` ownership flag: OFF writes through
+    to the CRM; ON creates the quote natively in sub (same §2.5 shape)."""
+    from app.services.sales import selfserve as selfserve_service
+
     reseller_id = _reseller_id(db, principal)
     account = reseller_portal._get_customer_account(db, reseller_id, account_id)
     if account is None:
         raise HTTPException(status_code=404, detail="Account not found")
+    if selfserve_service.native_write_enabled(db):
+        quote = selfserve_service.selfserve_quotes.request_quote(
+            db,
+            str(account.id),
+            latitude=payload.latitude,
+            longitude=payload.longitude,
+            address=payload.address,
+            region=payload.region,
+            note=payload.note,
+        )
+        return selfserve_service.build_portal_quote_payload(db, quote)
     return quotes_mirror.request_quote(
         db,
         str(account.id),

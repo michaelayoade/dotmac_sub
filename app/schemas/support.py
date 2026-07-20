@@ -3,9 +3,17 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    computed_field,
+    field_validator,
+)
 
 from app.models.support import TicketChannel, TicketCommentAuthorType, TicketPriority
+from app.schemas.status_presentation import StatusPresentation
 
 
 class AttachmentMeta(BaseModel):
@@ -85,6 +93,10 @@ class TicketUpdate(BaseModel):
     status: str | None = None
     priority: str | None = None
     ticket_type: str | None = Field(default=None, max_length=80)
+    # NCC complaints-return correction: setting either marks it agent-owned,
+    # and it is never re-derived from the ticket text afterwards.
+    ncc_category: str | None = Field(default=None, max_length=80)
+    ncc_subcategory: str | None = Field(default=None, max_length=120)
     channel: TicketChannel | None = None
     tags: list[str] | None = None
     metadata_: dict | None = Field(
@@ -133,10 +145,16 @@ class TicketRead(BaseModel):
     status: str
     priority: str
     ticket_type: str | None
+    ncc_category: str | None = None
+    ncc_category_source: str | None = None
+    ncc_subcategory: str | None = None
+    ncc_subcategory_source: str | None = None
     channel: TicketChannel
     tags: list[str] | None = None
     metadata_: dict | None = Field(
-        default=None, validation_alias="metadata", serialization_alias="metadata"
+        default=None,
+        validation_alias=AliasChoices("metadata_", "metadata"),
+        serialization_alias="metadata",
     )
     attachments: list[dict] | None = None
 
@@ -148,6 +166,26 @@ class TicketRead(BaseModel):
     is_active: bool
     created_at: datetime
     updated_at: datetime
+
+    # Support-satisfaction rating (1-5) if the customer has rated this resolved
+    # ticket. Read from the ORM's `Ticket.csat_rating` property (backed by
+    # metadata.csat) so the apps can show the score / hide the rate prompt.
+    csat_rating: int | None = None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def status_presentation(self) -> StatusPresentation:
+        """Canonical label/tone/icon projection for ticket rendering."""
+        from app.services.status_presentation import ticket_status_presentation
+
+        return ticket_status_presentation(self.status)
+
+
+class TicketSatisfactionRequest(BaseModel):
+    """Customer CSAT on a resolved/closed support ticket."""
+
+    rating: int = Field(ge=1, le=5)
+    comment: str | None = Field(default=None, max_length=2000)
 
 
 class TicketBulkUpdateItem(BaseModel):

@@ -6,6 +6,7 @@ class AppNotification {
     required this.id,
     required this.channel,
     required this.status,
+    this.isRead = false,
     this.category,
     this.eventType,
     this.subject,
@@ -17,6 +18,7 @@ class AppNotification {
   final String id;
   final String channel; // email | sms | push | websocket | webhook
   final String status; // queued | sending | delivered | failed | canceled
+  final bool isRead;
   final String? category;
   final String? eventType;
   final String? subject;
@@ -37,6 +39,7 @@ class AppNotification {
         id: json['id'].toString(),
         channel: json['channel'] as String? ?? 'email',
         status: json['status'] as String? ?? 'queued',
+        isRead: json['is_read'] as bool? ?? false,
         category: json['category'] as String?,
         eventType: json['event_type'] as String?,
         subject: json['subject'] as String?,

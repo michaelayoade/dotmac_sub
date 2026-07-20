@@ -18,6 +18,7 @@ from app.models.network_monitoring import (
     NetworkDevice,
 )
 from app.services import nas as nas_service
+from app.services.snmp_probe import probe_snmp_reachability
 
 logger = logging.getLogger(__name__)
 
@@ -31,9 +32,9 @@ def refresh_device_from_vendor_api(
     """
     vendor = str(device.vendor or "").lower()
     if "mikrotik" not in vendor:
-        return False, False
+        return refresh_device_from_direct_snmp(db, device)
     if not device.mgmt_ip:
-        return False, False
+        return refresh_device_from_direct_snmp(db, device)
 
     nas_device = db.scalars(
         select(NasDevice)
@@ -47,7 +48,7 @@ def refresh_device_from_vendor_api(
         )
     ).first()
     if not nas_device:
-        return False, False
+        return refresh_device_from_direct_snmp(db, device)
 
     now = datetime.now(UTC)
     try:
@@ -166,3 +167,29 @@ def refresh_device_from_vendor_api(
         device.current_subscriber_count = max(active_int, 0)
 
     return True, True
+
+
+def refresh_device_from_direct_snmp(
+    db: Session, device: NetworkDevice
+) -> tuple[bool, bool]:
+    """Refresh SNMP reachability by directly probing the device."""
+    _ = db  # Reserved for future metric writes; keep the signature uniform.
+    result = probe_snmp_reachability(device)
+    if not result.handled:
+        return False, False
+
+    now = datetime.now(UTC)
+    device.last_snmp_at = now
+    device.last_snmp_ok = result.success
+
+    if result.success:
+        device.snmp_down_since = None
+        from app.services.web_network_core_runtime import set_device_observed_status
+
+        if not (device.ping_enabled and device.last_ping_ok is False):
+            set_device_observed_status(device, DeviceStatus.online)
+    else:
+        if device.snmp_down_since is None:
+            device.snmp_down_since = now
+
+    return True, result.success

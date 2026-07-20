@@ -14,9 +14,25 @@ import pytest
 
 from app.services.network.reconcile import (
     OntDesiredState,
+    Tr181WanParameterPaths,
     Validation,
     validate_desired,
 )
+
+
+def _tr181_paths() -> Tr181WanParameterPaths:
+    return Tr181WanParameterPaths(
+        ip_enable="Device.IP.Interface.1.Enable",
+        dhcp_enable="Device.DHCPv4.Client.1.Enable",
+        ip_address="Device.IP.Interface.1.IPv4Address.1.IPAddress",
+        subnet_mask="Device.IP.Interface.1.IPv4Address.1.SubnetMask",
+        gateway="Device.Routing.Router.1.IPv4Forwarding.1.GatewayIPAddress",
+        dns_primary="Device.DNS.Client.Server.1.DNSServer",
+        dns_secondary="Device.DNS.Client.Server.2.DNSServer",
+        nat_enable="Device.NAT.InterfaceSetting.1.Enable",
+        vlan_enable="Device.Ethernet.VLANTermination.1.Enable",
+        vlan_id="Device.Ethernet.VLANTermination.1.VLANID",
+    )
 
 
 def _base() -> OntDesiredState:
@@ -209,6 +225,83 @@ def test_omci_method_with_positive_profile_id_is_accepted():
 def test_bridge_mode_with_nat_disabled_is_accepted():
     current = _base()
     target = dataclasses.replace(current, wan_mode="bridge", nat_enabled=False)
+    assert validate_desired(target, current).ok is True
+
+
+def test_public_static_wan_rejects_nat():
+    current = _base()
+    target = dataclasses.replace(
+        current,
+        wan_mode="static",
+        wan_static_ip="160.119.127.194",
+        wan_static_subnet="255.255.255.248",
+        wan_static_gateway="160.119.127.193",
+        wan_static_ip_is_public=True,
+        nat_enabled=True,
+    )
+    _assert_rejected(validate_desired(target, current), reason_contains="public static")
+
+
+def test_private_static_wan_rejects_nat_disabled():
+    current = _base()
+    target = dataclasses.replace(
+        current,
+        wan_mode="static",
+        wan_static_ip="10.20.30.2",
+        wan_static_subnet="255.255.255.0",
+        wan_static_gateway="10.20.30.1",
+        wan_static_ip_is_public=False,
+        nat_enabled=False,
+    )
+    _assert_rejected(
+        validate_desired(target, current), reason_contains="private static"
+    )
+
+
+def test_tr181_static_wan_requires_resolved_model_paths():
+    current = _base()
+    target = dataclasses.replace(
+        current,
+        wan_mode="static",
+        wan_static_ip="10.20.30.2",
+        wan_static_subnet="255.255.255.0",
+        wan_static_gateway="10.20.30.1",
+        wan_static_ip_is_public=False,
+        nat_enabled=True,
+        tr069_data_model_root="Device",
+        tr181_wan_paths=None,
+    )
+    _assert_rejected(
+        validate_desired(target, current), reason_contains="vendor/model parameter map"
+    )
+
+
+def test_tr181_dhcp_wan_requires_resolved_model_paths():
+    current = _base()
+    target = dataclasses.replace(
+        current,
+        wan_mode="dhcp",
+        tr069_data_model_root="Device",
+        tr181_wan_paths=None,
+    )
+    _assert_rejected(
+        validate_desired(target, current), reason_contains="vendor/model parameter map"
+    )
+
+
+def test_tr181_static_wan_accepts_complete_model_paths():
+    current = _base()
+    target = dataclasses.replace(
+        current,
+        wan_mode="static",
+        wan_static_ip="10.20.30.2",
+        wan_static_subnet="255.255.255.0",
+        wan_static_gateway="10.20.30.1",
+        wan_static_ip_is_public=False,
+        nat_enabled=True,
+        tr069_data_model_root="Device",
+        tr181_wan_paths=_tr181_paths(),
+    )
     assert validate_desired(target, current).ok is True
 
 

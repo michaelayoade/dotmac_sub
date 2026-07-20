@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import re
 import socket
+import time
 from dataclasses import asdict, replace
 from typing import Any, cast
 
@@ -313,6 +314,44 @@ def _derive_prompt_regex(output: str, fallback: str) -> str:
     return fallback
 
 
+def _send_huawei_command(
+    channel: Channel,
+    command: str,
+    *,
+    word_delay_sec: float = 0.1,
+) -> None:
+    """Send a command without overrunning Huawei's interactive line editor."""
+    parts = command.split(" ")
+    for index, part in enumerate(parts):
+        channel.send(part)
+        if index < len(parts) - 1:
+            channel.send(" ")
+            time.sleep(word_delay_sec)
+    if parts:
+        time.sleep(word_delay_sec)
+    channel.send("\n")
+
+
+def _prepare_huawei_read_shell(channel: Channel, prompt_regex: str) -> str:
+    """Enter privileged mode, derive its real prompt, and disable paging."""
+    _send_huawei_command(channel, "enable", word_delay_sec=0)
+    output = _read_until_prompt(
+        channel,
+        r"(?:^|\r?\n)[^\r\n]*#\s*$",
+        timeout_sec=_setup_prompt_timeout(),
+    )
+    fallback_prompt = prompt_regex.replace(">", "#")
+    if "#" not in fallback_prompt:
+        fallback_prompt = r"#\s*$"
+    privileged_prompt = _derive_prompt_regex(output, fallback_prompt)
+    _run_huawei_cmd(
+        channel,
+        "screen-length 0 temporary",
+        prompt=privileged_prompt,
+    )
+    return privileged_prompt
+
+
 def _replace_policy_prompt_regex(
     policy: OltSshPolicy, prompt_regex: str
 ) -> OltSshPolicy:
@@ -348,6 +387,18 @@ def _validate_fsp(fsp: str) -> tuple[bool, str]:
 def _validate_serial(serial_number: str) -> tuple[bool, str]:
     """Validate ONT serial number contains only alphanumeric chars and dashes."""
     return validate_serial(serial_number)
+
+
+def _setup_prompt_timeout() -> float:
+    """Prompt timeout for session-setup reads (``enable`` / ``screen-length``).
+
+    Env-tunable via ``OLT_SSH_PROMPT_TIMEOUT_SECONDS`` (default 15, floor 5;
+    resolved once at startup by ``app.config``). The old hardcoded 5s left
+    ~1.5s headroom over a healthy ~3s connect+enable (measured against
+    Jabi/Gwarimpa 2026-07-17) and failed intermittently under VTY contention
+    or mgmt-path jitter.
+    """
+    return settings.olt_ssh_prompt_timeout_seconds
 
 
 def _open_shell(olt: OLTDevice) -> tuple[Transport, Channel, OltSshPolicy]:
@@ -443,7 +494,7 @@ def _needs_huawei_command_confirm(output: str) -> bool:
 def _run_huawei_cmd(channel: Channel, command: str, prompt: str = r"#\s*$") -> str:
     """Send a command to a Huawei shell, accepting optional-argument prompts."""
     logger.debug("OLT command: %r", command)
-    channel.send(f"{command}\n")
+    _send_huawei_command(channel, command)
     out = _read_until_prompt(
         channel, rf"{prompt}|<cr>|{HUAWEI_OPTIONAL_ARG_PROMPT}", timeout_sec=12
     )
@@ -456,27 +507,41 @@ def _run_huawei_cmd(channel: Channel, command: str, prompt: str = r"#\s*$") -> s
 def _run_huawei_paged_cmd(
     channel: Channel, command: str, prompt: str = r"#\s*$", *, timeout_sec: int = 60
 ) -> str:
-    """Send a command and handle pagination (---- More ----) prompts."""
+    """Send a paged command within one cumulative deadline."""
     logger.debug("OLT paged command: %r", command)
-    channel.send(f"{command}\n")
+    _send_huawei_command(channel, command)
     output_parts: list[str] = []
     pager_pattern = r"---- More(?:\s*\([^)]*\)\s*)?----|<cr>|Press any key"
     combined_pattern = rf"{prompt}|{pager_pattern}"
+    deadline = time.monotonic() + max(float(timeout_sec), 0.1)
 
     while True:
-        chunk = _read_until_prompt(channel, combined_pattern, timeout_sec=timeout_sec)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(
+                f"Huawei command did not return a shell prompt within {timeout_sec}s"
+            )
+        chunk = _read_until_prompt(
+            channel,
+            combined_pattern,
+            timeout_sec=remaining,
+        )
         output_parts.append(chunk)
 
-        # Check if we hit a pager prompt
-        if "---- More" in chunk or "Press any key" in chunk:
+        # A single recv can contain an earlier continuation marker and the final
+        # prompt. The anchored shell prompt is authoritative when both appear.
+        if re.search(prompt, chunk):
+            break
+        elif "---- More" in chunk or "Press any key" in chunk:
             channel.send(" ")  # Send space to continue
             continue
         elif "<cr>" in chunk:
             channel.send("\n")
             continue
         else:
-            # Hit the shell prompt - we're done
-            break
+            raise TimeoutError(
+                f"Huawei command output ended before the shell prompt within {timeout_sec}s"
+            )
 
     return "".join(output_parts)
 
@@ -510,15 +575,12 @@ def get_service_ports(
 
     try:
         with ssh_context as (channel, policy):
-            channel.send("enable\n")
-            _read_until_prompt(channel, policy.prompt_regex, timeout_sec=5)
-            channel.send("screen-length 0 temporary\n")
-            _read_until_prompt(channel, policy.prompt_regex, timeout_sec=5)
+            prompt = _prepare_huawei_read_shell(channel, policy.prompt_regex)
 
             output = _run_huawei_paged_cmd(
                 channel,
                 f"display service-port port {fsp}",
-                prompt=policy.prompt_regex,
+                prompt=prompt,
             )
             entries = _parse_service_port_table(output)
             _cache_service_ports(olt, fsp, entries)
@@ -560,9 +622,9 @@ def create_service_ports(
 
     try:
         channel.send("enable\n")
-        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+        _read_until_prompt(channel, r"#\s*$", timeout_sec=_setup_prompt_timeout())
         channel.send("screen-length 0 temporary\n")
-        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+        _read_until_prompt(channel, r"#\s*$", timeout_sec=_setup_prompt_timeout())
 
         config_prompt = r"[#)]\s*$"
         _run_huawei_cmd(channel, "config", prompt=config_prompt)
@@ -642,9 +704,9 @@ def upgrade_firmware(
 
     try:
         channel.send("enable\n")
-        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+        _read_until_prompt(channel, r"#\s*$", timeout_sec=_setup_prompt_timeout())
         channel.send("screen-length 0 temporary\n")
-        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+        _read_until_prompt(channel, r"#\s*$", timeout_sec=_setup_prompt_timeout())
 
         # Huawei firmware upgrade command
         cmd = f"system-software upgrade {file_url}"
@@ -702,15 +764,12 @@ def get_firmware_info(olt: OLTDevice) -> tuple[bool, str, FirmwareInfo]:
         return False, f"Connection failed: {exc}", FirmwareInfo()
 
     try:
-        channel.send("enable\n")
-        _read_until_prompt(channel, policy.prompt_regex, timeout_sec=5)
-        channel.send("screen-length 0 temporary\n")
-        _read_until_prompt(channel, policy.prompt_regex, timeout_sec=5)
+        prompt = _prepare_huawei_read_shell(channel, policy.prompt_regex)
 
         output = _run_huawei_paged_cmd(
             channel,
             "display version",
-            prompt=policy.prompt_regex,
+            prompt=prompt,
             timeout_sec=30,
         )
 
@@ -757,7 +816,9 @@ def rollback_firmware(olt: OLTDevice) -> tuple[bool, str]:
 
     try:
         channel.send("enable\n")
-        _read_until_prompt(channel, policy.prompt_regex, timeout_sec=5)
+        _read_until_prompt(
+            channel, policy.prompt_regex, timeout_sec=_setup_prompt_timeout()
+        )
 
         # First check if we have dual image support
         ok, msg, info = get_firmware_info(olt)
@@ -767,7 +828,9 @@ def rollback_firmware(olt: OLTDevice) -> tuple[bool, str]:
             return False, "No standby firmware version available for rollback"
 
         channel.send("screen-length 0 temporary\n")
-        _read_until_prompt(channel, policy.prompt_regex, timeout_sec=5)
+        _read_until_prompt(
+            channel, policy.prompt_regex, timeout_sec=_setup_prompt_timeout()
+        )
 
         # Switch startup system software to standby
         # Huawei: startup system-software slave (or backup/standby depending on model)
@@ -845,7 +908,9 @@ def fetch_running_config_ssh(olt: OLTDevice) -> tuple[bool, str, str]:
     try:
         with ssh_context as (channel, policy):
             channel.send("enable\n")
-            _read_until_prompt(channel, policy.prompt_regex, timeout_sec=5)
+            _read_until_prompt(
+                channel, policy.prompt_regex, timeout_sec=_setup_prompt_timeout()
+            )
 
             output = _run_huawei_paged_cmd(
                 channel,
@@ -934,7 +999,9 @@ def run_cli_command(olt: OLTDevice, command: str) -> tuple[bool, str, str]:
     try:
         with ssh_context as (channel, policy):
             channel.send("enable\n")
-            _read_until_prompt(channel, policy.prompt_regex, timeout_sec=5)
+            _read_until_prompt(
+                channel, policy.prompt_regex, timeout_sec=_setup_prompt_timeout()
+            )
 
             channel.send(f"{command}\n")
             output = _read_until_prompt(channel, policy.prompt_regex, timeout_sec=30)
@@ -995,7 +1062,7 @@ def delete_service_port(olt: OLTDevice, index: int) -> tuple[bool, str]:
 
     try:
         channel.send("enable\n")
-        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+        _read_until_prompt(channel, r"#\s*$", timeout_sec=_setup_prompt_timeout())
 
         config_prompt = r"[#)]\s*$"
         _run_huawei_cmd(channel, "config", prompt=config_prompt)
@@ -1051,7 +1118,7 @@ def update_ont_profiles(
         from app.services.network.olt_ssh_ont._common import _send_slow
 
         channel.send("enable\n")
-        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+        _read_until_prompt(channel, r"#\s*$", timeout_sec=_setup_prompt_timeout())
 
         config_prompt = r"[#)]\s*$"
         _run_huawei_cmd(channel, "config", prompt=config_prompt)
@@ -1060,7 +1127,7 @@ def update_ont_profiles(
         frame_slot = f"{parts[0]}/{parts[1]}"
         port_num = parts[2]
         _send_slow(channel, f"interface gpon {frame_slot}")
-        _read_until_prompt(channel, config_prompt, timeout_sec=5)
+        _read_until_prompt(channel, config_prompt, timeout_sec=_setup_prompt_timeout())
 
         cmd = f"ont modify {port_num} {ont_id}"
         if line_profile_id is not None:
@@ -1139,7 +1206,7 @@ def set_ont_description(
         from app.services.network.olt_ssh_ont._common import _send_slow
 
         channel.send("enable\n")
-        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+        _read_until_prompt(channel, r"#\s*$", timeout_sec=_setup_prompt_timeout())
 
         config_prompt = r"[#)]\s*$"
         _run_huawei_cmd(channel, "config", prompt=config_prompt)
@@ -1148,7 +1215,7 @@ def set_ont_description(
         frame_slot = f"{parts[0]}/{parts[1]}"
         port_num = parts[2]
         _send_slow(channel, f"interface gpon {frame_slot}")
-        _read_until_prompt(channel, config_prompt, timeout_sec=5)
+        _read_until_prompt(channel, config_prompt, timeout_sec=_setup_prompt_timeout())
 
         # Escape any embedded double-quotes; the wrapped-in-quotes form is
         # how the rest of the codebase writes descriptions (matches
@@ -1239,7 +1306,7 @@ def create_single_service_port(
 
     try:
         channel.send("enable\n")
-        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+        _read_until_prompt(channel, r"#\s*$", timeout_sec=_setup_prompt_timeout())
 
         config_prompt = r"[#)]\s*$"
         _run_huawei_cmd(channel, "config", prompt=config_prompt)

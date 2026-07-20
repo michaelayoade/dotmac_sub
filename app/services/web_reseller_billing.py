@@ -14,6 +14,7 @@ from fastapi import Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
+from app.schemas.billing import BillingAccountCreditAllocationConfirm
 from app.services import customer_portal_flow_payments as customer_payments
 from app.services import payment_proofs, reseller_portal, reseller_portal_billing
 from app.web.reseller.branding import get_reseller_templates
@@ -73,9 +74,7 @@ def billing_overview(
             "allocation_error": error,
             "payment_options": [
                 opt
-                for opt in customer_payments._topup_payment_options(
-                    db, customer_payments._resolve_payment_provider(db)
-                )
+                for opt in customer_payments._topup_payment_options(db)
                 if opt["provider_type"] != "direct_bank_transfer"
             ],
             "bank_transfer_accounts": (
@@ -150,14 +149,64 @@ def payment_method_remove(request: Request, db: Session, method_id: str):
     )
 
 
-def allocate_subscriber_funds(request: Request, db: Session, subscriber_id: str):
+def preview_subscriber_funds_allocation(
+    request: Request, db: Session, subscriber_id: str, amount: str | None = None
+):
     context = _require_reseller_context(request, db)
     if not context:
         return RedirectResponse(url="/reseller/auth/login", status_code=303)
     reseller_id = str(context["reseller"].id)
     try:
-        result = reseller_portal_billing.allocate_unallocated_to_subscriber(
-            db, reseller_id, subscriber_id
+        result = reseller_portal_billing.preview_unallocated_to_subscriber(
+            db, reseller_id, subscriber_id, amount=amount
+        )
+    except ValueError as exc:
+        return RedirectResponse(
+            url="/reseller/billing?error=" + quote_plus(str(exc)),
+            status_code=303,
+        )
+    return templates.TemplateResponse(
+        "reseller/billing/allocation_confirm.html",
+        {
+            "request": request,
+            "active_page": "billing",
+            "reseller": context["reseller"],
+            "current_user": context["current_user"],
+            "preview": result["preview"],
+            "idempotency_key": result["idempotency_key"],
+        },
+    )
+
+
+def confirm_subscriber_funds_allocation(
+    request: Request,
+    db: Session,
+    subscriber_id: str,
+    amount: str,
+    preview_fingerprint: str,
+    idempotency_key: str,
+):
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url="/reseller/auth/login", status_code=303)
+    current_user = context.get("current_user") or {}
+    actor_id = (
+        current_user.get("actor_id")
+        or current_user.get("principal_id")
+        or current_user.get("subscriber_id")
+        or current_user.get("id")
+    )
+    try:
+        result = reseller_portal_billing.confirm_unallocated_to_subscriber(
+            db,
+            str(context["reseller"].id),
+            subscriber_id,
+            BillingAccountCreditAllocationConfirm(
+                amount=Decimal(amount),
+                preview_fingerprint=preview_fingerprint,
+                idempotency_key=idempotency_key,
+            ),
+            actor_id=str(actor_id) if actor_id else None,
         )
     except ValueError as exc:
         return RedirectResponse(
@@ -165,8 +214,8 @@ def allocate_subscriber_funds(request: Request, db: Session, subscriber_id: str)
             status_code=303,
         )
     message = (
-        f"Allocated {result['currency']} {result['allocated_total']:,.2f} "
-        f"to {result['invoice_count']} invoice(s)."
+        f"Allocated {result.currency} {result.amount:,.2f}; "
+        f"ledger evidence {result.billing_account_ledger_entry_id}."
     )
     return RedirectResponse(
         url="/reseller/billing?allocated=" + quote_plus(message),

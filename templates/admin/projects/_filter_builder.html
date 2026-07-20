@@ -1,0 +1,203 @@
+{# Shared condition-builder JS for the projects/tasks filter bars.
+   Same serialization contract as the support tickets builder: rows become
+   the `filters` JSON param {and: [[doctype, field, op, value], …], or: […]}
+   consumed by app/services/project_filters.py. #}
+<script>
+function projectFilterBuilder() {
+    return {
+        schema: [],
+        doctype: 'Project',
+        rows: [],
+        filtersJson: '',
+
+        init() {
+            const el = this.$el;
+            this.schema = this.parseJsonAttribute(el.getAttribute('data-filter-schema'), []);
+            this.doctype = el.getAttribute('data-doctype') || 'Project';
+            const initialFilters = this.parseJsonAttribute(el.getAttribute('data-initial-filters'), null);
+            this.rows = this.parseInitialFilters(initialFilters);
+            if (this.rows.length === 0) {
+                this.addRow();
+            }
+            this.syncFilters();
+        },
+
+        parseJsonAttribute(rawValue, fallbackValue) {
+            if (!rawValue || rawValue === 'null') return fallbackValue;
+            try {
+                return JSON.parse(rawValue);
+            } catch (_error) {
+                return fallbackValue;
+            }
+        },
+
+        parseInitialFilters(initialFilters) {
+            if (!initialFilters) return [];
+            try {
+                const parsed = typeof initialFilters === 'string' ? JSON.parse(initialFilters) : initialFilters;
+                const rows = [];
+                const andRows = Array.isArray(parsed) ? parsed : (Array.isArray(parsed.and) ? parsed.and : []);
+                const orRows = parsed && Array.isArray(parsed.or) ? parsed.or : [];
+                andRows.forEach((item) => {
+                    if (Array.isArray(item) && item.length === 4) {
+                        rows.push(this.rowFromPayload(item, 'and'));
+                    } else if (item && typeof item === 'object' && Array.isArray(item.or)) {
+                        item.or.forEach((groupRow) => {
+                            if (Array.isArray(groupRow) && groupRow.length === 4) {
+                                rows.push(this.rowFromPayload(groupRow, 'or'));
+                            }
+                        });
+                    }
+                });
+                orRows.forEach((item) => {
+                    if (Array.isArray(item) && item.length === 4) {
+                        rows.push(this.rowFromPayload(item, 'or'));
+                    }
+                });
+                return rows;
+            } catch (_error) {
+                return [];
+            }
+        },
+
+        rowFromPayload(item, group) {
+            const fieldEntry = this.schema.find((entry) => entry.field === item[1]);
+            const field = (fieldEntry && fieldEntry.field) ? fieldEntry.field : this.defaultField();
+            const operator = item[2] || this.defaultOperator(field);
+            let value = item[3];
+            if (operator === 'between' && !Array.isArray(value)) {
+                value = ['', ''];
+            }
+            return { id: this.newId(), field, operator, value, group };
+        },
+
+        newId() {
+            if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+                return window.crypto.randomUUID();
+            }
+            return `${Date.now()}-${Math.random()}`;
+        },
+
+        defaultField() {
+            if (this.schema.length > 0 && this.schema[0] && this.schema[0].field) {
+                return this.schema[0].field;
+            }
+            return 'status';
+        },
+
+        defaultOperator(field) {
+            const operators = this.operatorOptions(field);
+            if (operators.length > 0 && operators[0] && operators[0].value) {
+                return operators[0].value;
+            }
+            return '=';
+        },
+
+        operatorOptions(field) {
+            const fieldEntry = this.schema.find((entry) => entry.field === field);
+            return fieldEntry && fieldEntry.operators ? fieldEntry.operators : [{ value: '=', label: 'Equals' }];
+        },
+
+        selectOptions(field) {
+            const fieldEntry = this.schema.find((entry) => entry.field === field);
+            return fieldEntry && fieldEntry.options ? fieldEntry.options : [];
+        },
+
+        fieldType(field) {
+            const fieldEntry = this.schema.find((entry) => entry.field === field);
+            return fieldEntry && fieldEntry.type ? fieldEntry.type : 'text';
+        },
+
+        inputType(field) {
+            const type = this.fieldType(field);
+            if (type === 'number') return 'number';
+            if (type === 'date') return 'date';
+            if (type === 'datetime') return 'datetime-local';
+            return 'text';
+        },
+
+        addRow() {
+            const field = this.defaultField();
+            this.rows.push({
+                id: this.newId(),
+                field,
+                operator: this.defaultOperator(field),
+                value: '',
+                group: 'and',
+            });
+            this.syncFilters();
+        },
+
+        removeRow(index) {
+            this.rows.splice(index, 1);
+            if (this.rows.length === 0) {
+                this.addRow();
+                return;
+            }
+            this.syncFilters();
+        },
+
+        clearRows() {
+            this.rows = [];
+            this.addRow();
+        },
+
+        onFieldChange(index) {
+            const row = this.rows[index];
+            const options = this.operatorOptions(row.field).map((item) => item.value);
+            if (!options.includes(row.operator)) {
+                row.operator = this.defaultOperator(row.field);
+            }
+            if (row.operator === 'between' && !Array.isArray(row.value)) {
+                row.value = ['', ''];
+            }
+            if (row.operator !== 'between' && Array.isArray(row.value)) {
+                row.value = '';
+            }
+            this.syncFilters();
+        },
+
+        onOperatorChange(index) {
+            const row = this.rows[index];
+            if (row.operator === 'between' && !Array.isArray(row.value)) {
+                row.value = ['', ''];
+            }
+            if (row.operator !== 'between' && Array.isArray(row.value)) {
+                row.value = '';
+            }
+            this.syncFilters();
+        },
+
+        isRowComplete(row) {
+            if (!row || !row.field || !row.operator) return false;
+            if (row.operator === 'between') {
+                return Array.isArray(row.value)
+                    && row.value.length === 2
+                    && row.value[0] !== '' && row.value[0] !== null && row.value[0] !== undefined
+                    && row.value[1] !== '' && row.value[1] !== null && row.value[1] !== undefined;
+            }
+            if ((row.operator === 'is' || row.operator === 'is not') && this.fieldType(row.field) !== 'boolean') {
+                return true;
+            }
+            return row.value !== '' && row.value !== null && row.value !== undefined;
+        },
+
+        syncFilters() {
+            const andRows = [];
+            const orRows = [];
+            this.rows.forEach((row) => {
+                if (!this.isRowComplete(row)) return;
+                const payload = [this.doctype, row.field, row.operator, row.value];
+                if (row.group === 'or') {
+                    orRows.push(payload);
+                } else {
+                    andRows.push(payload);
+                }
+            });
+            this.filtersJson = (andRows.length === 0 && orRows.length === 0)
+                ? ''
+                : JSON.stringify({ and: andRows, or: orRows });
+        },
+    };
+}
+</script>

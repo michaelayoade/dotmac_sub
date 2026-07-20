@@ -97,6 +97,25 @@ def search_candidates(serial_number: str | None) -> list[str]:
     return candidates
 
 
+def build_huawei_external_id(
+    fsp: str | None, ont_id_on_olt: int | str | None
+) -> str | None:
+    """Return a Huawei external id scoped to the PON path.
+
+    Huawei ONT IDs are only unique within a PON port. Persisting a bare value
+    like ``"0"`` collides across ports, so inventory identifiers include F/S/P.
+    """
+    if ont_id_on_olt is None:
+        return None
+    ont_id_text = str(ont_id_on_olt).strip()
+    if not ont_id_text:
+        return None
+    fsp_text = str(fsp or "").strip().replace("/", ".")
+    if not fsp_text:
+        return ont_id_text
+    return f"huawei:{fsp_text}.{ont_id_text}"
+
+
 def parse_ont_id_on_olt(external_id: str | None) -> int | None:
     """Extract the integer ONT-ID from supported external_id formats.
 

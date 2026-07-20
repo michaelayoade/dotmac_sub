@@ -11,6 +11,7 @@ from app.services.network.parsers import (
     parse_profile_table,
     parse_service_port_table,
 )
+from app.services.network.parsers.firmware import parse_firmware_info
 from app.services.network.parsers.loader import clear_template_cache
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "huawei"
@@ -28,6 +29,26 @@ def _load_fixture(name: str) -> str:
     if not fixture_path.exists():
         pytest.skip(f"Fixture not found: {fixture_path}")
     return fixture_path.read_text()
+
+
+def test_parse_ma5608t_display_version() -> None:
+    output = """
+VERSION : MA5600V800R013C00
+PATCH   : SPC105
+PRODUCT : MA5608T
+Current Program Area : A
+Program Area A Version : MA5600V800R013C00
+Program Area B Version : MA5600V800R012C00
+Uptime is 2 day(s), 3 hour(s), 4 minute(s)
+boi-olt#
+"""
+
+    info = parse_firmware_info(output)
+
+    assert info.current_version == "MA5600V800R013C00"
+    assert info.standby_version == "MA5600V800R012C00"
+    assert info.has_dual_image is True
+    assert info.uptime == "2 day(s), 3 hour(s), 4 minute(s)"
 
 
 class TestAutofindParser:

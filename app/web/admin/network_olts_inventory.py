@@ -6,7 +6,7 @@ import json
 import logging
 from urllib.parse import quote_plus
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -30,13 +30,13 @@ from app.services.network import olt_web_topology as olt_web_topology_service
 from app.services.network.action_logging import actor_label, log_network_action_result
 from app.services.network.olt_inventory import get_olt_or_none
 from app.services.network.olt_lifecycle import get_deletion_impact
+from app.services.network.ont_provisioning_commands import request_ont_authorization
 from app.services.network.ont_scope import (
     can_authorize_ont_from_request,
     resolve_authorization_redirect_ont,
     submitted_authorization_ont_matches_scope,
 )
 from app.services.olt_detail_adapter import olt_detail_adapter
-from app.services.queue_adapter import enqueue_task
 from app.web.request_parsing import parse_form_data_sync
 
 logger = logging.getLogger(__name__)
@@ -181,6 +181,7 @@ def pon_interfaces_list(
     search: str | None = None,
     status: str | None = None,
     olt_id: str | None = None,
+    aliased: str | None = None,
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     context = _base_context(request, db, active_page="pon-interfaces")
@@ -190,6 +191,7 @@ def pon_interfaces_list(
             search=search,
             status=status,
             olt_id=olt_id,
+            aliased=aliased,
         )
     )
     return templates.TemplateResponse(
@@ -232,6 +234,8 @@ def olts_list(
     request: Request,
     search: str | None = None,
     status: str | None = None,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=10, le=200),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     """List all OLT devices."""
@@ -239,6 +243,8 @@ def olts_list(
         db,
         search=search,
         status=status,
+        page=page,
+        per_page=per_page,
     )
     context = _base_context(request, db, active_page="olts")
     context.update(page_data)
@@ -992,17 +998,10 @@ def olt_ssh_get_config(
 def olt_refresh_ont_telemetry(
     request: Request, olt_id: str, db: Session = Depends(get_db)
 ) -> RedirectResponse:
-    dispatch = enqueue_task(
-        "app.tasks.zabbix_ingestion.ingest_olt_signals_from_zabbix",
-        correlation_id=f"ont_signal_ingest:{olt_id}",
-        source="olt_refresh_ont_telemetry",
-    )
-    ok = dispatch.queued
-    message = (
-        "Queued ONU telemetry refresh from monitoring data."
-        if ok
-        else f"Failed to queue ONU telemetry refresh: {dispatch.error}"
-    )
+    # The Zabbix telemetry ingest this button used to queue was retired with
+    # the native monitoring cutover; report the retirement instead of queueing.
+    ok = False
+    message = "ONU telemetry refresh is unavailable: monitoring ingest retired."
     _log_olt_action_result(
         request=request,
         olt_id=olt_id,
@@ -1294,31 +1293,27 @@ def olt_authorize_ont(
     # Normalize preset_id: empty string means no preset selected
     effective_preset_id = preset_id.strip() if preset_id else None
     try:
-        dispatch = enqueue_task(
-            "app.tasks.ont_provisioning.authorize_ont",
-            kwargs={
-                "olt_id": olt_id,
-                "fsp": fsp,
-                "serial_number": serial_number,
-                "force_reauthorize": force,
-                "preset_id": effective_preset_id,
-                "scoped_ont_id": scoped_ont_id or None,
-                "initiated_by": actor_label(request),
-            },
-            correlation_id=f"ont_authorize:{olt_id}:{fsp}:{serial_number}",
-            source="admin_olt_authorize_ont",
+        command = request_ont_authorization(
+            db,
+            olt_id=olt_id,
+            fsp=fsp,
+            serial_number=serial_number,
+            force_reauthorize=force,
+            preset_id=effective_preset_id,
+            scoped_ont_id=scoped_ont_id or None,
+            initiated_by=actor_label(request),
         )
     except Exception as exc:
         logger.exception(
-            "Failed to queue ONT authorization olt_id=%s fsp=%s serial=%s",
+            "Failed to stage ONT authorization olt_id=%s fsp=%s serial=%s",
             olt_id,
             fsp,
             serial_number,
         )
-        dispatch = None
-        auth_msg = f"Authorization queue failed: {exc}"
+        command = None
+        auth_msg = f"Authorization could not be started: {exc}"
 
-    if dispatch and dispatch.queued:
+    if command and command.accepted:
         auth_msg = (
             f"Authorization started for ONT {serial_number}. "
             "The ONT detail page will show progress and next actions."
@@ -1353,7 +1348,10 @@ def olt_authorize_ont(
     auth_msg = (
         auth_msg
         if "auth_msg" in locals()
-        else f"Authorization queue failed: {getattr(dispatch, 'error', 'unknown error')}"
+        else (
+            "Authorization could not be started: "
+            f"{getattr(command, 'message', 'unknown error')}"
+        )
     )
 
     # On failure, redirect back to where user came from with error message

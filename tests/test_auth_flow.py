@@ -10,7 +10,13 @@ from jose import jwt
 from starlette.requests import Request
 
 from app.api.auth_flow import router as auth_flow_router
-from app.models.auth import AuthProvider, MFAMethod, SessionStatus, UserCredential
+from app.models.auth import (
+    AuthProvider,
+    MFAMethod,
+    MFARecoveryCode,
+    SessionStatus,
+    UserCredential,
+)
 from app.models.auth import Session as AuthSession
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscriber import UserType
@@ -571,6 +577,38 @@ def test_reset_password_rejects_short_password(db_session, person, monkeypatch):
     assert exc.value.status_code == 400
 
 
+def test_reset_password_uses_configured_min_length(db_session, person, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.auth,
+            key="password_min_length",
+            value_type=SettingValueType.integer,
+            value_text="12",
+            is_active=True,
+        )
+    )
+    credential = UserCredential(
+        person_id=person.id,
+        provider=AuthProvider.local,
+        username="configured-min-pw@example.com",
+        password_hash=hash_password("secret"),
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    result = request_password_reset(db_session, person.email)
+    assert result
+    with pytest.raises(HTTPException) as exc:
+        reset_password(db_session, result["token"], "12345678901")
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Password must be at least 12 characters"
+
+    reset_at = reset_password(db_session, result["token"], "123456789012")
+    assert reset_at.tzinfo is not None
+
+
 def test_reset_token_is_single_use(db_session, person, monkeypatch):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
     credential = UserCredential(
@@ -789,6 +827,69 @@ def test_admin_login_mfa_verify_issues_tokens(db_session, monkeypatch):
     assert verified["access_token"]
 
 
+def test_mfa_recovery_code_is_one_time_login_fallback(db_session, person, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    monkeypatch.setenv("TOTP_ENCRYPTION_KEY", Fernet.generate_key().decode("utf-8"))
+    credential = UserCredential(
+        person_id=person.id,
+        provider=AuthProvider.local,
+        username="mfa-recovery@example.com",
+        password_hash=hash_password("secret"),
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    setup = AuthFlow.mfa_setup(db_session, str(person.id), label="device")
+    method = AuthFlow.mfa_confirm(
+        db_session,
+        str(setup["method_id"]),
+        pyotp.TOTP(setup["secret"]).now(),
+        str(person.id),
+    )
+    recovery_codes = auth_flow_service.generate_mfa_recovery_codes(db_session, method)
+
+    assert len(recovery_codes) == 10
+    assert (
+        db_session.query(MFARecoveryCode)
+        .filter(MFARecoveryCode.mfa_method_id == method.id)
+        .filter(MFARecoveryCode.is_active.is_(True))
+        .count()
+        == 10
+    )
+    stored_codes = (
+        db_session.query(MFARecoveryCode)
+        .filter(MFARecoveryCode.mfa_method_id == method.id)
+        .all()
+    )
+    assert all(row.code_hash not in recovery_codes for row in stored_codes)
+
+    request = _make_request()
+    result = AuthFlow.login(
+        db_session, "mfa-recovery@example.com", "secret", request, None
+    )
+
+    verified = AuthFlow.mfa_verify(
+        db_session,
+        result["mfa_token"],
+        recovery_codes[0],
+        request,
+    )
+    assert verified["access_token"]
+
+    reused_login = AuthFlow.login(
+        db_session, "mfa-recovery@example.com", "secret", request, None
+    )
+    with pytest.raises(HTTPException) as exc:
+        AuthFlow.mfa_verify(
+            db_session,
+            reused_login["mfa_token"],
+            recovery_codes[0],
+            request,
+        )
+    assert exc.value.status_code == 401
+
+
 def test_admin_mfa_verify_rejects_wrong_code(db_session, monkeypatch):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
     monkeypatch.setenv("TOTP_ENCRYPTION_KEY", Fernet.generate_key().decode("utf-8"))
@@ -814,7 +915,7 @@ def test_admin_login_requires_mfa_enrollment_when_forced(db_session, monkeypatch
     monkeypatch.setenv("JWT_SECRET", "test-secret")
     setting = DomainSetting(
         domain=SettingDomain.auth,
-        key="force_2fa",
+        key="admin_mfa_required",
         value_type=SettingValueType.boolean,
         value_text="true",
         is_active=True,
@@ -827,6 +928,28 @@ def test_admin_login_requires_mfa_enrollment_when_forced(db_session, monkeypatch
     result = AuthFlow.login(
         db_session, system_user.email, "secret", _make_request(), None
     )
+    assert result["mfa_enrollment_required"] is True
+    assert result["mfa_enrollment_token"]
+
+
+def test_admin_login_legacy_force_2fa_still_requires_mfa(db_session, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    setting = DomainSetting(
+        domain=SettingDomain.auth,
+        key="force_2fa",
+        value_type=SettingValueType.boolean,
+        value_text="true",
+        is_active=True,
+    )
+    db_session.add(setting)
+    system_user, _credential = _system_user_with_credential(
+        db_session, "admin-legacy-force-enroll@example.com"
+    )
+
+    result = AuthFlow.login(
+        db_session, system_user.email, "secret", _make_request(), None
+    )
+
     assert result["mfa_enrollment_required"] is True
     assert result["mfa_enrollment_token"]
 
@@ -850,10 +973,71 @@ def test_login_locked_account_is_not_a_password_oracle(db_session, person, monke
         with pytest.raises(HTTPException) as exc:
             AuthFlow.login(db_session, "oracle@example.com", password, request, None)
         assert exc.value.status_code == 403
+        assert "Try again in 10 minutes." in str(exc.value.detail)
 
     db_session.refresh(credential)
     # Attempts while locked must not extend the lock or bump the counter.
     assert credential.failed_login_attempts == 5
+
+
+def test_admin_login_lockout_uses_configured_policy(db_session, person, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    db_session.add_all(
+        [
+            DomainSetting(
+                domain=SettingDomain.auth,
+                key="admin_login_max_attempts",
+                value_type=SettingValueType.integer,
+                value_text="2",
+                is_active=True,
+            ),
+            DomainSetting(
+                domain=SettingDomain.auth,
+                key="admin_lockout_minutes",
+                value_type=SettingValueType.integer,
+                value_text="7",
+                is_active=True,
+            ),
+        ]
+    )
+    credential = UserCredential(
+        person_id=person.id,
+        provider=AuthProvider.local,
+        username="configured-lockout@example.com",
+        password_hash=hash_password("secret"),
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    request = _make_request()
+    for _ in range(2):
+        with pytest.raises(HTTPException) as exc:
+            AuthFlow.login(
+                db_session,
+                "configured-lockout@example.com",
+                "wrong",
+                request,
+                None,
+            )
+        assert exc.value.status_code == 401
+
+    db_session.refresh(credential)
+    assert credential.failed_login_attempts == 2
+    assert credential.locked_until is not None
+    remaining = auth_flow_service._as_utc(credential.locked_until) - datetime.now(UTC)
+    assert timedelta(minutes=6) <= remaining <= timedelta(minutes=7)
+
+    with pytest.raises(HTTPException) as exc:
+        AuthFlow.login(
+            db_session,
+            "configured-lockout@example.com",
+            "secret",
+            request,
+            None,
+        )
+    assert exc.value.status_code == 403
+    assert "Try again in 7 minutes." in str(exc.value.detail)
 
 
 def test_login_expired_lock_starts_fresh_window(db_session, person, monkeypatch):
@@ -957,9 +1141,69 @@ def test_mfa_verify_locks_after_repeated_wrong_codes(db_session, person, monkeyp
     with pytest.raises(HTTPException) as exc:
         AuthFlow.mfa_verify(db_session, mfa_token, totp.now(), request)
     assert exc.value.status_code == 429
+    assert "Try again in 15 minutes." in str(exc.value.detail)
 
     method = db_session.get(MFAMethod, setup["method_id"])
     assert method.locked_until is not None
+
+
+def test_mfa_lockout_uses_configured_policy(db_session, person, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    monkeypatch.setenv("TOTP_ENCRYPTION_KEY", Fernet.generate_key().decode("utf-8"))
+    db_session.add_all(
+        [
+            DomainSetting(
+                domain=SettingDomain.auth,
+                key="mfa_max_failed_attempts",
+                value_type=SettingValueType.integer,
+                value_text="2",
+                is_active=True,
+            ),
+            DomainSetting(
+                domain=SettingDomain.auth,
+                key="mfa_lockout_minutes",
+                value_type=SettingValueType.integer,
+                value_text="4",
+                is_active=True,
+            ),
+        ]
+    )
+    credential = UserCredential(
+        person_id=person.id,
+        provider=AuthProvider.local,
+        username="configured-mfa-lockout@example.com",
+        password_hash=hash_password("secret"),
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    setup = AuthFlow.mfa_setup(db_session, str(person.id), label="device")
+    totp = pyotp.TOTP(setup["secret"])
+    AuthFlow.mfa_confirm(
+        db_session, str(setup["method_id"]), totp.now(), str(person.id)
+    )
+
+    request = _make_request()
+    result = AuthFlow.login(
+        db_session, "configured-mfa-lockout@example.com", "secret", request, None
+    )
+    mfa_token = result["mfa_token"]
+    wrong = "000000" if totp.now() != "000000" else "111111"
+    for _ in range(2):
+        with pytest.raises(HTTPException) as exc:
+            AuthFlow.mfa_verify(db_session, mfa_token, wrong, request)
+        assert exc.value.status_code == 401
+
+    method = db_session.get(MFAMethod, setup["method_id"])
+    assert method.locked_until is not None
+    remaining = auth_flow_service._as_utc(method.locked_until) - datetime.now(UTC)
+    assert timedelta(minutes=3) <= remaining <= timedelta(minutes=4)
+
+    with pytest.raises(HTTPException) as exc:
+        AuthFlow.mfa_verify(db_session, mfa_token, totp.now(), request)
+    assert exc.value.status_code == 429
+    assert "Try again in 4 minutes." in str(exc.value.detail)
 
 
 def test_mfa_setup_reuses_pending_method_row(db_session, person, monkeypatch):

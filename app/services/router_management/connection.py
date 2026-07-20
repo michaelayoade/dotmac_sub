@@ -18,13 +18,64 @@ DANGEROUS_COMMANDS = [
     "/disk/format-drive",
     "/file/remove",
     "/user/remove",
+    "/user/set",
+    "/ip/service/set",
+    "/interface/disable",
+    "/interface/remove",
+    "/routing/bgp/remove",
+    "/routing/bgp/set",
+    "/routing/ospf/remove",
+    "/routing/ospf/set",
+    "/ip/route/remove",
+    "/ip/route/set",
+    "/ipv6/route/remove",
+    "/ipv6/route/set",
+    "/ip/firewall/filter/remove",
+    "/ip/firewall/filter/set",
+    "/ipv6/firewall/filter/remove",
+    "/ipv6/firewall/filter/set",
+    "/ip/firewall/nat/remove",
+    "/ip/firewall/nat/set",
 ]
 
+# Fallback defaults — the live values come from SettingDomain.network via
+# _rest_tunables() so operators can tune them for WAN/high-latency plant without
+# a code change. These remain the defaults (and the safety net if settings/DB
+# are unavailable).
 CONNECT_TIMEOUT = 10.0
 READ_TIMEOUT = 30.0
 MAX_RETRIES = 3
 RETRY_BACKOFF_BASE = 2.0
 RouterResponse = dict | list | str
+
+
+class RouterTransportError(RuntimeError):
+    """Router transport failed with an outcome that may be ambiguous for writes."""
+
+
+def _rest_tunables() -> tuple[float, float, int, float]:
+    """Resolve (connect_timeout, read_timeout, max_retries, backoff_base) from
+    network settings, falling back to the module defaults. Best-effort: a
+    settings/DB hiccup must never break the router connection layer."""
+    ct, rt, mr, bb = CONNECT_TIMEOUT, READ_TIMEOUT, MAX_RETRIES, RETRY_BACKOFF_BASE
+    try:
+        from app.db import SessionLocal
+        from app.models.domain_settings import SettingDomain
+        from app.services import settings_spec
+
+        with SessionLocal() as session:
+
+            def _num(key: str, fallback: float) -> float:
+                value = settings_spec.resolve_value(session, SettingDomain.network, key)
+                return float(value) if value is not None else fallback
+
+            ct = _num("router_rest_connect_timeout_seconds", ct)
+            rt = _num("router_rest_read_timeout_seconds", rt)
+            mr = max(1, int(_num("router_rest_max_retries", mr)))
+            bb = _num("router_rest_retry_backoff_base", bb)
+    except Exception:
+        logger.debug("router REST tunables: using defaults", exc_info=True)
+    return ct, rt, mr, bb
 
 
 def check_dangerous_commands(commands: list[str]) -> None:
@@ -121,7 +172,9 @@ class RouterConnectionService:
             cls._tunnels.clear()
 
     @classmethod
-    def get_client(cls, router: Router) -> httpx.Client:
+    def get_client(
+        cls, router: Router, *, timeout: httpx.Timeout | None = None
+    ) -> httpx.Client:
         username = (
             decrypt_credential(router.rest_api_username) or router.rest_api_username
         )
@@ -143,7 +196,7 @@ class RouterConnectionService:
             base_url=base_url,
             auth=(username, password),
             verify=router.verify_tls,
-            timeout=httpx.Timeout(CONNECT_TIMEOUT, read=READ_TIMEOUT),
+            timeout=timeout or httpx.Timeout(CONNECT_TIMEOUT, read=READ_TIMEOUT),
         )
 
     @classmethod
@@ -153,12 +206,31 @@ class RouterConnectionService:
         method: str,
         path: str,
         payload: dict | None = None,
+        *,
+        connect_timeout: float | None = None,
+        read_timeout: float | None = None,
+        max_retries: int | None = None,
     ) -> RouterResponse:
-        last_error: Exception | None = None
+        """Issue one REST call to the router.
 
-        for attempt in range(MAX_RETRIES):
+        ``connect_timeout``/``read_timeout``/``max_retries`` override the
+        settings-resolved tunables for callers with a different latency budget
+        (e.g. the hourly LLDP discovery poll fails fast with a single attempt
+        while config snapshots keep the patient defaults). ``None`` keeps the
+        existing settings/default behavior for current callers.
+        """
+        last_error: Exception | None = None
+        d_connect, d_read, d_retries, backoff_base = _rest_tunables()
+        if connect_timeout is None:
+            connect_timeout = d_connect
+        if read_timeout is None:
+            read_timeout = d_read
+        max_retries = d_retries if max_retries is None else max(1, max_retries)
+        timeout = httpx.Timeout(connect_timeout, read=read_timeout)
+
+        for attempt in range(max_retries):
             try:
-                with cls.get_client(router) as client:
+                with cls.get_client(router, timeout=timeout) as client:
                     response = client.request(
                         method=method,
                         url=f"/rest{path}",
@@ -179,8 +251,8 @@ class RouterConnectionService:
                     return response.text
             except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.ConnectError) as exc:
                 last_error = exc
-                if attempt < MAX_RETRIES - 1:
-                    wait = RETRY_BACKOFF_BASE**attempt
+                if attempt < max_retries - 1:
+                    wait = backoff_base**attempt
                     logger.warning(
                         "Router %s attempt %d failed: %s. Retrying in %.1fs",
                         router.name,
@@ -195,8 +267,8 @@ class RouterConnectionService:
                     f"{exc.response.text[:200]}"
                 ) from exc
 
-        raise RuntimeError(
-            f"Router {router.name} unreachable after {MAX_RETRIES} attempts: {last_error}"
+        raise RouterTransportError(
+            f"Router {router.name} unreachable after {max_retries} attempts: {last_error}"
         )
 
     @staticmethod

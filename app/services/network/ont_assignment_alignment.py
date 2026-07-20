@@ -1,36 +1,35 @@
-"""Keep ONT assignments aligned with authoritative OLT scan details."""
+"""Project non-conflicting OLT observations into initially empty ONT topology."""
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.network import OntAssignment, OntUnit, PonPort
-from app.services.network.olt_web_topology import ensure_canonical_pon_port
+from app.services.network.ont_topology_observations import (
+    observe_ont_electronic_topology,
+)
 
 
 @dataclass(frozen=True)
 class AssignmentAlignmentResult:
     assignment: OntAssignment
     pon_port: PonPort
-    created: bool = False
-    updated: bool = False
-    reactivated: bool = False
-
-    @property
-    def changed(self) -> bool:
-        return self.created or self.updated or self.reactivated
+    review_required: bool = False
+    review_reason: str | None = None
 
 
 @dataclass(frozen=True)
 class OntTopologyAlignmentResult:
-    """Result of aligning direct ONT topology to an authoritative F/S/P."""
+    """Result of projecting an observation into direct ONT topology."""
 
-    pon_port: PonPort
+    pon_port: PonPort | None
     updated: bool = False
+    review_required: bool = False
+    review_reason: str | None = None
 
 
 def parse_fsp_parts(fsp: str) -> tuple[str | None, str | None]:
@@ -41,41 +40,30 @@ def parse_fsp_parts(fsp: str) -> tuple[str | None, str | None]:
     return f"{parts[0]}/{parts[1]}", parts[2]
 
 
-def _was_returned_to_inventory(assignment: OntAssignment) -> bool:
-    reason = str(getattr(assignment, "release_reason", "") or "")
-    return getattr(assignment, "released_at", None) is not None or reason.startswith(
-        "returned_to_inventory"
-    )
-
-
-def align_ont_assignment_to_authoritative_fsp(
+def check_ont_assignment_against_fsp_observation(
     db: Session,
     *,
     ont: OntUnit,
-    olt_id: object,
+    olt_id: str | uuid.UUID,
     fsp: str,
-    assigned_at: datetime | None = None,
-    create_missing_assignment: bool = True,
-    reactivate_existing_assignment: bool = True,
 ) -> AssignmentAlignmentResult | None:
-    """Point the ONT's active assignment at the PON from the OLT scan.
+    """Check an active assignment against a non-conflicting OLT observation.
 
-    The OLT scan/autofind row is the source of truth for the physical F/S/P.
-    Existing subscriber and service-address links are preserved while the PON
-    pointer is corrected to the canonical modeled port.
+    This compatibility adapter no longer creates, reactivates, or rewrites an
+    assignment. OLT scans are observations; conflicting assignment identity
+    must be repaired through ``network.ont_assignment_identity``.
     """
     board, port = parse_fsp_parts(fsp)
     if not board or not port:
         return None
 
-    now = assigned_at or datetime.now(UTC)
-    topology = sync_ont_topology_to_authoritative_fsp(
+    topology = project_ont_topology_from_fsp_observation(
         db,
         ont=ont,
         olt_id=olt_id,
         fsp=fsp,
     )
-    if topology is None:
+    if topology is None or topology.pon_port is None:
         return None
     pon_port = topology.pon_port
 
@@ -92,86 +80,46 @@ def align_ont_assignment_to_authoritative_fsp(
         .with_for_update()
     ).first()
     if active_assignment is not None:
-        updated = active_assignment.pon_port_id != pon_port.id
-        if updated:
-            active_assignment.pon_port_id = pon_port.id
-        if active_assignment.assigned_at is None:
-            active_assignment.assigned_at = now
-            updated = True
+        assignment_conflict = active_assignment.pon_port_id != pon_port.id
         return AssignmentAlignmentResult(
             assignment=active_assignment,
             pon_port=pon_port,
-            updated=updated,
+            review_required=topology.review_required or assignment_conflict,
+            review_reason=(
+                topology.review_reason
+                or (
+                    "active assignment PON conflicts with the OLT observation"
+                    if assignment_conflict
+                    else None
+                )
+            ),
         )
-
-    latest_assignment = db.scalars(
-        select(OntAssignment)
-        .where(OntAssignment.ont_unit_id == ont.id)
-        .order_by(
-            OntAssignment.created_at.desc(),
-            OntAssignment.assigned_at.desc(),
-        )
-        .with_for_update()
-    ).first()
-    if (
-        latest_assignment is not None
-        and reactivate_existing_assignment
-        and not _was_returned_to_inventory(latest_assignment)
-    ):
-        latest_assignment.pon_port_id = pon_port.id
-        latest_assignment.active = True
-        if latest_assignment.assigned_at is None:
-            latest_assignment.assigned_at = now
-        return AssignmentAlignmentResult(
-            assignment=latest_assignment,
-            pon_port=pon_port,
-            reactivated=True,
-        )
-
-    if not create_missing_assignment:
-        return None
-
-    assignment = OntAssignment(
-        ont_unit_id=ont.id,
-        pon_port_id=pon_port.id,
-        active=True,
-        assigned_at=now,
-    )
-    db.add(assignment)
-    return AssignmentAlignmentResult(
-        assignment=assignment,
-        pon_port=pon_port,
-        created=True,
-    )
+    return None
 
 
-def sync_ont_topology_to_authoritative_fsp(
+def project_ont_topology_from_fsp_observation(
     db: Session,
     *,
     ont: OntUnit,
-    olt_id: object,
+    olt_id: str | uuid.UUID,
     fsp: str,
 ) -> OntTopologyAlignmentResult | None:
-    """Align direct ONT topology without implying customer assignment."""
+    """Delegate an exact Huawei F/S/P observation to the canonical owner."""
     board, port = parse_fsp_parts(fsp)
     if not board or not port:
         return None
-
-    pon_port = ensure_canonical_pon_port(
+    result = observe_ont_electronic_topology(
         db,
-        olt_id=olt_id,
-        fsp=fsp,
-        board=board,
-        port=port,
+        source="huawei_fsp",
+        evidence_key=f"{ont.id}:{olt_id}:{fsp}",
+        ont_unit_id=ont.id,
+        observed_olt_id=olt_id,
+        observed_port_number=int(port) if port.isdigit() else None,
+        observed_port_label=fsp,
     )
-    updated = False
-    if getattr(ont, "olt_device_id", None) is None:
-        ont.olt_device_id = pon_port.olt_id
-        updated = True
-    if getattr(ont, "pon_port_id", None) != pon_port.id:
-        ont.pon_port_id = pon_port.id
-        updated = True
     return OntTopologyAlignmentResult(
-        pon_port=pon_port,
-        updated=updated,
+        pon_port=result.pon_port,
+        updated=result.ont_updated,
+        review_required=result.review_required,
+        review_reason=result.reason,
     )

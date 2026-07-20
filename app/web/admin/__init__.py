@@ -32,11 +32,16 @@ from app.web.admin.catalog import router as catalog_router
 from app.web.admin.catalog_settings import legacy_add_ons_router
 from app.web.admin.catalog_settings import router as catalog_settings_router
 from app.web.admin.configuration import router as configuration_router
+from app.web.admin.crm_referrals import router as crm_referrals_router
 from app.web.admin.customers import contacts_router
 from app.web.admin.customers import router as customers_router
 from app.web.admin.dashboard import router as dashboard_router
 from app.web.admin.design_system import router as design_system_router
+from app.web.admin.dispatch_work_orders import router as dispatch_work_orders_router
+from app.web.admin.drift import router as drift_router
+from app.web.admin.field_maps import router as field_maps_router
 from app.web.admin.gis import router as gis_router
+from app.web.admin.inbox import router as inbox_router
 from app.web.admin.integrations import router as integrations_router
 from app.web.admin.legal import router as legal_router
 from app.web.admin.nas import router as nas_router
@@ -50,6 +55,9 @@ from app.web.admin.network_device_groups import router as network_device_groups_
 from app.web.admin.network_dns_threats import router as network_dns_threats_router
 from app.web.admin.network_fiber_plant import router as network_fiber_plant_router
 from app.web.admin.network_fiber_splice import router as network_fiber_splice_router
+from app.web.admin.network_firmware_catalog import (
+    router as network_firmware_catalog_router,
+)
 from app.web.admin.network_ip_management import router as network_ip_management_router
 from app.web.admin.network_monitoring import router as network_monitoring_router
 from app.web.admin.network_olts_inventory import router as network_olts_inventory_router
@@ -61,6 +69,7 @@ from app.web.admin.network_onts_provisioning import (
     router as network_onts_provisioning_router,
 )
 from app.web.admin.network_onu_types import router as network_onu_types_router
+from app.web.admin.network_operations import router as network_operations_router
 from app.web.admin.network_pop_sites import router as network_pop_sites_router
 from app.web.admin.network_radius import router as network_radius_router
 from app.web.admin.network_speed_profiles import router as network_speed_profiles_router
@@ -70,23 +79,31 @@ from app.web.admin.network_tr069_presets import router as network_tr069_presets_
 from app.web.admin.network_tr069_provisions import (
     router as network_tr069_provisions_router,
 )
+from app.web.admin.network_uisp_control import router as network_uisp_control_router
 from app.web.admin.network_vendor_capabilities import (
     router as network_vendor_capabilities_router,
 )
 from app.web.admin.network_weathermap import router as network_weathermap_router
 from app.web.admin.network_zones import router as network_zones_router
 from app.web.admin.notifications import router as notifications_router
+from app.web.admin.projects import router as projects_router
 from app.web.admin.provisioning import router as provisioning_router
 from app.web.admin.reports import router as reports_router
 from app.web.admin.resellers import router as resellers_router
+from app.web.admin.sales import router as sales_router
 from app.web.admin.service_requests_queue import router as service_requests_queue_router
+from app.web.admin.support_assignment_rules import (
+    router as support_assignment_rules_router,
+)
 from app.web.admin.support_automation import router as support_automation_router
 from app.web.admin.support_tickets import router as support_tickets_router
 from app.web.admin.system import router as system_router
 from app.web.admin.system_whats_new import router as system_whats_new_router
 from app.web.admin.usage import legacy_router as usage_legacy_router
 from app.web.admin.usage import router as usage_router
-from app.web.admin.vas import router as vas_router
+from app.web.admin.vendor_operations import router as vendor_operations_router
+from app.web.admin.vendor_routes import router as vendor_routes_router
+from app.web.admin.vendors import router as vendors_router
 from app.web.admin.wireguard import legacy_router as wireguard_legacy_router
 from app.web.admin.wireguard import router as wireguard_router
 from app.web.auth.dependencies import require_admin_web_auth
@@ -156,6 +173,10 @@ def admin_nas_legacy_path_redirect(path: str):
 # Include all admin sub-routers
 router.include_router(dashboard_router)
 router.include_router(design_system_router)
+router.include_router(dispatch_work_orders_router)
+router.include_router(field_maps_router)
+router.include_router(vendor_routes_router)
+router.include_router(crm_referrals_router)
 router.include_router(
     customers_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("customer"))],
@@ -228,6 +249,7 @@ router.include_router(
     billing_reporting_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("billing"))],
 )
+router.include_router(inbox_router)
 router.include_router(system_router)
 router.include_router(system_whats_new_router)
 router.include_router(
@@ -263,6 +285,10 @@ router.include_router(
     dependencies=[Depends(module_manager_service.require_module_enabled("network"))],
 )
 router.include_router(
+    network_uisp_control_router,
+    dependencies=[Depends(module_manager_service.require_module_enabled("network"))],
+)
+router.include_router(
     network_olts_inventory_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("network"))],
 )
@@ -280,6 +306,10 @@ router.include_router(
 )
 router.include_router(
     network_onts_inventory_router,
+    dependencies=[Depends(module_manager_service.require_module_enabled("network"))],
+)
+router.include_router(
+    network_operations_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("network"))],
 )
 router.include_router(
@@ -335,6 +365,10 @@ router.include_router(
     dependencies=[Depends(module_manager_service.require_module_enabled("network"))],
 )
 router.include_router(
+    network_firmware_catalog_router,
+    dependencies=[Depends(module_manager_service.require_module_enabled("network"))],
+)
+router.include_router(
     network_vendor_capabilities_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("network"))],
 )
@@ -346,7 +380,6 @@ router.include_router(
     gis_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("gis"))],
 )
-router.include_router(vas_router)
 router.include_router(
     reports_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("reports"))],
@@ -360,6 +393,7 @@ router.include_router(
 router.include_router(resellers_router)
 router.include_router(service_requests_queue_router)
 router.include_router(alerts_router)
+router.include_router(drift_router)
 router.include_router(
     notifications_router,
     dependencies=[
@@ -367,7 +401,15 @@ router.include_router(
     ],
 )
 router.include_router(support_tickets_router)
+router.include_router(sales_router)
 router.include_router(support_automation_router)
+router.include_router(support_assignment_rules_router)
+router.include_router(projects_router)
+router.include_router(vendor_operations_router)
+# Last of the /vendors routers on purpose: this one owns `/vendors/{vendor_id}`,
+# which would otherwise swallow the literal `/vendors/routes` and
+# `/vendors/operations` paths registered above.
+router.include_router(vendors_router)
 router.include_router(
     wireguard_router,
     prefix="/network",

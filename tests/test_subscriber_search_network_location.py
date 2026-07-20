@@ -65,7 +65,7 @@ def test_subscriber_search_matches_cabinet(db_session, subscription, olt_device)
     db_session.add(cabinet)
     db_session.flush()
 
-    splitter = Splitter(name="Splitter A", fdh_id=cabinet.id)
+    splitter = Splitter(name="Splitter A", fdh_id=cabinet.id, splitter_ratio="1:8")
     db_session.add(splitter)
     db_session.flush()
 

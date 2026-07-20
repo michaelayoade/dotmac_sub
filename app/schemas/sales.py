@@ -1,0 +1,242 @@
+"""Leads / pipeline / quotes schemas — CRM port.
+
+Ported from ``dotmac_crm/app/schemas/crm/sales.py`` and evolved natively. Leads
+identify a reviewed Party before an account is required; Subscriber remains
+the account link for Quote and SalesOrder. Native campaign UUIDs and external
+provider attribution are separated by the structured origin contract.
+"""
+
+from __future__ import annotations
+
+from datetime import date, datetime
+from decimal import Decimal
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.models.sales import (
+    LeadCaptureMethod,
+    LeadSourcePlatform,
+    LeadStatus,
+    QuoteStatus,
+)
+
+
+class PipelineBase(BaseModel):
+    name: str = Field(min_length=1, max_length=160)
+    is_active: bool = True
+    metadata_: dict | None = Field(default=None, serialization_alias="metadata")
+
+
+class PipelineCreate(PipelineBase):
+    pass
+
+
+class PipelineUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=160)
+    is_active: bool | None = None
+    metadata_: dict | None = Field(default=None, serialization_alias="metadata")
+
+
+class PipelineRead(PipelineBase):
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    id: UUID
+    created_at: datetime
+    updated_at: datetime
+
+
+class PipelineStageBase(BaseModel):
+    pipeline_id: UUID
+    name: str = Field(min_length=1, max_length=160)
+    order_index: int = 0
+    is_active: bool = True
+    default_probability: int = Field(default=50, ge=0, le=100)
+    metadata_: dict | None = Field(default=None, serialization_alias="metadata")
+
+
+class PipelineStageCreate(PipelineStageBase):
+    pass
+
+
+class PipelineStageUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=160)
+    order_index: int | None = None
+    is_active: bool | None = None
+    default_probability: int | None = Field(default=None, ge=0, le=100)
+    metadata_: dict | None = Field(default=None, serialization_alias="metadata")
+
+
+class PipelineStageRead(PipelineStageBase):
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    id: UUID
+    created_at: datetime
+    updated_at: datetime
+
+
+class LeadBase(BaseModel):
+    """Lead linked to Party identity; Subscriber is optional account context."""
+
+    subscriber_id: UUID | None = None
+    pipeline_id: UUID | None = None
+    stage_id: UUID | None = None
+    # CrmAgent UUID carried verbatim — inbox model.
+    owner_agent_id: UUID | None = None
+    title: str | None = Field(default=None, max_length=200)
+    status: LeadStatus = LeadStatus.new
+    estimated_value: Decimal | None = None
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+    probability: int | None = Field(default=None, ge=0, le=100)
+    expected_close_date: date | None = None
+    lost_reason: str | None = Field(default=None, max_length=200)
+    lead_source: str | None = Field(default=None, max_length=40)
+    campaign_id: UUID | None = None
+    campaign_recipient_id: UUID | None = None
+    region: str | None = Field(default=None, max_length=80)
+    address: str | None = None
+    notes: str | None = None
+    metadata_: dict | None = Field(default=None, serialization_alias="metadata")
+    is_active: bool = True
+
+
+class LeadOriginCaptureCreate(BaseModel):
+    capture_method: LeadCaptureMethod
+    source_platform: LeadSourcePlatform
+    campaign_id: UUID | None = None
+    campaign_recipient_id: UUID | None = None
+    external_campaign_id: str | None = Field(default=None, max_length=200)
+    external_ad_set_id: str | None = Field(default=None, max_length=200)
+    external_ad_id: str | None = Field(default=None, max_length=200)
+    external_form_id: str | None = Field(default=None, max_length=200)
+    external_click_id: str | None = Field(default=None, max_length=255)
+    utm_source: str | None = Field(default=None, max_length=200)
+    utm_medium: str | None = Field(default=None, max_length=200)
+    utm_campaign: str | None = Field(default=None, max_length=200)
+    utm_content: str | None = Field(default=None, max_length=200)
+    utm_term: str | None = Field(default=None, max_length=200)
+    landing_path: str | None = Field(default=None, max_length=500)
+    captured_at: datetime | None = None
+    capture_source: str = Field(min_length=1, max_length=80)
+    capture_reason: str = Field(min_length=1)
+
+
+class LeadCreate(LeadBase):
+    party_id: UUID | None = None
+    party_binding_source: str | None = Field(default=None, max_length=80)
+    party_binding_reason: str | None = None
+    origin_capture: LeadOriginCaptureCreate | None = None
+
+
+class LeadUpdate(BaseModel):
+    subscriber_id: UUID | None = None
+    pipeline_id: UUID | None = None
+    stage_id: UUID | None = None
+    owner_agent_id: UUID | None = None
+    title: str | None = Field(default=None, max_length=200)
+    status: LeadStatus | None = None
+    estimated_value: Decimal | None = None
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+    probability: int | None = Field(default=None, ge=0, le=100)
+    expected_close_date: date | None = None
+    lost_reason: str | None = Field(default=None, max_length=200)
+    lead_source: str | None = Field(default=None, max_length=40)
+    region: str | None = Field(default=None, max_length=80)
+    address: str | None = None
+    notes: str | None = None
+    metadata_: dict | None = Field(default=None, serialization_alias="metadata")
+    is_active: bool | None = None
+
+
+class LeadRead(LeadBase):
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    id: UUID
+    party_id: UUID | None = None
+    weighted_value: Decimal | None = None
+    closed_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class QuoteBase(BaseModel):
+    """Quote linked to a subscriber in the unified party model."""
+
+    subscriber_id: UUID  # Required — links to Subscriber
+    lead_id: UUID | None = None
+    # Staff person UUID carried verbatim — staff map for display.
+    owner_person_id: UUID | None = None
+    status: QuoteStatus = QuoteStatus.draft
+    currency: str = Field(default="NGN", min_length=3, max_length=3)
+    subtotal: Decimal = Decimal("0.00")
+    tax_rate: Decimal | None = Field(default=None, ge=0, le=100)
+    tax_total: Decimal = Decimal("0.00")
+    total: Decimal = Decimal("0.00")
+    expires_at: datetime | None = None
+    sent_at: datetime | None = None
+    notes: str | None = None
+    metadata_: dict | None = Field(default=None, serialization_alias="metadata")
+    is_active: bool = True
+
+
+class QuoteCreate(QuoteBase):
+    pass
+
+
+class QuoteUpdate(BaseModel):
+    subscriber_id: UUID | None = None
+    lead_id: UUID | None = None
+    owner_person_id: UUID | None = None
+    status: QuoteStatus | None = None
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+    subtotal: Decimal | None = None
+    tax_rate: Decimal | None = Field(default=None, ge=0, le=100)
+    tax_total: Decimal | None = None
+    total: Decimal | None = None
+    expires_at: datetime | None = None
+    sent_at: datetime | None = None
+    notes: str | None = None
+    metadata_: dict | None = Field(default=None, serialization_alias="metadata")
+    is_active: bool | None = None
+
+
+class QuoteRead(QuoteBase):
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    id: UUID
+    sales_order_id: UUID | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class QuoteLineItemBase(BaseModel):
+    quote_id: UUID
+    # CRM inventory UUID carried verbatim while inventory remains externally owned.
+    inventory_item_id: UUID | None = None
+    description: str = Field(min_length=1, max_length=255)
+    quantity: Decimal = Field(default=Decimal("1.000"), gt=0)
+    unit_price: Decimal = Field(default=Decimal("0.00"), ge=0)
+    discount_percent: Decimal = Field(default=Decimal("0.00"), ge=0, le=100)
+    amount: Decimal = Field(default=Decimal("0.00"), ge=0)
+    metadata_: dict | None = Field(default=None, serialization_alias="metadata")
+
+
+class QuoteLineItemCreate(QuoteLineItemBase):
+    pass
+
+
+class QuoteLineItemUpdate(BaseModel):
+    inventory_item_id: UUID | None = None
+    description: str | None = Field(default=None, min_length=1, max_length=255)
+    quantity: Decimal | None = Field(default=None, gt=0)
+    unit_price: Decimal | None = Field(default=None, ge=0)
+    discount_percent: Decimal | None = Field(default=None, ge=0, le=100)
+    amount: Decimal | None = Field(default=None, ge=0)
+    metadata_: dict | None = Field(default=None, serialization_alias="metadata")
+
+
+class QuoteLineItemRead(QuoteLineItemBase):
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    id: UUID
+    created_at: datetime

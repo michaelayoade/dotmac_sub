@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import HTTPException
@@ -12,13 +11,12 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.models.network import PonPort
 from app.models.ont_autofind import OltAutofindCandidate
-from app.schemas.network import OntAssignmentCreate, OntAssignmentUpdate
 from app.services import network as network_service
 from app.services import subscriber as subscriber_service
 from app.services.common import coerce_uuid
 from app.services.network.olt_autofind import parse_fsp_parts
-from app.services.network.olt_web_topology import ensure_canonical_pon_port
 from app.services.web_network_ont_autofind import (
     _normalize_serial,
     _normalized_serial_expr,
@@ -91,9 +89,21 @@ def resolve_pon_port_for_ont(db: Session, ont) -> dict[str, object]:
 
     fsp = f"{board}/{port}"
     try:
-        pon_port = ensure_canonical_pon_port(
-            db, olt_id=olt_device_id, fsp=fsp, board=board, port=port
-        )
+        pon_port = db.scalars(
+            select(PonPort)
+            .where(
+                PonPort.olt_id == olt_device_id,
+                PonPort.name == fsp,
+                PonPort.is_active.is_(True),
+            )
+            .limit(1)
+        ).first()
+        if pon_port is None:
+            return {
+                "pon_port_id": None,
+                "pon_port_label": fsp,
+                "pon_port_resolved": False,
+            }
         # Get OLT name for display
         olt_name = ""
         olt_device = getattr(ont, "olt_device", None)
@@ -197,21 +207,20 @@ def parse_form_values(form) -> dict[str, object]:
     return {
         "pon_port_id": form.get("pon_port_id", "").strip(),
         "account_id": form.get("account_id", "").strip() or None,
+        "subscription_id": form.get("subscription_id", "").strip() or None,
         "service_address_id": form.get("service_address_id", "").strip() or None,
         "notes": form.get("notes", "").strip() or None,
     }
 
 
 def validate_form_values(values: dict[str, object]) -> str | None:
-    """Validate assignment fields.
-
-    Subscriber account is optional: ONT assignments may be created without
-    a subscriber ref for standalone network operations (see DCP-11).
-    ``service_address_id`` requires ``account_id`` because addresses belong
-    to a subscriber.
-    """
-    if values.get("service_address_id") and not values.get("account_id"):
-        return "Service address requires a subscriber account"
+    """Require the exact normal-provisioning identity selected by the operator."""
+    if not values.get("account_id"):
+        return "Subscriber account is required"
+    if not values.get("subscription_id"):
+        return "Exact service subscription is required"
+    if not values.get("pon_port_id"):
+        return "A modeled PON port is required before assignment"
     return None
 
 
@@ -240,23 +249,6 @@ def active_assignment_for_ont_id(db: Session, ont_id) -> Any | None:
     ).first()
 
 
-def get_or_create_active_assignment(db: Session, ont) -> Any:
-    """Get the active assignment for an ONT, creating one if none exists.
-
-    This is the canonical function for retrieving/creating an active assignment.
-    Use this when you need a mutable assignment record to update.
-    """
-    from app.models.network import OntAssignment
-
-    for assignment in getattr(ont, "assignments", []) or []:
-        if getattr(assignment, "active", False):
-            return assignment
-    assignment = OntAssignment(ont_unit_id=ont.id, active=True)
-    db.add(assignment)
-    db.flush()
-    return assignment
-
-
 def resolve_pon_port_id_for_assignment(
     db: Session, ont, values: dict[str, object]
 ) -> str | None:
@@ -274,94 +266,32 @@ def resolve_pon_port_id_for_assignment(
     return None
 
 
-def resolve_service_address_for_subscriber(
-    db: Session, subscriber_id: str
-) -> str | None:
-    """Get the subscriber's primary/first service address."""
-    addresses = subscriber_service.addresses.list(
-        db=db,
-        subscriber_id=subscriber_id,
-        order_by="created_at",
-        order_dir="asc",
-        limit=1,
-        offset=0,
-    )
-    if addresses:
-        return str(addresses[0].id)
-    return None
-
-
-def create_assignment(db: Session, ont, values: dict[str, object]) -> None:
-    """Create ONT assignment, auto-resolving PON port and address.
-
-    Subscriber account is optional. When absent, the service address lookup
-    is skipped and the assignment is created without a subscriber ref.
-    """
+def create_assignment(
+    db: Session,
+    ont,
+    values: dict[str, object],
+    *,
+    actor_id: str | None = None,
+) -> Any:
+    """Delegate an exact normal assignment to its canonical command owner."""
     pon_port_id_str = resolve_pon_port_id_for_assignment(db, ont, values)
-    pon_port_id = coerce_uuid(pon_port_id_str) if pon_port_id_str else None
-
-    subscriber_id_str = str(values["account_id"]) if values.get("account_id") else None
-
-    service_address_id_str: str | None
-    if values.get("service_address_id"):
-        service_address_id_str = str(values["service_address_id"])
-    elif subscriber_id_str is not None:
-        service_address_id_str = resolve_service_address_for_subscriber(
-            db, subscriber_id_str
-        )
-    else:
-        service_address_id_str = None
-
-    payload = OntAssignmentCreate(
+    if not pon_port_id_str or not values.get("subscription_id"):
+        raise ValueError("Exact subscription and modeled PON are required")
+    return network_service.ont_assignment_commands.assign(
+        db,
         ont_unit_id=ont.id,
-        pon_port_id=pon_port_id,
-        subscriber_id=coerce_uuid(subscriber_id_str) if subscriber_id_str else None,
+        subscription_id=str(values["subscription_id"]),
+        pon_port_id=pon_port_id_str,
+        subscriber_id=str(values["account_id"]),
         service_address_id=(
-            coerce_uuid(service_address_id_str) if service_address_id_str else None
+            str(values["service_address_id"])
+            if values.get("service_address_id")
+            else None
         ),
-        assigned_at=datetime.now(UTC),
-        active=True,
         notes=str(values.get("notes")) if values.get("notes") else None,
+        actor_id=actor_id,
+        source="admin_assignment_form",
     )
-    network_service.ont_assignments.create(db=db, payload=payload)
-
-
-def claim_existing_assignment(
-    db: Session, ont, assignment, values: dict[str, object]
-) -> None:
-    """Attach subscriber details to an active assignment created by authorization."""
-    pon_port_id_str = resolve_pon_port_id_for_assignment(db, ont, values)
-    pon_port_id = (
-        coerce_uuid(pon_port_id_str)
-        if pon_port_id_str
-        else getattr(assignment, "pon_port_id", None)
-    )
-
-    subscriber_id_str = str(values["account_id"]) if values.get("account_id") else None
-
-    service_address_id_str: str | None
-    if values.get("service_address_id"):
-        service_address_id_str = str(values["service_address_id"])
-    elif subscriber_id_str is not None:
-        service_address_id_str = resolve_service_address_for_subscriber(
-            db, subscriber_id_str
-        )
-    else:
-        service_address_id_str = None
-
-    assignment.released_at = None
-    assignment.release_reason = None
-    payload = OntAssignmentUpdate(
-        pon_port_id=pon_port_id,
-        subscriber_id=coerce_uuid(subscriber_id_str) if subscriber_id_str else None,
-        service_address_id=(
-            coerce_uuid(service_address_id_str) if service_address_id_str else None
-        ),
-        assigned_at=getattr(assignment, "assigned_at", None) or datetime.now(UTC),
-        active=True,
-        notes=str(values.get("notes")) if values.get("notes") else None,
-    )
-    network_service.ont_assignments.update(db, str(assignment.id), payload)
 
 
 def form_payload(
@@ -375,6 +305,8 @@ def form_payload(
     result = {
         "pon_port_id": values.get("pon_port_id"),
         "account_id": values.get("account_id"),
+        "subscription_id": values.get("subscription_id"),
+        "subscription_label": "",
         "account_label": "",
         "service_address_id": values.get("service_address_id"),
         "notes": values.get("notes"),
@@ -399,6 +331,20 @@ def form_payload(
                     result["account_label"] = label
         except Exception:
             pass  # Keep empty label on lookup failure
+    if db and values.get("subscription_id"):
+        try:
+            from app.models.catalog import Subscription
+
+            subscription = db.get(Subscription, values["subscription_id"])
+            if subscription:
+                offer = getattr(subscription, "offer", None)
+                result["subscription_label"] = (
+                    getattr(subscription, "login", None)
+                    or getattr(offer, "name", None)
+                    or str(subscription.id)
+                )
+        except Exception:
+            pass
     return result
 
 
@@ -409,6 +355,12 @@ def assignment_form_payload_from_assignment(assignment) -> dict[str, object]:
     return {
         "pon_port_id": str(assignment.pon_port_id) if assignment.pon_port_id else "",
         "account_id": str(assignment.subscriber_id) if assignment.subscriber_id else "",
+        "subscription_id": (
+            str(assignment.subscription_id) if assignment.subscription_id else ""
+        ),
+        "subscription_label": (
+            getattr(getattr(assignment, "subscription", None), "login", None) or ""
+        ),
         "account_label": account_label,
         "service_address_id": (
             str(assignment.service_address_id) if assignment.service_address_id else ""
@@ -459,7 +411,13 @@ def get_assignment_edit_form(
     )
 
 
-def create_assignment_from_form(db: Session, ont_id: str, form) -> AssignmentFormResult:
+def create_assignment_from_form(
+    db: Session,
+    ont_id: str,
+    form,
+    *,
+    actor_id: str | None = None,
+) -> AssignmentFormResult:
     """Validate and create an ONT assignment from submitted web form data."""
     try:
         ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
@@ -472,17 +430,17 @@ def create_assignment_from_form(db: Session, ont_id: str, form) -> AssignmentFor
     if (
         not error
         and active_assignment is not None
-        and getattr(active_assignment, "subscriber_id", None) is not None
+        and (
+            getattr(active_assignment, "subscription_id", None) is not None
+            or getattr(active_assignment, "subscriber_id", None) is not None
+        )
     ):
         error = "This ONT is already assigned"
     if error:
         return AssignmentFormResult(ont=ont, values=values, error=error)
 
     try:
-        if active_assignment is not None:
-            claim_existing_assignment(db, ont, active_assignment, values)
-        else:
-            create_assignment(db, ont, values)
+        create_assignment(db, ont, values, actor_id=actor_id)
     except IntegrityError as exc:
         db.rollback()
         msg = (
@@ -491,6 +449,10 @@ def create_assignment_from_form(db: Session, ont_id: str, form) -> AssignmentFor
             else "Could not create assignment due to a data conflict."
         )
         return AssignmentFormResult(ont=ont, values=values, error=msg)
+    except (HTTPException, ValueError) as exc:
+        db.rollback()
+        detail = getattr(exc, "detail", None) or str(exc)
+        return AssignmentFormResult(ont=ont, values=values, error=str(detail))
     return AssignmentFormResult(ont=ont, values=values)
 
 
@@ -501,44 +463,22 @@ def update_assignment_from_form(
     assignment_id: str,
     form,
 ) -> AssignmentFormResult:
-    """Validate and update an ONT assignment from submitted web form data."""
+    """Retire direct identity edits in favor of reviewed repair."""
     loaded = get_assignment_edit_form(db, ont_id=ont_id, assignment_id=assignment_id)
     if loaded.not_found:
         return loaded
 
     assignment = loaded.assignment
     values = parse_form_values(form)
-    error = validate_form_values(values)
-    resolved_pon_port_id = (
-        coerce_uuid(str(values["pon_port_id"]))
-        if values.get("pon_port_id")
-        else getattr(assignment, "pon_port_id", None)
-    )
-    if resolved_pon_port_id is None:
-        error = error or "PON port is required"
-
-    if error:
-        return AssignmentFormResult(
-            ont=loaded.ont,
-            assignment=assignment,
-            values=values,
-            error=error,
-        )
-
-    payload = OntAssignmentUpdate(
-        pon_port_id=resolved_pon_port_id,
-        subscriber_id=(
-            coerce_uuid(str(values["account_id"])) if values.get("account_id") else None
+    return AssignmentFormResult(
+        ont=loaded.ont,
+        assignment=assignment,
+        values=values,
+        error=(
+            "Direct assignment identity edits are retired. Use the ONT identity "
+            "review workflow for corrections."
         ),
-        service_address_id=(
-            coerce_uuid(str(values["service_address_id"]))
-            if values.get("service_address_id")
-            else None
-        ),
-        notes=str(values.get("notes")) if values.get("notes") else None,
     )
-    network_service.ont_assignments.update(db, assignment_id, payload)
-    return AssignmentFormResult(ont=loaded.ont, assignment=assignment, values=values)
 
 
 def remove_assignment(
@@ -546,11 +486,26 @@ def remove_assignment(
     *,
     ont_id: str,
     assignment_id: str,
+    actor_id: str | None = None,
 ) -> AssignmentFormResult:
-    """Validate and remove an ONT assignment."""
+    """Close an exact normal assignment through the command owner."""
     loaded = get_assignment_edit_form(db, ont_id=ont_id, assignment_id=assignment_id)
     if loaded.not_found:
         return loaded
 
-    network_service.ont_assignments.delete(db, assignment_id)
+    try:
+        network_service.ont_assignment_commands.release(
+            db,
+            assignment_id=assignment_id,
+            reason="admin_released",
+            actor_id=actor_id,
+            source="admin_assignment_form",
+        )
+    except (HTTPException, ValueError) as exc:
+        db.rollback()
+        return AssignmentFormResult(
+            ont=loaded.ont,
+            assignment=loaded.assignment,
+            error=str(getattr(exc, "detail", None) or exc),
+        )
     return loaded

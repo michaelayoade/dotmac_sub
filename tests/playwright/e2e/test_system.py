@@ -7,6 +7,8 @@ from playwright.sync_api import Page, expect
 from tests.playwright.pages.admin.system import (
     APIKeysPage,
     AuditPage,
+    ControlPlanePage,
+    ModulesPage,
     RolesPage,
     SettingsPage,
     UsersPage,
@@ -127,6 +129,80 @@ class TestSettings:
         page = SettingsPage(admin_page, settings.base_url)
         page.goto()
         page.expect_loaded()
+
+
+class TestControlPlane:
+    """Tests for the read-only effective-state projection."""
+
+    def test_all_owner_domains_and_provenance_columns_render(
+        self, admin_page: Page, settings
+    ):
+        page = ControlPlanePage(admin_page, settings.base_url)
+        page.goto()
+        page.expect_loaded()
+
+        for column in (
+            "Decision",
+            "Effective value",
+            "Source",
+            "Precedence",
+            "Affected scope",
+            "Health",
+            "Last change",
+        ):
+            expect(
+                admin_page.get_by_role("columnheader", name=column).first
+            ).to_be_visible()
+
+    def test_filter_hides_unmatched_owner_domains(self, admin_page: Page, settings):
+        page = ControlPlanePage(admin_page, settings.base_url)
+        page.goto()
+        page.expect_loaded()
+
+        page.filter("permission-catalogue")
+        expect(admin_page.locator(".control-plane-section:visible")).to_have_count(1)
+        expect(admin_page.locator("section#rbac")).to_be_visible()
+        expect(
+            admin_page.locator("section#rbac .control-plane-row:visible")
+        ).not_to_have_count(0)
+
+
+class TestModuleManager:
+    """Tests for the canonical feature-control writer."""
+
+    def test_feature_controls_show_tri_state_provenance(
+        self, admin_page: Page, settings
+    ):
+        page = ModulesPage(admin_page, settings.base_url)
+        page.goto()
+        page.expect_loaded()
+
+        control = page.control("billing.autopay")
+        expect(control).to_be_visible()
+        expect(control.locator("option")).to_have_text(["Inherit", "On", "Off"])
+        for label in ("Effective", "Source", "Scope", "Precedence", "Canonical change"):
+            expect(admin_page.get_by_text(label, exact=True).first).to_be_visible()
+
+    def test_feature_override_persists_and_is_restored(
+        self, admin_page: Page, settings
+    ):
+        page = ModulesPage(admin_page, settings.base_url)
+        page.goto()
+        page.expect_loaded()
+
+        control_key = "billing.autopay"
+        control = page.control(control_key)
+        original = control.input_value()
+        changed = "off" if original != "off" else "on"
+
+        try:
+            control.select_option(changed)
+            page.save()
+            expect(page.control(control_key)).to_have_value(changed)
+        finally:
+            page.control(control_key).select_option(original)
+            page.save()
+            expect(page.control(control_key)).to_have_value(original)
 
 
 class TestSystemAPI:

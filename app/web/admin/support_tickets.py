@@ -2,17 +2,39 @@
 
 from __future__ import annotations
 
+from typing import Literal
+from urllib.parse import urlencode
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
+from fastapi.responses import (
+    HTMLResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.services import web_support_ticket_bulk as support_ticket_bulk_service
+from app.services import (
+    web_support_ticket_bulk_actions as support_ticket_bulk_actions_service,
+)
 from app.services import web_support_tickets as support_web_service
 from app.services.auth_dependencies import require_permission
+from app.services.list_query import ListQuery
+from app.web.request_parsing import parse_json_body
 
 router = APIRouter(prefix="/support/tickets", tags=["web-admin-support-tickets"])
 templates = Jinja2Templates(directory="templates")
@@ -71,35 +93,172 @@ def tickets_list(
     project_manager_person_id: str | None = Query(default=None),
     site_coordinator_person_id: str | None = Query(default=None),
     subscriber_id: str | None = Query(default=None),
-    order_by: str = Query(default="created_at"),
-    order_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
+    filters: str | None = Query(default=None),
+    sort: Literal["created_at", "updated_at", "due_at", "priority", "status", "number"]
+    | None = Query(default=None),
+    direction: Literal["asc", "desc"] | None = Query(default=None, alias="dir"),
+    order_by: str | None = Query(default=None),
+    order_dir: str | None = Query(default=None),
     page: int = Query(default=1, ge=1),
-    per_page: int = Query(default=25, ge=10, le=100),
+    per_page: str | None = Query(default="25"),
     db: Session = Depends(get_db),
 ):
-    context = _ctx(request, db)
-    context.update(
-        support_web_service.build_tickets_list_context(
-            db,
+    if sort and order_by and sort != order_by:
+        raise HTTPException(status_code=422, detail="Conflicting ticket sort fields")
+    if direction and order_dir and direction != order_dir:
+        raise HTTPException(
+            status_code=422, detail="Conflicting ticket sort directions"
+        )
+    try:
+        list_query = support_web_service.build_ticket_list_query(
             search=search,
             status=status,
             ticket_type=ticket_type,
             assigned_to_me=assigned_to_me,
-            actor_id=_actor_id(request),
             project_manager_person_id=project_manager_person_id,
             site_coordinator_person_id=site_coordinator_person_id,
             subscriber_id=subscriber_id,
-            order_by=order_by,
-            order_dir=order_dir,
+            filters=filters,
+            sort_by=sort or order_by or "created_at",
+            sort_dir=direction or order_dir or "desc",
             page=page,
             per_page=per_page,
-            visible_columns_cookie=request.cookies.get("ticket_columns"),
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    context = _ctx(request, db)
+    state = support_web_service.build_tickets_list_context(
+        db,
+        list_query=list_query,
+        actor_id=_actor_id(request),
+        visible_columns_cookie=request.cookies.get("ticket_columns"),
+    )
+    state["support_ticket_bulk_action_contract"] = (
+        support_ticket_bulk_actions_service.build_support_ticket_bulk_action_contract(
+            db,
+            auth=getattr(request.state, "auth", None) or {},
+            tickets=state["tickets"],
+        )
+    )
+    context.update(state)
+    effective_query = state["list_query"]
+    assert isinstance(effective_query, ListQuery)
+    canonicalization_needed = (
+        effective_query.page != page
+        or order_by is not None
+        or order_dir is not None
+        or str(per_page or "") != str(effective_query.per_page)
     )
 
     if request.headers.get("HX-Request"):
-        return templates.TemplateResponse("admin/support/tickets/_table.html", context)
+        response = templates.TemplateResponse(
+            "admin/support/tickets/_list.html", context
+        )
+        if canonicalization_needed:
+            response.headers["HX-Replace-Url"] = effective_query.url(
+                "/admin/support/tickets"
+            )
+        return response
+    if canonicalization_needed:
+        return RedirectResponse(
+            url=effective_query.url("/admin/support/tickets"), status_code=307
+        )
     return templates.TemplateResponse("admin/support/tickets/index.html", context)
+
+
+@router.get(
+    "/export.csv",
+    dependencies=[Depends(require_permission("support:ticket:read"))],
+)
+def tickets_export_csv(
+    request: Request,
+    search: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    ticket_type: str | None = Query(default=None),
+    assigned_to_me: bool = Query(default=False),
+    project_manager_person_id: str | None = Query(default=None),
+    site_coordinator_person_id: str | None = Query(default=None),
+    subscriber_id: str | None = Query(default=None),
+    filters: str | None = Query(default=None),
+    sort: Literal["created_at", "updated_at", "due_at", "priority", "status", "number"]
+    | None = Query(default=None),
+    direction: Literal["asc", "desc"] | None = Query(default=None, alias="dir"),
+    order_by: str | None = Query(default=None),
+    order_dir: str | None = Query(default=None),
+    columns: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    if sort and order_by and sort != order_by:
+        raise HTTPException(status_code=422, detail="Conflicting ticket sort fields")
+    if direction and order_dir and direction != order_dir:
+        raise HTTPException(
+            status_code=422, detail="Conflicting ticket sort directions"
+        )
+    try:
+        list_query = support_web_service.build_ticket_list_query(
+            search=search,
+            status=status,
+            ticket_type=ticket_type,
+            assigned_to_me=assigned_to_me,
+            project_manager_person_id=project_manager_person_id,
+            site_coordinator_person_id=site_coordinator_person_id,
+            subscriber_id=subscriber_id,
+            filters=filters,
+            sort_by=sort or order_by or "created_at",
+            sort_dir=direction or order_dir or "desc",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    content = support_web_service.render_tickets_csv(
+        db,
+        list_query=list_query,
+        actor_id=_actor_id(request),
+        visible_columns_cookie=columns or request.cookies.get("ticket_columns"),
+    )
+    return StreamingResponse(
+        iter([content]),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="tickets_export.csv"'},
+    )
+
+
+@router.post(
+    "/bulk/preview",
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def tickets_bulk_preview(
+    data: dict = Depends(parse_json_body),
+    db: Session = Depends(get_db),
+):
+    try:
+        preview = support_ticket_bulk_service.preview_support_ticket_bulk_update(
+            db, data
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return preview.as_response()
+
+
+@router.post(
+    "/bulk/update",
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def tickets_bulk_update(
+    request: Request,
+    data: dict = Depends(parse_json_body),
+    db: Session = Depends(get_db),
+):
+    try:
+        return support_ticket_bulk_service.execute_support_ticket_bulk_update(
+            db,
+            data,
+            actor_id=_actor_id(request),
+            request=request,
+        )
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get(
@@ -163,15 +322,23 @@ def ticket_create(
     related_outage_ticket_id: str | None = Form(default=None),
     assignee_person_ids: list[str] = Form(default=[]),
     attachments: list[UploadFile] = File(default=[]),
+    duplicate_override: str | None = Form(default=None),
     db: Session = Depends(get_db),
 ):
     actor_id = _actor_id(request)
+    duplicate_confirmed = str(duplicate_override or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
     try:
         ticket = support_web_service.create_ticket_from_form(
             db,
             request=request,
             actor_id=actor_id,
             attachments=attachments,
+            duplicate_override=duplicate_confirmed,
             title=title,
             description=description,
             subscriber_id=subscriber_id,
@@ -190,6 +357,46 @@ def ticket_create(
             tags=tags,
             related_outage_ticket_id=related_outage_ticket_id,
             assignee_person_ids=assignee_person_ids,
+        )
+    except support_web_service.DuplicateTicketWarningError as exc:
+        # Similar open tickets exist and the operator has not confirmed the
+        # override — re-render the form with the duplicate warning (409, like
+        # CRM's admin create flow) so they can review or tick "Create anyway".
+        db.rollback()
+        context = _ctx(request, db)
+        context.update(
+            support_web_service.build_ticket_form_context(
+                db,
+                query_params={
+                    "title": title,
+                    "description": description,
+                    "subscriber_id": subscriber_id or "",
+                    "customer_account_id": customer_account_id or "",
+                    "customer_person_id": customer_person_id or "",
+                    "region": region or "",
+                    "ticket_type": ticket_type or "",
+                    "priority": priority,
+                    "channel": channel,
+                    "status": status,
+                    "tags": tags or "",
+                    "related_outage_ticket_id": related_outage_ticket_id or "",
+                },
+            )
+        )
+        context.update(
+            {
+                "page_title": "New Ticket",
+                "form_mode": "create",
+                "ticket": None,
+                "error": (
+                    "A similar ticket already exists. Review the warning below, "
+                    "then open the existing ticket or tick Create anyway."
+                ),
+                "duplicate_warning": exc.result.as_dict(),
+            }
+        )
+        return templates.TemplateResponse(
+            "admin/support/tickets/new.html", context, status_code=409
         )
     except (ValidationError, ValueError) as exc:
         # Re-render the form with a clean message instead of a 500 (e.g. a
@@ -296,6 +503,7 @@ def ticket_add_comment(
     ticket_id: UUID,
     body: str = Form(...),
     is_internal: bool = Form(False),
+    mentions: str | None = Form(default=None),
     attachments: list[UploadFile] = File(default=[]),
     db: Session = Depends(get_db),
 ):
@@ -307,8 +515,33 @@ def ticket_add_comment(
         actor_id=actor_id,
         body=body,
         is_internal=is_internal,
+        mentions=mentions,
         attachments=attachments,
     )
+    return RedirectResponse(url=f"/admin/support/tickets/{ticket_id}", status_code=303)
+
+
+@router.post(
+    "/{ticket_id}/comments/{comment_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def ticket_edit_comment(
+    request: Request,
+    ticket_id: UUID,
+    comment_id: UUID,
+    body: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    if body.strip():
+        support_web_service.update_ticket_comment_from_form(
+            db,
+            request=request,
+            ticket_id=str(ticket_id),
+            comment_id=str(comment_id),
+            actor_id=_actor_id(request),
+            body=body,
+        )
     return RedirectResponse(url=f"/admin/support/tickets/{ticket_id}", status_code=303)
 
 
@@ -320,13 +553,27 @@ def ticket_add_comment(
 def ticket_auto_assign(
     request: Request, ticket_id: UUID, db: Session = Depends(get_db)
 ):
-    support_web_service.auto_assign_ticket(
+    result = support_web_service.auto_assign_ticket(
         db,
         request=request,
         ticket_id=str(ticket_id),
         actor_id=_actor_id(request),
     )
-    return RedirectResponse(url=f"/admin/support/tickets/{ticket_id}", status_code=303)
+    changes = result.get("changes") if isinstance(result, dict) else None
+    if result.get("matched") and changes:
+        message = f"Auto-assign applied {len(changes)} field(s)."
+        status = "success"
+    elif result.get("matched"):
+        message = "Auto-assign matched, but no empty assignment fields changed."
+        status = "info"
+    else:
+        reason = str(result.get("reason") or "no matching rule").replace("_", " ")
+        message = f"Auto-assign did not run: {reason}."
+        status = "warning"
+    query = urlencode({"auto_assign_status": status, "auto_assign_message": message})
+    return RedirectResponse(
+        url=f"/admin/support/tickets/{ticket_id}?{query}", status_code=303
+    )
 
 
 @router.post(
@@ -341,14 +588,27 @@ def ticket_link(
     link_type: str = Form(...),
     db: Session = Depends(get_db),
 ):
-    support_web_service.link_ticket_from_form(
-        db,
-        request=request,
-        ticket_id=str(ticket_id),
-        to_ticket_id=to_ticket_id,
-        link_type=link_type,
-        actor_id=_actor_id(request),
-    )
+    try:
+        support_web_service.link_ticket_from_form(
+            db,
+            request=request,
+            ticket_id=str(ticket_id),
+            to_ticket_id=to_ticket_id,
+            link_type=link_type,
+            actor_id=_actor_id(request),
+        )
+    except ValueError as exc:
+        db.rollback()
+        context = _ctx(request, db)
+        context.update(
+            support_web_service.build_ticket_detail_context(
+                db, ticket_lookup=str(ticket_id)
+            )
+        )
+        context["action_error"] = str(exc)
+        return templates.TemplateResponse(
+            "admin/support/tickets/detail.html", context, status_code=400
+        )
     return RedirectResponse(url=f"/admin/support/tickets/{ticket_id}", status_code=303)
 
 
@@ -364,14 +624,27 @@ def ticket_merge(
     reason: str | None = Form(default=None),
     db: Session = Depends(get_db),
 ):
-    target = support_web_service.merge_ticket_from_form(
-        db,
-        request=request,
-        ticket_id=str(ticket_id),
-        target_ticket_id=target_ticket_id,
-        reason=reason,
-        actor_id=_actor_id(request),
-    )
+    try:
+        target = support_web_service.merge_ticket_from_form(
+            db,
+            request=request,
+            ticket_id=str(ticket_id),
+            target_ticket_id=target_ticket_id,
+            reason=reason,
+            actor_id=_actor_id(request),
+        )
+    except ValueError as exc:
+        db.rollback()
+        context = _ctx(request, db)
+        context.update(
+            support_web_service.build_ticket_detail_context(
+                db, ticket_lookup=str(ticket_id)
+            )
+        )
+        context["action_error"] = str(exc)
+        return templates.TemplateResponse(
+            "admin/support/tickets/detail.html", context, status_code=400
+        )
     return RedirectResponse(url=f"/admin/support/tickets/{target.id}", status_code=303)
 
 

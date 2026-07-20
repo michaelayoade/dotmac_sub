@@ -1,7 +1,7 @@
 {% extends "layouts/admin.html" %}
 {% from "components/ui/macros.html" import
     ambient_background, page_header, stats_card, card,
-    table_head, status_badge, animation_styles
+    table_head, status_badge, animation_styles, pagination as table_pagination
 %}
 
 {% set severity_variants = {
@@ -47,6 +47,7 @@
                 <option value="acknowledged" {% if status == 'acknowledged' %}selected{% endif %}>Acknowledged</option>
                 <option value="resolved" {% if status == 'resolved' %}selected{% endif %}>Resolved</option>
             </select>
+            <input type="hidden" name="per_page" value="{{ pagination.per_page }}">
         </form>
     {% endcall %}
 
@@ -101,27 +102,24 @@
                                 {% else %}Unknown device{% endif %}
                             </p>
                             <p class="mt-1 text-xs text-slate-400 dark:text-slate-500">
-                                {{ alarm.metric_type.value }}: {{ alarm.measured_value }} | Triggered: {{ alarm.triggered_at.strftime('%b %d, %Y %H:%M') if alarm.triggered_at else '-' }}
+                                {{ alarm.metric_type.value }}: {{ alarm.measured_value }} | Triggered: {{ alarm.triggered_at | app_datetime('%b %d, %Y %H:%M', '-') }}
                             </p>
                         </div>
-                    </div>
-                    <div class="flex items-center gap-2">
-                        {% if alarm.status.value == 'open' %}
-                        <form method="POST" action="/admin/network/alarms/{{ alarm.id }}/acknowledge">
-                            {% include "components/forms/csrf_input.html" %}
-                            <button type="submit" class="text-sm text-blue-600 hover:text-blue-700 dark:text-blue-400">Acknowledge</button>
-                        </form>
-                        {% endif %}
-                        {% if alarm.status.value != 'resolved' %}
-                        <form method="POST" action="/admin/network/alarms/{{ alarm.id }}/resolve">
-                            {% include "components/forms/csrf_input.html" %}
-                            <button type="submit" class="text-sm text-green-600 hover:text-green-700 dark:text-green-400">Resolve</button>
-                        </form>
-                        {% endif %}
                     </div>
                 </div>
             </div>
             {% endfor %}
+        </div>
+        <div class="-mx-6 -mb-6 mt-6">
+            {{ table_pagination(
+                pagination.page,
+                pagination.total_pages,
+                pagination.total,
+                pagination.per_page,
+                "/admin/network/alarms",
+                extra_params="&severity=" ~ (severity or "") ~ "&status=" ~ (status or ""),
+                item_label="alarms"
+            ) }}
         </div>
         {% else %}
         <div class="text-center py-12">
@@ -134,7 +132,7 @@
                     <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
                     <span class="relative inline-flex h-2 w-2 rounded-full bg-emerald-500"></span>
                 </span>
-                <span class="text-xs font-medium text-emerald-700 dark:text-emerald-400">Monitoring {{ stats.critical + stats.warning + stats.info + stats.total_open }} rules across all devices</span>
+                <span class="text-xs font-medium text-emerald-700 dark:text-emerald-400">Monitoring {{ rules | length }} active rules across all devices</span>
             </div>
         </div>
         {% endif %}

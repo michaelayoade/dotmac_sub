@@ -1,11 +1,16 @@
 """Reseller-facing aggregations of the CRM mirrors (Sales/Quotes B3).
 
 A reseller manages many customer accounts (``Subscriber.reseller_id``). These
-helpers aggregate the per-subscriber CRM mirrors — quotes, projects, work orders —
-across the reseller's whole customer set, tagging each row with its account so the
-reseller can see "which customer". Reads come straight from the local mirror (the
-reconcile task keeps it fresh), so a reseller dashboard never fans out N CRM calls
-and works during a CRM outage.
+helpers aggregate the per-subscriber quotes / projects / work orders across the
+reseller's whole customer set, tagging each row with its account so the
+reseller can see "which customer".
+
+During native ownership cutover, quote and project reads run behind the per-vertical
+``{quotes,projects}_native_read_enabled`` read-flip flags — OFF (default)
+serves the local CRM mirrors (the reconcile task keeps them fresh, so a
+reseller dashboard never fans out N CRM calls and works during a CRM outage),
+ON serves sub's native tables. Response shells and item shapes are identical
+contract. Work orders stay mirror-only until native work-order authority is enabled.
 """
 
 from __future__ import annotations
@@ -13,12 +18,16 @@ from __future__ import annotations
 import logging
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
+from app.models.project import Project
 from app.models.project_mirror import ProjectMirror
 from app.models.quote_mirror import QuoteMirror
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
+from app.services import projects as projects_service
 from app.services import quotes_mirror, reseller_portal
+from app.services.sales import selfserve as selfserve_service
+from app.services.work_order_views import row_to_item
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +50,31 @@ def quotes_for_reseller(db: Session, reseller_id: str) -> dict:
     names = _customer_names(db, reseller_id)
     if not names:
         return {"quotes": [], "total": 0, "open": 0}
+
+    if selfserve_service.native_read_enabled(db):
+        quotes = selfserve_service.selfserve_quotes.list_for_subscribers(
+            db, [str(s) for s in names]
+        )
+        # H1: batch-resolve install-project ids for the whole subtree in one
+        # query instead of a per-quote metadata scan.
+        project_ids = selfserve_service._find_project_ids_for_quotes(
+            db, [q.id for q in quotes]
+        )
+        native_items: list[dict] = []
+        for q in quotes:
+            item = selfserve_service.build_portal_quote_payload(
+                db, q, project_id=project_ids.get(str(q.id))
+            )
+            item["account_id"] = str(q.subscriber_id)
+            item["account_name"] = names.get(q.subscriber_id)
+            native_items.append(item)
+        open_count = sum(
+            1
+            for i in native_items
+            if i["status"] not in selfserve_service._PORTAL_CLOSED_QUOTE_STATUSES
+        )
+        return {"quotes": native_items, "total": len(native_items), "open": open_count}
+
     rows = db.scalars(
         select(QuoteMirror)
         .where(QuoteMirror.subscriber_id.in_(list(names)))
@@ -58,10 +92,57 @@ def quotes_for_reseller(db: Session, reseller_id: str) -> dict:
     return {"quotes": items, "total": len(items), "open": open_count}
 
 
+# Reseller project rows carry this subset of the portal payload keys (§2.5:
+# the `{projects,total,active}` shell + account tags are the contract).
+_RESELLER_PROJECT_KEYS = (
+    "id",
+    "name",
+    "status",
+    "project_type",
+    "progress_pct",
+    "current_stage",
+    "region",
+    "customer_address",
+    "due_at",
+    "created_at",
+)
+
+
 def projects_for_reseller(db: Session, reseller_id: str) -> dict:
     names = _customer_names(db, reseller_id)
     if not names:
         return {"projects": [], "total": 0, "active": 0}
+
+    if projects_service.native_read_enabled(db):
+        native_rows = (
+            db.query(Project)
+            .options(selectinload(Project.tasks))
+            .filter(Project.subscriber_id.in_(list(names)))
+            .filter(Project.is_active.is_(True))
+            .order_by(Project.created_at.desc())
+            .all()
+        )
+        native_items = []
+        for p in native_rows:
+            payload = projects_service.build_portal_project_payload(p)
+            native_items.append(
+                {
+                    "account_id": str(p.subscriber_id),
+                    "account_name": names.get(p.subscriber_id),
+                    **{key: payload[key] for key in _RESELLER_PROJECT_KEYS},
+                }
+            )
+        active = sum(
+            1
+            for i in native_items
+            if i["status"] not in ("completed", "canceled", "closed")
+        )
+        return {
+            "projects": native_items,
+            "total": len(native_items),
+            "active": active,
+        }
+
     rows = db.scalars(
         select(ProjectMirror)
         .where(ProjectMirror.subscriber_id.in_(list(names)))
@@ -93,28 +174,16 @@ def work_orders_for_reseller(db: Session, reseller_id: str) -> dict:
     if not names:
         return {"work_orders": [], "total": 0, "upcoming": 0}
     rows = db.scalars(
-        select(WorkOrderMirror)
-        .where(WorkOrderMirror.subscriber_id.in_(list(names)))
-        .order_by(WorkOrderMirror.created_at.desc())
+        select(WorkOrder)
+        .where(WorkOrder.subscriber_id.in_(list(names)))
+        .order_by(WorkOrder.created_at.desc())
     ).all()
-    items = [
-        {
-            "account_id": str(r.subscriber_id),
-            "account_name": names.get(r.subscriber_id),
-            "id": r.crm_work_order_id,
-            "title": r.title,
-            "status": r.status,
-            "work_type": r.work_type,
-            "priority": r.priority,
-            "technician_name": r.technician_name,
-            "technician_phone": r.technician_phone,
-            "address": r.address,
-            "scheduled_start": _dt(r.scheduled_start),
-            "estimated_arrival_at": _dt(r.estimated_arrival_at),
-            "completed_at": _dt(r.completed_at),
-        }
-        for r in rows
-    ]
+    items = []
+    for r in rows:
+        item = row_to_item(r, include_internal=False)
+        item["account_id"] = str(r.subscriber_id)
+        item["account_name"] = names.get(r.subscriber_id)
+        items.append(item)
     upcoming = sum(
         1 for r in rows if r.status not in ("completed", "canceled", "draft")
     )

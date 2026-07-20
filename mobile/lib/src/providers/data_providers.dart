@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/addon.dart';
+import '../models/connection_status.dart';
 import '../models/contact.dart';
 import '../models/invoice.dart';
 import '../models/service_status.dart';
@@ -13,6 +14,7 @@ import '../models/payment_proof.dart';
 import '../models/session.dart';
 import '../models/page.dart';
 import '../models/subscription.dart';
+import '../models/technician_location.dart';
 import '../models/ticket.dart';
 import '../models/usage.dart';
 import '../repositories/billing_repository.dart';
@@ -25,10 +27,7 @@ import '../models/quote.dart';
 import '../models/service_location.dart';
 import '../repositories/location_repository.dart';
 import '../repositories/quotes_repository.dart';
-import '../models/vas.dart';
-import '../models/wallet.dart';
 import '../repositories/notification_repository.dart';
-import '../repositories/wallet_repository.dart';
 import '../repositories/reseller_repository.dart';
 import '../repositories/support_repository.dart';
 import '../repositories/usage_repository.dart';
@@ -68,10 +67,6 @@ final locationRepositoryProvider = Provider<LocationRepository>(
 final quotesRepositoryProvider = Provider<QuotesRepository>(
   (ref) => QuotesRepository(ref.watch(apiClientProvider).dio),
 );
-final walletRepositoryProvider = Provider<WalletRepository>(
-  (ref) => WalletRepository(ref.watch(apiClientProvider).dio),
-);
-
 final notificationRepositoryProvider = Provider<NotificationRepository>(
   (ref) => NotificationRepository(ref.watch(apiClientProvider).dio),
 );
@@ -94,8 +89,9 @@ final resellerDashboardProvider = FutureProvider.autoDispose<ResellerDashboard>(
 );
 
 /// Sales/Quotes across the reseller's customers (B3).
-final resellerQuotesProvider =
-    FutureProvider.autoDispose<List<ResellerQuote>>((ref) async {
+final resellerQuotesProvider = FutureProvider.autoDispose<List<ResellerQuote>>((
+  ref,
+) async {
   cacheFor(ref);
   return ref.watch(resellerRepositoryProvider).quotes();
 });
@@ -261,6 +257,16 @@ final serviceStatusProvider = FutureProvider.autoDispose<ServiceStatus>((
 ) async {
   cacheFor(ref);
   return ref.watch(catalogRepositoryProvider).serviceStatus();
+});
+
+/// Per-customer connection verdict (GET /me/connection-status, outage
+/// classifier P4): "what's wrong with my connection?" with area-outage blame
+/// suppression. Drives the Connection status screen + the slim Home banner.
+final connectionStatusProvider = FutureProvider.autoDispose<ConnectionStatus>((
+  ref,
+) async {
+  cacheFor(ref);
+  return ref.watch(catalogRepositoryProvider).connectionStatus();
 });
 
 final subscriptionsProvider = FutureProvider.autoDispose<Page<Subscription>>((
@@ -521,31 +527,27 @@ final workOrdersProvider = FutureProvider.autoDispose<WorkOrdersSummary>((
   return ref.watch(workOrderRepositoryProvider).summary();
 });
 
+/// Polls the assigned technician's live position for an in-progress work order
+/// (~20s). The CRM gates visibility to the Start work → End work window and
+/// returns available=false otherwise, so the map self-hides.
+final technicianLocationProvider = StreamProvider.autoDispose
+    .family<TechnicianLocation, String>((ref, workOrderId) async* {
+  final repo = ref.watch(workOrderRepositoryProvider);
+  while (true) {
+    try {
+      yield await repo.technicianLocation(workOrderId);
+    } catch (_) {
+      yield const TechnicianLocation(available: false, reason: 'error');
+    }
+    await Future<void>.delayed(const Duration(seconds: 20));
+  }
+});
+
 final serviceLocationProvider = FutureProvider.autoDispose<ServiceLocation>((
   ref,
 ) async {
   cacheFor(ref);
   return ref.watch(locationRepositoryProvider).location();
-});
-
-final vasCatalogProvider = FutureProvider.autoDispose<List<VasCategory>>((
-  ref,
-) async {
-  cacheFor(ref);
-  return ref.watch(walletRepositoryProvider).catalog();
-});
-
-final vasPurchasesProvider = FutureProvider.autoDispose<List<VasTransaction>>((
-  ref,
-) async {
-  cacheFor(ref);
-  return ref.watch(walletRepositoryProvider).purchases();
-});
-
-/// Null when the wallet feature is disabled server-side (404) — UI hides.
-final walletProvider = FutureProvider.autoDispose<WalletOverview?>((ref) async {
-  cacheFor(ref);
-  return ref.watch(walletRepositoryProvider).overviewOrNull();
 });
 
 /// The subscriber's additional contacts. Invalidate after create/update/delete.

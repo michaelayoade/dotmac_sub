@@ -11,14 +11,27 @@ from app.services.db_session_adapter import db_session_adapter
 logger = logging.getLogger(__name__)
 
 
-@celery_app.task(name="app.tasks.monitoring_cleanup.check_stale_infrastructure")
+@celery_app.task(
+    name="app.tasks.monitoring_cleanup.check_stale_infrastructure",
+    soft_time_limit=50,
+    time_limit=55,
+)
 def check_stale_infrastructure() -> dict[str, object]:
     """Check for stale DB transactions and Celery backlog indicators."""
     logger.info("Starting stale infrastructure check")
     with db_session_adapter.read_session() as db:
-        from app.services.infrastructure_health import check_all_services
+        from app.services.infrastructure_health import (
+            check_all_services,
+            publish_database_pressure_snapshot,
+        )
 
         services = check_all_services(db)
+
+    postgres = next(
+        (service for service in services if service.name == "PostgreSQL"), None
+    )
+    if postgres is not None:
+        publish_database_pressure_snapshot(postgres)
 
     degraded = [
         {
@@ -54,6 +67,18 @@ def sync_nas_to_monitoring() -> dict[str, int]:
 
         result = sync_all_nas_to_monitoring(db)
         return result
+
+
+@celery_app.task(name="app.tasks.monitoring_cleanup.sync_inventory_to_monitoring")
+def sync_inventory_to_monitoring() -> dict[str, dict[str, int]]:
+    """Sync local NAS and RouterOS inventories into network monitoring."""
+    logger.info("Starting local inventory → monitoring sync")
+    with db_session_adapter.session() as db:
+        from app.services.monitoring_metrics import (
+            sync_inventory_to_monitoring as do_sync,
+        )
+
+        return do_sync(db)
 
 
 @celery_app.task(name="app.tasks.monitoring_cleanup.cleanup_old_device_metrics")

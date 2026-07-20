@@ -8,7 +8,11 @@ void main() {
   group('SemanticColors extension', () {
     test('light and dark variants differ (so dark mode adapts)', () {
       expect(SemanticColors.light.success, isNot(SemanticColors.dark.success));
+      expect(SemanticColors.light.info, isNot(SemanticColors.dark.info));
       expect(SemanticColors.light.warning, isNot(SemanticColors.dark.warning));
+      expect(
+          SemanticColors.light.negative, isNot(SemanticColors.dark.negative));
+      expect(SemanticColors.light.neutral, isNot(SemanticColors.dark.neutral));
     });
 
     test('lerp interpolates each channel', () {
@@ -24,6 +28,7 @@ void main() {
       final c = SemanticColors.light.copyWith(success: const Color(0xFF123456));
       expect(c.success, const Color(0xFF123456));
       expect(c.warning, SemanticColors.light.warning);
+      expect(c.negative, SemanticColors.light.negative);
     });
 
     testWidgets('context.semantic resolves the registered extension per theme',

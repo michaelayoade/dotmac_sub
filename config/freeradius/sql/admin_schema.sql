@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS radacct_admin (
     acctuniqueid VARCHAR(32) NOT NULL UNIQUE,
     username VARCHAR(64),
     nasipaddress INET,
-    nasportid VARCHAR(32),
+    nasportid VARCHAR(253),
     nasporttype VARCHAR(32),
     acctstarttime TIMESTAMP WITH TIME ZONE,
     acctupdatetime TIMESTAMP WITH TIME ZONE,

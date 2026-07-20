@@ -19,6 +19,8 @@ from app.models.support import (
 from app.schemas.support import TicketCreate
 from app.services import support as support_service
 from app.services import support_automation
+from app.services import support_ticket_settings as support_ticket_settings_service
+from app.web.admin import support_automation as admin_support_automation
 
 # ---------------------------------------------------------------------------
 # Pure-Python helpers — no DB required.
@@ -140,6 +142,22 @@ def test_apply_action_missing_value_is_a_no_op():
     rule = _fake_rule(AutomationActionType.set_priority, {})
     support_automation._apply_action(rule, ticket)
     assert ticket.priority == "medium"
+
+
+def test_admin_action_value_validation_rejects_mismatched_payload(db_session):
+    support_ticket_settings_service.update_options(
+        db_session,
+        statuses=["open"],
+        priorities=["normal"],
+        ticket_types=["incident"],
+    )
+
+    with pytest.raises(ValueError, match="priority"):
+        admin_support_automation._validate_action_value(
+            db_session,
+            AutomationActionType.set_priority,
+            {"status": "open"},
+        )
 
 
 # ---------------------------------------------------------------------------

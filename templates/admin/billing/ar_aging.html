@@ -226,8 +226,8 @@
                         </td>
                         <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ row.account_label }}</td>
                         <td class="px-6 py-4 text-sm font-semibold text-slate-900 dark:text-white">{{ invoice_currency }} {{ "{:,.2f}".format(invoice.balance_due or 0) }}</td>
-                        <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ invoice.due_at.strftime('%b %d, %Y') if invoice.due_at else 'N/A' }}</td>
-                        <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ row.last_payment_at.strftime('%b %d, %Y') if row.last_payment_at else 'No payment' }}</td>
+                        <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ invoice.due_at | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }}</td>
+                        <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ row.last_payment_at | app_datetime('%b %d, %Y', 'No payment', include_tz=False) }}</td>
                     </tr>
                     {% endfor %}
                     {% else %}

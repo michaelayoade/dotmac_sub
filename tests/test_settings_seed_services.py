@@ -188,8 +188,7 @@ class TestSeedImportsSettings:
 class TestSeedGisSettings:
     """Tests for seed_gis_settings function."""
 
-    def test_seeds_sync_enabled(self, db_session):
-        """Test GIS sync enabled setting is seeded."""
+    def test_does_not_recreate_retired_sync_enabled_alias(self, db_session):
         settings_seed.seed_gis_settings(db_session)
 
         setting = (
@@ -200,8 +199,7 @@ class TestSeedGisSettings:
             )
             .first()
         )
-        assert setting is not None
-        assert setting.value_json is True
+        assert setting is None
 
     def test_seeds_sync_interval(self, db_session):
         """Test GIS sync interval setting is seeded."""
@@ -329,8 +327,7 @@ class TestSeedNotificationTemplates:
 class TestSeedCollectionsSettings:
     """Tests for seed_collections_settings function."""
 
-    def test_seeds_dunning_enabled(self, db_session, monkeypatch):
-        """Test dunning enabled setting is seeded."""
+    def test_does_not_recreate_retired_dunning_alias(self, db_session, monkeypatch):
         monkeypatch.setenv("DUNNING_ENABLED", "false")
 
         settings_seed.seed_collections_settings(db_session)
@@ -343,8 +340,7 @@ class TestSeedCollectionsSettings:
             )
             .first()
         )
-        assert setting is not None
-        assert setting.value_json is False
+        assert setting is None
 
     def test_seeds_prepaid_skip_holidays(self, db_session, monkeypatch):
         """Test prepaid skip holidays setting is seeded."""
@@ -362,6 +358,54 @@ class TestSeedCollectionsSettings:
         )
         assert setting is not None
         assert setting.value_json == ["2026-01-01"]
+
+    def test_seeds_enforcement_window_policy(self, db_session, monkeypatch):
+        monkeypatch.setenv("ENFORCEMENT_WINDOW_MODE", "enforce")
+        monkeypatch.setenv("ENFORCEMENT_WINDOW_START", "09:00")
+        monkeypatch.setenv("ENFORCEMENT_WINDOW_END", "17:00")
+        monkeypatch.setenv("ENFORCEMENT_SKIP_WEEKENDS", "true")
+        monkeypatch.setenv("ENFORCEMENT_SKIP_HOLIDAYS", '["2026-01-01"]')
+
+        settings_seed.seed_collections_settings(db_session)
+
+        rows = {
+            row.key: row
+            for row in db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.collections,
+                DomainSetting.key.in_(
+                    {
+                        "enforcement_window_mode",
+                        "enforcement_window_start",
+                        "enforcement_window_end",
+                        "enforcement_skip_weekends",
+                        "enforcement_skip_holidays",
+                    }
+                ),
+            )
+            .all()
+        }
+        assert rows["enforcement_window_mode"].value_text == "enforce"
+        assert rows["enforcement_window_start"].value_text == "09:00"
+        assert rows["enforcement_window_end"].value_text == "17:00"
+        assert rows["enforcement_skip_weekends"].value_json is True
+        assert rows["enforcement_skip_holidays"].value_json == ["2026-01-01"]
+
+    def test_seeds_prepaid_balance_sweep_interval(self, db_session, monkeypatch):
+        monkeypatch.setenv("PREPAID_BALANCE_SWEEP_INTERVAL_SECONDS", "1800")
+
+        settings_seed.seed_collections_settings(db_session)
+
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.collections,
+                DomainSetting.key == "prepaid_balance_sweep_interval_seconds",
+            )
+            .first()
+        )
+        assert setting is not None
+        assert setting.value_text == "1800"
 
     def test_seeds_suspension_notification_dedupe_hours(self, db_session):
         settings_seed.seed_collections_settings(db_session)
@@ -389,13 +433,9 @@ class TestSeedBillingNotificationSettings:
                 DomainSetting.domain == SettingDomain.billing,
                 DomainSetting.key.in_(
                     [
-                        "suspension_grace_hours",
                         "expiry_reminder_days",
                         "invoice_reminder_days",
-                        "dunning_escalation_days",
                         "autopay_max_consecutive_failures",
-                        "blocking_period_days",
-                        "deactivation_period_days",
                         "minimum_balance",
                         "arrangement_min_installments",
                         "arrangement_max_installments",
@@ -415,21 +455,15 @@ class TestSeedBillingNotificationSettings:
             .all()
         }
 
-        assert settings["suspension_grace_hours"] == "48"
         assert settings["expiry_reminder_days"] == "7"
         assert settings["invoice_reminder_days"] == "7,1"
-        assert settings["dunning_escalation_days"] == "3,7,14,30"
         assert settings["autopay_max_consecutive_failures"] == "3"
-        assert settings["blocking_period_days"] == "0"
-        assert settings["deactivation_period_days"] == "0"
         assert settings["minimum_balance"] == "0"
         assert settings["arrangement_min_installments"] == "2"
         assert settings["arrangement_max_installments"] == "24"
         assert settings["arrangement_default_overdue_installments"] == "2"
         assert settings["service_extension_max_days"] == "30"
-        assert settings["topup_preset_amounts"] == (
-            "1000,2000,5000,10000,20000,50000"
-        )
+        assert settings["topup_preset_amounts"] == ("1000,2000,5000,10000,20000,50000")
         assert settings["topup_reconciliation_stale_minutes"] == "15"
         assert settings["topup_reconciliation_max_age_days"] == "7"
         assert settings["payment_gateway_timeout_seconds"] == "30"
@@ -455,6 +489,9 @@ class TestSeedGeocodingSettings:
         monkeypatch.setenv("GEOCODING_USER_AGENT", "dotmac_sm")
         monkeypatch.setenv("GEOCODING_EMAIL", "test@example.com")
         monkeypatch.setenv("GEOCODING_TIMEOUT_SEC", "5")
+        monkeypatch.setenv("GEOCODING_MIN_INTERVAL_MS", "1250")
+        monkeypatch.setenv("GEOCODING_GOOGLE_API_KEY", "google-secret")
+        monkeypatch.setenv("GEOCODING_MAPBOX_API_KEY", "mapbox-secret")
 
         settings_seed.seed_geocoding_settings(db_session)
 
@@ -469,6 +506,28 @@ class TestSeedGeocodingSettings:
         assert setting is not None
         assert setting.value_json is True
 
+        interval = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.geocoding,
+                DomainSetting.key == "min_interval_ms",
+            )
+            .first()
+        )
+        assert interval is not None
+        assert interval.value_text == "1250"
+
+        google_key = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.geocoding,
+                DomainSetting.key == "google_api_key",
+            )
+            .first()
+        )
+        assert google_key is not None
+        assert google_key.is_secret is True
+
     def test_seeds_geocoding_provider(self, db_session, monkeypatch):
         """Test geocoding provider setting is seeded."""
         monkeypatch.setenv("GEOCODING_PROVIDER", "google")
@@ -476,6 +535,9 @@ class TestSeedGeocodingSettings:
         monkeypatch.setenv("GEOCODING_USER_AGENT", "dotmac_sm")
         monkeypatch.setenv("GEOCODING_EMAIL", "test@example.com")
         monkeypatch.setenv("GEOCODING_TIMEOUT_SEC", "5")
+        monkeypatch.setenv("GEOCODING_MIN_INTERVAL_MS", "0")
+        monkeypatch.setenv("GEOCODING_GOOGLE_API_KEY", "google-secret")
+        monkeypatch.setenv("GEOCODING_MAPBOX_API_KEY", "mapbox-secret")
 
         settings_seed.seed_geocoding_settings(db_session)
 
@@ -534,6 +596,32 @@ class TestSeedSchedulerSettings:
         assert setting is not None
         assert setting.value_text == "America/New_York"
 
+    def test_seeds_event_outbox_dispatch_settings(self, db_session, monkeypatch):
+        monkeypatch.setenv("EVENT_DISPATCH_ENABLED", "true")
+        monkeypatch.setenv("EVENT_DISPATCH_INTERVAL_SECONDS", "30")
+        monkeypatch.setenv("EVENT_DISPATCH_BATCH_SIZE", "250")
+
+        settings_seed.seed_scheduler_settings(db_session)
+
+        rows = {
+            row.key: row
+            for row in db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.scheduler,
+                DomainSetting.key.in_(
+                    {
+                        "event_dispatch_enabled",
+                        "event_dispatch_interval_seconds",
+                        "event_dispatch_batch_size",
+                    }
+                ),
+            )
+            .all()
+        }
+        assert rows["event_dispatch_enabled"].value_json is True
+        assert rows["event_dispatch_interval_seconds"].value_text == "30"
+        assert rows["event_dispatch_batch_size"].value_text == "250"
+
 
 # =============================================================================
 # Radius Settings Tests
@@ -588,6 +676,31 @@ class TestSeedBillingSettings:
         assert setting is not None
         assert setting.value_text == "EUR"
 
+    def test_seeds_prepaid_reconstruction_trust_anchor_as_openbao_ref(
+        self, db_session, monkeypatch
+    ):
+        reference = (
+            "bao://secret/billing/prepaid-reconstruction-attestation#public_key_pem"
+        )
+        monkeypatch.setenv(
+            "PREPAID_RECONSTRUCTION_ATTESTATION_PUBLIC_KEY_REF",
+            reference,
+        )
+
+        settings_seed.seed_billing_settings(db_session)
+
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.billing,
+                DomainSetting.key
+                == "prepaid_reconstruction_attestation_public_key_ref",
+            )
+            .one()
+        )
+        assert setting.is_secret is True
+        assert setting.value_text == reference
+
     def test_seeds_invoice_number_settings(self, db_session, monkeypatch):
         """Test invoice number settings are seeded."""
         monkeypatch.setenv("BILLING_INVOICE_NUMBER_PREFIX", "INVOICE-")
@@ -605,22 +718,23 @@ class TestSeedBillingSettings:
         assert setting is not None
         assert setting.value_text == "INVOICE-"
 
-    def test_seeds_auto_suspend_on_overdue(self, db_session, monkeypatch):
-        """Test overdue auto-suspension setting is seeded."""
-        monkeypatch.setenv("BILLING_AUTO_SUSPEND_ON_OVERDUE", "false")
-
+    def test_does_not_seed_retired_access_controls(self, db_session):
         settings_seed.seed_billing_settings(db_session)
 
-        setting = (
-            db_session.query(DomainSetting)
-            .filter(
-                DomainSetting.domain == SettingDomain.billing,
-                DomainSetting.key == "auto_suspend_on_overdue",
-            )
-            .first()
-        )
-        assert setting is not None
-        assert setting.value_text == "false"
+        retired = {
+            "auto_suspend_on_overdue",
+            "suspension_grace_hours",
+            "dunning_escalation_days",
+            "blocking_period_days",
+            "deactivation_period_days",
+        }
+        seeded = {
+            row.key
+            for row in db_session.query(DomainSetting)
+            .filter(DomainSetting.domain == SettingDomain.billing)
+            .all()
+        }
+        assert retired.isdisjoint(seeded)
 
     def test_seeds_plan_change_runtime_settings(self, db_session, monkeypatch):
         """Test runtime plan-change settings are seeded in billing domain."""
@@ -680,27 +794,6 @@ class TestSeedCatalogSettings:
 # =============================================================================
 # Subscriber Settings Tests
 # =============================================================================
-
-
-class TestSeedSubscriberSettings:
-    """Tests for seed_subscriber_settings function."""
-
-    def test_seeds_default_account_status(self, db_session, monkeypatch):
-        """Test default account status is seeded."""
-        monkeypatch.setenv("SUBSCRIBER_DEFAULT_ACCOUNT_STATUS", "pending")
-
-        settings_seed.seed_subscriber_settings(db_session)
-
-        setting = (
-            db_session.query(DomainSetting)
-            .filter(
-                DomainSetting.domain == SettingDomain.subscriber,
-                DomainSetting.key == "default_account_status",
-            )
-            .first()
-        )
-        assert setting is not None
-        assert setting.value_text == "pending"
 
 
 # =============================================================================
@@ -855,10 +948,9 @@ class TestSeedNetworkPolicySettings:
         )
         assert setting is not None
 
-    def test_seeds_mikrotik_api_session_kick_enabled_by_default(
+    def test_does_not_recreate_retired_api_session_kick_alias(
         self, db_session, monkeypatch
     ):
-        """RouterOS API session kicking is enabled for reliable forced reauth."""
         monkeypatch.delenv("NETWORK_MIKROTIK_API_SESSION_KICK_ENABLED", raising=False)
 
         settings_seed.seed_network_policy_settings(db_session)
@@ -871,14 +963,11 @@ class TestSeedNetworkPolicySettings:
             )
             .first()
         )
-        assert setting is not None
-        assert setting.value_text == "true"
-        assert setting.value_json is True
+        assert setting is None
 
-    def test_updates_mikrotik_api_session_kick_existing_false(
+    def test_does_not_mutate_retired_api_session_kick_alias(
         self, db_session, monkeypatch
     ):
-        """Existing old defaults are moved to the reliable force-reauth path."""
         monkeypatch.delenv("NETWORK_MIKROTIK_API_SESSION_KICK_ENABLED", raising=False)
         network_settings.ensure_by_key(
             db_session,
@@ -897,8 +986,8 @@ class TestSeedNetworkPolicySettings:
             .first()
         )
         assert setting is not None
-        assert setting.value_text == "true"
-        assert setting.value_json is True
+        assert setting.value_text == "false"
+        assert setting.value_json is False
 
 
 # =============================================================================
@@ -930,26 +1019,6 @@ class TestSeedRadiusPolicySettings:
 # =============================================================================
 # Inventory Settings Tests
 # =============================================================================
-
-
-class TestSeedInventorySettings:
-    """Tests for seed_inventory_settings function."""
-
-    def test_seeds_default_reservation_status(self, db_session, monkeypatch):
-        """Test default reservation status is seeded."""
-        monkeypatch.setenv("INVENTORY_DEFAULT_RESERVATION_STATUS", "pending")
-
-        settings_seed.seed_inventory_settings(db_session)
-
-        setting = (
-            db_session.query(DomainSetting)
-            .filter(
-                DomainSetting.domain == SettingDomain.inventory,
-                DomainSetting.key == "default_reservation_status",
-            )
-            .first()
-        )
-        assert setting is not None
 
 
 # =============================================================================

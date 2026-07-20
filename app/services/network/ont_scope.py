@@ -231,7 +231,7 @@ def submitted_authorization_ont_matches_scope(
     if direct_match:
         return True
 
-    if direct_olt_id is not None:
+    if not hasattr(db, "scalars"):
         return False
 
     candidate = db.scalars(

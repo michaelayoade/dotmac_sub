@@ -12,7 +12,7 @@ import logging
 from collections.abc import Iterable
 from typing import Any
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.models.subscriber import Subscriber
@@ -20,6 +20,7 @@ from app.models.support import TicketCommentAuthorType
 from app.services.common import coerce_uuid
 from app.services.crm_client import CRMClientError, get_crm_client
 from app.services.session_store import get_session_redis
+from app.services.status_presentation import ticket_status_presentation
 
 logger = logging.getLogger(__name__)
 
@@ -29,35 +30,19 @@ _CACHE_SUBSCRIBER_MAP = 3600  # 1hr — subscriber ID mapping
 _CACHE_LIST = 60  # 60s — list pages
 _CACHE_DETAIL = 30  # 30s — detail pages
 
-# ── Status display dicts (no Tailwind interpolation) ─────────────────────
-
-TICKET_STATUS_DISPLAY: dict[str, str] = {
-    "open": "Open",
-    "in_progress": "In Progress",
-    "waiting_on_customer": "Waiting on Customer",
-    "waiting_on_agent": "Waiting on Agent",
-    "resolved": "Resolved",
-    "closed": "Closed",
-}
-
-TICKET_STATUS_COLORS: dict[str, str] = {
-    "open": "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
-    "in_progress": "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200",
-    "waiting_on_customer": "bg-violet-100 text-violet-800 dark:bg-violet-900 dark:text-violet-200",
-    "waiting_on_agent": "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200",
-    "resolved": "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200",
-    "closed": "bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-200",
-}
-
 TICKET_PRIORITY_DISPLAY: dict[str, str] = {
+    "lower": "Lower",
     "low": "Low",
+    "medium": "Medium",
     "normal": "Normal",
     "high": "High",
     "urgent": "Urgent",
 }
 
 TICKET_PRIORITY_COLORS: dict[str, str] = {
+    "lower": "bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300",
     "low": "bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300",
+    "medium": "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300",
     "normal": "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300",
     "high": "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300",
     "urgent": "bg-rose-100 text-rose-700 dark:bg-rose-900 dark:text-rose-300",
@@ -116,7 +101,7 @@ def resolve_crm_subscriber_id(db: Session, subscriber_id: str) -> str | None:
         _cache_set(cache_key, "__none__", _CACHE_SUBSCRIBER_MAP)
         return None
 
-    client = get_crm_client()
+    client = get_crm_client(db)
     crm_id = client.resolve_subscriber_id(subscriber.splynx_customer_id)
     if crm_id:
         try:
@@ -171,17 +156,60 @@ def _ok_context() -> dict[str, Any]:
 
 def _ticket_to_dict(ticket: Any) -> dict[str, Any]:
     """Map a local support Ticket to the dict shape the portal templates expect."""
+    meta = ticket.metadata_ if isinstance(ticket.metadata_, dict) else {}
+    csat = meta.get("csat") if isinstance(meta.get("csat"), dict) else {}
+    due_at = getattr(ticket, "due_at", None)
+    resolved_at = getattr(ticket, "resolved_at", None)
+    closed_at = getattr(ticket, "closed_at", None)
     return {
         "id": str(ticket.id),
         "ticket_number": ticket.number,
         "title": ticket.title,
         "description": ticket.description or "",
         "status": ticket.status,
+        "status_presentation": ticket_status_presentation(ticket.status).model_dump(
+            mode="json"
+        ),
         "priority": ticket.priority,
         "subscriber_id": str(ticket.subscriber_id) if ticket.subscriber_id else None,
+        "due_at": due_at.isoformat() if due_at else None,
+        "resolved_at": resolved_at.isoformat() if resolved_at else None,
+        "closed_at": closed_at.isoformat() if closed_at else None,
         "created_at": ticket.created_at.isoformat() if ticket.created_at else None,
         "updated_at": ticket.updated_at.isoformat() if ticket.updated_at else None,
+        "csat_rating": csat.get("rating"),
     }
+
+
+def handle_ticket_rating(
+    db: Session,
+    subscriber_ids: list[str],
+    ticket_id: str,
+    rating: int,
+    comment: str | None = None,
+) -> dict[str, Any]:
+    """Record a customer CSAT rating on a local support ticket the caller owns.
+
+    Returns a dict with a 'success' bool (mirrors handle_ticket_comment)."""
+    from app.services import support as support_service
+
+    allowed = {str(s or "").strip() for s in subscriber_ids if str(s or "").strip()}
+    try:
+        ticket = support_service.Tickets.get(db, ticket_id)
+    except Exception:  # noqa: BLE001 - not found / invalid id
+        return {"success": False, "error": "Ticket not found."}
+    if not ticket.subscriber_id or str(ticket.subscriber_id) not in allowed:
+        return {"success": False, "error": "Ticket not found."}
+    try:
+        support_service.Tickets.set_satisfaction(
+            db,
+            ticket,
+            rating=max(1, min(5, int(rating))),
+            comment=(comment or "")[:2000] or None,
+        )
+    except HTTPException:
+        return {"success": False, "error": "You can rate support once resolved."}
+    return {"success": True}
 
 
 def _comment_to_dict(comment: Any, customer_subscriber_ids: set[str]) -> dict[str, Any]:
@@ -208,14 +236,18 @@ def _comment_to_dict(comment: Any, customer_subscriber_ids: set[str]) -> dict[st
 
 
 def _ticket_list_base(request: Request, customer: dict) -> dict[str, Any]:
+    from app.services import web_support_tickets
+
     return {
         "request": request,
         "customer": customer,
         "active_page": "support",
-        "status_display": TICKET_STATUS_DISPLAY,
-        "status_colors": TICKET_STATUS_COLORS,
         "priority_display": TICKET_PRIORITY_DISPLAY,
         "priority_colors": TICKET_PRIORITY_COLORS,
+        "max_attachment_bytes": web_support_tickets.MAX_ATTACHMENT_BYTES,
+        "max_attachment_mb": max(
+            1, web_support_tickets.MAX_ATTACHMENT_BYTES // 1048576
+        ),
     }
 
 
@@ -316,8 +348,7 @@ def handle_ticket_create(
     """Create a ticket in the internal (local) ticket module.
 
     ``attachments`` (UploadFile list) are stored locally on the ticket via
-    ``upload_ticket_attachments``. NOTE: the CRM push (``crm_ticket_push``) does
-    not carry attachments, so attached files stay local and may not sync to CRM.
+    ``upload_ticket_attachments``.
 
     Returns:
         Dict with 'success' bool and 'ticket' or 'error' key.
@@ -358,10 +389,6 @@ def handle_ticket_create(
                 actor_id=str(sid),
             )
             support_service.Tickets.add_attachments(db, str(ticket.id), uploaded)
-        from app.services.crm_ticket_push import enqueue_crm_ticket_push
-
-        if getattr(ticket, "id", None):
-            enqueue_crm_ticket_push(ticket.id, source="portal_ticket_create")
         return {"success": True, "ticket": _ticket_to_dict(ticket)}
     except ValueError as e:
         # Attachment validation (type/size) — surface the specific reason.
@@ -388,8 +415,7 @@ def handle_ticket_comment(
     """Add a customer comment to a local support ticket.
 
     ``attachments`` (UploadFile list) are stored locally on the comment via
-    ``upload_ticket_attachments``. NOTE: the CRM push (``crm_ticket_push``) does
-    not carry attachments, so attached files stay local and may not sync to CRM.
+    ``upload_ticket_attachments``.
 
     Returns:
         Dict with 'success' bool.
@@ -433,10 +459,6 @@ def handle_ticket_comment(
             actor_id=None,
         )
         db.commit()
-        from app.services.crm_ticket_push import enqueue_crm_comment_push
-
-        if getattr(comment, "id", None):
-            enqueue_crm_comment_push(comment.id, source="portal_ticket_comment")
         return {"success": True}
     except ValueError as e:
         # Attachment validation (type/size) — surface the specific reason.
@@ -473,8 +495,6 @@ def reseller_account_tickets_context(
                 "tickets": [],
                 "account_id": account_id,
                 "active_page": "accounts",
-                "status_display": TICKET_STATUS_DISPLAY,
-                "status_colors": TICKET_STATUS_COLORS,
                 **_ok_context(),
             }
         client = get_crm_client()
@@ -487,8 +507,6 @@ def reseller_account_tickets_context(
             "tickets": [],
             "account_id": account_id,
             "active_page": "accounts",
-            "status_display": TICKET_STATUS_DISPLAY,
-            "status_colors": TICKET_STATUS_COLORS,
             **_error_context(),
         }
 
@@ -496,11 +514,17 @@ def reseller_account_tickets_context(
         "request": request,
         "current_user": current_user,
         "reseller": reseller,
-        "tickets": tickets,
+        "tickets": [
+            {
+                **ticket,
+                "status_presentation": ticket_status_presentation(
+                    ticket.get("status")
+                ).model_dump(mode="json"),
+            }
+            for ticket in tickets
+        ],
         "account_id": account_id,
         "active_page": "accounts",
-        "status_display": TICKET_STATUS_DISPLAY,
-        "status_colors": TICKET_STATUS_COLORS,
         **_ok_context(),
     }
 
@@ -509,13 +533,13 @@ def reseller_open_tickets_count(
     db: Session,
     reseller_id: str,
     account_ids: list[str],
-) -> int:
+) -> int | None:
     """Count open tickets across all reseller accounts.
 
-    Fails silently (returns 0) if CRM is unreachable.
+    Returns None if CRM is unreachable so callers do not show a false zero.
     """
     total = 0
-    client = get_crm_client()
+    client = get_crm_client(db)
     for account_id in account_ids:
         try:
             crm_sub_id = resolve_crm_subscriber_id(db, account_id)
@@ -529,5 +553,5 @@ def reseller_open_tickets_count(
             )
         except CRMClientError:
             logger.debug("CRM unreachable for open ticket count, skipping")
-            return 0
+            return None
     return total

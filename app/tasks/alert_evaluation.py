@@ -92,12 +92,8 @@ def _notify_alert(
     """Queue alert notifications via policy routing, with admin fallback."""
     try:
         from app.models.network_monitoring import NetworkDevice
-        from app.models.notification import (
-            Notification,
-            NotificationChannel,
-            NotificationStatus,
-        )
         from app.services import notification as notification_service
+        from app.services.staff_notifications import queue_staff_email
 
         device = db.get(NetworkDevice, metric.device_id) if metric.device_id else None
         device_name = device.name if device else str(metric.device_id or "Unknown")
@@ -141,14 +137,12 @@ def _notify_alert(
         # Get alert recipients from policy or fallback to admin emails
         recipients = _get_alert_recipients(db, rule)
         for recipient in recipients:
-            notification = Notification(
-                channel=NotificationChannel.email,
+            queue_staff_email(
+                db,
                 recipient=recipient,
                 subject=subject,
                 body=body,
-                status=NotificationStatus.queued,
             )
-            db.add(notification)
 
         if recipients:
             logger.info(

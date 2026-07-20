@@ -411,6 +411,80 @@ def test_synced_ont_no_proposed_change_is_a_noop(
     assert acs.spv_calls == []
 
 
+def test_dual_stack_tr181_reconciles_and_persists_verified_observation(
+    db_session, ont, stub_ont_status, monkeypatch
+):
+    desired = _make_desired(
+        ont,
+        ipv6_enabled=True,
+        tr069_data_model_root="Device",
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core.desired_from_ont_unit",
+        lambda db, target_ont: desired,
+    )
+
+    def leaf(value):
+        return {"_value": value, "_object": False, "_writable": True}
+
+    device = _synced_acs_device(ont)
+    device["Device"] = {
+        "DeviceInfo": {"SoftwareVersion": leaf("FW-TR181")},
+        "ManagementServer": {
+            "PeriodicInformInterval": leaf("300"),
+            "ConnectionRequestUsername": leaf("admin"),
+            "ConnectionRequestPassword": leaf("admin"),
+        },
+        "IP": {"Interface": {"1": {"IPv6Enable": leaf("false")}}},
+        "DHCPv6": {
+            "Client": {
+                "1": {
+                    "Enable": leaf("false"),
+                    "RequestPrefixes": leaf("false"),
+                }
+            }
+        },
+        "RouterAdvertisement": {"InterfaceSettings": {"1": {"Enable": leaf("false")}}},
+    }
+
+    class _Ipv6Acs(_StubAcsClient):
+        def set_parameter_values(self, device_id, params, **kwargs):
+            result = super().set_parameter_values(device_id, params, **kwargs)
+            if "Device.IP.Interface.1.IPv6Enable" in params:
+                self._device["Device"]["IP"]["Interface"]["1"]["IPv6Enable"] = leaf(
+                    params["Device.IP.Interface.1.IPv6Enable"]
+                )
+                self._device["Device"]["DHCPv6"]["Client"]["1"]["Enable"] = leaf(
+                    params["Device.DHCPv6.Client.1.Enable"]
+                )
+                self._device["Device"]["DHCPv6"]["Client"]["1"]["RequestPrefixes"] = (
+                    leaf(params["Device.DHCPv6.Client.1.RequestPrefixes"])
+                )
+                self._device["Device"]["RouterAdvertisement"]["InterfaceSettings"]["1"][
+                    "Enable"
+                ] = leaf(
+                    params["Device.RouterAdvertisement.InterfaceSettings.1.Enable"]
+                )
+            return result
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="sweep",
+        olt_adapter=_StubOltAdapter(present=True),
+        acs_client=_Ipv6Acs(device=device),
+    )
+
+    assert result.success is True
+    assert any(action.field == "acs_ipv6_enabled" for action in result.actions_applied)
+    observation = db_session.query(OntObservation).filter_by(ont_unit_id=ont.id).one()
+    assert observation.acs_data_model_root == "Device"
+    assert observation.acs_observed_ipv6_enabled is True
+    assert observation.acs_observed_dhcpv6_enabled is True
+    assert observation.acs_observed_dhcpv6_request_prefixes is True
+    assert observation.acs_observed_ra_enabled is True
+
+
 def test_wifi_password_change_on_synced_ont_pushes_once(
     db_session, ont, stub_desired, stub_ont_status
 ):
@@ -832,10 +906,19 @@ def test_verification_re_read_marks_out_of_sync_when_drift_remains(
     olt = _StubOltAdapter(present=True)
     acs = _StubAcsClient(device=_synced_acs_device(ont))
 
+    def _must_not_persist_unverified_intent(*args, **kwargs):
+        raise AssertionError("unverified desired state was persisted")
+
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core.apply_proposed_change",
+        _must_not_persist_unverified_intent,
+    )
+
     result = reconcile_ont(
         db_session,
         ont.id,
         mode="bootstrap",
+        proposed_change={"wifi_enabled": False},
         olt_adapter=olt,
         acs_client=acs,
     )
@@ -966,3 +1049,91 @@ def test_verification_re_read_marks_out_of_sync_when_acs_unreachable_post_apply(
     assert result.failure.reason == ReconcileFailureReason.ACS_UNREACHABLE
     assert "verification" in result.failure.message.lower()
     assert acs.list_calls == 2
+
+
+def test_tr069_profile_change_is_olt_only_and_persists_after_readback(
+    db_session, ont, stub_desired, monkeypatch
+):
+    from app.services.network.reconcile import AcsObservedFields, OltObservedFields
+    from app.services.network.reconcile.readers import ReadResult
+
+    reads = 0
+
+    def _profile_read(adapter, desired, *, deadline=None):
+        nonlocal reads
+        reads += 1
+        observed_profile = 2 if reads == 1 else desired.tr069_profile_id
+        return ReadResult(
+            success=True,
+            unreachable=False,
+            observed=OltObservedFields(
+                olt_present=True,
+                olt_match_state="match",
+                olt_run_state="online",
+                olt_distance_m=None,
+                olt_rx_dbm=None,
+                olt_tx_dbm=None,
+                olt_temperature_c=None,
+                olt_description=None,
+                olt_mgmt_ip=None,
+                olt_mgmt_vlan=None,
+                olt_line_profile_id=None,
+                olt_service_profile_id=None,
+                olt_service_ports=(),
+                olt_tr069_profile_id=observed_profile,
+            ),
+            error=None,
+        )
+
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core.read_olt_state", _profile_read
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core._resolve_acs_client",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("profile-only reconcile must not require ACS")
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core._cached_acs_observation",
+        lambda db, target: AcsObservedFields(
+            acs_present=True,
+            acs_last_inform_at=None,
+            acs_last_boot_at=None,
+            acs_last_bootstrap_at=None,
+            acs_observed_software_version="V5R020",
+            acs_observed_pppoe_username=None,
+            acs_observed_pppoe_enable=None,
+            acs_observed_wan_vlan=None,
+            acs_observed_wan_external_ip=None,
+            acs_observed_wan_connection_status=None,
+            acs_observed_nat_enabled=None,
+            acs_observed_dhcp_enabled=None,
+            acs_observed_ssid=None,
+            acs_observed_periodic_inform_interval_sec=None,
+            acs_observed_cr_username=None,
+            acs_observed_cr_username_set=None,
+            acs_observed_cr_password_set=None,
+            acs_observed_wan_wcd_index=None,
+            acs_observed_wan_instance_index=None,
+            acs_observed_wan_ppp_locations=(),
+        ),
+    )
+    adapter = _StubOltAdapter()
+
+    result = reconcile_ont(
+        db_session,
+        str(ont.id),
+        proposed_change={"tr069_profile_id": 5},
+        olt_adapter=adapter,
+    )
+
+    assert result.success is True
+    assert adapter.calls == ["bind_tr069_profile"]
+    assert reads == 2
+    db_session.refresh(ont)
+    assert ont.desired_tr069_profile_id == 5
+    observation = db_session.query(OntObservation).one()
+    assert observation.olt_tr069_profile_id == 5
+    assert observation.acs_present is True
+    assert observation.acs_observed_software_version == "V5R020"

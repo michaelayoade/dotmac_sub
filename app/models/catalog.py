@@ -48,6 +48,28 @@ class BillingCycle(enum.Enum):
     annual = "annual"
 
 
+def billing_cycle_noun(cycle: "BillingCycle | None") -> str:
+    """Human cadence noun for invoice line descriptions (e.g. 'quarterly')."""
+    return {
+        BillingCycle.daily: "daily",
+        BillingCycle.weekly: "weekly",
+        BillingCycle.monthly: "monthly",
+        BillingCycle.quarterly: "quarterly",
+        BillingCycle.annual: "annual",
+    }.get(cycle or BillingCycle.monthly, "monthly")
+
+
+def billing_cycle_suffix(cycle: "BillingCycle | None") -> str:
+    """Price-summary suffix for a cadence (e.g. '/qtr', '/yr')."""
+    return {
+        BillingCycle.daily: "/day",
+        BillingCycle.weekly: "/wk",
+        BillingCycle.monthly: "/mo",
+        BillingCycle.quarterly: "/qtr",
+        BillingCycle.annual: "/yr",
+    }.get(cycle or BillingCycle.monthly, "/mo")
+
+
 class ContractTerm(enum.Enum):
     month_to_month = "month_to_month"
     twelve_month = "twelve_month"
@@ -137,12 +159,13 @@ class AccessState(enum.Enum):
     """Network access state — single source of truth for what RADIUS does
     with a subscriber. See docs/radius_state_refactor/phase0_state_model.md.
 
-    Derived from ``SubscriptionStatus`` + ``Subscriber.captive_redirect_enabled``
+    Derived from ``SubscriptionStatus`` + persisted enforcement locks through
+    the canonical walled-garden policy
     via ``app.services.radius_access_state.derive_access_state``. Stored as
     a string column rather than a PG enum so future states (e.g.
     ``throttled``, ``trial_expired``) can be added by code change alone.
 
-    Maps to RADIUS groups (phase 1 of the refactor):
+    Maps to RADIUS groups during the access-profile migration:
       active     → dotmac-active     (normal customer)
       suspended  → dotmac-suspended  (hard block, Auth-Type := Reject)
       captive    → dotmac-captive    (soft block, captive portal)
@@ -756,6 +779,12 @@ class Subscription(Base):
     service_address_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("addresses.id")
     )
+    bundle_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("subscription_bundles.id"),
+        nullable=True,
+        index=True,
+    )
 
     # Provisioning - which NAS handles this subscription
     provisioning_nas_device_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -770,7 +799,7 @@ class Subscription(Base):
         Enum(SubscriptionStatus), default=SubscriptionStatus.pending
     )
     # access_state is the RADIUS-facing state, derived from `status` +
-    # subscriber.captive_redirect_enabled. Nullable until phase 5 backfill.
+    # canonical persisted access restriction. Nullable until its backfill completes.
     # See docs/radius_state_refactor/phase0_state_model.md.
     access_state: Mapped[str | None] = mapped_column(String(20))
     billing_mode: Mapped[BillingMode] = mapped_column(
@@ -779,6 +808,11 @@ class Subscription(Base):
     contract_term: Mapped[ContractTerm] = mapped_column(
         Enum(ContractTerm), default=ContractTerm.month_to_month
     )
+    # Contracted billing cadence owned by this subscription (SOT). Nullable:
+    # NULL => inherit the offer/version price cadence (fallback). New contracts
+    # captured from the sales order set this explicitly; existing rows are
+    # backfilled to their currently-resolved cadence by migration 310.
+    billing_cycle: Mapped[BillingCycle | None] = mapped_column(Enum(BillingCycle))
     start_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     end_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     next_billing_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -842,6 +876,33 @@ class Subscription(Base):
     quota_buckets = relationship("QuotaBucket", back_populates="subscription")
 
 
+class SubscriptionBundle(Base):
+    __tablename__ = "subscription_bundles"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    subscriber_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False, index=True
+    )
+    label: Mapped[str | None] = mapped_column(String(160))
+    anchor_subscription_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscriptions.id"), nullable=True
+    )
+    is_dedicated: Mapped[bool] = mapped_column(Boolean, default=False)
+    status: Mapped[str] = mapped_column(String(32), default="active")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+
 class SubscriptionAddOn(Base):
     __tablename__ = "subscription_add_ons"
 
@@ -857,9 +918,20 @@ class SubscriptionAddOn(Base):
     quantity: Mapped[int] = mapped_column(Integer, default=1)
     start_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     end_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    account_adjustment_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("account_adjustments.id", ondelete="RESTRICT"),
+        nullable=True,
+        unique=True,
+    )
+    purchase_preview_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    purchase_idempotency_key: Mapped[str | None] = mapped_column(String(120))
 
     subscription = relationship("Subscription", back_populates="add_ons")
     add_on = relationship("AddOn")
+    account_adjustment = relationship(
+        "AccountAdjustment", back_populates="subscription_add_on"
+    )
 
 
 class NasDevice(Base):
@@ -918,6 +990,9 @@ class NasDevice(Base):
     api_token: Mapped[str | None] = mapped_column(Text)
     api_url: Mapped[str | None] = mapped_column(String(500))
     api_verify_tls: Mapped[bool] = mapped_column(Boolean, default=False)
+    # RouterOS API port for the bandwidth poller (8728 plaintext / 8729 API-SSL).
+    # First-class column replacing the brittle ``mikrotik_api_port:NNNN`` tag.
+    mikrotik_api_port: Mapped[int | None] = mapped_column(Integer)
 
     # SNMP Configuration
     snmp_community: Mapped[str | None] = mapped_column(String(512))
@@ -1103,8 +1178,14 @@ class RadiusProfile(Base):
 
     attributes = relationship("RadiusAttribute", back_populates="profile")
     offer_links = relationship("OfferRadiusProfile", back_populates="profile")
+    # access_credentials now has TWO FKs to radius_profiles: the live
+    # radius_profile_id, and pre_throttle_radius_profile_id which remembers what a
+    # collections throttle replaced. Name the join column explicitly so this
+    # relationship keeps meaning "credentials currently ON this profile".
     access_credentials = relationship(
-        "AccessCredential", back_populates="radius_profile"
+        "AccessCredential",
+        back_populates="radius_profile",
+        foreign_keys="AccessCredential.radius_profile_id",
     )
     subscriptions = relationship("Subscription", back_populates="radius_profile")
 
@@ -1154,12 +1235,26 @@ class AccessCredential(Base):
     subscriber_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
     )
+    subscription_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("subscriptions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     username: Mapped[str] = mapped_column(String(120), nullable=False)
     secret_hash: Mapped[str | None] = mapped_column(String(512))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     last_auth_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     radius_profile_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("radius_profiles.id")
+    )
+    # The profile this credential carried before a collections throttle replaced
+    # it. Persisted because the throttle is a TEMPORARY override that has to be
+    # undone exactly, and the customer's real speed is not otherwise recoverable:
+    # the offer's profile is only a guess, and an admin credential-level override
+    # would be silently discarded by it. NULL when the credential is not throttled.
+    pre_throttle_radius_profile_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("radius_profiles.id"), nullable=True
     )
     # IPoE/DHCP Option 82 relay agent fields
     circuit_id: Mapped[str | None] = mapped_column(String(255))
@@ -1179,7 +1274,12 @@ class AccessCredential(Base):
     )
 
     subscriber = relationship("Subscriber", back_populates="access_credentials")
-    radius_profile = relationship("RadiusProfile", back_populates="access_credentials")
+    subscription = relationship("Subscription")
+    radius_profile = relationship(
+        "RadiusProfile",
+        back_populates="access_credentials",
+        foreign_keys=[radius_profile_id],
+    )
     radius_users = relationship("RadiusUser", back_populates="access_credential")
 
 

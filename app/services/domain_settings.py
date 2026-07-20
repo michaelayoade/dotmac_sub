@@ -2,6 +2,7 @@ import builtins
 from typing import Any
 
 from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import DomainSetting, SettingDomain
@@ -70,6 +71,20 @@ class DomainSettings(ListResponseMixin):
         bind = db.get_bind()
         return getattr(getattr(bind, "dialect", None), "name", None) == "sqlite"
 
+    @staticmethod
+    def _validate_relationship_change(
+        db: Session, domain: SettingDomain, key: str, value: object
+    ) -> None:
+        from app.services.control_relationships import (
+            ControlRelationshipError,
+            validate_setting_change,
+        )
+
+        try:
+            validate_setting_change(db, domain, key, value)
+        except ControlRelationshipError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     def _prepare_create_payload(
         self, db: Session, key: str, payload: DomainSettingCreate
     ) -> DomainSettingCreate:
@@ -86,13 +101,27 @@ class DomainSettings(ListResponseMixin):
         return DomainSettingCreate(**data)
 
     def _prepare_update_payload(
-        self, db: Session, key: str, payload: DomainSettingUpdate
+        self,
+        db: Session,
+        key: str,
+        payload: DomainSettingUpdate,
+        *,
+        existing_is_secret: bool = False,
     ) -> DomainSettingUpdate:
         data = payload.model_dump(exclude_unset=True)
+        effective_is_secret = bool(data.get("is_secret", existing_is_secret))
+        if self.domain:
+            from app.services.settings_spec import get_spec
+
+            spec = get_spec(self.domain, key)
+            if spec and spec.is_secret:
+                effective_is_secret = True
+        if effective_is_secret:
+            data["is_secret"] = True
         resolved = self._write_secret_ref(
             key=key,
             value_text=data.get("value_text"),
-            is_secret=bool(data.get("is_secret")),
+            is_secret=effective_is_secret,
             allow_plain_fallback=self._allow_plain_secret_fallback(db),
         )
         if resolved is not None:
@@ -112,6 +141,14 @@ class DomainSettings(ListResponseMixin):
         payload = self._prepare_create_payload(db, payload.key, payload)
         data = payload.model_dump()
         data["domain"] = self._resolve_domain(payload.domain)
+        self._validate_relationship_change(
+            db,
+            data["domain"],
+            payload.key,
+            payload.value_json
+            if payload.value_json is not None
+            else payload.value_text,
+        )
         setting = DomainSetting(**data)
         db.add(setting)
         db.commit()
@@ -156,10 +193,22 @@ class DomainSettings(ListResponseMixin):
         setting = db.get(DomainSetting, coerce_uuid(setting_id))
         if not setting or (self.domain and setting.domain != self.domain):
             raise HTTPException(status_code=404, detail="Setting not found")
-        payload = self._prepare_update_payload(db, setting.key, payload)
+        payload = self._prepare_update_payload(
+            db,
+            setting.key,
+            payload,
+            existing_is_secret=setting.is_secret,
+        )
         data = payload.model_dump(exclude_unset=True)
         if "domain" in data and data["domain"] != setting.domain:
             raise HTTPException(status_code=400, detail="Setting domain mismatch")
+        pending_value = data.get(
+            "value_json",
+            data.get("value_text", setting.value_json or setting.value_text),
+        )
+        self._validate_relationship_change(
+            db, setting.domain, setting.key, pending_value
+        )
         for key, value in data.items():
             setattr(setting, key, value)
         db.commit()
@@ -184,17 +233,27 @@ class DomainSettings(ListResponseMixin):
     def upsert_by_key(self, db: Session, key: str, payload: DomainSettingUpdate):
         if not self.domain:
             raise HTTPException(status_code=400, detail="Setting domain is required")
-        payload = self._prepare_update_payload(db, key, payload)
         setting = (
             db.query(DomainSetting)
             .filter(DomainSetting.domain == self.domain)
             .filter(DomainSetting.key == key)
             .first()
         )
+        payload = self._prepare_update_payload(
+            db,
+            key,
+            payload,
+            existing_is_secret=bool(setting and setting.is_secret),
+        )
         if setting:
             data = payload.model_dump(exclude_unset=True)
             data.pop("domain", None)
             data.pop("key", None)
+            pending_value = data.get(
+                "value_json",
+                data.get("value_text", setting.value_json or setting.value_text),
+            )
+            self._validate_relationship_change(db, self.domain, key, pending_value)
             for field, value in data.items():
                 setattr(setting, field, value)
             db.commit()
@@ -250,7 +309,19 @@ class DomainSettings(ListResponseMixin):
             is_secret=is_secret,
             is_active=True,
         )
-        return self.create(db, payload)
+        try:
+            return self.create(db, payload)
+        except IntegrityError:
+            db.rollback()
+            raced = (
+                db.query(DomainSetting)
+                .filter(DomainSetting.domain == self.domain)
+                .filter(DomainSetting.key == key)
+                .first()
+            )
+            if raced:
+                return raced
+            raise
 
     def delete(self, db: Session, setting_id: str):
         setting = db.get(DomainSetting, setting_id)
@@ -273,7 +344,6 @@ network_settings = DomainSettings(SettingDomain.network)
 network_monitoring_settings = DomainSettings(SettingDomain.network_monitoring)
 provisioning_settings = DomainSettings(SettingDomain.provisioning)
 geocoding_settings = DomainSettings(SettingDomain.geocoding)
-vas_settings = DomainSettings(SettingDomain.vas)
 usage_settings = DomainSettings(SettingDomain.usage)
 radius_settings = DomainSettings(SettingDomain.radius)
 notification_settings = DomainSettings(SettingDomain.notification)
@@ -290,3 +360,4 @@ subscription_engine_settings = DomainSettings(SettingDomain.subscription_engine)
 gis_settings = DomainSettings(SettingDomain.gis)
 scheduler_settings = DomainSettings(SettingDomain.scheduler)
 modules_settings = DomainSettings(SettingDomain.modules)
+integration_settings = DomainSettings(SettingDomain.integration)

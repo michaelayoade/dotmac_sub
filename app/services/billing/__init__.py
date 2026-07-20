@@ -26,7 +26,15 @@ from app.services.billing._common import (
     _validate_payment_linkages,
     _validate_payment_provider,
 )
+from app.services.billing.adjustments import AccountAdjustments
 from app.services.billing.billing_accounts import BillingAccounts
+from app.services.billing.consolidated_payments import (
+    ConsolidatedCreditAllocations,
+    ConsolidatedPaymentRefunds,
+    ConsolidatedPaymentReturnReconciliations,
+    ConsolidatedPaymentReversals,
+    ConsolidatedPaymentSettlements,
+)
 from app.services.billing.credit_notes import (
     CreditNoteApplications,
     CreditNoteLines,
@@ -37,11 +45,14 @@ from app.services.billing.ledger import LedgerEntries
 from app.services.billing.payments import (
     BankAccounts,
     CollectionAccounts,
+    PaymentAllocationReconciliationExceptions,
     PaymentAllocations,
     PaymentChannelAccounts,
     PaymentChannels,
     PaymentMethods,
+    PaymentReversals,
     Payments,
+    Refunds,
 )
 from app.services.billing.providers import PaymentProviderEvents, PaymentProviders
 from app.services.billing.reporting import BillingReporting, billing_reporting
@@ -57,7 +68,12 @@ credit_note_applications = CreditNoteApplications()
 payment_methods = PaymentMethods()
 bank_accounts = BankAccounts()
 payments = Payments()
+refunds = Refunds()
+reversals = PaymentReversals()
 payment_allocations = PaymentAllocations()
+payment_allocation_reconciliation_exceptions = (
+    PaymentAllocationReconciliationExceptions()
+)
 payment_channels = PaymentChannels()
 collection_accounts = CollectionAccounts()
 payment_channel_accounts = PaymentChannelAccounts()
@@ -67,19 +83,34 @@ billing_runs = BillingRuns()
 payment_providers = PaymentProviders()
 payment_provider_events = PaymentProviderEvents()
 billing_accounts = BillingAccounts()
+consolidated_payment_settlements = ConsolidatedPaymentSettlements()
+consolidated_credit_allocations = ConsolidatedCreditAllocations()
+consolidated_payment_refunds = ConsolidatedPaymentRefunds()
+consolidated_payment_reversals = ConsolidatedPaymentReversals()
+consolidated_payment_return_reconciliations = ConsolidatedPaymentReturnReconciliations()
+account_adjustments = AccountAdjustments()
 
 __all__ = [
     # Classes
     "BillingAccounts",
+    "ConsolidatedPaymentSettlements",
+    "ConsolidatedCreditAllocations",
+    "ConsolidatedPaymentRefunds",
+    "ConsolidatedPaymentReturnReconciliations",
+    "ConsolidatedPaymentReversals",
+    "AccountAdjustments",
     "Invoices",
     "InvoiceLines",
     "CreditNotes",
     "CreditNoteLines",
     "CreditNoteApplications",
     "Payments",
+    "PaymentReversals",
+    "Refunds",
     "PaymentMethods",
     "BankAccounts",
     "PaymentAllocations",
+    "PaymentAllocationReconciliationExceptions",
     "PaymentChannels",
     "CollectionAccounts",
     "PaymentChannelAccounts",
@@ -98,7 +129,10 @@ __all__ = [
     "payment_methods",
     "bank_accounts",
     "payments",
+    "refunds",
+    "reversals",
     "payment_allocations",
+    "payment_allocation_reconciliation_exceptions",
     "payment_channels",
     "collection_accounts",
     "payment_channel_accounts",
@@ -108,6 +142,12 @@ __all__ = [
     "payment_providers",
     "payment_provider_events",
     "billing_accounts",
+    "consolidated_payment_settlements",
+    "consolidated_credit_allocations",
+    "consolidated_payment_refunds",
+    "consolidated_payment_return_reconciliations",
+    "consolidated_payment_reversals",
+    "account_adjustments",
     "billing_reporting",
     # Helper functions (for billing_automation compatibility)
     "_validate_account",

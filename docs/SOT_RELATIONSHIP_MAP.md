@@ -1,0 +1,2691 @@
+# Single Source of Truth Relationship Map
+
+This document names the service layers that should own decisions. Web/API
+routes and Celery tasks should be thin wrappers around these services.
+
+The executable registry is `app/services/sot_relationships.py`. When a domain
+is harmonised, add or update its service boundary there and cover it with tests
+before migrating more callers.
+
+## UI Projection Boundary
+
+The approved cross-Dotmac presentation contract is
+`docs/UI_INFORMATION_AND_ACTION_STANDARD.md`.
+
+1. Domain read/context services own displayed facts, status meaning,
+   provenance, freshness, and business action hints.
+2. Domain command/transition services own action eligibility and execution.
+3. RBAC owns authorization. Every UI surface is granularly permission-gated:
+   each list read, each bulk action, and each form/command action is gated by
+   its own `domain:resource:action` permission projected against the principal.
+   No coarse permission may span read and write (e.g. a single
+   `operations:dispatch` covering list, create, update, and assign is a
+   violation — split it into `:read`/`:write`/`:assign`). Event/timeline
+   services own official history.
+   During the reports permission migration, persisted `reports:billing` and
+   `reports:network` API-key scopes are compatibility aliases for `:read` only;
+   they never authorize `:export`. Database grants are migrated to the granular
+   keys and the coarse permission rows are retired.
+4. UI page contracts own relevance, ordering, progressive disclosure,
+   responsive depth, and interaction shape.
+5. Routes, templates, HTMX handlers, and mobile clients render the contract and
+   submit commands; they do not derive business state, totals, or eligibility.
+6. `ui.projection_contracts` owns the transport-neutral `StateValue`, `Kpi`, and
+   `Action` shapes. Owners use them to distinguish unknown/stale/unavailable
+   values, bind every KPI to its exact cohort, and separate action tone from
+   eligibility and confirmation requirements.
+
+Rule: the UI is a projection boundary, not a new business source of truth. Web,
+API, exports, and mobile surfaces may present different depths for their task,
+but equivalent state and actions resolve through the same backend owners.
+
+## Domain Order
+
+1. `party_identity`
+2. `customer_context`
+3. `financial_access`
+4. `network`
+5. `subscriber_sessions`
+6. `application_sessions`
+7. `secrets_credentials`
+8. `notifications_communications`
+9. `events_webhooks`
+10. `runtime_infrastructure`
+11. `observability`
+12. `support_operations`
+13. `ai_advisory`
+14. `provisioning_operations`
+15. `feature_control_plane`
+16. `authorization_control_plane`
+17. `scheduler_control_plane`
+18. `network_access_control_plane`
+19. `service_intent_control_plane`
+20. `integration_control_plane`
+21. `ui_list_projection`
+22. `ui_bulk_actions`
+23. `ui_display_formatting`
+24. `ui_action_forms`
+25. `ui_semantic_presentation`
+26. `vpn_remote_access`
+27. `geospatial`
+28. `sales_referrals`
+
+Rule: each change should finish one coherent domain boundary: define the owner
+service, migrate the highest-risk callers, and add focused tests. Avoid broad
+mechanical rewrites that obscure business behavior.
+
+Collaboration-quality documentation is part of the source-of-truth contract.
+Current architecture documents, migration descriptions, code comments, and
+operator guidance must name the owner, affected capability, compatibility
+boundary, verification gate, and current state in terms another team can act
+on. Do not rely on unexplained internal sequence labels, pull-request numbers,
+or shorthand such as “phase N” or “slice N” as the explanation. Historical
+plans may preserve chronology, but any rule or contract promoted from them must
+be restated in durable domain language here or in the owning design document.
+
+Architecture liveness is checked in both directions. Every declared owner must
+have a real application/operator caller, and every new service module with a
+persistence-like mutation must name a declared owner. The 279 existing
+undeclared writer-like modules are an explicit shrink-only migration baseline,
+not approved parallel writers; resolving an owner or removing its write requires
+deleting the baseline entry. Adding an entry requires an explicit ownership
+review.
+
+The reverse-liveness burn-down names `observability.audit_log` as the canonical
+audit-event writer, `control.settings_bootstrap` as the startup
+default-materialization owner, and `secrets.settings_migration` as the live
+OpenBao settings migration boundary. Bootstrap writes defaults through
+`control.domain_settings`; it does not create a second runtime settings writer.
+
+## Party Identity, Roles, and Relationships
+
+The complete approved contract is `docs/PARTY_ROLE_RELATIONSHIP_SOT.md`.
+The read-only cleanup contract is `docs/PARTY_IDENTITY_CLEANUP_AUDIT.md`.
+
+`party.registry` is the one native owner for this coherent identity boundary:
+
+1. person/organization identity, data classification, quarantine, merge policy,
+   and external-reference provenance;
+2. concurrent role lifecycle and the controlled distinction between reseller,
+   vendor, partner, customer/subscriber, staff, and agent;
+3. directional descriptive relationships between parties, which never grant
+   authorization;
+4. a person's explicit organization context and bounded access scope, with
+   authorization still resolved through `auth.rbac` and
+   `auth.permission_gate`; and
+5. normalized reachability, provider/account scope, immutable social subject
+   identity, verification, and consent evidence.
+
+Rule: one real-world person or organization has one canonical Party and may
+hold several independent roles. A reseller is a specific commercial channel
+role; partner is an explicitly typed collaboration agreement and is not a
+reseller alias or permission shortcut. Subscriber, reseller, vendor, staff,
+contact, and login records are domain profiles, relationships, memberships, or
+principals linked to Party—not separate identities. CRM identifiers are import
+provenance only and CRM has no runtime party/lifecycle authority.
+
+Migrations 349 through 355 are additive foundations. Migration 350 gives
+Subscriber a nullable, evidence-bound canonical Party link owned by
+`party.registry`; one
+Party may own several accounts, and an existing link cannot be repointed by the
+binding command. The link assigns no role or permission and no row is
+backfilled. Existing subscriber, organization, reseller, vendor, FieldVendor,
+Team Inbox, and authentication reads remain unchanged until their individual
+backfills, parity gates, cutovers, and compatibility-path retirements. Callers
+must not infer that the presence of the new tables or link means a domain has
+cut over.
+
+`party.identity_audit` is a read-only resolver over native Sub facts. It owns
+subscriber cleanup cohort classification, duplicate-candidate evidence groups,
+and the private UUID-only worklist contract. It never writes a source model,
+calls CRM, or treats any evidence level as permission to merge. Applying a
+quarantine, Party backfill, merge, or repoint remains a separate reviewed slice.
+Account-level billing blocks remain access-enforcement facts: they do not demote
+an active subscription or remove the subscriber lifecycle cohort. The audit
+observes subscription lifecycle and account status but owns neither.
+
+`party.identity_adjudication` owns the reviewed decision contract and PII-free
+Party backfill dry-run plan. Every decision is bound to the current audit digest
+and subscriber-row fingerprint. Medium/high duplicate groups must be resolved
+completely before any member enters a plan; multiple accounts share one planned
+Party only through an explicit common Party UUID. The planner has no database
+writer or apply mode, never infers Person versus Organization, and never turns
+duplicate evidence into automatic merge authority. `party.registry` remains the
+record writer.
+
+`party.identity_backfill_executor` owns the separately approved execution gate
+and PII-free receipt, while delegating predetermined Party creation and binding
+to `party.registry`. It requires the exact decision and plan file hashes, audit
+and plan digests, an expiring approval with exact count limits, typed digest
+confirmation, and a PostgreSQL `SERIALIZABLE, READ WRITE` transaction. Selected
+Subscriber rows are locked and any stale fact, UUID collision, partial state,
+repoint, or receipt drift fails closed. The durable receipt manifest makes an
+exact retry verifiable and preserves later compensation evidence. The executor
+cannot merge identities, assign roles, copy contacts, or change account,
+subscription, billing, access, or authorization state. Migration 351 creates
+only the receipt schema; it performs no backfill and authorizes no production
+execution.
+
+Migration 352 adds evidence-bound, one-to-one Party links to `Organization`,
+`Reseller`, `Vendor`, and `FieldVendor`. `party.registry` is their only binding
+writer. Profile binding requires an active/quarantined Organization Party, is
+idempotent only for the exact existing target, preserves original evidence,
+and refuses repoints. It assigns no role or permission. The native Vendor and
+its string-bridged FieldVendor auth projection must bind together to the same
+Party; missing, partial, conflicting, or duplicate projections fail closed.
+
+`Organization.account_type`, Reseller/Vendor/FieldVendor `is_active`, and the
+FieldVendor string UUID remain compatibility state until their runtime callers
+pass a documented parity and cutover gate. They are not converted into Party
+roles by migration 352. `party.organization_profile_audit` reports aggregate
+binding, role-coverage, and vendor-twin debt without identity values or writes.
+The complete migration boundary is
+`docs/PARTY_ORGANIZATION_PROFILE_BINDING.md`.
+
+Migration 353 adds reviewed Person Party links to `SystemUser` and
+`ResellerUser`, and reviewed canonical `PartyMembership` links to
+`ResellerUser`, `OrganizationMembership`, and `FieldVendorUser`.
+`party.registry` is the only binding writer. A reseller principal must bind to
+one `reseller_admin` membership whose Person and Organization agree with its
+reviewed reseller profile. A FieldVendorUser binds to one `vendor_user`
+membership; its SystemUser must already identify that same Person and both
+vendor profiles must already identify the same Organization.
+OrganizationMembership role and Organization must agree with the canonical
+membership. The unused native VendorUser is not wired into the new boundary.
+
+Migration 353 does not create or activate a PartyMembership, infer identity
+from names/email/legacy UUIDs, assign Party roles, change `is_active`, alter
+credentials/tokens/RBAC, or change a login/read path. Compatibility state stays
+authoritative until an explicit parity cutover. The read-only
+`party.principal_context_audit` reports only aggregate schema, binding,
+membership-context, and FieldVendorUser context debt. The complete boundary is
+`docs/PARTY_PRINCIPAL_CONTEXT_BINDING.md`.
+
+Migration 354 adds an evidence-bound Person Party link to `SubscriberContact`,
+reviewed projection tables for its descriptive relationship and individual
+legacy contact fields, and an evidence-bound canonical `PartyContactPoint`
+projection on `InboxContactLink`. `party.registry` is the only writer for the
+SubscriberContact Person, relationship, and source-field projections.
+`communications.team_inbox`, through `team_inbox_contact_links`, remains the
+only writer for Inbox routing and for the Inbox contact-point projection.
+
+The migration is schema-only. It does not infer a person from an email, phone,
+name, social handle, or shared account; create a Party, relationship, or contact
+point; copy verification or consent; grant access from a descriptive
+relationship; change `SubscriberContact.is_authorized`, notification flags, an
+Inbox target/active route, subscription state, billing block, or any current
+read path. Social projections require provider, connected-account, and
+immutable provider-subject scope. Unsupported `other_social`, `chat_widget`,
+and `note` values remain explicit audit debt rather than guessed identities.
+
+`party.contact_inbox_audit` reports only aggregate schema, binding,
+relationship, contact-point, verification/consent coverage, and Inbox
+projection debt. Its operator runs in a PostgreSQL read-only, repeatable-read
+transaction. Backfill, shadow parity, reader cutover, and compatibility-path
+retirement remain separate approvals. The complete boundary and cutover gates
+are `docs/PARTY_CONTACT_INBOX_PROJECTION.md`.
+
+Migration 355 establishes the additive customer-lifecycle boundary. A Lead can
+identify a reviewed Party before any Subscriber account exists, and
+`sales.lead_lifecycle` owns its immutable structured origin and later reviewed
+account attachment. Native Sub communication campaign UUIDs remain owned by
+`communications.campaigns`; Meta/Google and other provider campaign IDs remain
+external origin provenance and are never coerced into those UUIDs.
+
+`sales.service`, `sales.orders`, `access.subscription_lifecycle`, and
+`support.ticket_lifecycle` retain their domain state. Their links are guarded:
+Quote Subscriber must match Lead Party, Sales Order Subscriber must match
+Quote, and any Ticket customer links must match its Lead Party. A Lead-only
+Ticket remains valid for pre-sales support. Billing blocks and Subscription
+status are observed by the PII-free `customer.lifecycle_audit`, never decided
+or changed by it. CRM and `dotmac_mkt` have no runtime customer-lifecycle or
+person-level attribution authority. The complete boundary and cutover gates
+are `docs/PARTY_CUSTOMER_LIFECYCLE.md`.
+
+Migration 356 applies that boundary to Refer & Earn. `referrals.program` owns
+capture, exact-Party account conversion, qualification, and reward decisions.
+It asks `party.registry` to create quarantined identity/reachability facts and
+`sales.lead_lifecycle` to create the Lead and immutable referral origin. New
+capture creates no Subscriber and duplicates no contact PII into Referral
+metadata. Account attachment requires exact reviewed Party equality; contact
+matching cannot qualify or relink a referral. The detailed contract is
+`docs/PARTY_FIRST_REFERRAL_CAPTURE.md`.
+
+Referral customer reads/writes are permanently native. The prior referral
+read/write controls, CRM referral mutation, mirror write-through, and scheduled
+outbound reconciliation are retired. The legacy mirror is read-only historical
+compatibility evidence, is not an active SOT owner, and cannot feed native
+referral decisions. The signed legacy webhook route and old Celery names are
+no-op tombstones that absorb queued traffic without database or network work.
+
+Referral signup and operator account adjudication resolve through
+`referrals.account_conversion`. Its stable context is the canonical
+Referral/Party/Lead UUID triple already stored by migration 356, so account
+conversion adds no parallel table or migration. The coordinator locks and
+revalidates that context, asks `customer.accounts` to prepare a Subscriber,
+then delegates Party binding, Lead attachment, and Referral attachment to their
+existing owners before one commit. A stale context, different Party/account,
+or self-referral is refused; contact values never select identity. The detailed
+contract is `docs/REFERRAL_ACCOUNT_CONVERSION.md`.
+
+Public capture carries that context forward as a 24-hour signed, PII-free
+capability. `auth.token_signing` owns configured signing-key/algorithm
+resolution and the cryptographic envelope; `referrals.account_conversion` owns
+purpose, claims, lifetime, and canonical revalidation. Public signup exposes no
+lifecycle, reseller, billing, verification, numbering, or permission controls.
+It also cannot set marketing consent outside the communication-eligibility
+owner. The token proves capture continuity only and does not verify identity
+or authorize contact matching.
+
+After account creation, `auth.customer_credential_enrollment` owns the separate
+credential handoff. It creates no random or placeholder password. It sends a
+typed, non-secret communication intent; `communications.ephemeral_actions`
+revalidates the canonical context and mints the 24-hour capability only when
+the delivery worker is ready to call the email transport. The rendered bearer
+exists only in worker memory and is never projected back into the intent,
+Notification, audit, delivery error, or log. The local `UserCredential` is
+created only when the recipient chooses a password. Successful redemption and
+`Subscriber.email_verified` are one transaction and make the capability
+single-use through canonical credential state. They do not verify a Party
+contact point, activate or merge the quarantined Party, or change account,
+subscription, billing-block, access, consent, role, or permission state. The
+detailed security and delivery boundary is
+`docs/REFERRAL_CREDENTIAL_ENROLLMENT.md`.
+
+## Financial and Access
+
+1. `financial.ledger` owns the append-only record lifecycle and reversal
+   invariant. Domain owners decide why money moves.
+2. `financial.payments`, `financial.consolidated_payments`,
+   `financial.invoices`, and `financial.credit_notes` own their scoped document
+   lifecycles, owner-produced previews, and the ledger postings those
+   transitions require. Invoice read models expose payment, credit-note, and
+   remaining-receivable amounts as distinct fields.
+3. `financial.tax_configuration` owns configurable tax-rate records and their
+   active lifecycle. Inclusive, exclusive, or exempt treatment belongs to the
+   invoice/credit-note line, not to a second tax-rate vocabulary.
+4. `financial.payment_proofs` owns proof review and creation of the source WHT
+   receivable when a reseller pays net cash against a gross obligation.
+5. `financial.tax_accounting` owns tax-report meaning, periods, currency
+   separation, issued-output-tax and credit-note adjustment projection, net
+   output-tax liability, WHT-receivable projection and lifecycle, its immutable
+   official transition timeline, and the bounded tax-fact feeds consumed by
+   Dotmac ERP. Issued output tax less issued credit-note tax adjustments is the
+   source-document liability; it is not labelled as collected cash. Pending and
+   certified WHT remain outstanding receivables; reclaimed and written-off
+   records remain visible without inflating the outstanding amount. Dotmac ERP
+   exclusively owns TaxCode account mappings, balanced journals, tax
+   transactions, and financial statements. Sub has no tax posting or account-
+   mapping table.
+6. The VAS product is retired. Its database tables are immutable financial
+   archives, not live balances or action owners. Revision
+   `300_retire_vas_runtime` blocks cutover until wallet liabilities are zero and
+   provider workflows are terminal; no route, task, setting, or service may
+   resume writes to those tables. The cutover and fallback contract is
+   `docs/designs/VAS_RETIREMENT.md`.
+7. Customer financial position owns read-side financial summaries, including
+   the bounded bulk projection used by cohort monitoring. It exposes invoice
+   receivables and prepaid service funding as separate values; it does not net
+   them into a generic balance or absorb payment lifecycle or service-access
+   state. Prepaid funding delegates to
+   `financial.prepaid_funding_reconstruction`: one reviewed opening position at
+   the final authority-cutover timestamp plus canonical native events strictly
+   after that timestamp. There is no Splynx/legacy fallback or authority toggle.
+   The opening-position manifest covers the exact funding cohort and is
+   Ed25519 sealed against an OpenBao-owned public trust reference before
+   materialization. Its default is blocker-free. An explicitly approved partial
+   cutover binds verified rows and every quarantined account/reason under the
+   same signature; quarantined accounts receive neither a guessed balance nor a
+   money-based access consequence.
+   A pre-cutover account without an approved opening balance fails closed; an
+   account created after cutover starts at zero and accumulates native events.
+   Customer statements and scalar funding previews use that reviewed position
+   as their opening event. A native fact crosses that boundary when its
+   economic timestamp or its Sub `created_at` is later, so late-entered,
+   backdated money is not hidden by the opening position. They never replay the
+   archived mirror or older duplicate projections.
+   Portal outstanding-balance views consume its collection-blocking
+   value; a capped invoice display list never caps or redefines the amount.
+   Billing reporting applies the same collectible/non-proforma boundary and
+   derives settled value from invoice money, not a status label. The account
+   balance KPI is collectible AR in one declared currency, never `min_balance`.
+   Bulk callers use the same owner instead of reconstructing another balance
+   or looping the single-customer ledger reader. Its customer billing headline
+   projection is one complete, explicit-currency cohort: total billed excludes
+   draft, void, pro-forma, inactive, and other-currency rows; outstanding and
+   overdue apply the same currency and non-pro-forma boundary. The portal route
+   and template neither sum invoices nor select a currency.
+8. `financial.access_resolution` owns financial suspension/restoration
+   eligibility. For prepaid service, both directions compare the customer
+   financial position with the single `financial.prepaid_threshold` in the
+   configured `billing.prepaid_enforcement_currency`; nominal amounts in
+   different currencies are never compared. The existence or size of one
+   payment is never itself permission to restore.
+9. `financial.prepaid_enforcement` owns the prepaid candidate cohort and the
+   warn/suspend/restore plan consumed by both dry-run and execution. It consumes
+   the funding decision from `financial.access_resolution`; it does not create
+   another balance or threshold rule. Migration first materializes a named,
+   timestamped, reviewed funding-cohort opening position through
+   `financial.prepaid_funding_reconstruction` (for example, from the Splynx
+   cutover position plus proven native events). Splynx exports and bank
+   statements may close migration evidence, but their rows and narrations are
+   never runtime funding. The enforcement owner still applies billing
+   profile validity, configured grace, activation time, windows, shields,
+   health, and lifecycle policy, including selection of the candidate cohort.
+   Activation does not reset an older low-balance timer. A resolved zero-day
+   grace policy is actionable on the first eligible sweep; an explicit nonzero
+   account or policy-set grace remains authoritative. Supplied snapshots are
+   complete-or-error by default. A partial cutover must cryptographically
+   partition the exact funding cohort into materialized and quarantined IDs and
+   never fill either set from a different balance source. The broader repair
+   cohort may clear stale prepaid timers/locks on non-prepaid or service-less
+   accounts without creating a funding baseline.
+   A reviewed never-paid decision may resolve only an exact hash-bound
+   `source_service_without_paid_through_period` cohort: it preserves the source
+   opening balance, makes the service due immediately, and is bound into the
+   signed artifact. Exact-set equality is not evidence that the reason is true:
+   the final source service must also have no charge, discount, correction, or
+   other service-linked period transaction. Any such evidence gets a separate
+   blocker and cannot consume the never-paid disposition. Account-level payment
+   receipts remain in opening funding but do not prove a particular service
+   period. The disposition is not a generic blocker override.
+   After authority cutover, an affordable reconstructed service-cycle charge
+   must have an active `ServiceEntitlement` for the same subscription and
+   billing-period start, linked either to a paid `financial.invoices` line or
+   an exact customer-position wallet debit. Missing or amount-mismatched funding
+   evidence blocks reconstruction; the reconstruction owner never substitutes
+   an undocumented charge.
+   `financial.prepaid_service_renewals` owns the non-payment-triggered case:
+   when reviewed funding already exists as a monthly period becomes due, it
+   previews against the verified position, posts one idempotent service debit,
+   links one active entitlement, and advances the exact subscription period.
+   It requires the positive contracted `Subscription.unit_price` and fails
+   closed when that evidence is absent; current catalog price is not authority
+   for an already-contracted prepaid service.
+   The daily adapter is control-gated and refuses anchors more than two days
+   stale; historical cycles require a reviewed hash-bound reconciliation plan.
+10. `financial.billing_reporting` (`app/services/billing/reporting.py`) owns
+   every money figure the admin reports and overview render: overview and
+   payments/collections summaries, AR aging and outstanding receivables,
+   revenue by offer/service type, statements, subscription movement, and the
+   canonical bases decided 2026-07-16 — figures labelled "Revenue" use the
+   invoice settled-value basis, the payments basis is labelled Collections,
+   and recurring revenue uses the MRR-countable basis. Report/web layers
+   compose these reads and own presentation only.
+11. `financial.prepaid_enforcement_readiness` owns the activation prerequisite.
+   After the signed funding-cohort opening position is materialized, it records one
+   fresh plan from Sub's live currency-bound funding owner for the exact
+   owner-selected cohort. It accepts no alternate funding input. Before the
+   first sweep seals activation, any cohort, policy, live-funding decision, or
+   active reconstruction-evidence change invalidates readiness. The
+   feature-control writer and runtime adverse path fail closed without current
+   evidence bound to the configured activation and currency. The readiness
+   record is evidence, not money: after activation,
+   every suspend and restore resolves the live Sub ledger again. Bank statements
+   may close missing source evidence through normal reconciliation, but never
+   become a parallel runtime balance. Live enforcement consumes only the
+   reviewed opening balance plus native post-cutover events.
+   Dry-run, readiness, and execution therefore consume the same funding owner.
+   `collections.prepaid_activation_max_grace_days` is the activation-cohort
+   policy gate; it is configured as zero for this cutover, so readiness cannot
+   be recorded while an underfunded candidate resolves to a fresh grace period.
+12. `financial.prepaid_plan_change` owns the immediate prepaid plan-change quote,
+   affordability decision, confirmation fingerprint, and idempotent financial
+   adjustment. It binds the human preview to a durable change request, locks the
+   account and recomputes at write time, then records the exact adjustment or
+   credit-note and ledger transaction on that request. Portal, admin, API, and
+   change-request application paths do not post their own plan-change debit.
+   Debits delegate to `financial.account_adjustments`; credits delegate to
+   `financial.credit_notes`. Immediate admin bulk changes are gated until a
+   batch contract can preview and confirm every subscription separately;
+   next-cycle bulk scheduling produces no immediate financial transaction.
+13. `financial.account_adjustments` owns debit eligibility, preview, locked
+   confirmation, idempotency, actor audit, exact ledger evidence, and previewed
+   append-only reversal. It never issues customer credits and never decides
+   service-access state.
+14. `financial.addon_purchases` owns customer add-on price, subscription-state,
+   and entitlement confirmation. A paid add-on delegates one exact debit to
+   `financial.account_adjustments` and stores the structural entitlement-to-
+   adjustment link; a free add-on explicitly produces no ledger transaction.
+15. Dunning owns postpaid enforcement; prepaid enforcement owns prepaid access.
+   Both submit owner-produced previews to `financial.dunning`'s shared
+   financial-access consequence confirmation. It locks and rechecks billing
+   profile validity, payment-arrangement/proof/extension shields, canonical
+   receivables or prepaid funding, and billing enforcement health immediately
+   before acting. `access.subscription_lifecycle` is the sole writer of
+   enforcement locks and subscription/account access status.
+16. `financial.payment_arrangements` owns arrangement eligibility, lifecycle,
+   installment schedule, payment application, and active-arrangement shield
+   state. Dunning consumes the shield; it does not reimplement arrangement
+   eligibility, and an arrangement does not rewrite receivables or access.
+17. `financial.billing_health` owns monitoring snapshots and anomaly
+    classification. Health signals are observations, not balances or direct
+    suspension/restoration permission.
+18. Scheduled billing, collections, and payment-reconciliation services own DB
+   sessions, transaction outcomes, and operational logging for Celery runners.
+19. `financial.payment_webhooks` owns signature-verified provider-payload
+   projection and inbound dead-letter lifecycle. Replay rebuilds the same
+   settlement command as live delivery; `financial.payment_provider_events`
+   owns idempotent event processing, delegates the monetary write to the
+   payment owner, and must resume an incomplete event rather than treating
+   receipt identity as proof that money was posted.
+20. Referral rewards are account credits owned by `financial.credit_notes`;
+   neither CRM nor referral services post a parallel wallet balance. Automated
+   referral issuance uses the same owner-generated preview, locked confirmation,
+   idempotency, audit, and exact funding-ledger evidence as other credit issuance.
+21. `financial.account_credit_deposits` owns the typed Deposit Account Credit
+   intent and atomic provider-confirmation composition. The full receipt first
+   becomes payment-backed unallocated account credit and grants no prepaid
+   duration. `financial.account_credit_applications` then owns deterministic
+   oldest-debt consumption through `financial.payments` allocation preview and
+   confirmation. Customer routes, provider webhooks, payment-proof review,
+   invoice issuance/void, and reconcilers are adapters around those owners;
+   none may maintain a wallet counter, allocate rows directly, or restore
+   access merely because cash was deposited.
+22. Every money-moving financial command is previewed by the same owner that executes it.
+   Execution locks and recomputes the preview, rejects stale confirmation,
+   records idempotency and actor audit evidence, and structurally links the
+   command result to its exact ledger transaction(s). Financial settlement may
+   request access reconciliation, but it never promises restoration itself.
+
+Account adjustments and add-on purchase debits use one evidenced contract:
+
+- Old paths: the generic ledger API could post or reverse arbitrary account
+  entries, plan changes posted their own ledger debit, and customer add-on
+  purchases derived a wallet balance before constructing a bare adjustment row.
+  None recorded a durable decision-to-transaction link.
+- New debit owner: `financial.account_adjustments` exposes prepaid funding,
+  postpaid receivables, collection-blocking balance, and service-access
+  consequence as distinct preview fields. Confirmation locks the account,
+  recomputes the preview, rejects stale or unfunded requests, records
+  idempotency and actor audit evidence, and links one decision to one exact debit.
+- Credit boundary: the adjustment contract is debit-only. Customer credits,
+  including the credit side of a prepaid plan change, remain documents owned by
+  `financial.credit_notes`; callers cannot use a generic adjustment as a second
+  credit authority.
+- Add-on boundary: `financial.addon_purchases` combines the current catalog
+  price and subscription state with the adjustment owner's funding preview.
+  Mobile/API confirmation sends the fingerprint and an idempotency key, then the
+  entitlement and exact adjustment link commit atomically. Clients do not
+  derive affordability from a displayed balance.
+- Reversal boundary: generic ledger reversal is gated. An adjustment reversal
+  is separately previewed and confirmed, preserves the original category,
+  records audit/idempotency evidence, and structurally points its exact credit to
+  the debit it reverses. It does not promise restoration or mutate access state.
+- Cutover gate: generic ledger writes/reversals remain disabled; plan-change and
+  add-on paths contain no direct debit writer; stale preview, insufficient
+  funding, idempotent replay, exact debit/reversal links, audit, architecture,
+  API, and mobile contract tests must remain green.
+
+Immediate plan changes use the same evidenced wrapper contract:
+
+- Old wrapper: customer web/mobile/API and admin could show a proration quote,
+  then submit only the target offer. The nested debit owner recomputed safely,
+  but nothing proved which wrapper quote the person confirmed, and the change
+  request did not name the resulting adjustment, credit note, or ledger row.
+- New owner contract: the quote exposes one fingerprint plus distinct prepaid
+  funding, postpaid receivables, collection-blocking balance, exact ledger type,
+  source and amount, and the explicitly non-restorative access consequence.
+  Confirmation supplies that fingerprint and an idempotency key. The owner
+  locks and recomputes before changing money.
+- Exact evidence: revision `302_plan_change_confirmation_evidence` links the
+  applied request to at most one account adjustment or credit note and directly
+  to its exact ledger entry. Zero-money immediate changes record the confirmed
+  snapshot and no ledger link. Actor audit, request state, subscription state,
+  and nested financial evidence commit together.
+- Historical boundary: pre-cutover and scheduled next-cycle requests retain
+  NULL confirmation/evidence fields; no amount, memo, or timestamp matching is
+  used to invent financial provenance.
+- Batch boundary: bulk admin changes schedule at each service's next cycle.
+  Immediate batch execution is rejected until it can carry per-subscription
+  owner previews, fingerprints, idempotency, and results.
+
+Credit-note application is the first migrated financial-action contract:
+
+- Old path: the invoice template derived credit availability and settlement
+  totals, then posted directly to an unpreviewed application command.
+- New owner: `financial.credit_notes` resolves choices, preview, eligibility,
+  locked execution, idempotency, and application-to-ledger evidence;
+  `financial.invoices` owns the receivable summary and settlement handoff.
+- Cutover gate: preview fingerprint, exact ledger link, audit metadata,
+  idempotent replay, invoice-summary, access-reconciliation, and template
+  boundary tests must remain green.
+- Historical application rows are not heuristically linked to ledger entries;
+  reconciliation must use reviewed evidence rather than amount/memo guesses.
+
+Credit-note issuance and voiding are the next migrated financial-action contract:
+
+- Old owners: admin, refund, cancellation-proration, prepaid plan-change, CRM,
+  and remediation paths could construct issued documents directly; some posted
+  a separate credit ledger row and some posted no ledger evidence at all.
+- New owner: `financial.credit_notes` produces the issue/void preview, locks and
+  rechecks confirmation, creates the document and descriptive line, requests
+  the exact append-only funding or reversal transaction, records idempotency and
+  audit evidence, and structurally links every result.
+- Projection boundary: the issued credit-note document owns the customer
+  financial-position effect. Credit-note funding, application-transfer, and
+  void-reversal ledger rows are operational evidence and are excluded from that
+  projection so the same credit is not counted twice.
+- Application boundary: applying a structurally funded note also links the exact
+  unallocated debit that consumes the operational credit pool. Historical notes
+  without reviewed funding evidence retain their legacy application behavior.
+- Verification phase: direct writers have migrated to the owner and architecture
+  tests reject new document, line, or status writers outside the owner package.
+- Cutover gate: issue/void preview fingerprints, idempotent replay, actor audit,
+  exact funding/application/reversal links, customer-position non-duplication,
+  access separation, and adapter-boundary tests must remain green.
+- Historical reconciliation is explicit and dry-run-first. It never guesses a
+  ledger link from amount or memo; an operator must select the exact entry or
+  explicitly approve creation of missing funding for the remaining amount.
+
+Payment refunds are the next migrated financial-action contract:
+
+- Old paths: the admin button and provider-event adapter could flip payment
+  status without a confirmed amount, preview, idempotency key, or structural
+  link to the refund transaction. The compatibility command could also grant a
+  cash refund and credit note for the same amount.
+- New owner: `financial.payments` exclusively resolves refund capability,
+  previews customer funding, unallocated account credit, invoice receivables,
+  exact ledger results, and the access-reconciliation handoff; then locks and
+  recomputes those facts before confirmation.
+- Provider boundary: manual recording is limited to non-provider payments.
+  Provider-backed refunds require a signature-verified, provider-matched event
+  carrying a normalized amount and currency; the provider-event adapter submits
+  that observation and never sets refund status itself.
+- Projection boundary: the payment document owns the refund's customer-position
+  effect. Its payment-linked refund ledger row is exact accounting evidence and
+  is not debited again from unallocated account credit. A separate structurally
+  linked internal debit consumes only the refund portion attributable to
+  spendable account credit and is excluded from the customer ledger projection.
+- Access boundary: refund confirmation requests the canonical account-status
+  recheck. Neither the preview nor the UI promises suspension, restoration, or
+  any other service-access outcome.
+- Cutover gate: stale-preview rejection, idempotent replay, audit evidence,
+  exact total and account-credit ledger links, proportional invoice effects,
+  normalized provider-event evidence, UI boundary, and owner-writer tests must
+  remain green. Refund-plus-credit-note double benefit remains rejected.
+- Historical reconciliation is dry-run-first and identifies every unlinked
+  refund ledger row. Execution requires an operator-selected exact row and an
+  explicitly reviewed account-credit consumption amount; it does not infer
+  either from UI balances, memo text, or today's eligibility.
+
+Payment reversals and chargebacks are a separate migrated financial-action
+contract; they are not failed captures or customer refunds:
+
+- Old owner/path: the compatibility command combined status mutation and a
+  refund-shaped ledger row. It had no preview, confirmation fingerprint,
+  idempotency reservation, audit record, or structural reversal evidence; a
+  partially refunded payment could be marked failed without reversing its
+  remaining settled value, and unallocated credit could remain spendable.
+- New owner: `financial.payments` exclusively resolves reversal capability,
+  previews the remaining settled value after completed refunds, separates
+  customer funding, unallocated account credit, and invoice receivables, then
+  locks and recomputes those facts before writing one `PaymentReversal` and its
+  exact ledger links. The terminal payment state is `reversed`, distinct from a
+  failed capture and from `refunded`/`partially_refunded`.
+- Provider boundary: manual recording is limited to non-provider payments and
+  represents a chargeback or bank reversal already confirmed outside Sub.
+  Provider-backed reversal requires a verified, provider-matched event with the
+  explicit normalized `reversal_confirmed` financial effect, exact remaining
+  amount, and matching currency. Raw event names or UI-selected statuses are not
+  financial evidence.
+- Projection boundary: the reversed payment document removes its remaining
+  settled value once from customer financial position. Its payment-linked total
+  reversal debit is exact accounting evidence and is excluded from both the
+  customer-position projection and the unallocated-credit pool. A second,
+  structurally linked internal debit consumes only reversal value that was still
+  spendable as account credit.
+- Access boundary: confirmation requests the canonical account-status recheck;
+  payment reversal does not decide, promise, or render a suspension or
+  restoration amount.
+- Verification/cutover gate: distinct status presentation, stale-preview
+  rejection, idempotent replay, actor audit, exact total and account-credit
+  links, proportional receivable reopening, normalized provider evidence,
+  adapter boundaries, and sole-writer tests must remain green. Generic status
+  edits and provider adapters cannot write `reversed` directly.
+- Historical reconciliation is explicit and repairable. Inspection reports
+  unlinked candidate debits, while execution requires the exact selected row and
+  a reviewed account-credit consumption amount. It does not guess from an old
+  failed status, a memo, or a current UI balance.
+
+Payment creation, settlement, and allocation are one coherent owner contract:
+
+- Old path: constructing a payment immediately posted allocations, unallocated
+  credit, events, and access consequences even when the document said
+  `pending`, `failed`, or `canceled`. Generic status edits later treated
+  `succeeded` as a field value, provider adapters constructed allocations, and
+  the admin form used a browser confirmation instead of an owner preview.
+- New owner: `financial.payments` separates payment intent/observation from
+  confirmed settlement. Pending, failed, and canceled documents post no money,
+  change no receivable, emit no payment-received event, and request no access
+  consequence. Only settlement writes `PaymentSettlement`, allocation ledger
+  links, an unallocated-credit link, optional prepaid-renewal debit evidence,
+  actor audit, and the access-reconciliation handoff.
+- Position boundary: the preview keeps confirmed funding, unallocated account
+  credit, postpaid invoice receivables, prepaid service renewal, payment state,
+  and service-access consequence visibly distinct. A prepaid renewal is an
+  explicit previewed debit and billing-period consequence, never a UI-derived
+  balance or billing date.
+- Allocation boundary: applying already-settled unallocated credit to an
+  invoice is a transfer, not new funding. Confirmation writes and structurally
+  links the exact invoice credit and a separate internal account-credit debit;
+  customer financial position excludes that internal debit so the transfer
+  does not double-change total funding. Provider adapters and APIs call the
+  same owner.
+- Reconciliation boundary: native unallocated-credit reconciliation is an
+  orchestration adapter, not a money writer. For each payment/invoice transfer
+  it calls the same allocation preview and fingerprint-bound confirmation with
+  a stable idempotency key. It never constructs `PaymentAllocation` or
+  `LedgerEntry` rows. Only active succeeded payments with reviewed settlement
+  evidence are spendable; historical or imported credits without that evidence
+  remain visible as unbacked for explicit review.
+- Immutability boundary: evidence-backed payment amounts, currencies,
+  settlements, and allocations are not edited, deleted, or re-pointed in
+  place. Pending allocation intent has no money evidence and may be withdrawn.
+  Generic import rollback cannot delete financial rows; imported-payment
+  reversal uses the separate batch owner below.
+- Provider boundary: verified provider success is a settlement origin, while a
+  non-success webhook remains an observation. A verified invoice hint becomes
+  pending intent before settlement or uses the confirmed allocation-transfer
+  owner after settlement; the provider adapter never constructs financial rows.
+- Cash-first provider boundary: a signature-verified webhook or successful
+  provider verification commits the payment document, gross charge, provider
+  fee, net `PaymentSettlement`, and exact net unallocated-credit ledger link
+  before invoice allocation is attempted. Invoice eligibility, prepaid funding
+  projection, or other downstream consequence failures cannot roll back that
+  confirmed cash evidence.
+- Allocation-exception boundary: applying the net unallocated credit to the
+  checkout invoice remains owned by the normal preview/fingerprint-bound
+  allocation service. Failure leaves the net credit untouched and writes one
+  idempotent `PaymentAllocationReconciliationException` linking the payment,
+  intended invoice, checkout intent/reference, and error. A successful replay
+  resolves that exception; retries cannot duplicate money or exception rows.
+- Invoice-lifecycle boundary: invoice-payment checkout cannot persist an intent
+  for a draft. The checkout adapter first requests the canonical invoice
+  lifecycle owner to transition the document from draft to issued, then creates
+  the provider intent from the issued document.
+- Historical boundary: old succeeded payments are not automatically trusted or
+  linked by amount/memo similarity. Inspection lists candidates; reconciliation
+  requires an operator-selected exact ledger row for every active allocation,
+  remainder, and prepaid debit, verifies the complete payment partition, links
+  evidence, records audit, and posts no new money.
+- Legacy prepaid-cycle repair is a preview-confirm exception owned by
+  `financial.payments`, not a generic allocation shortcut. It requires explicit
+  payment, allocation, invoice, debit, subscription, and replacement-payment
+  identifiers; retires only an unevidenced legacy allocation; reconstructs the
+  missing payment credit, settlement, and entitlement; and records the exact
+  credit-to-debit use in `PaymentPrepaidApplication`. A settled payment consumed
+  after its cash confirmation keeps its immutable `PaymentSettlement` snapshot;
+  the application row is the later-use evidence. The invoice owner alone voids
+  an unpaid superseded draft. Access reconciliation runs only after the financial
+  transaction commits, and an unavailable prepaid baseline is recorded as a
+  deferred recheck instead of rolling back money or granting access.
+- Cutover gate: pending/no-money tests, stale-preview rejection, idempotent
+  creation/settlement/allocation replay, exact settlement/allocation/prepaid
+  links, provider replay, explicit historical reconciliation, legacy-cycle
+  repair replay and stale-preview tests, owner-writer architecture tests, and
+  admin/API preview-confirm boundaries must remain green. Generic succeeded
+  status edits and direct settled-allocation commands remain gated.
+
+Consolidated payment settlement has a separate scoped owner contract:
+
+- Old path: a billing-account payment entered the generic payment creator as
+  already succeeded. That path allocated member invoices immediately, mutated
+  `BillingAccount.balance` for any surplus without a ledger row, and accepted a
+  browser confirmation instead of an owner preview. Provider verification,
+  proof approval, reconciliation, reseller checkout, admin, and API callers
+  could each enter that parallel path.
+- Owner: `financial.consolidated_payments` exclusively owns the exact FIFO or
+  explicit member-invoice allocation preview, locked fingerprint confirmation,
+  idempotency, actor audit, and settlement evidence. Verified provider facts
+  and approved proofs use the same preview-bound owner; generic
+  `financial.payments` may record a pending consolidated observation but gates
+  a succeeded consolidated write.
+- Position boundary: the preview and confirmation keep payment state, each
+  subscriber invoice receivable, reseller-held consolidated credit, prepaid
+  funding, and service-access consequence distinct. Paying a reseller account
+  does not itself decide subscriber access; paid member invoices request the
+  existing access-reconciliation owner.
+- Ledger boundary: each member-invoice allocation links its exact subscriber
+  `LedgerEntry`. Any surplus links one exact
+  `BillingAccountLedgerEntry`; `BillingAccount.balance` is only the current
+  projection of those consolidated-account transactions and never substitutes
+  for ledger evidence or a fake subscriber account.
+- Adapter boundary: admin uses a server-rendered preview and a second
+  fingerprint-bound confirmation. The API exposes matching preview and confirm
+  commands. Provider webhooks, top-up reconciliation, reseller checkout, and
+  proof approval treat their verified fact or human approval as confirmation
+  but still bind it to the owner-produced fingerprint and stable idempotency
+  key.
+- Historical boundary: revision
+  `318_consolidated_settlement_reconciliation` adds reviewed structural
+  provenance for historical consolidated settlements. Inspection lists exact
+  subscriber-ledger, billing-account-ledger, and original-cash candidates;
+  preview requires the complete payment partition plus exactly one matching
+  processed provider event, verified payment proof, or completed top-up intent.
+  Confirmation locks and rechecks those rows, links them to one settlement,
+  records actor audit and idempotency evidence, and posts no new money. Missing
+  or ambiguous cash provenance is refused, so a legacy synthesized succeeded
+  payment cannot become trusted merely because its allocations add up.
+- Drift boundary: recorded `BillingAccount.balance`, ledger-evidenced
+  consolidated credit, and their projection drift are shown separately in the
+  inspection and preview. Historical settlement reconciliation does not repair
+  that drift, change access, or infer any restoration amount, eligibility, or
+  billing date.
+- Cutover gate: read-only preview, exact dual-ledger evidence, stale-preview
+  rejection, idempotent replay, pending/no-money behavior, generic-writer gate,
+  provider replay, historical provenance refusal, admin/API boundary, and
+  owner-registry tests remain green.
+
+Consolidated-credit allocation is a separate transfer owned by the same scoped
+financial service:
+
+- Old path: the reseller portal and API submitted a one-step allocation after
+  deriving the maximum from displayed invoice totals and
+  `BillingAccount.balance`. The payment service could synthesize a succeeded
+  payment when that projection lacked source evidence, then mutate the balance
+  directly. The result did not structurally identify which consolidated credit
+  was consumed.
+- Owner: `financial.consolidated_payments` produces the allocation capability,
+  exact FIFO source/invoice preview, locked fingerprint confirmation,
+  idempotency, actor audit, and access-reconciliation handoff. Web and API
+  adapters only render the owner preview and submit its confirmation command.
+- Position boundary: recorded consolidated credit, ledger-evidenced
+  consolidated credit, subscriber postpaid receivables, payment state, and
+  service-access consequence remain separate. Projection drift or historical
+  allocation without exact source-consumption evidence fails closed; no
+  synthetic payment repairs it.
+- Exact evidence: revision `316_consolidated_credit_allocation` records one
+  allocation decision linked to its billing-account debit and item rows linking
+  each source billing-account credit to the exact `PaymentAllocation` and
+  subscriber `LedgerEntry` it produced. `BillingAccount.balance` is updated only
+  alongside the canonical ledger transaction.
+- Historical boundary: revision
+  `323_consolidated_credit_consumption_reconciliation` adds reviewed provenance
+  for a legacy transfer that changed a member receivable without recording the
+  exact source-consumption structure. Inspection keeps the recorded balance,
+  ledger-evidenced credit, projection drift, valid source credits, unlinked
+  member allocations, and unclaimed debit candidates separate. Preview and
+  confirmation require operator-selected exact source credit, payment
+  allocation, subscriber ledger result, and either one exact existing
+  billing-account debit or explicit approval to append the missing debit.
+  Confirmation locks and recomputes the evidence, is fingerprint-bound and
+  idempotent, records actor audit, and never changes `BillingAccount.balance`.
+- Repair boundary: a missing debit may be appended only up to the exact negative
+  projection drift and only for allocations carried by a payment with an exact
+  consolidated settlement. Positive/unbacked projection value, an allocation
+  without an exact subscriber ledger result, an unsettled or synthesized carrier,
+  cross-reseller evidence, and ambiguous source consumption remain fail-closed.
+  Neither inspection nor confirmation changes or promises service access.
+- Cutover gate: the projection-only balance credit/debit helpers and legacy
+  one-step allocation command remain gated. Read-only preview, stale rejection,
+  cross-reseller scope, partial allocation, historical existing/missing-debit
+  reconciliation, unbacked-credit refusal, exact dual-ledger links, replay,
+  audit, API preview-confirm, and sole-writer architecture tests must remain green.
+
+Consolidated refunds and payment reversals remain under that scoped owner:
+
+- Old path: the subscriber payment refund/reversal owner rejected every
+  billing-account payment. Admin/API confirmation and normalized provider
+  refund or reversal events therefore stopped without an authoritative money
+  path, while ad hoc balance repair risked assigning reseller money to a fake
+  subscriber or leaving paid member receivables closed.
+- Owner: `financial.consolidated_payments` owns refund and reversal capability,
+  preview, locked fingerprint confirmation, idempotency, actor/provider audit,
+  payment state, and every resulting ledger link. Generic
+  `financial.payments` continues to own subscriber-scoped returns and refuses
+  consolidated scope.
+- Position boundary: reseller-held credit, member invoice receivables, payment
+  refund/reversal state, and service access remain separate in preview and
+  confirmation. A partial refund may consume only credit still evidenced for
+  that payment at billing-account scope. A partial request that would infer an
+  allocation clawback fails closed; a complete refund or reversal explicitly
+  reopens every remaining allocation.
+- Evidence boundary: consolidated credit consumption writes and links one exact
+  `BillingAccountLedgerEntry`. Each reopened member allocation writes an exact
+  invoice-linked subscriber debit and records its source `PaymentAllocation`
+  through `ConsolidatedPaymentReturnAllocationEvidence`. No fake subscriber,
+  UI-derived balance, mutable-only restoration amount, or unlinked ledger row
+  is permitted.
+- Access/provider boundary: member receivable reopening emits a reconciliation
+  request but does not decide suspension or restoration. Trusted normalized
+  provider events dispatch to the same consolidated owner; untrusted API
+  callers cannot claim provider evidence.
+- Cutover gate: revision `317_consolidated_payment_returns.py`, partial-surplus,
+  full-refund, reversal, stale-preview, replay, dual-ledger, provider dispatch,
+  admin/API dispatch, and sole-writer tests must remain green.
+- Historical boundary: revision `324_consolidated_return_reconciliation` adds
+  read-only inspection, fingerprint-bound preview, locked confirmation,
+  idempotent replay, actor audit, and one reviewed provenance row for an
+  existing historical consolidated `PaymentRefund` or `PaymentReversal`.
+  Confirmation requires the return amount to be exactly partitioned across the
+  selected billing-account debit and selected inactive allocation debits, and a
+  provider-backed return additionally requires its exact processed normalized
+  event. It links those existing rows and may correct the payment's derived
+  refund/reversal state from the exact return documents; it creates no return
+  document or ledger transaction, does not change `BillingAccount.balance`, and
+  makes no service-access decision.
+- Refusal boundary: recorded and ledger-evidenced consolidated credit must
+  agree before return evidence is linked. Active allocations, incomplete or
+  reused evidence, subscriber-wallet or generic return carriers, owner-confirmed
+  rows with missing evidence, and ambiguous provenance remain fail-closed rather
+  than being reconstructed from a UI value, memo, current eligibility, or
+  inferred billing state.
+- Missing-document boundary: revision
+  `325_consolidated_return_document_reconstruction` covers the narrower case
+  where a historical consolidated payment already carries a return-compatible
+  status and exact unclaimed return debits exist, but the `PaymentRefund` or
+  `PaymentReversal` document is absent. The status is a consistency gate, not
+  financial evidence. Preview binds a proposed document ID, explicit reviewed
+  amount, non-secret external evidence reference, exact selected debit partition,
+  and exact
+  processed provider event when provider-backed. Confirmation creates only the
+  missing return document and reconstruction provenance, then composes the
+  revision-324 evidence owner for every structural link and derived payment
+  field. It posts no money, changes no billing-account balance, invoice,
+  allocation consequence, or access state, and replays idempotently.
+- Reconstruction refusal: the selected evidence must derive the same
+  `refunded`, `partially_refunded`, or `reversed` state already recorded on the
+  historical payment. Succeeded/failed status, missing or synthetic settlement,
+  projection drift, an existing reversal, incomplete/reused evidence, or an
+  existing return document that has not completed revision-324 reconciliation
+  blocks reconstruction. No amount, type, or source reference is inferred from
+  the historical status. Bank rows, narrations, account details, credentials,
+  and other raw statement data are never stored in the reference.
+
+Imported-payment batch reversal is a separate migrated wrapper owner:
+
+- Owner: `financial.import_payment_batch_reversals` owns durable creation
+  provenance, batch eligibility, the human preview fingerprint, locked
+  confirmation, batch idempotency, actor audit, and exact links from import row
+  to source settlement to resulting `PaymentReversal` and ledger transactions.
+  `financial.payments` remains the sole writer of every nested payment reversal.
+- Provenance boundary: a new applied payment row records both its exact
+  `payment_id` and whether that run created or merely reused the payment. The
+  created Payment also links back to that run. A later idempotent import cannot
+  claim or reverse a payment created by an earlier run.
+- Historical boundary: nullable provenance is deliberate. Existing import rows
+  without both structural links fail closed and are not backfilled from row
+  JSON, external ID, amount, memo, file name, or current UI state.
+- Preview boundary: the batch owner resolves every exact source settlement,
+  allocation ledger link, unallocated-credit link, prepaid-funding link,
+  remaining reversible amount, receivable reopening, and resulting reversal
+  ledger debit. Prepaid funding, unallocated account credit, postpaid
+  receivables, collection-blocking balance, payment state, and service-access
+  consequence remain visibly distinct.
+- Confirmation boundary: the owner locks the import run and every affected
+  account, rebuilds the whole batch preview, rejects drift before posting, then
+  composes idempotent per-payment reversal commands in one transaction. A
+  changed payment, refund, allocation, funding position, receivable, or source
+  evidence aborts the entire batch. No imported row is deleted or deactivated.
+- Reused-row boundary: rows that structurally say `record_created = false` are
+  shown as skipped and remain unchanged. A batch with no newly created payments
+  is ineligible rather than reversing somebody else's payment.
+- Result/access boundary: `PaymentImportBatchReversalItem` links each import row,
+  source settlement, payment reversal, exact result ledger debit, and optional
+  account-credit-consumption debit. Nested payment reversal reopens receivables
+  and requests canonical account/access reconciliation; the batch UI never
+  promises restoration, suspension, or an eligibility amount.
+- Cutover gate: revision `303_payment_import_batch_reversal.py`, stale-preview,
+  replay, atomic multi-payment, mixed created/reused, invoice reopening,
+  historical fail-closed, exact-evidence, adapter, and sole-writer tests must
+  remain green. Legacy settings-history rollback stays nonfinancial only.
+
+Nonterminal invoice lifecycle transitions are owned alongside terminal closure:
+
+- Old paths: scheduled billing and usage posting constructed invoice documents
+  or lines directly, scheduled billing temporarily flipped prepaid drafts to
+  issued, prepaid credit reconciliation and cleanup moved invoices back to
+  draft, and overdue automation, dunning, and admin bulk issue assigned status
+  and timestamps themselves. The architecture allowlist normalized these
+  parallel writers instead of enforcing one owner.
+- Owner: `financial.invoices` now stages automation-created invoice documents,
+  validates and stages automation/usage invoice lines, owns stable billing-line
+  replay, owns draft issuance, rechecks whether an untouched prepaid receivable
+  may return to draft, and owns overdue eligibility, transition, one-time
+  observation event, and audit. Automation, usage, reconciliation, cleanup,
+  dunning, and UI services select candidates and call the owner.
+- Construction boundary: only `app.services.billing.invoices` may construct
+  `Invoice` or `InvoiceLine` rows. System staging accepts only draft/issued
+  documents, records the source reason and exact document amount, and rejects a
+  billing-line key reused for different facts. Document staging posts no ledger
+  transaction; the invoice source document remains the canonical receivable
+  fact and its customer-ledger projection is derived from that exact row.
+- Derived-state boundary: payment and credit settlement still derive
+  `paid`/`partially_paid`/reopened status inside the invoice owner package from
+  canonical settlement facts. No adapter may assign those states. Draft,
+  issued, and overdue transitions record that no ledger transaction resulted;
+  terminal monetary closure continues to require exact evidence below.
+- Access boundary: `invoice.overdue` is an observation. It does not create a
+  dunning consequence or decide service access. Returning an unfunded prepaid
+  invoice to draft likewise changes no funding and grants no access.
+- Verification boundary: invoice and invoice-line constructors are restricted
+  to `app.services.billing.invoices`; the lifecycle writer allowlist contains
+  only that owner and its derived-total helper. Direct construction or status
+  assignment in automation, usage, reconciliation, cleanup, collections, and
+  web adapters is rejected by architecture tests.
+
+Invoice void and write-off are distinct terminal owner contracts:
+
+- Old path: generic invoice status edits, single/bulk routes, and prepaid
+  remediation jobs could set `void` or `written_off` directly. Void constructed
+  ad hoc credits and deactivated original debits, violating append-only ledger
+  semantics; partially settled invoices could retain stranded payment or credit
+  allocations. Write-off trusted the stored balance and had no structural link
+  from the terminal decision to its adjustment entry.
+- New owner: `financial.invoices` exclusively resolves void/write-off
+  eligibility, derives the receivable from invoice total plus canonical payment
+  and credit-note settlement facts, previews exact consequences, locks and
+  rechecks confirmation, records idempotency/audit evidence, writes one terminal
+  `InvoiceClosure`, and links every exact ledger result through
+  `InvoiceClosureLedgerEvidence`.
+- Meaning boundary: void means the invoice should never have existed and is
+  permitted only after effective payment/credit value is removed through its
+  own owner. It reverses each original invoice debit append-only and leaves the
+  original active. Current `invoice`-source debits and historical
+  `adjustment`-source debits qualify only when the ledger row carries the exact
+  `invoice_id`; unlinked account adjustments remain outside this owner.
+  Write-off means collectible postpaid debt will not be
+  collected; it writes one exact adjustment credit for the remaining
+  receivable. It is not payment, prepaid funding, customer credit, or invoice
+  void.
+- Position boundary: a native written-off invoice remains the original customer
+  debit and its `InvoiceClosure` contributes only the confirmed remaining-debt
+  credit, preserving any already-applied payment/credit value. The linked
+  operational ledger entry is evidence and is not counted a second time. Void
+  removes the invoice document from customer position; its reversal rows are
+  likewise evidence-only. Historical evidence reconciliation changes neither
+  projection.
+- State boundary: generic create/update/delete paths cannot manufacture paid,
+  partially-paid, void, or written-off state, edit `balance_due`, or delete an
+  issued receivable. Admin and API adapters use owner preview/confirmation;
+  bulk void displays and confirms each per-invoice owner preview. Prepaid repair
+  and cleanup workflows call deterministic system confirmation rather than
+  mutating terminal state.
+- Access boundary: the preview names only an access-reconciliation handoff.
+  Confirmation clears the receivable and asks the access/collections owners to
+  re-evaluate eligibility; neither void nor write-off promises restoration.
+- Historical boundary: legacy terminal invoices remain immutable. Inspection
+  lists exact invoice-linked ledger candidates; reconciliation requires explicit
+  operator-selected evidence (one exact write-off credit or one exact reversal
+  for every original invoice debit), records links/audit, and posts no money.
+- Cutover gate: append-only reversal, exact write-off link, no-settlement void,
+  stale-preview rejection, idempotent replay, draft/no-money closure, explicit
+  historical reconciliation, remediation-adapter, admin/API confirmation, and
+  owner-writer architecture tests must remain green.
+
+Dunning decisions and their service-access consequences are now a distinct,
+evidenced owner contract:
+
+- Old paths: scheduled dunning selected policy steps, `_execute_dunning_action`
+  independently rechecked some gates, `_suspend_account` rechecked a different
+  set, payment events decided whether restoration was allowed from invoice
+  snapshots, invoice-overdue events maintained a second warning/shield path,
+  and case resolution restored throttle state without evidence linking the
+  decision to what changed.
+- Decision owner: `financial.dunning` owns postpaid policy selection and the
+  shared financial access consequence preview/confirmation used by dunning,
+  prepaid enforcement, payment settlement, and billing reconciliation.
+  `financial.access_resolution`, payment arrangements/proofs/extensions, and
+  billing health supply independent decision inputs; none writes access state.
+- Grace owner: `app.services.collections.grace_policy` resolves the effective
+  duration and provenance once: explicit account override, then active policy
+  set, then billing-mode default. Postpaid dunning steps count from the end of
+  that grace decision; prepaid planning, enforcement, and customer status use
+  the same low-balance deadline. Zero configured days means no elapsed-time
+  grace and is actionable immediately. The former collections settings
+  `prepaid_grace_days` and `prepaid_deactivation_days` are retired.
+- Consequence writer: `access.subscription_lifecycle` exclusively creates or
+  resolves `EnforcementLock` rows, persists their `access_mode`, and derives
+  subscription/account status.
+  RADIUS and session-enforcement services project that lifecycle result; they
+  do not decide whether debt, funding, a shield, or a case permits access.
+- Timer-state writer: `financial.prepaid_enforcement_state`
+  (`app.services.prepaid_enforcement_state`) exclusively arms and clears the
+  Subscriber low-balance and deactivation timestamps. The enforcement planner,
+  scheduled sweep, funded-restoration flow, and account lifecycle submit
+  prepared observations or cleanup requests; they do not assign the fields.
+  Disabled and canceled accounts clear obsolete timers in the lifecycle
+  transaction. The timer writer flushes but never commits and owns no funding,
+  grace, suspension, restoration, or eligibility decision.
+- Evidence boundary: every confirmed financial suspend, reject, throttle, or
+  restore writes one `FinancialAccessConsequence` containing the exact locked
+  preview fingerprint, idempotency key, separated receivable/prepaid/profile/
+  shield/health inputs, outcome, and system audit. Structural evidence links
+  the decision to every exact enforcement lock, access credential, and dunning
+  case it created, resolved, throttled, or restored. A `DunningActionLog` links
+  to the consequence that implemented its access action.
+- Access-tier boundary: hard reject is the default. Captive is a requested
+  exception only for an explicitly opted-in, direct-house account with an
+  explicit residential classification and a valid enabled portal network
+  contract. Business, government, NGO, reseller-owned, reseller-principal,
+  system, disabled, canceled, and uncategorized accounts fail closed even when
+  a stale opt-in flag exists. `app.services.walled_garden_policy` revalidates
+  persisted captive intent and applies most-restrictive-active-lock-wins before
+  RADIUS, connectivity, and UI read projections consume it.
+- Captive cutover gate: the global captive setting remains disabled until
+  staging proves RADIUS projection readback, portal reachability from the
+  restricted tier, a real test payment, and canonical post-payment access
+  restoration. Any failed or stale readiness input downgrades the effective
+  tier to hard reject.
+- Restoration boundary: payment and invoice settlement submit observations;
+  they never promise restoration. Confirmation resolves overdue locks/cases/
+  throttle only after canonical overdue receivables are empty, and resolves
+  prepaid locks/timers only after the canonical funding threshold is met.
+  Other active lock reasons remain untouched.
+- Financial-position boundary: post-cutover account positions and reconstructed
+  prepaid funding share the same currency-typed signed native-event arithmetic.
+  Overdue decisions consume collectible receivables; prepaid decisions consume
+  the reviewed opening position plus native events and compare it with the
+  affordability threshold. The archived Splynx mirror is migration evidence,
+  never a runtime fallback. Reason-scoped repair follows the reason owner: an
+  ``overdue`` lock is never judged by the prepaid affordability resolver.
+  Ledger projections require both `is_active` and `affects_customer_position`.
+  Those fields are deliberately orthogonal: `is_active` follows the source
+  artifact lifecycle, while `affects_customer_position` prevents structural,
+  cutover, and correction evidence from duplicating document or opening-baseline
+  value. Neither field may be inferred from or mechanically rewritten from the
+  other.
+- Transport boundary: `invoice.overdue` is observation only. Notifications,
+  throttle, suspension, and rejection come from the configured dunning step.
+  `payment.received` always asks the owner to reconcile and contains no local
+  invoice-balance eligibility branch.
+- Retired controls: billing automation no longer reads or seeds
+  `auto_suspend_on_overdue`, `suspension_grace_hours`,
+  `dunning_escalation_days`, `blocking_period_days`, or
+  `deactivation_period_days`. Existing database rows are inert legacy data.
+  The hourly billing-notification job sends pre-due invoice reminders only;
+  it does not re-emit overdue events or maintain invoice metadata as access
+  evidence. Policy dunning steps are the only overdue timing/action controls.
+  `PolicySet.suspension_action` is retained as compatibility data but is not an
+  execution input and is no longer exposed by the admin policy form.
+- UI boundary: subscriber pages do not derive a "next block" date or access
+  eligibility from balance, grace, or legacy metadata. They render only
+  owner-produced financial/access projections and confirmed consequences.
+- Historical boundary: a throttled credential without a structurally captured
+  `pre_throttle_radius_profile_id` is reported in preview/audit and is not
+  restored by guessing from an offer, UI state, or current profile. It requires
+  explicit reviewed historical reconciliation.
+- Cutover gate: stale-preview rejection, idempotent replay, exact consequence
+  links, canonical receivable evidence, shield/health enforcement, reason-
+  scoped restoration, event-adapter thinness, and owner-writer architecture
+  tests must remain green.
+
+Rule: no module should infer access from draft invoices, ad hoc balances, or
+legacy import fields when a billing/access resolver exists. Celery tasks only
+apply scheduling, routing, idempotency, and feature-gate concerns before calling
+the owning financial service. Retired VAS archive tables have no application
+writer and are excluded from schema autogeneration so history cannot be dropped
+accidentally. Templates and mobile clients do not calculate invoice
+receivables, credit availability, restoration amounts, billing dates, or
+financial-action eligibility.
+
+Tax-accounting migration record:
+
+- Old owner: `app.services.web_reports_extended` queried invoice models and the
+  Jinja report interpreted them as `tax_amount`/`total_amount`, ignored its date
+  controls, mixed currencies, and labelled issued tax as collected.
+- New source-fact owner: `app.services.tax_accounting` projects bounded invoice,
+  credit-note, and WHT rows plus full filtered aggregates per currency. It owns
+  legal WHT transitions and the WHT official timeline. Web services and routes
+  remain thin adapters.
+- Accounting owner: Dotmac ERP owns TaxCode configuration and account mappings,
+  balanced invoice/credit-note/payment/WHT journals, tax transactions, tax
+  returns, and financial statements. Its existing pull integration consumes
+  Sub's bounded sync feeds; no parallel push or local Sub subledger is added.
+- Read boundary: the tax report is the canonical tax-register projection from
+  authoritative invoice, credit-note, and WHT source documents. ERP journals do
+  not replace source-document ownership, and Sub report rows do not replace ERP
+  accounting.
+- Credit-note tax point: `financial.credit_notes` persists the first `issued_at`
+  when a credit enters an adjusting state; `financial.tax_accounting` uses that
+  timestamp for report periods and the ERP sync contract. Migration 291
+  backfills existing issued/applied rows from `created_at`. All direct automated
+  writers use the shared lifecycle adapter, and cancellation credits preserve the
+  source invoice, rate, and inclusive/exclusive/exempt line treatment.
+- Fallback retirement: the false `total_tax`/`invoices` model contract and
+  `tax_amount`/`total_amount` template fields are removed by the tax-accounting
+  ownership boundary.
+- Feed contract: invoice and credit-note sync lines expose `tax_rate_id` and
+  `tax_application`; the tax-rate feed exposes code/rate; payment sync exposes
+  gross cash settlement, net bank cash, WHT amount/rate/status/record/certificate,
+  and the source resolution timestamp for terminal decisions. WHT transitions
+  advance the owning payment watermark so ERP re-pulls changes.
+- ERP resolution: ERP resolves each source rate/treatment to exactly one active,
+  effective, ERP-owned TaxCode and fails closed on missing or ambiguous account
+  configuration. Corrections reverse and re-post in one transaction rather than
+  mutating posted lines.
+- Operator control: `/admin/billing/tax-accounting` is the permission-protected
+  source-fact and WHT evidence console with server-side search, status filters,
+  counts, and pagination. It does not offer account mapping or journal controls.
+- WHT lifecycle: payment-proof verification creates the pending source record.
+  The tax owner alone permits pending -> certified -> reclaimed, pending/certified
+  -> written_off, requires certificate evidence or a write-off reason, and appends
+  `withholding_tax_transitions`. Each transition advances the payment sync
+  watermark; ERP applies the accounting consequence from its own mapped accounts.
+
+## Customer Context
+
+1. `customer.accounts` owns Subscriber account creation and the
+   transaction-neutral preparation command used by approved cross-domain
+   coordinators. It delegates requested status to
+   `access.subscription_lifecycle` and stages `subscriber.created`; callers do
+   not construct Subscriber rows directly. Existing direct constructors remain
+   explicit shrink-only migration debt, not approved parallel owners.
+2. Customer context owns identity, account, billing, service, support, and
+network summary composition.
+3. Customer network context owns the raw customer-to-network footprint.
+4. Network access path owns the customer service path.
+5. `customer.profile_commands` owns admin customer profile edits and explicit
+   person-to-business customer conversion. Normal person edit submission must
+   not mutate account type; conversion is a dedicated command with its own
+   validation and audit trail.
+6. `customer.service_status` owns customer-visible service health and action
+   hints, including whether payment can restore every active service hold and
+   the authoritative amount required by financial policy.
+7. `customer.usage_summary` owns customer usage windows, headline totals, and
+   total provenance. An authoritative zero is a valid value, not a missing-data
+   sentinel.
+8. `customer.reseller_status_actions` (`app/services/reseller_portal.py`) owns
+   the reseller-scoped impact preview for deactivate, restore, and disable. It
+   evaluates current subscription state, active enforcement locks, duplicate-
+   login restore conflicts, account overrides, and accounts with no services,
+   then fingerprints that exact preview. The first POST renders a distinct
+   server-calculated confirmation page; the second carries the fingerprint and
+   an account-bound idempotency key. The owner reserves the key, rechecks after
+   locking, commits the lifecycle mutation and replay result once, and returns
+   the original result on retry. Lifecycle mutation is still delegated to
+   `access.subscription_lifecycle`.
+9. `subscriber.growth_reports` (`app/services/subscriber_growth.py`) owns the
+   admin subscriber growth and churn report reads: monthly growth/churn series,
+   month-over-month new counts, churn/at-risk summaries, status counts, and
+   cumulative signups. The derived-cancelled rule (explicit `canceled`, or NULL
+   status on an inactive row) lives here; report pages compose it and never
+   re-derive lifecycle in Python.
+10. `customer.data_completeness`
+   (`app/services/subscriber_data_completeness.py`) owns the purpose-specific
+   requirements, derived completeness/revalidation state, capture backlog, and
+   filing-readiness counts. It is read-only: it identifies the gap and never
+   fills it.
+11. `customer.location_verification`
+   (`app/services/geocode_reconciler.py`) is the only writer of subscriber
+   location verification-ledger facts and owns reconciliation of a captured GPS
+   pin against claimed location. It writes only facts that agree; disagreement
+   is flagged for a human and never auto-applied.
+12. `customer.location_capture` (`app/services/location_capture.py`) owns the
+    default-off rollout controls, source authorization, prompt eligibility and
+    snooze lifecycle, and orchestration of field-arrival, portal, and agent
+    capture. Those adapters call this owner, which delegates adjudication and
+    ledger writes to `customer.location_verification`. Neither owner writes
+    `Subscriber` columns; projecting a verified fact onto the profile remains
+    the subscriber profile owner's job.
+
+Rule: admin, portal, support, and reporting views should consume context
+services instead of rebuilding customer joins. Admin routes submit explicit
+profile commands; they do not expose a generic category dropdown that can
+silently move an individual into business workflows. Customer clients must not
+infer that `blocked` or `suspended` means payment-restorable, or calculate
+restoration amounts from locally loaded invoice rows; they consume
+`/me/service-status`. Customer clients consume `/me/usage-summary` totals and
+provenance; they do not replace a server total with a loaded-session page,
+chart-series sum, or a different time window.
+
+## Support Operations
+
+1. `support.ticket_lifecycle` owns the ticket status vocabulary, guarded status
+   transitions, lifecycle timestamps, and transition consequences.
+2. `support.ticket_configuration` owns the operator-visible status subset,
+   priority/type choices, routing, and SLA policy. A configured status must be
+   part of the lifecycle vocabulary.
+3. Status configuration does not own labels, tones, icons, or platform colors;
+   those are read-side presentation concerns.
+4. `support.ticket_bulk_commands` owns exact selected membership, normalized
+   shared changes, side-effect-free eligibility preview, confirmation drift
+   detection, and structured outcomes for admin ticket bulk update. Eligible
+   execution delegates through `app.services.support.Tickets.update`; it does
+   not maintain a second status, priority, assignment, SLA, automation,
+   work-order, notification, event, audit, or workqueue path.
+
+Rule: API, admin, customer, reseller, automation, and import adapters request
+ticket mutation through the ticket lifecycle service. Settings may narrow the
+choices presented to operators but cannot create a state the lifecycle owner
+will reject.
+
+## UI List Projections
+
+1. `ui.list_contracts` owns normalized list query state, list capability
+   declarations, page metadata, and canonical URL serialization.
+2. Each resource declares one projection owner for its searchable fields,
+   filters, stable sort, row projection, and filtered count.
+3. `ui.customer_list_projection` is the first migrated resource. The live admin
+   customer route and Jinja table consume `ListQuery` and `PageMeta` from
+   `app.services.web_customer_lists`.
+4. The configurable-table customer data endpoint is now a compatibility
+   projection over `app.services.web_customer_lists`. `app.services.table_config`
+   still owns saved column visibility/order and serialization, but it does not
+   select, filter, count, sort, or paginate customer rows. The live customer
+   template does not load or mount the legacy client.
+5. Customer configurable-table migration record:
+   - Old owner: the generic
+     `TableConfigurationService.apply_query_config` customer branch.
+   - New owner: `app.services.web_customer_lists`, using `ui.list_contracts`.
+   - Verification phase: contract tests exercise canonical scope, compatibility
+     aliases, filters, stable sorting, and clamped pagination. A runtime dual-read
+     shadow was not retained because the live customer screen had already been
+     gated off the legacy client.
+   - Cutover gate: customer list, compatibility API, SOT-registry, and route
+     architecture tests must remain green.
+   - Fallback retirement: the generic customer scalar-filter and location-filter
+     branches were removed; unsupported inputs fail closed with HTTP 400.
+6. Legacy `q`, `activation_state`, `customer_type`, NAS/location,
+   `customer_name` sort, `limit`, and aligned `offset` inputs are normalized into
+   `ListQuery`.
+7. `ui.subscriber_list_projection` owns the remaining subscriber
+   configurable-table query. There is no separate live subscriber list: the
+   production admin list and legacy Playwright facade both use `/admin/customers`,
+   while `app.web.admin.subscribers` is an import alias to the customer router.
+8. Subscriber configurable-table migration record:
+   - Old owner: the generic `TableConfigurationService.apply_query_config`
+     Subscriber branch.
+   - New owner: `app.services.web_subscriber_lists`, using `ui.list_contracts`
+     and delegating subscriber scope/full-text search to
+     `app.services.subscriber.Subscribers.query`.
+   - Verification phase: contract tests exercise scope, search aliases, filters,
+     stable sorting, filter-before-pagination, and clamped offsets. No runtime
+     shadow was retained because no production template mounts the subscriber
+     dynamic-table client.
+   - Cutover gate: subscriber service, compatibility projection, SOT registry,
+     and architecture tests must remain green.
+   - Fallback retirement: the generic table query engine and Subscriber-specific
+     fallback were removed. New table data resources require a named projection
+     owner before registration.
+9. Subscriber list reads are read-only. The retired table path used to generate
+   missing subscriber numbers and commit them during serialization. Identifier
+   assignment remains with subscriber creation/update workflows; projections
+   return the stored value, including `null`, and never repair it implicitly.
+10. Legacy subscriber `q`, `status`/`activation_state`, `subscriber_type`,
+    declared sorts, `limit`, and aligned `offset` inputs normalize into
+    `ListQuery`; undeclared scalar filters and sorts fail closed with HTTP 400.
+11. `ui.invoice_list_projection` extends the existing
+    `app.services.web_billing_overview` invoice owner with declared searchable,
+    filterable, and sortable fields; stable ID tie-breaking; page clamping; and
+    an uncapped export scope. Full-page and HTMX reads render the same
+    `_invoices_list.html` and `_invoices_table.html` projections, so status
+    totals, filters, canonical URLs, pagination, and rows cannot diverge.
+12. `ui.support_ticket_list_projection` extends the existing
+    `app.services.web_support_tickets` web owner and delegates its filtered
+    domain query to `app.services.support.Tickets`. It owns the declared admin
+    search/filter/sort capabilities, exact count, page clamping, status-summary
+    links, and uncapped CSV scope. Full-page and HTMX reads render the same
+    `_list.html` and `_table.html` projections.
+13. Support-ticket list migration record:
+    - Old owners: the admin route and Jinja fragments independently interpreted
+      sort/page inputs, inferred a next page from one extra row, hand-built URLs,
+      and applied a silent 10,000-row export cap. Advanced filters submitted by
+      the page were not accepted by the export route.
+    - New owner: `app.services.web_support_tickets`, using `ui.list_contracts`
+      and the canonical filtered query in `app.services.support.Tickets`.
+    - Verification phase: contract, query, route/template architecture,
+      filter-before-pagination, stable-order, exact-count, clamped-page,
+      canonical-URL, accessibility, and complete-export tests protect the
+      boundary. A runtime dual-read was not retained because both paths used the
+      same database query and the old implementation had no independent owner.
+    - Cutover gate: support service, web projection, route/template, SOT
+      registry, and focused list tests must remain green.
+    - Fallback retirement: the route no longer owns pagination semantics; the
+      templates no longer assemble sort/filter/page URLs; the one-extra-row page
+      estimate and silent export cap are removed. Legacy `order_by`/`order_dir`
+      inputs remain only as canonicalizing compatibility aliases.
+
+14. `ui.reseller_list_projection` (`app.services.web_admin_resellers`) declares the
+    admin reseller list capabilities with `ui.list_contracts` — status filter, name
+    sort, pagination — so the route derives no pagination or filter rules;
+    `web_admin_resellers` owns the reseller read. The reseller admin surface is
+    granularly gated by `reseller:read` (list) and `reseller:write` (create/edit),
+    split off the shared `customer:read`/`customer:write`; migration preserves access
+    by granting the reseller permissions to current customer-permission holders.
+15. `ui.work_order_list_projection` (`app.services.web_dispatch_work_orders`)
+    declares the admin work-order list capabilities with `ui.list_contracts` and
+    delegates the read to `work_order_views.query_work_orders`
+    (`operations.work_orders`), which owns the canonical filtered/sorted query —
+    the projection issues no SQL. Read-only: no Sub-owned admin bulk command is
+    declared, so no selection/bulk is declared. Each dispatch route is granularly
+    gated (`operations:dispatch:read`/`:write`/`:assign`).
+
+16. `ui.project_list_projection` (`app.services.web_projects`) declares the admin
+    project list capabilities with `ui.list_contracts` — searchable name,
+    status/type/priority/region filters, name/priority/created sort, pagination —
+    and delegates the read to `projects_service.projects.list`
+    (`operations.project_lifecycle`), which owns the canonical filtered/sorted
+    query; the projection issues no query of its own. Gated by the existing
+    granular `project:read`.
+
+17. `ui.referral_list_projection` (`app.services.web_referrals`) owns the admin
+    referral filter, stable sort, page/row projection, canonical URL, and KPI
+    cohort links. It depends on `ui.list_contracts`, `ui.projection_contracts`,
+    and `referrals.program`. The route redirects invalid or clamped request state
+    to the owner-provided URL; the template uses shared sortable-header,
+    pagination, page-size, and keyboard-visible row-action controls.
+
+Rule: filters and search are applied before pagination; every paginated sort has
+a unique tie-breaker. Web list state is encoded in URL query parameters so deep
+links, refresh, and browser history reproduce the same projection. A changed
+search, filter, sort, or page size starts at page one. Templates render the
+owner-provided query and page metadata and do not hand-build competing query
+strings, totals, page counts, or sort rules. Under the global Dotmac UI
+standard, the interaction model follows the Carbon data-table, filtering, and
+pagination patterns, with WCAG 2.2 AA as the accessibility floor. This is a
+behavior standard, not a Carbon visual-theme migration. Column-configuration
+responses derive their `sortable` flags from the corresponding resource owner
+rather than the legacy table-field registry.
+
+## UI Bulk Actions
+
+1. `ui.bulk_action_contracts` owns code-native selection modes and the
+   authorized presentation of bulk action label, description, semantic tone,
+   preview/confirmation requirements, execution mode, and result-reference
+   vocabulary. It does not own business eligibility or mutation.
+2. A bulk resource declares page select-all semantics and whether the list owner
+   supports an explicit all-filtered selection. Empty selected IDs never imply
+   a filtered cohort.
+3. `ui.customer_bulk_action_projection` is the first adopted resource. It
+   projects only customer actions authorized for the current principal and
+   depends on `ui.customer_list_projection` for filtered scope semantics.
+4. The customer table header checkbox selects the visible page. A separate
+   affordance promotes that selection to all rows matching the canonical search
+   and filters. Search, filter, or page-size changes clear the selection.
+5. `app.services.web_customer_actions` resolves selected IDs or the explicit
+   filtered query again at preview and execution. Mutations require the preview
+   count and confirmation token in the confirmation request and fail with HTTP
+   409 when the cohort has changed. Customer activation/deactivation binds that
+   token to each selected account's observed active state and the requested
+   target; customer deletion also binds active/subscription eligibility, so a
+   newly eligible row cannot be deleted under a stale impact preview. Commands
+   continue to re-check domain state and return partial outcomes or notification
+   identifiers.
+6. `ui.invoice_bulk_action_projection` adopts the same interaction contract for
+   invoice issue, send, void, mark-paid, PDF-generation, and export actions.
+   `app.services.web_billing_invoice_bulk` remains the single eligibility and
+   command owner; the projection calls that policy rather than copying status
+   rules into Jinja or JavaScript.
+7. Invoice selection is page-only. Mutation and PDF-generation commands require
+   a server preview, exact resolved count, and impact token. The token covers
+   selected membership plus each row's eligibility outcome, so a status change
+   that expands or shrinks impact after preview fails with HTTP 409. Execution
+   re-checks eligibility and audits only processed invoice IDs.
+8. `ui.support_ticket_bulk_action_projection` projects authorized support-ticket
+   update controls and page-row eligibility. Selection is page-only and never
+   implies all filtered tickets.
+9. `support.ticket_bulk_commands` requires an in-modal, side-effect-free preview
+   of exact selected membership, the shared proposed change set, eligible rows,
+   and skipped reasons. Confirmation binds matched count, proposed changes, and
+   every row eligibility outcome; drift returns HTTP 409.
+
+Migration record:
+
+- Old owners: customer Jinja/Alpine independently exposed the actions menu,
+  stored selected IDs, and interpreted an empty array as every row matching
+  submitted filters; the reusable data-grid selectable mode was a second local
+  ID collector without action capabilities. Invoice Jinja/Alpine independently
+  hardcoded actions and confirmation text, while its full-page and HTMX tables
+  rebuilt different filters, rows, and pagination.
+- New owners: `app.services.bulk_actions` owns the generic interaction contract,
+  `app.services.web_customer_bulk_actions` owns the customer projection,
+  `app.services.web_customer_lists` owns filtered customer cohort semantics,
+  `app.services.web_billing_overview` owns the invoice list/export scope,
+  `app.services.web_billing_invoice_bulk_actions` owns invoice action
+  presentation, and existing customer/invoice command services retain mutation
+  and consequence ownership.
+- Verification: contract, service, route/template architecture, selection,
+  explicit filtered-scope, list-query, preview, membership/eligibility drift,
+  and partial-outcome tests protect the boundary.
+- Cutover gate: no-selection requests fail closed; unauthorized actions and
+  selection controls are omitted; page selection and filtered promotion are
+  distinguishable; preview membership or eligibility drift prevents execution.
+- Fallback retirement: the customer page no longer exposes bulk actions before
+  selection, and `resolve_bulk_customer_scope` no longer falls through from an
+  empty ID list to filtered execution. The invoice page no longer hardcodes
+  action buttons, eligibility assumptions, manual query strings, or a second
+  HTMX-only table. Other resources remain unchanged until they adopt named list
+  and bulk projections.
+
+Support-ticket bulk migration record:
+
+- Old owners: the public bulk API delegated to `Tickets.bulk_update`, but that
+  method directly changed status, priority, and assignment while bypassing the
+  canonical single-ticket lifecycle consequences. The admin list had no
+  selection, authorization projection, impact preview, or drift contract.
+- New owners: `support.ticket_bulk_commands` owns selected membership, change
+  normalization, preview, confirmation, and outcomes;
+  `ui.support_ticket_bulk_action_projection` owns authorized page-selection
+  presentation; `support.ticket_lifecycle` remains the mutation/consequence
+  owner through `Tickets.update`.
+- Verification: service, projection, route-permission, architecture, template,
+  no-selection, preview/no-side-effect, proposal drift, eligibility drift,
+  lifecycle-audit, and structured-outcome tests protect the boundary.
+- Cutover gate: unauthorized users receive no selection controls; empty or
+  filtered scope fails closed; no update executes without the exact server
+  preview; changed membership, eligibility, or proposal returns HTTP 409.
+- Fallback retirement: `Tickets.bulk_update` no longer writes lifecycle fields
+  directly and the admin page exposes no unpreviewed or all-filtered ticket
+  mutation path.
+
+Rule: bulk controls appear only when a selection exists and a canonical command
+supports it. Filtered, customer-visible, financial, destructive, or fleet-wide
+operations require explicit impact preview and confirmation. WCAG 2.2 AA labels,
+indeterminate state, selected-count announcements, and focus/keyboard behavior
+are part of the contract; hidden controls are never authorization enforcement.
+## UI Action Forms
+
+## UI Display Formatting
+
+1. `ui.display_formatting` / `app.services.display_format` owns the code-native
+   display rules for normalized currency codes, currency symbols, single-value
+   money, ordered multi-currency summaries, configured display timezone, and
+   timestamp strings. Missing scalar facts use one explicit em-dash marker;
+   only a caller-declared aggregate absence becomes zero.
+2. Financial, network, usage, and other domain owners retain the typed facts:
+   amount, ISO currency, unit, timestamp, and whether a value is zero, unknown,
+   stale, or unavailable. Formatting never changes or derives those facts.
+3. Single-currency values may use the declared symbol form. Mixed-currency
+   totals use explicit ISO-style codes, group normalized codes independently,
+   sort them deterministically, and never add unlike currencies together.
+4. `control.settings_spec` owns the configured billing default currency and
+   scheduler timezone. `ui.display_formatting` resolves those settings for
+   display; templates and mobile clients do not independently default to NGN or
+   Africa/Lagos when a projection declares another value.
+5. `mobile/lib/src/core/formatters.dart` is the existing platform renderer for
+   mobile layout and locale mechanics. It is not a second owner of currency,
+   timezone, missing-value, or unit facts.
+6. First adoption: billing overview/invoice/aging, payments/import history,
+   ledger, and reconciliation delegate their multi-currency summary strings to
+   `app.services.display_format`. Their former private currency-code, amount,
+   and grouped-total formatter copies are retired.
+
+Migration record:
+
+- Old owners: four billing web projection modules each carried equivalent
+  `_currency_code`, `_format_currency_amount`, and `_format_currency_groups`
+  implementations. Their behavior could drift independently from the existing
+  global money filter and configured display settings.
+- New owner: `app.services.display_format`; billing services still assemble
+  domain-owned totals and request a display projection from that owner.
+- Missing-state correction: the prior scalar `format_money` helper rendered
+  missing or invalid values as currency zero. It now renders the shared em-dash
+  marker; aggregate callers request zero explicitly through the grouped/amount
+  functions.
+- Verification phase: formatter behavior tests cover normalization, explicit
+  ISO labels, deterministic grouping, duplicate normalized codes, empty totals,
+  and setting resolution. Existing billing overview, payment import, ledger,
+  and reconciliation tests prove byte-compatible output.
+- Cutover gate: the four pilot modules import `display_format` and contain no
+  private currency normalization or formatter definitions.
+- Fallback retirement: the private formatter copies are removed. Other screens
+  migrate incrementally; no second shared formatter or template-local default
+  may be introduced.
+
+Rule: formatting projects authoritative facts; it does not repair missing data,
+convert currency, select business precision, or collapse unknown into zero.
+Callers must make aggregate-zero behavior explicit and keep unlike currencies
+separate.
+
+1. `ui.action_form_contracts` owns the code-native interaction projection for
+   an action: visibility, disabled reason, semantic tone, impact preview,
+   confirmation requirement, declared fields/options, submitted values, and
+   structured field/general errors.
+2. Domain command and transition services still own authorization, business
+   eligibility, validation, locking, mutation, audit, and consequences. A form
+   contract is a read projection, not an execution bypass. The command owner
+   rechecks every decision when the form is submitted.
+3. Unauthorized actions are omitted. State-ineligible actions are shown
+   disabled only when the owner-provided reason helps the operator understand
+   what must change.
+4. `ui.payment_proof_review_projection` is the first adopted resource.
+   `financial.payment_proofs` owns submitted/verified/rejected eligibility,
+   duplicate-reference policy, payment creation/allocation, WHT consequences,
+   and typed command errors. The web projection adapts those facts into the
+   shared verify/reject forms.
+5. Failed payment-proof submissions render the same detail page with declared
+   values preserved and typed field or general errors. Successful mutations
+   keep POST-Redirect-GET. Templates do not map domain error strings back to
+   fields or infer review availability from raw status.
+6. High-impact actions expose their consequence before submit and require an
+   explicit confirmation supplied by the action contract. Web rendering uses
+   branding-owned semantic roles and WCAG 2.2 AA labels, descriptions, focus,
+   invalid-state, and live-error semantics.
+
+Migration record:
+
+- Old owner: payment-proof detail Jinja selected review actions from raw status,
+  declared fields/defaults, hardcoded impact/confirmation copy, and redirected
+  failed submissions through one unstructured query-string error.
+- New owners: `app.services.payment_proofs` supplies typed eligibility and
+  command errors; `app.services.web_billing_payment_proofs` builds the resource
+  projection through `app.services.action_forms`; the shared Jinja macro only
+  renders that contract.
+- Verification phase: contract, domain eligibility, route/RBAC, submitted-value,
+  structured-error, template architecture, accessibility, payment, duplicate,
+  and WHT tests.
+- Cutover gate: the payment-proof template contains no raw verify/reject form,
+  status-based action branch, local confirmation copy, or domain-error mapping.
+- Fallback retirement: the successful redirect remains; the old failed-action
+  redirect is removed. Other forms migrate incrementally only after their
+  command owner exposes equivalent eligibility and error contracts.
+
+Rule: UI action projections explain and collect a command; they do not decide or
+execute it. Routes pass submissions to the named owner, templates render only
+declared controls, and the owner rechecks permission and eligibility under the
+same lock or transaction that protects the mutation.
+## UI Semantic Presentation
+
+1. Account, subscription, invoice, payment, outage-incident, support-ticket, and
+   work-order lifecycle owners remain authoritative for raw values and
+   transitions. `network.device_state` remains authoritative for the derived
+   device operational vocabulary, retry-pending state, and alarm classification;
+   `network.connection_health` owns the separate customer-safe
+   `connected/trouble/outage` verdict and diagnostic wording.
+2. `ui.status_presentation` owns the human label, semantic tone (`positive`,
+   `info`, `warning`, `negative`, or `neutral`), and non-color icon key for each
+   account, subscription, invoice, payment, outage-incident, device operational,
+   customer connection health, support-ticket, and field work-order status.
+3. Admin customer, billing, and support screens; customer billing/support;
+   reseller invoice/ticket and customer-connection screens; network outage and
+   device NOC consoles;
+   catalog, billing, service-status, support, CRM outage, and network-device API
+   projections; customer mobile;
+   field job/manager APIs; and field mobile consume the same
+   `StatusPresentation` contract.
+4. Server responses carry semantic meanings, not Tailwind classes, Flutter
+   colors, or other platform-specific tokens. `customer.branding` owns the
+   concrete primary, secondary, and five-role semantic palette. Web renders it
+   through `/branding/theme.css`; both Flutter clients resolve the same
+   `BRAND_SEMANTIC_*_COLOR` build inputs from `brand.json`. Renderers select a
+   role and icon; they do not keep local role-to-color dictionaries.
+   The runtime stylesheet also owns compatibility aliases for legacy non-neutral
+   Tailwind palette names and the ordered `data-1` through `data-7` categorical
+   palette used by charts and maps. Structural neutral surfaces, text, borders,
+   shadows, white, and black remain owned by the design-system foundation.
+5. Unknown or old-backend values fail neutral. Clients may humanize the raw
+   value for compatibility, but must not recreate state-specific tone policy.
+
+Migration record:
+
+- Old owners: account label/color dictionaries in customer Jinja and portal
+  context, subscription/invoice/ticket state-to-tone switches in customer
+  mobile, invoice and ticket label/color dictionaries in portal/admin/reseller
+  Jinja, configurable ticket status colors, and work-order label/color
+  dictionaries in field mobile, plus outage lifecycle badges in the manual,
+  classifier, and notification-review consoles, plus device operational label/
+  color maps in NOC inventory, detail, monitoring, worklist, and map surfaces,
+  plus customer-connection state/color switches in portal, reseller, and mobile
+  diagnostic surfaces.
+- Old color owners: literal Tailwind/hex tone maps in the shared badge,
+  connection diagnostics, NOC map/summary renderers, and Flutter status widgets.
+- New meaning owner: `app.services.status_presentation`, transported through
+  `app.schemas.status_presentation.StatusPresentation`. New concrete-color
+  owner: `app.services.brand_profiles` and the generated brand theme tokens.
+- Compatibility boundary: legacy Tailwind palette names resolve to branding-owned
+  scales at runtime; new or touched code uses primary, accent, semantic, or
+  categorical data tokens directly. Literal chart, map, and mobile palettes are
+  retired from migrated domains.
+- Verification: exhaustive enum coverage, API serialization, projection,
+  template architecture, and Flutter parsing/rendering tests.
+- Cutover gate: no customer account/subscription, invoice, payment, outage-incident,
+  device operational, customer connection-health, support-ticket, or field
+  work-order status dictionary or local semantic role-to-color map remains in
+  migrated templates or mobile presentation paths. Configured semantic seeds
+  must retain WCAG 2.2 AA text contrast in light and dark themes.
+- Fallback retirement: client compatibility fallbacks are neutral-only and may
+  be removed after all supported servers emit `status_presentation`.
+
+Rule: UI consumers render semantic tones and icon keys through branding-owned
+theme tokens. They do not decide that a domain state is positive, warning,
+negative, informational, or neutral, and they do not assign a literal color to
+one of those roles locally.
+
+## Secrets and Credentials
+
+1. Bootstrap secrets required before the application starts use environment or
+   mounted secret files.
+2. Low-cardinality application and integration secrets use OpenBao references.
+3. High-cardinality customer, device, and connector credentials use the
+   declared encrypted database-field inventory.
+4. Scheduled rotation stages current and previous keys, converges stored
+   ciphertext, and retires the previous key only after the grace period.
+5. `secrets.settings_migration` is the sole migration boundary for replacing
+   noncanonical secret-setting values with OpenBao references. Its operator
+   command is dry-run by default and never prints secret values.
+
+Rule: callers request a secret or credential outcome from the owning service.
+They do not choose fallback precedence, store plaintext, reveal existing values
+in forms, or rotate key material directly.
+
+## Notifications and Communications
+
+1. Notification channel policy owns channel eligibility and preferences.
+2. Event notification policy owns event enablement and balance-notification
+   suppression.
+3. `communications.eligibility` owns the recipient suppression ledger and the
+   transactional-versus-marketing send decision.
+4. `communications.intents` owns communication intent lifecycle, recipient and
+   channel expansion, and delivery-outcome projection.
+5. `communications.ephemeral_actions` owns the allowlisted, typed, non-secret
+   action envelope and just-in-time sensitive-message materialization
+   orchestration. Calling domains still own capability purpose, claims,
+   lifetime, and consequences. The worker must not persist or log rendered
+   bearer content or exception text that may contain it.
+6. Notification service owns notification rows and delivery lifecycle.
+7. Staff notification service owns internal/admin notification creation.
+8. `communications.customer_read_state` owns customer notification read/unread
+   state and unread counts across the web portal and mobile app. Subscriber
+   metadata is its bounded persistence mechanism; `/me/notifications` projects
+   that state, and `/me/notifications/read` is the self-scoped mutation
+   boundary. Device storage is only a one-way legacy migration input. The
+   identity-cleared GET response cache may render last-known state offline but
+   never accepts read decisions.
+9. `communications.team_inbox` owns conversation notes, assignment, replies,
+   contact-linking, widget writes, inbound-channel ingestion, collaboration,
+   and admin mutation transactions. `app.services.team_inbox_commands` is the
+   committed admin command boundary; `app.web.admin.inbox` only translates HTTP
+   inputs and outcomes. Named sub-owners inside the family:
+   `team_inbox_channel_receive`/`team_inbox_smtp_inbound`/`team_inbox_receive`
+   own inbound ingestion (webhook adapters build payloads and call their
+   `*_committed` entrypoints, never the ORM); `team_inbox_outbound` and
+   `team_outbound` own sends; `team_inbox_routing` owns conversation routing
+   and auto-assignment; `team_inbox_assignment`/`team_inbox_operations`
+   decide lifecycle and are invoked through the command boundary;
+   `communications.team_inbox_campaigns` owns campaign-sourced conversation
+   and outbound-message materialization. Inbox ORM rows have no writer
+   outside the `team_inbox_*` family — campaigns and other domains request
+   materialization from it rather than constructing inbox rows themselves.
+   `app.team_inbox_smtp` owns only the dedicated SMTP process lifecycle,
+   readiness check, and continuous/deployment probe orchestration; it delegates
+   every inbound write and exact-probe verification to
+   `team_inbox_smtp_inbound`, delegates consent-gated probe delivery to the
+   canonical notification delivery point and email transport, and is never
+   started from a web-process lifespan.
+   `team_inbox_contact_links` also owns the reviewed projection from an
+   existing Inbox route to a canonical Party contact point. It validates the
+   point, provider scope, target Party, and active contact relationship against
+   `party.registry`, but does not let Party services mutate Inbox routing.
+   `team_inbox_read` and `team_inbox_operations.queue_metrics` also own the
+   exact open, needs-response, unassigned, muted, snoozed, and failed-outbound
+   cohorts. KPI links carry the matching server filter; resolved conversations
+   cannot leak into an open-derived drilldown.
+9. Campaign services own marketing audience, sequence, and content decisions.
+   They apply `communications.eligibility` when building an audience, before
+   enqueueing a send, and again through the marketing communication intent at
+   delivery. Agent replies are transactional communication intents and remain
+   eligible unless the suppression ledger blocks all communication. Campaigns
+   request a canonical sender key; email delivery alone resolves that key to
+   SMTP identity and credentials.
+
+Rule: domain services request a notification outcome; they should not construct
+notification rows, choose email/SMS/WhatsApp directly, or maintain recipient
+read state outside the owning service. Admin inbox routes must not load or
+mutate inbox ORM rows, control commits, or select alternate mutation helpers.
+Invoice issue/send actions emit `invoice_sent` once through the invoice owner;
+web and bulk adapters do not hand-compose or directly deliver a second email.
+
+## Events and Webhooks
+
+1. Event dispatcher owns event routing.
+2. Event-store service owns event rows, handler attempts, retry lookup, cleanup,
+   and stale processing.
+3. Webhook delivery service owns webhook delivery rows and queueing.
+4. Subscription lifecycle event service owns lifecycle audit rows.
+
+Rule: handlers orchestrate. Persistence and retry bookkeeping live in services.
+
+## Observability
+
+1. Observability service owns task/job run recording.
+2. Task reliability owns task metadata, heartbeat interpretation, and alerting.
+3. `observability.channel_health_contracts`
+   (`app.services.channel_health_contracts`) owns monitoring activation, active
+   windows, natural-versus-synthetic mode, silence thresholds, severity, and
+   runbook declaration for every sensitive external channel. Every supported
+   channel has exactly one enabled contract or an explicit disabled reason.
+   Invalid or incomplete registries fail closed and alert immediately.
+4. Metrics collectors expose read-only gauges/counters for runtime pressure.
+5. Scheduled single-flight producers own expensive business-health snapshots;
+   metrics collectors only read those bounded snapshots.
+6. The cross-Dotmac scrape contract is defined in
+   `docs/METRICS_SCRAPE_SAFETY.md`: `/metrics` reads process-local instruments,
+   bounded snapshots, and static metadata only. It never opens a database
+   session or invokes a business resolver.
+
+Rule: Celery tasks report lifecycle through shared observability helpers; they
+should not write heartbeat/run rows directly unless they are the helper.
+Scrape-time collectors must never perform unbounded business-table scans or
+per-customer financial reconstruction. Database and infrastructure queries are
+also produced out of band so pool exhaustion cannot make the scrape path block.
+Prometheus and transport adapters consume channel-health contract facts; they
+must not hard-code a second activation flag, business window, silence threshold,
+or severity. High-volume channels use natural freshness. Low-volume sensitive
+channels require a verified end-to-end synthetic signal that cannot be forged
+by an external payload marker. Once a contract is enabled its declared alert
+consequence is live—there is no shadow decision path.
+
+## Network Domain
+
+Dependency order:
+
+1. `network.identity`: resolves cross-model network/customer links.
+2. `network.monitoring_inventory`: owns monitoring inventory, metric records,
+   alert rules, and alert state mutations.
+3. `network.fiber_source_staging`: owns immutable source manifests, normalized
+   staged map facts, and non-authoritative duplicate/match suggestions. Staging
+   preserves evidence; it cannot create, merge, retire, or delete canonical
+   assets.
+4. `network.fiber_topology`: owns fiber asset identity and connectivity, the
+   OLT-to-customer topology integrity contract, ordered validated subscription
+   traces, bounded fault-candidate ranking, and customer-trace evidence
+   completeness. Electronic inventory, telemetry, and imported map geometry are
+   observations until this owner validates their identity and edges. Missing or
+   ambiguous edges remain explicit gaps; ranking does not declare an incident or
+   decide numeric cutover-review readiness. An operational cable must have two
+   distinct active, canonically referenced termination points and approved route
+   geometry, and its active component must be rooted at an exact serving
+   PON/OLT boundary. It also declares positive cable `fiber_count` and exact
+   numbered cores through `FiberStrand.segment_id`; cable names cannot establish
+   ownership. Supports and poles are mounts, not implicit terminations.
+   Revision `361_fiber_plant_operational_integrity` adds the active-row database
+   check. `network.fiber_plant_integrity` owns rooted activation, safe cable
+   retirement, exact numbered-core materialization, and cable/splitter capacity
+   guards; topology remains the trace and diagnostic read owner.
+   Its preflight reports legacy violations and never repairs them implicitly.
+5. `network.fiber_support_structures`: owns canonical pole/support identity,
+   lifecycle, ownership, inspection, and lease state, plus exact reviewed mount
+   edges to cabinets, FAT/access points, splice closures, and fiber segments.
+   Imported pole rows remain observations. Reviewed source-identity decisions
+   may create or link a support through `network.fiber_asset_changes`, whose
+   approved support mutations delegate here. Mount preview is write-free;
+   confirmed proposals bind exact state, require independent review, and lock
+   and revalidate before execution. Geometry, names, external IDs, and
+   proximity never create a mount. A support with active mounts cannot retire.
+
+Physical-continuity owner: `network.fiber_physical_continuity` owns reviewed
+fiber racks, ODF/patch panels, one-channel connector ports, exact strand-end
+terminations, core splices, patch cords, and the ordered physical-core evidence
+hash. Every link has preview, independent review, locked execution, and exact
+result evidence. Rack-unit, panel-port, cable-core, and splitter capacity remain
+explicit and bounded. Duplex patching is two explicit channel links sharing an
+assembly label; MPO/MTP inventory fails closed until an exact assembly/lane
+model exists. Names, labels, proximity, geometry, legacy `FiberSplice` rows,
+and `FiberSegment.fiber_strand_id` never create continuity. Direct legacy splice
+writers are retired; historical rows remain readable evidence.
+
+6. `network.fiber_asset_changes`: owns reviewed passive-fiber change requests
+   and their approved mutations. Approved support mutations delegate to
+   `network.fiber_support_structures`; this generic request owner does not
+   construct supports or mount edges. Operational cable decisions delegate exact
+   infrastructure-end, PON-rootedness, core-materialization, and safe-retirement
+   enforcement to `network.fiber_plant_integrity`. Splitter and splitter-port
+   decisions delegate persistence to `network.splitter_inventory`, which is also
+   the owner used by API and admin form adapters and rejects declared ratio/count
+   conflicts. Rack, panel, and connector changes plus field core-splice review
+   delegate to `network.fiber_physical_continuity`; the change-request workflow
+   does not write a parallel splice graph. Attachment decisions remain separately
+   owned and neither names nor geometry create those edges. Direct map imports
+   are not a second writer.
+7. `network.fiber_identity_decisions`: owns dual-reviewed source identity
+   decisions and canonical source links. Point-asset creates become pending
+   `network.fiber_asset_changes` requests; the source link is projected only
+   after the approved asset exists.
+8. `network.fiber_identity_review`: owns the latest-source review queue,
+   immutable batch proposal manifests, exact-manifest independent review
+   attestations, bounded execution-run evidence, and idempotent finalization
+   sweep. It delegates each decision transition to
+   `network.fiber_identity_decisions`; execution and reconciliation never
+   approve the resulting asset change request.
+9. `network.fiber_field_observations`: owns immutable technician observations
+   bound to exact staged feature content, native Sub work orders, technician and
+   person identities, explicit labels or canonical references, measurement
+   facts, and active same-work-order private attachment pointers. It retains
+   contradictory observations and projects agreement, conflict, superseded
+   evidence, and drift by verification scope. It cannot infer identity or
+   endpoints, create or advance decisions, approve changes, mutate canonical
+   topology, or establish a cutover threshold. For an explicitly planned job it
+   also enforces the exact source scope owned by
+   `network.fiber_field_verification_job_scope`; legacy jobs without a plan keep
+   their existing behavior.
+10. `network.fiber_field_verification_job_scope`: owns the versioned work-order
+   metadata contract for exact planned staged-feature IDs, content hashes, and
+   worklist row hashes. A planned job cannot observe a source identity outside
+   that scope or content that has changed. Names, labels, geometry, and
+   proximity never expand it.
+11. `network.fiber_field_verification_worklist`: owns the exhaustive read-only
+   latest-source field-evidence worklist, deterministic evidence-gathering
+   priority, and exact row/report digests. Every staged point and path remains
+   visible, including current agreement. Existing native work-order references
+   are context only. This owner cannot create or assign jobs, record
+   observations, infer identity or endpoints, generate decisions, mutate
+   topology, establish a field threshold, or claim cutover readiness.
+12. `network.fiber_field_verification_jobs`: owns bounded, write-free previews
+   and confirmed execution of exact staged-source job plans. A plan selects at
+   most 100 explicit current worklist rows and binds their IDs, row/content/
+   geometry hashes, existing job context, the complete worklist report hash,
+   explicit subscriber, schedule, optional technician, and deterministic native
+   job identity. Execute re-runs the worklist and exact plan digest, then
+   delegates create and optional assignment to
+   `operations.work_order_commands` in one transaction and records actor audit
+   evidence. It never constructs either work-order table and adds no action to
+   the read-only worklist or map.
+13. `network.fiber_field_verification_map`: owns the complete read-only exact
+   staged-GeoJSON overlay for the field-verification worklist, presentation-only
+   geometry classification and bounds, and exact feature/overlay digests. It
+   fails closed on worklist/source identity or hash drift, colors features only
+   by owner-produced evidence priority, and retains unrenderable source geometry
+   without repairing or hiding its cohort row. It cannot snap, transform, infer
+   topology, create jobs or observations, mutate state, establish a threshold,
+   or claim cutover readiness.
+14. `network.fiber_work_order_evidence_map`: owns the read-only exact-GeoJSON
+   fiber evidence projection for one explicitly scoped native Sub work order.
+   It consumes the immutable field-observation cohort and complete
+   field-verification overlay, requires every job observation to map exactly
+   once, returns no
+   unobserved source feature, strips all other jobs' evidence, and retains
+   current versus superseded source context plus exact hashes. Current
+   field-verification geometry remains presentation evidence; superseded
+   observations do not verify it. This owner cannot create or assign jobs,
+   record observations,
+   repair geometry, infer or mutate topology, establish a threshold, decide
+   customer impact, or claim cutover readiness.
+   The `field_mobile` consumer is a read-only projection adapter, not a
+   new owner. It opens this exact endpoint from native job detail, renders only
+   the returned job cohort and server-owned context/geometry presentations, and
+   stores offline snapshots under authenticated-principal scope plus the
+   composite `work_order_public_id + report_sha256` evidence identity. A newer
+   report replaces the prior snapshot for that principal and job; an offline
+   hit is visibly stale, and no cached report can cross a principal or
+   work-order boundary. Authoritative 4xx scope, permission, or lineage failures
+   never fall back to stale evidence. The client cannot discover unobserved
+   assets, aggregate jobs, repair geometry, infer topology/fault/customer
+   impact, create observations, or mutate work and topology state.
+15. `network.fiber_identity_coverage`: owns exhaustive read-only reconciliation
+   of every latest staged cabinet, FAT/access point, splice closure, building,
+   and pole/support identity to immutable batch/review/run evidence,
+   change-request state, canonical asset state, and exact source provenance. It
+   keeps canonical-model support, identity coverage, lifecycle, mount state,
+   and field-verification evidence independent. A support identity is terminal
+   only when it is applied with current provenance or explicitly reviewed and
+   rejected. Identity coverage does not infer or decide support mounts. Field
+   observations remain visible but do not alter this component owner's gates.
+   The approved numeric policy consumes them only through
+   `network.fiber_cutover_readiness`. Passing component gates provide evidence
+   for that separate combined review only; this owner cannot infer identity, create
+   or advance decisions, approve change requests, mutate assets, or authorize
+   production cutover.
+16. `network.fiber_connectivity_decisions`: owns reviewed staged-path endpoint
+   decisions, shared typed termination resolution, canonical segment source
+   provenance, and connectivity reconciliation. Geometry never supplies an
+   endpoint. A canonical edge exists only after two explicit endpoint
+   references and their segment mutation are independently reviewed and
+   applied through `network.fiber_asset_changes`. Direct termination/segment
+   API mutations are retired; read endpoints remain projections.
+17. `network.fiber_connectivity_review`: owns immutable operator-scale staged-path
+   proposal manifests, exact-manifest independent all-or-nothing attestations,
+   and bounded execution/reconciliation evidence. Every create or link row binds
+   the exact staged content hash and operator-supplied canonical endpoint IDs;
+   geometry is evidence only and never selects an endpoint. It delegates every
+   decision transition to `network.fiber_connectivity_decisions` and never
+   approves the resulting termination or segment request owned by
+   `network.fiber_asset_changes`.
+18. `network.fiber_connectivity_coverage`: owns exhaustive read-only
+   reconciliation of every latest staged path to immutable batch/review/run
+   evidence, decision lifecycle, termination/segment request state, and canonical
+   segment source provenance. It keeps exact, unassigned, superseded,
+   overlapping, and blocked source coverage separate from pending, applied,
+   rejected, declined, stale, failed, and evidence-drift lifecycle state. Field
+   observations are projected separately and do not alter this component
+   owner's gates. Its conservative gates produce evidence for the numeric
+   cutover-readiness owner only. It never infers endpoints, creates or advances decisions,
+   approves change requests, mutates topology, or authorizes production cutover.
+19. `network.fiber_cutover_readiness`: owns policy
+   `fiber_topology_cutover_v1`, the complete global cohort evidence projection,
+   and the sole combined numeric topology cutover-review readiness decision.
+   It consumes exact identity/connectivity coverage, the exhaustive field
+   worklist, canonical topology blockers, and exhaustive active-customer traces
+   in one repeatable read-only snapshot. Gates require 100% exact-current and
+   current terminal evidence, 100% traceability, 100% current agreement for
+   required field rows, and zero blockers. Explicit dormant low-risk rows would
+   require a 20% audit with a 25-row minimum; any discrepancy blocks, and above
+   2% expands that asset class to complete review. No authoritative dormant
+   classifier exists, so all staged rows remain required. Missing POP/OLT,
+   splitter, and customer-endpoint field contracts fail closed. A passing report
+   is independent-review evidence only and cannot authorize or perform a
+   production cutover.
+20. `network.ont_topology_observations`: owns durable allowlisted network facts
+   about an ONT's exact electronic location. UISP supplies an exact ONT, parent
+   OLT, and numeric PON observation; it may initialize missing PON inventory.
+   Huawei F/S/P observations can link only an already-modeled exact active PON.
+   The owner may initialize empty ONT OLT/PON edges with source evidence, but it
+   never overwrites or merges an existing identity edge. Missing or conflicting
+   data remains unresolved observation evidence in the admin review queue and
+   cannot itself authorize an assignment repair. Inferred repair, assignment
+   form reads, Huawei authorization adapters, and PON metadata forms cannot
+   bypass the owner to merge, create, reactivate, or rewrite PON inventory or
+   references.
+21. `network.ont_assignment_commands`: owns normal explicit ONT service
+   assignment, normal release, verified PON-move projection, and exact audit
+   results. It requires exact ONT, subscription, and modeled PON identifiers;
+   derives the subscriber only through the subscription bridge; and fails
+   closed when an existing customer, subscription, PON, or OLT identity
+   disagrees. MAC, name, address, work-order, registration, and geometry
+   inference cannot select identity. UFiber MAC matching is preview-only,
+   management IPAM cannot manufacture an assignment, and generic CRUD adapters
+   delegate or retire mutation.
+22. `network.ont_assignment_identity`: owns preview, independent review,
+   execution, and exact-result evidence for exceptional ONT assignment
+   identity repair. Repairs bind one active assignment, exact subscription,
+   PON, OLT, and the complete set of active ONT/subscription conflicts. The
+   subscriber projection comes only from the exact subscription. Subscriber,
+   address, name, geometry, and imported registration inference are forbidden.
+   Public assignment mutations and registration-driven writes are retired;
+   changed execution inputs close without mutation. The admin review queue is a
+   thin projection: it detects disagreements, requires exact identifiers,
+   derives OLT only from the exact modeled PON, enumerates conflicts
+   deterministically, and requires preview before proposal. It never promotes a
+   detected discrepancy directly into a decision or mutation.
+23. `network.ont_assignment_cutover`: owns the exhaustive read-only audit of
+   active assignment invariants, stable exact blocker evidence, and the future
+   database-constraint readiness gate. It scans all active assignments before
+   display filtering, keeps required identity, active-ONT uniqueness,
+   active-subscription uniqueness, and exact active network targets visibly
+   distinct, and routes investigation to `network.ont_assignment_identity`.
+   It never chooses replacement identity, creates a proposal, mutates an
+   assignment, or enables a constraint. A clean report is necessary but does
+   not itself authorize cutover.
+24. `network.ont_assignment_cutover_batches`: owns immutable operator-selected
+   cleanup manifests and their independent review attestations. Every manifest
+   binds the complete cutover report SHA-256, each selected finding SHA-256,
+   and explicit per-assignment action, target, and complete conflict IDs. It
+   atomically delegates proposal and review state to
+   `network.ont_assignment_identity`; it cannot execute a batch or mutate an
+   assignment. Approval only makes the individual decisions eligible for their
+   identity owner's locked revalidation and execution.
+25. `network.ont_assignment_cutover_verification`: owns immutable
+   post-execution verification attestations. It copies every terminal identity
+   decision's exact result payload/hash, binds those results to a fresh
+   exhaustive assignment audit, and keeps pending, applied, stale-closed,
+   conflict-closed, declined, batch-scope residual, and global blocker evidence
+   distinct. A verifier must be independent of proposal, review, and execution
+   actors. Pending decisions cannot be attested. This owner cannot execute a
+   repair, mutate an assignment, or enable a constraint.
+26. `network.ont_assignment_cutover_coverage`: owns the read-only reconciliation
+   of every current assignment cleanup finding against all immutable proposal,
+   review, decision-result, and verification lineage. One repeatable snapshot
+   distinguishes exact, superseded, unassigned, and overlapping coverage while
+   keeping decision outcome, current repair-scope state, and verification drift
+   separate. Its conservative gates produce evidence for a separate constraint
+   authorization review; they do not authorize or enable constraints, and this
+   owner cannot execute repairs or mutate assignments.
+27. `network.ont_assignment_constraint_authorization`: owns immutable requests
+   and independent approve/decline attestations for a future assignment
+   constraint cutover. Each request binds an explicitly named target, expiry,
+   complete clean coverage payload, current coverage hash, and independent audit
+   hash. Approval fails closed on expiry or current evidence drift. Current,
+   stale, expired, declined, and invalid state is derived rather than maintained
+   as a second mutable lifecycle. Even current approval is only evidence for a
+   separate reviewed DDL change; this owner has no constraint or DDL executor.
+28. `network.ont_inventory_release`: owns the local electronic-identity release
+   consequence of an explicit return-to-inventory transition. After successful
+   external OLT/ACS cleanup it locks the ONT and all assignments, closes active
+   assignments, clears exact subscription/subscriber/service-address and PON
+   references, and clears ONT OLT/PON/F/S/P identity in one transaction. It
+   chooses no replacement identity. Legacy SmartOLT import is preview-only and
+   bulk provisioning migration cannot target a PON.
+29. `network.fiber_access_attachments`: owns preview, independent review,
+   execution, and audit evidence for exact PON-to-splitter-input and
+   ONT-to-splitter-output attachments plus exact directed
+   splitter-output-to-downstream-input cascades. It is the only writer for
+   active `PonPortSplitterLink` and `SplitterCascadeLink` records and the ONT
+   splitter projection. It requires exact ONT/PON/OLT agreement, one rooted
+   acyclic splitter tree, directed active ports, root-first cascade construction,
+   leaf-first removal, one-to-one port occupancy, and explicit insertion loss
+   for every cascaded splitter stage. Geometry, cabinets, names, ratios,
+   proximity, and legacy splitter assignments never create an edge; stale
+   execution closes without mutation.
+30. `network.access_path`: resolves `subscriber/subscription -> access path`
+   from identity plus validated fiber topology. Its fiber end-to-end projection
+   composes customer/ONT, exact passive cables, reviewed racks/ODFs/patch cords,
+   numbered in-use cores and core splices, OLT identity, authoritative
+   provisioning NAS, and the observation-agreeing forwarding chain to a
+   core/border root. It emits typed gaps and one combined evidence hash. Live
+   RADIUS NAS remains a separate observation and never supplies a missing
+   authoritative hop.
+31. `network.radius_sessions`: resolves online-now state from active sessions.
+32. `network.ont_runtime_status`: owns Huawei bulk ONT status observations, the
+   Huawei OLT pollability predicate, and admission of those poll tasks. Scheduled
+   sweeps and stale inventory reads request the same retry-safe infrastructure
+   observation poll through this owner. These bulk reads are not tracked device
+   commands; operator-requested single-ONT refresh remains operation-backed.
+33. `network.device_state`: derives NOC operational state, retry state, and alarm
+   classification from administrative intent and monitoring observations, and
+   owns the `up/degraded/down/maintenance` vocabulary. Retry-pending gaps stay
+   binary but are non-alarming; presentation renders retry-pending `down` as
+   warning/clock rather than a confirmed negative failure.
+34. `network.ont_status_refresh`: owns admission of stale ONT runtime-status
+   refresh requests from read surfaces. ONT inventory may request a refresh when
+   displayed evidence is stale, but it must not poll OLTs directly. Huawei ONTs
+   request the `network.ont_runtime_status` infrastructure observation poll with
+   per-OLT cooldown/admission; UISP-managed ONTs remain refreshed by the UISP
+   topology sync source. `Status refresh pending` means the displayed value is
+   retained or derived and needs asynchronous confirmation, not that the page
+   performed a live check.
+35. `network.outage_impact`: resolves affected customers from topology.
+36. `network.device_groups`: owns device-group mutations, membership, and bulk
+   action queueing.
+37. `network.outage_lifecycle`: owns the persisted incident status vocabulary,
+   incident transitions, escalation planning, and outage event emission.
+38. `network.connection_health`: combines authoritative path, live-session,
+   last-mile, impact, and active-incident inputs into the customer-safe
+   `connected/trouble/outage` verdict plus headline/message/advice. It does not
+   own device operational state or raw online-session observations.
+39. `network.control_plane_intent`: owns the shared desired-state delivery
+   lifecycle, control-plane target/revision identity, and vendor status
+   projections. Vendor adapters project through this one
+   desired-to-readback lifecycle.
+40. `network.huawei_cli_response`: owns Huawei CLI response classification,
+   stable error codes, expected-absence predicates, unsupported-command
+   detection, and idempotent response semantics. Huawei SSH sessions, protocol
+   adapters, readback verification, and web workflows consume these projections
+   and do not maintain firmware response string tables. A response classified
+   as accepted is transport evidence, not proof of convergence; write workflows
+   still require the control-plane intent readback contract. Protocol adapter,
+   authorization, provisioning, and reconcile history persist the sanitized
+   classifier projection as operation evidence; raw CLI output is not retained.
+41. `network.routeros_sot`: owns typed MikroTik desired state, the managed
+   resource/field registry, Dotmac ownership markers, verified reconciliation,
+   and periodic drift evidence. Router routes and tasks only orchestrate it,
+   and it projects through `network.control_plane_intent`.
+42. `network.forwarding_topology`: owns reviewed downstream-to-upstream
+   forwarding declarations and the official operational graph for exact device,
+   interface, site, core/border/NAS role, VRF, preference, configuration intent,
+   and, where applicable, peer, route, next-hop, and NAS termination identity.
+   Declare and retire transitions require a write-free preview, exact hash
+   confirmation, independent review, locked revalidation, audit evidence, and
+   an exact hashed result. `network.control_plane_intent` and
+   `network.routeros_sot` remain configuration owners; this owner never applies
+   device configuration. LLDP, BGP, routing-table, and RADIUS data remain
+   observations. LLDP must agree on both exact interfaces, border paths require
+   exact current BGP and route observations, NAS paths require exact LLDP and
+   route observations, and RADIUS session counts remain online context only.
+   Missing, expired, conflicting, or invalid evidence fails closed. Customer
+   upstream paths, reachability ancestry, outage localization, and blast radius
+   consume only reviewed declarations with current required observation
+   agreement. No observation, legacy `NetworkDevice.role`, imported identifier,
+   name, or inferred site can create official forwarding path.
+   `app.services.network.forwarding_observation_collector` is the read-only
+   RouterOS adapter: it uses GET requests scoped by active reviewed declarations,
+   requires exact router/device, interface, and VRF identity, and submits
+   expiring facts only through the forwarding owner. Its scheduled task is
+   fail-closed behind `network.forwarding_observation_collection`; enabling the
+   control starts an observation shadow run and does not authorize declaration,
+   configuration, customer/outage cutover, or any router write.
+   `network.access_path.resolve_fiber_end_to_end_path` is the read-only composed
+   proof across this graph and `network.fiber_topology`. It requires the exact
+   subscription/ONT, passive segment inventory, and one exact reviewed physical
+   connector/patch/core/splice route, one OLT identity node,
+   the authoritative provisioning NAS on the selected agreeing declaration
+   chain, and a core/border root. It preserves typed gaps and one combined
+   evidence hash. Live RADIUS NAS identity remains a separate observation and
+   cannot fill a missing provisioning or declaration edge. Production remains
+   blocked until complete reviewed passive/declaration cohorts and fresh
+   observations pass their documented cutover gates.
+43. `network.operation_ledger`: owns the tracked device operation lifecycle and
+   status vocabulary, the terminal-transition guard, correlation-key duplicate
+   suppression, stale-active reclamation, parent/child rollup, and whether an
+   operation may run, resume, or be re-executed. Celery is transport: tasks
+   report progress through the ledger and do not decide retry eligibility.
+   `app.services.task_reliability` declares each task's retry/idempotency/
+   visibility contract and is a *projection* of this owner, not a second
+   authority. A contract may only claim operator redrive
+   (`MANUAL_REDRIVE`/`ADMIN_REDRIVE`) once a redrive path exists in the ledger;
+   declaring an affordance that does not exist is drift, not policy. Recovery
+   requests require a reviewed current-state head, scoped idempotency key,
+   operator reason, retry limit, and a typed handler. The failed operation is
+   immutable; each approved attempt is a separate `redrive_of` operation.
+   `app.services.network_operation_recovery` is the ledger's typed recovery
+   boundary. It cannot dispatch task names or payloads supplied by a route.
+   The initial recovery handler covers operator-requested, observation-only
+   single-ONT status refresh. Firmware, configuration, lifecycle, and other
+   device writes remain ineligible until their owning service provides
+   current-state validation and replay safety.
+44. `network.operation_dispatch`: owns transactional staging and transport for
+   operation-backed network commands. The operation and its exact versioned
+   command are committed together in `network_operation_dispatches`; request
+   handlers never commit an operation and then publish its device task. The
+   scheduled publisher is the only broker writer for registered commands, and
+   every broker message enters a typed envelope that atomically claims the row
+   before device code runs. Duplicate envelopes therefore do not duplicate a
+   device command. Broker acceptance, worker acknowledgement, completed
+   delivery, exhausted publication, and reconciliation-needed execution are
+   transport evidence, not substitutes for operation/device outcome. Unknown
+   execution fails closed and requires current-state review before redrive.
+   The cutover covers operator-requested single-ONT status refresh, ONT
+   authorization and baseline repair, TR-069 bootstrap verification attempts,
+   ONT and OLT firmware entry commands, and OLT-triggered ONT desired-state
+   reconciliation. Recurring or stale-read-triggered bulk OLT status collection
+   is observation polling owned by `network.ont_runtime_status`, not an
+   operation-backed command. Firmware verification/readback continuations retain
+   their own state machines and are not parallel command-origination paths.
+45. `network.ont_provisioning_commands`: owns acceptance and duplicate handling
+   for ONT authorization, baseline repair, and bootstrap verification commands.
+   It commits each operation and typed dispatch atomically. Admin, API, and bulk
+   callers receive operation/dispatch identifiers and never publish the device
+   task themselves.
+46. `network.ont_provisioning_execution`: owns the tracked authorization,
+   baseline-repair, DB-only baseline preview, bootstrap retry, parent rollup,
+   and bulk-item transitions.
+   Celery workers claim an existing dispatch and delegate execution here; they
+   do not create operations or decide a parallel retry policy. Delayed bootstrap
+   attempts are separate immutable dispatch rows on the same child operation,
+   while Inform-driven completion uses the same parent projection.
+47. `network.ip_pool_utilization` (`app/services/ip_pool_utilization_snapshot.py`):
+   owns IP-pool utilization reads — the daily utilization snapshots and the
+   live per-pool used/total counts consumed by the network report. The live
+   count (assignment-join basis) is deliberately distinct from the snapshot's
+   CIDR-capacity basis; both definitions live in this owner and are documented
+   in its docstrings. Web layers compose these reads; they do not count
+   addresses or assignments themselves.
+
+Provisioning dispatch authority migration: the retired path published Celery
+tasks from admin/API/bulk callers and created the operation inside the worker.
+The new command owner creates the operation and typed dispatch atomically before
+publication. The cutover gate is: migration `294` applied, the dispatch
+publisher enabled, and workers running code that claims dispatch envelopes.
+For broker-retention safety, an old envelope without a dispatch identifier may
+only re-submit its intent to `network.ont_provisioning_commands`; it cannot enter
+device code. Remove this compatibility adapter after one maximum broker-retention
+window has elapsed after production cutover. The old direct-publish and
+worker-owned-operation paths have no fallback authority and must not return.
+
+Rule: pollers and map collectors write observations; `network.fiber_topology`
+validates passive asset identity and connectivity;
+`network.forwarding_topology` owns official forwarding declarations and
+agreement; resolver services decide state; event services decide consequences.
+Customer-facing outage, SLA, expiry suppression, support
+context, and escalation should consume these network SOT layers.
+Outage list/detail projections add `StatusPresentation` from the raw lifecycle
+state; templates and CRM consumers do not maintain their own state-to-severity
+dictionaries. Device operational state and customer connection-health verdicts
+remain separate vocabularies owned by their corresponding network services.
+Numeric fiber cutover-review readiness is decided only by
+`network.fiber_cutover_readiness`; component reports and UIs cannot maintain a
+parallel threshold.
+Customer portal, reseller, support context, API, and mobile verdict surfaces
+consume the same connection-health payload and semantic presentation; raw
+session dots on subscription views remain observation surfaces outside that
+verdict.
+
+## Subscriber Sessions
+
+Dependency order:
+
+1. `sessions.radius_reconciliation`: is the canonical writer of the
+   `radius_active_sessions` projection; it reconciles external `radacct` open
+   sessions and prunes dead rows.
+2. `sessions.radius_resolution`: answers online-now and primary-session
+   questions for customers/subscribers.
+3. `sessions.enforcement`: owns CoA, disconnect, and session refresh outcomes
+   after billing/access/FUP state changes.
+
+Rule: accounting imports write session facts; resolvers answer online state;
+enforcement applies network-side consequences. Billing/access code should not
+query `RadiusAccountingSession` or `radius_active_sessions` directly to decide
+access.
+
+## Application Sessions
+
+Dependency order:
+
+1. `app_sessions.store`: owns Redis-backed storage, principal indexes, fallback
+   store, and revocation epochs.
+2. `app_sessions.customer_portal`: owns customer portal session lifecycle,
+   refresh, revoke-all, impersonation, and read-only policy.
+3. `app_sessions.auth`: owns database auth-session listing and revocation.
+
+Rule: routes authenticate and authorize, but session lifecycle and revocation
+policy belongs in session services. Do not duplicate cookie/session mutation
+logic in route handlers.
+
+The read-only admin control-plane projection may aggregate database-session
+counts and Redis health, but it does not enumerate Redis keys or become a
+session writer.
+
+## Runtime Infrastructure
+
+Dependency order:
+
+1. `runtime.db_sessions`: owns background DB session lifecycle and advisory lock
+   safety.
+2. `runtime.task_idempotency`: owns duplicate suppression and stale task
+   execution rows.
+3. `runtime.task_heartbeat`: owns task success/skip heartbeat signals.
+4. `runtime.infrastructure_polling`: owns shared native reachability observations
+   and the generic network-device pollability predicate. Domain-specific
+   collectors such as Huawei ONT runtime status depend on these polling
+   mechanics while owning their own observation and eligibility contracts.
+5. `runtime.infrastructure_health`: owns dependency health checks for
+   Postgres, Redis, VictoriaMetrics, Celery, and related infrastructure.
+
+Rule: tasks should use shared DB-session, lock, idempotency, and heartbeat
+helpers. Infrastructure pollers write observations only; network/device SOT
+services interpret state for customer impact, alerts, and SLA.
+
+## Provisioning Operations
+
+Dependency order:
+
+1. `operations.provisioning_context`: composes subscriber, subscription, ONT,
+   CPE, TR-069, ACS, service address, and NAS context.
+2. `operations.provisioning_workflow`: executes service-order workflows and
+   provisioning steps from the resolved context.
+3. `operations.work_order_status`: declares persisted work-order values and the
+   canonical open, assignable, and terminal sets.
+4. `operations.work_order_commands`: owns native work-order creation and header
+   commands, assignment decisions/projection, and assignment-queue transitions.
+   Dispatch API/web and field-manager handlers are authorization/transport
+   adapters around this owner. Assignment preview is read-only; execution locks
+   the work order, atomically updates the queue and assignee projection, records
+   exact previous/result actor audit evidence, and treats an equivalent retry as
+   a replay. Direct header assignment fields and direct field-execution status
+   changes are rejected. CRM ingest remains a provenance importer and does not
+   become native command authority.
+5. `operations.work_orders`: exposes work-order read models and customer links.
+   The `work_order` table is Sub's authoritative work-order storage
+   (WORK_ORDER_IDENTITY_SOT): identity is the Sub-generated `public_id`;
+   `crm_work_order_id` is a nullable provenance reference on the `work_order`
+   root only — NULL for native rows and written only by CRM import/webhook
+   ingest, resolved to native identity once at that boundary, and never used as
+   a join key. The eleven field-evidence tables carry no CRM string; they join
+   solely through the `work_order.id` FK. The still-live
+   `reconcile_work_order_mirror` job keeps its persisted name because it is a
+   CRM sync job, not the name of authoritative storage, and retires with CRM.
+
+   Native mutations delegate to `operations.work_order_commands`. Read-only
+   cross-domain worklists may show job context but cannot write work-order or
+   assignment state themselves.
+6. `operations.field_completion`: owns field-job completion eligibility, evidence
+   requirements, and completion transitions.
+7. `operations.material_dependencies`: owns the material need and approval that
+   can block a Sub service work order, then idempotently projects ERP's
+   authoritative issue/refusal outcome back into that workflow. It never posts
+   stock or selects ERP inventory. After the per-flow cutover, the old local
+   issue/fulfil actions fail closed. The cross-repository contract is
+   `dotmac_erp/docs/dotmac_sub_material_support_contract.md`.
+8. `operations.project_lifecycle`: owns native project field/status mutations,
+   project SLA synchronization, and lifecycle event/notification requests.
+9. `operations.vendor_project_lifecycle` (`app.services.vendor_portal_operations`)
+   is the only writer for vendor start/complete transitions on
+   `installation_projects`: `approved -> in_progress -> completed`. It locks
+   the project, rechecks the assigned vendor and current state, and atomically
+   appends `installation_project_lifecycle_events` evidence carrying the
+   authenticated actor type/id, transition time, previous/result state, vendor,
+   and durable event id. The same transaction stages the typed outbox events
+   `vendor_project.started` or `vendor_project.completed`. Cross-team consumers
+   may read that timeline or consume those events; they do not infer actor/time
+   from `updated_at` and do not write project status directly. Vendor routes,
+   confirmation handlers, templates, and future delivery integrations are thin
+   adapters around this owner. The owner raises transport-neutral
+   `VendorProjectLifecycleError` rejections; the confirmation/delivery adapter
+   alone maps them to HTTP responses. The same named owner also owns the
+   installation-project quote and as-built evidence lifecycles, including the
+   read-only impact snapshot used before submit; one implementation module is
+   therefore declared under one owner name. The vendor project-detail map reads
+   proposed and prior as-built geometry through
+   `app.services.vendor_routes_api.build_project_route_geojson`; its capture
+   controls render only from the owner's `as_built_action` projection and
+   serialize the existing `VendorAsBuiltCreate.geojson` contract rather than
+   writing route evidence from the template.
+10. `operations.vendor_purchase_invoices` owns vendor purchase-invoice state,
+   financial totals, submit eligibility, and the financial impact snapshot.
+   ERP owns accounts-payable settlement. The local
+   `erp_purchase_invoice_status` is currently only the ERP creation-response
+   snapshot; it is not a refreshed payment projection and must not be labelled
+   as "Paid" or "Awaiting payment" in Sub. Vendor payment visibility requires a
+   dedicated ERP read contract plus an idempotent Sub refresher that records
+   status and observation time before the portal may render it.
+11. `operations.vendor_submission_confirmation` (implemented by
+   `app.services.vendor_submission_proposals`) owns the short-lived signed
+   confirmation proposal, stale-preview comparison, idempotency reservation,
+   and replay result for lifecycle actions, quote, as-built, and
+   purchase-invoice submissions.
+   The proposal carries no decision authority: each domain owner locks and
+   rechecks its current facts, and the mutation plus idempotency result commit
+   once. Vendor web routes only request preview or confirmation.
+
+Rule: provisioning callers should resolve customer/network context once through
+the operations context service before running workflow steps. Step executors may
+consume context, but should not rediscover subscriber/ONT/CPE links themselves.
+`Projects.update` is the canonical writer for native project mutations;
+Kanban, Gantt, normal edit, API, and web adapters delegate to it rather than
+maintaining parallel SLA/event/notification paths. Customer and reseller read
+authority is owned by `projects.native_read`. Where CRM project data is shown, it
+is served from a local mirror populated over the CRM API and treated as a cache,
+never as the authority. Field job detail projects `completion_requirements`
+from the same transition service that validates completion. Field clients consume
+that contract and may offer advisory quality checks, but must not invent a separate
+completion gate from local checklist state or cached settings.
+Work-order API projections carry server-owned status labels, tones, and icons;
+field clients retain the raw value for transitions and filtering, but do not
+reinterpret its presentation.
+
+## Support Control Plane
+
+1. `support.tickets` owns ticket lifecycle, assignment, comments, SLA events,
+   and satisfaction state.
+
+Rule: support routes and jobs translate requests and delegate ticket decisions
+to `app.services.support`. Events and notifications are consequences requested
+by that owner, not alternate ticket writers.
+
+## Customer Data Completeness
+
+1. `customer.data_completeness` (`app.services.subscriber_data_completeness`)
+   owns the declared answer to "is this subscriber's data good enough for X?":
+   the purpose → required-field policy (`ncc_filing`, `kyc`), the derivation of
+   what is missing, the capture backlog (`queue`), and the pre-filing readiness
+   counts (`readiness`). One declarative policy — callers ask it rather than
+   re-deciding what "complete" means.
+
+Rule: completeness is **derived, never stored**. It asks the same resolver the
+consuming report asks (state completeness reuses
+`ncc_subscriber_report.infer_state`), so a subscriber cannot be complete here
+and Unknown in the return.
+
+Rule: the module is **read-only**. Capture flows through the subscriber owner;
+this owner reports gaps and never fills them.
+
+Rule: **suggestions are never auto-applied.** A suggestion is unconfirmed
+evidence carrying its source, offered to a human who decides. Reporting a
+subscriber we cannot locate as though we know where they are is the
+fabrication removed from the NCC return (unresolved state was filed as
+"Abuja"); a suggestion that silently became a stored fact would reintroduce it
+one layer up. A suggester must also use a signal the presence check does not
+already exhaust, or it is dead code by construction.
+
+The registry declares this read-only policy as `customer.data_completeness`.
+The portal prompt consumes it through `customer.location_capture`; filing
+readiness consumes it directly. Neither caller may turn a derived gap or
+suggestion into a stored fact.
+
+## AI Control Plane
+
+AI is advisory: it observes, derives, and recommends; it never decides domain
+state (`docs/designs/AI_SOT.md`).
+
+1. `ai.gateway` owns LLM provider calls, redaction, prompt-injection defence,
+   and provider/latency/token telemetry. It is a **transport**, like a
+   payment or SMS provider — it holds no business rule and owns no domain
+   state. Credentials resolve through `secrets` (OpenBao), never settings
+   rows.
+2. `ai.personas` owns candidate-insight derivation: each persona builds
+   bounded context from the owning domain's read surface and returns a
+   title, summary, structured output, recommendations, and confidence.
+   Personas read; they never write.
+3. `ai.insights` (`app.services.ai_operations`) is the canonical writer of
+   `AIInsight` rows and owns insight lifecycle — create, acknowledge,
+   expire. Generated insights land here and nowhere else.
+4. `ai.intake` (`AiIntakeConfig`) owns the per-scope, per-channel decision to
+   run AI at all: enablement, confidence threshold, clarification limits,
+   and escalation timing. This is AI's only decision.
+5. `ai.generation` (`app.services.ai.engine`) owns the bounded on-demand report
+   advisory path: advisor lookup, prompt assembly, and token budget. It accepts
+   a caller-owned report projection, does not query domain models, and persists
+   only by delegating to `ai.insights`. The default-off `ai.generation` control
+   gates the admin report surface.
+
+Rule: an insight never mutates domain state. Acting on a recommendation means
+calling the domain's declared owner (`support.tickets`,
+`operations.work_orders`, `operations.project_lifecycle`,
+`communications.team_inbox`), which applies its own guards, events, and audit.
+No module under `app/services/ai*` may construct or session-write a non-AI ORM
+row; `tests/architecture/test_ai_boundaries.py` enforces it.
+
+## Control Planes
+
+Feature controls:
+
+1. `control.module_manager`: owns product module enablement.
+2. `control.domain_settings`: owns stored setting mutation.
+3. `control.settings_spec`: owns setting schema, coercion, and defaults;
+   environment values seed stored settings at bootstrap.
+4. `control.settings_bootstrap`: materializes startup defaults and notification
+   templates through `control.domain_settings`; it does not own runtime policy.
+5. `control.feature_registry`: composes module and canonical feature decisions,
+   keeps safety gates separate, and validates canonical override requests.
+6. `control.effective_state`: is the read-only admin projection implemented by
+   `app/services/web_control_plane.py`. It reports the decision and provenance
+   from each owner; it is never a mutation path or a second policy resolver.
+
+Decision-input ownership:
+
+| Input class | Named owner / resolver | Canonical source |
+| --- | --- | --- |
+| Capability and module gates | `control.feature_registry` / `control.module_manager` | canonical module setting plus the registered default |
+| Global business and operational tuning | `control.settings_spec` | active database setting, otherwise the registered default |
+| Task cadence and task enablement | `scheduler.registry` | scheduler registry and `ScheduledTask` state |
+| Per-customer, subscriber, service, or device policy | the named domain owner | the owning domain model or policy record |
+| External integration targets | the named integration/configuration resolver | its configuration model; deployment-only endpoints may use a declared environment resolver |
+| Credentials and secret material | the named credential resolver | OpenBao reference or an approved local secret pointer |
+| Protocol constants and safety invariants | the named domain owner | code, schema, or database constraint |
+
+Settings are inputs to a decision owner; they are not decision owners. Every
+important decision has one named owner, and every variable input has one
+declared source or resolver. Business and operational tuning must not be
+hardcoded at callers. Protocol constants, mathematical constants, enum values,
+and safety invariants remain code or constraints unless operators genuinely
+need to tune them.
+
+Runtime settings are database-authoritative. `control.settings_spec` resolves
+Redis cache, then the active database row, then the registered default. A
+`SettingSpec.env_var` is bootstrap and migration metadata only: startup seeding
+or the explicit one-way settings-sync command may materialize it into the
+database, but runtime resolvers must not treat it as a live override. An
+emergency environment override is allowed only when it is registered as a
+separate control with visible provenance, an explicit safe failure direction,
+and an audited retirement plan.
+
+Rule: task and feature gates should call the feature registry. Callers should
+not separately read env vars, domain settings, module state, and legacy flags.
+The module manager is the canonical writer UX for registered feature controls:
+`Inherit` deactivates the canonical row, while `On` and `Off` persist an explicit
+`modules.<canonical_key>` override through `control.domain_settings`. The page
+shows stored and effective state separately because an owner module can mask a
+feature. Every canonical feature change is audited. Michael approved immediate
+alias cutoff on 2026-07-15: registered controls resolve only from an active
+canonical modules row or their registry default. Migration 284 materializes
+legacy database decisions before deleting retired rows; environment-only values
+must be materialized before deployment because a database migration cannot see
+deployment configuration. The operational gate and rollback are documented in
+`docs/runbooks/legacy-feature-alias-retirement.md`. Retired settings forms, API
+fields, seeds, specs, and direct consumers must not recreate a parallel writer.
+`billing.billing_enabled` remains the independent cross-feature billing master,
+not an alias writer for `billing.invoicing`.
+Registered capability gates include billing capture/collections/payment
+options, prepaid monthly invoicing, RADIUS/session enforcement,
+usage/FUP emission gates, CRM/native transition flags, and GIS/network worker
+toggles. Numeric intervals, thresholds, profile IDs, account lists, and other
+tuning values remain in `settings_spec`.
+
+Decision-input migrations are coherent, domain-scoped ownership changes, not
+global literal replacement. Each migration names the old source and new
+resolver, proves precedence and
+provenance, migrates the highest-risk callers, and removes or gates the old
+path. External projections follow the separate authority-MOVE procedure with
+shadow verification before cutover.
+
+Authorization:
+
+1. `auth.rbac`: owns roles, permissions, and assignments.
+2. `auth.permission_gate`: owns request/route permission dependencies.
+3. `auth.token_signing`: owns configured JWT key/algorithm resolution and the
+   cryptographic envelope for typed capability tokens. Calling domains own
+   purpose, claims, duration, and consequences.
+4. `auth.staff_provisioning`: owns staff account bootstrap.
+5. `auth.customer_credential_enrollment`: owns purpose-bound local credential
+   enrollment for referral-created customer accounts and the atomic
+   Subscriber-email verification consequence. It creates no placeholder
+   credential and owns no Party or subscription lifecycle state. It submits a
+   non-secret action to `communications.ephemeral_actions`; token issuance and
+   email rendering occur only at the worker transport boundary.
+
+Rule: routes declare permissions and business services receive an authorized
+principal. RBAC mutation stays inside RBAC services.
+Every literal route permission must exist in the seed catalogue; the
+architecture parity test makes an absent, therefore ungrantable, permission a
+build failure. The effective-state projection reads roles and grants only.
+
+Scheduler:
+
+1. `scheduler.registry`: owns effective task registration, cadence, and toggle
+   synchronization.
+2. `scheduler.operations`: owns `ScheduledTask` CRUD and manual enqueue.
+3. `scheduler.worker_control`: owns worker restart targets/actions.
+
+Rule: task cadence and enablement flow through scheduler config and the feature
+control plane. Task bodies execute work and report status.
+The effective-state projection reads `ScheduledTask` state and run timestamps;
+it never changes cadence, enablement, or dispatch state.
+
+Network access:
+
+1. `access.control_resolution`: owns desired service access outcomes.
+2. `access.event_policy`: owns event-driven enforcement settings, FUP action
+   policy, and overdue suspension policy reads.
+3. `access.walled_garden_policy`: resolves persisted restriction intent to the
+   effective hard-reject/captive tier. Hard reject is default; captive requires
+   explicit eligible residential opt-in and network readiness.
+4. `access.radius_state`: maps the effective tier to RADIUS groups/profiles.
+5. `access.radius_reject`: owns reject IP lifecycle.
+6. `access.radius_target_registry`: owns external RADIUS database target
+   selection, per-target capabilities and schema names, environment bootstrap,
+   and cutover-shadow verification. Active `RadiusSyncJob` + encrypted
+   `ConnectorConfig` rows are the runtime authority; the environment DSN is
+   bootstrap and verification input only, never a runtime fallback.
+7. `access.radius_projection`: is the single idempotent writer that projects
+   desired access and reject state into `radcheck`/`radreply`/`radusergroup`
+   (and the `radcheck_admin`/`radreply_admin` device-login tables), under a
+   per-target Postgres advisory lock across every target selected by
+   `access.radius_target_registry`. Blocked/suspended users get a walled-garden
+   `radreply` rather than row deletion, so suspension takes effect at the BNG
+   without losing the captive pay-page treatment.
+8. `access.session_enforcement`: applies CoA/disconnect outcomes.
+
+Rule: billing, FUP, and admin actions resolve the desired access outcome once,
+map it to RADIUS state once, and let enforcement apply the network-side change.
+No module outside `access.radius_projection` writes `radcheck`, `radreply`, or
+`radusergroup`;
+event-time and per-user callers request a projection (full sweep or a scoped
+reconcile) or enqueue `refresh_radius_from_subs`. Target failures are reported
+per target and suppress downstream CoA. The closed boundary is pinned by
+`tests/architecture/test_radius_projection_ownership.py`.
+
+RADIUS schema names and target capabilities are configuration owned by each
+`ConnectorConfig`; access-group names, priorities, address-list names, and
+enforcement reconciler thresholds are database settings. Code defaults are
+bootstrap values only, not parallel runtime policy.
+
+Service intent:
+
+1. `service_intent.catalog_policy`: owns catalog policy lookup.
+2. `service_intent.catalog_validation`: owns catalog consistency checks.
+3. `service_intent.catalog_billing_governance`: owns billing-critical catalog
+   mutation safety, audit, and operator alerts. Live pricing/cadence is versioned
+   rather than edited in place, and routes require `catalog:billing_write`.
+4. `service_intent.subscription_lifecycle`: owns the current/proposed lifecycle
+   projection, command eligibility, reviewed-head contract, and billing/access
+   impact preview.
+5. `service_intent.subscription_lifecycle_execution`: owns serialized,
+   idempotent execution and structured single/batch outcomes. It delegates the
+   resulting mutations to account lifecycle, catalog, billing, scheduler, and
+   RADIUS owners. Admin routes and bulk adapters submit commands to this owner;
+   they do not update subscription status or offers directly.
+6. `service_intent.subscription_nas_assignment`: owns commercial-service NAS
+   assignment.
+7. `service_intent.subscription_billing_cadence`: owns the subscription's
+   contracted billing cadence. Cadence is captured on the sales-order line,
+   materialized on the subscription at creation, and read by the recurring
+   biller (`subscription.billing_cycle` -> offer/version price -> monthly). The
+   offer price cadence is fallback-only; catalog offer-cadence immutability
+   stays with `service_intent.catalog_billing_governance`.
+8. `service_intent.ont`: projects provisioning intent to ONT operations.
+
+Rule: catalog policy and subscription owners define commercial intent. Every
+lifecycle execution carries a reviewed head and idempotency key. Network owners
+project configured intent without a parallel catalog-to-network adapter.
+
+Integrations:
+
+1. `integration.registry`: owns connectors and capabilities.
+2. `integration.jobs`: owns targets, jobs, and runs.
+3. `integration.sync`: owns sync orchestration.
+4. `integration.hooks`: owns hook dispatch and subscriptions.
+5. `integration.erp_material_support`: maps an approved Sub material need to the
+   neutral ERP contract, assigns the stable idempotency key, and observes/reconciles
+   ERP outcomes. It is a transport and observation owner, not an inventory or
+   service-workflow decision owner.
+
+Rule: integration routes/webhooks validate and enqueue. Connector behavior,
+sync lifecycle, and hook delivery stay inside integration services.
+The effective-state projection derives connector/webhook health from runs and
+deliveries and reads OpenBao metadata without reading secret values. It does
+not own connector, subscription, delivery, or credential decisions.
+
+## VPN / Remote Access
+
+Dependency order:
+
+1. `vpn.key_material`: owns WireGuard keypair generation and private-key
+   at-rest encryption.
+2. `vpn.system_interface`: owns the VPS-local WireGuard interface state and the
+   projection of desired peers onto the running interface.
+3. `vpn.wireguard`: owns WireGuard server and peer lifecycle and the peer config
+   and MikroTik RouterOS script generation.
+4. `vpn.routing_readiness`: resolves whether a VPN interface is ready for device
+   access.
+
+Rule: admin VPN routes and device-access callers resolve server/peer lifecycle,
+config and RouterOS script generation, key material, and interface readiness
+through these owners. `web_vpn_*` adapters and device-access code do not build
+WireGuard config, mutate peers, or write the system interface directly. The
+Redis `vpn_cache` is a rebuildable projection of server/peer configs, never a
+source of truth.
+
+## Geospatial
+
+1. `gis.geocoding`: owns address and coordinate resolution, geocode lookup, and
+   result caching.
+2. `gis.spatial_sync`: owns GIS/spatial data synchronization and spatial feature
+   import and projection.
+
+Rule: address/coordinate resolution and spatial data synchronization resolve
+through these owners. API, web, and task callers request a geocode or a sync
+outcome; they do not embed their own geocode lookups or spatial write logic.
+
+## Sales and Referrals
+
+1. `sales.orders`: owns sales order lifecycle.
+2. `sales.selfserve`: owns the self-serve quote and signup flow.
+3. `sales.service`: owns sales service operations.
+4. `referrals.program`: owns Party-first Refer & Earn capture, reviewed account
+   conversion, qualification, and reward decisions.
+5. `referrals.account_conversion`: owns exact Referral/Party/Lead context
+   validation, the bounded public-signup capability contract, and atomic
+   account-creation/adjudication orchestration.
+
+Rule: sales order, self-serve quote/signup, sales service, and Refer & Earn
+referral logic resolve through these owners. `web_sales`/`web_referrals` adapters
+and API/task callers request an outcome. `customer.accounts` creates or prepares
+Subscriber rows; the referral coordinator never constructs them itself.
+Customer referral reads and writes are native-only. The legacy referral mirror
+is isolated compatibility evidence and never a SOT, decision, identity, or
+attribution owner.
+Quote-request and deposit surfaces branch on the explicit
+`quotes_native_write_enabled` cutover control: the native branch is owned by
+`sales.selfserve`, and its deposit "already paid" decision belongs to the paid
+deposit Invoice in the billing ledger — never to a mirror flag the CRM could
+stale-sync.

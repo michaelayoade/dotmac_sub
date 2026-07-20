@@ -50,7 +50,7 @@
                 {{ info_row("Start Date", arrangement.start_date.strftime('%Y-%m-%d') if arrangement.start_date else 'N/A') }}
                 {{ info_row("End Date", arrangement.end_date.strftime('%Y-%m-%d') if arrangement.end_date else 'N/A') }}
                 {{ info_row("Next Due Date", arrangement.next_due_date.strftime('%Y-%m-%d') if arrangement.next_due_date else 'N/A') }}
-                {{ info_row("Created", arrangement.created_at.strftime('%Y-%m-%d %H:%M') if arrangement.created_at else 'N/A') }}
+                {{ info_row("Created", arrangement.created_at | app_datetime('%Y-%m-%d %H:%M', 'N/A')) }}
             {% endcall %}
             {% if arrangement.notes %}
             <div class="mt-4 rounded-lg bg-slate-50 p-3 dark:bg-slate-700/50">
@@ -138,7 +138,7 @@
                             {% endif %}
                         </td>
                         <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
-                            {{ inst.paid_at.strftime('%Y-%m-%d %H:%M') if inst.paid_at else '—' }}
+                            {{ inst.paid_at | app_datetime('%Y-%m-%d %H:%M', '—') }}
                         </td>
                         <td class="whitespace-nowrap px-6 py-4">
                             {% if next_actionable_installment_id and (inst.id | string) == next_actionable_installment_id %}

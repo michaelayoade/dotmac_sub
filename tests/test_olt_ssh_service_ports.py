@@ -34,6 +34,10 @@ def _patch_successful_shell(monkeypatch, command_output: str) -> None:
         lambda *_args, **_kwargs: "",
     )
     monkeypatch.setattr(
+        "app.services.network.olt_ssh._prepare_huawei_read_shell",
+        lambda _channel, prompt: prompt,
+    )
+    monkeypatch.setattr(
         "app.services.network.olt_ssh._run_huawei_cmd",
         lambda _channel, command, **_kwargs: (
             command_output if command.startswith("service-port") else ""
@@ -74,6 +78,78 @@ def test_create_single_service_port_accepts_verified_duplicate(monkeypatch) -> N
     assert "already exists" in message
 
 
+def test_create_single_service_port_retries_lagging_conflict_readback(
+    monkeypatch,
+) -> None:
+    output = (
+        "Failure: The service virtual port has existed already. "
+        "Conflicted service virtual port index: 123"
+    )
+    _patch_successful_shell(monkeypatch, output)
+    reads = iter(
+        [
+            (True, "not found yet", None),
+            (True, "found", _matching_port()),
+        ]
+    )
+    monkeypatch.setattr(
+        service_ports,
+        "get_service_port_by_index",
+        lambda _olt, _index: next(reads),
+    )
+    monkeypatch.setattr(
+        service_ports,
+        "get_service_ports_for_ont",
+        lambda *_args: (True, "none yet", []),
+    )
+    sleeps = []
+    monkeypatch.setattr(service_ports.time, "sleep", sleeps.append)
+
+    ok, message, assigned_index = service_ports.create_single_service_port(
+        SimpleNamespace(id="olt-a", name="OLT-A"),
+        "0/1/7",
+        5,
+        1,
+        203,
+    )
+
+    assert ok is True
+    assert assigned_index == 123
+    assert "already exists" in message
+    assert sleeps == [service_ports._SERVICE_PORT_VERIFY_DELAY_SEC]
+
+
+def test_create_single_service_port_uses_per_pon_conflict_readback(
+    monkeypatch,
+) -> None:
+    output = (
+        "Failure: The service virtual port has existed already. "
+        "Conflicted service virtual port index: 123"
+    )
+    _patch_successful_shell(monkeypatch, output)
+    monkeypatch.setattr(
+        service_ports,
+        "get_service_port_by_index",
+        lambda _olt, _index: (True, "global index not found", None),
+    )
+    monkeypatch.setattr(
+        service_ports,
+        "get_service_ports_for_ont",
+        lambda *_args: (True, "found on PON", [_matching_port()]),
+    )
+
+    ok, _message, assigned_index = service_ports.create_single_service_port(
+        SimpleNamespace(id="olt-a", name="OLT-A"),
+        "0/1/7",
+        5,
+        1,
+        203,
+    )
+
+    assert ok is True
+    assert assigned_index == 123
+
+
 def test_create_single_service_port_rejects_mismatched_duplicate(monkeypatch) -> None:
     output = (
         "Failure: The service virtual port has existed already. "
@@ -99,3 +175,62 @@ def test_create_single_service_port_rejects_mismatched_duplicate(monkeypatch) ->
     assert ok is False
     assert assigned_index is None
     assert "different ONT/VLAN/GEM" in message
+
+
+def test_get_service_port_by_index_parses_huawei_detail_output(monkeypatch) -> None:
+    output = """
+      Index               : 225
+      VLAN ID             : 203
+      Port type           : gpon
+      F/S/P               : 0/2/1
+      ONT ID              : 10
+      GEM port index      : 1
+      Flow type           : vlan
+      Flow para           : 203
+      State               : up
+      Tag transform       : translate
+    """
+    transport = MagicMock()
+    channel = MagicMock()
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh._open_shell",
+        lambda _olt: (transport, channel, SimpleNamespace(prompt_regex=r"#\s*$")),
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh._read_until_prompt",
+        lambda *_args, **_kwargs: "",
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh._prepare_huawei_read_shell",
+        lambda _channel, prompt: prompt,
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh._run_huawei_paged_cmd",
+        lambda *_args, **_kwargs: output,
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh.is_error_output",
+        lambda _output: False,
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh._parse_service_port_table",
+        lambda _output: [],
+    )
+
+    ok, message, port = service_ports.get_service_port_by_index(
+        SimpleNamespace(name="Garki Huawei OLT"), 225
+    )
+
+    assert ok is True
+    assert message == "Found service-port 225"
+    assert port == ServicePortEntry(
+        index=225,
+        vlan_id=203,
+        ont_id=10,
+        gem_index=1,
+        flow_type="vlan",
+        flow_para="203",
+        state="up",
+        fsp="0/2/1",
+        tag_transform="translate",
+    )

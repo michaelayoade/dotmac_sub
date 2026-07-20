@@ -45,13 +45,14 @@ from app.models.network import OLTDevice, OntSyncStatus, OntUnit
 from .adapters import (
     apply_proposed_change,
     desired_from_ont_unit,
+    observed_from_ont_observation,
     upsert_ont_observation,
 )
-from .alerts import ZabbixTrapper, resolve_sweep_unreachable
+from .alerts import resolve_sweep_unreachable
 from .applier import ApplyContext, SecretResolver, apply_plan
 from .locking import OntNotFound, acquire_reconcile_lock
 from .planner import compute_plan
-from .readers import read_acs_state, read_olt_state
+from .readers import ReadResult, read_acs_state, read_olt_state
 from .readers.reachability import PingFunction, is_pingable
 from .secrets import default_secret_resolver_from_env
 from .state import (
@@ -180,14 +181,26 @@ def reconcile_ont(
                 target = desired_current
 
             # ── Resolve adapters ────────────────────────────────────────────
+            olt_only_profile_change = mode == "sync" and proposed_fields == frozenset(
+                {"tr069_profile_id"}
+            )
             if olt_adapter is None:
                 olt_adapter = _resolve_olt_adapter(db, ont)
-            if acs_client is None:
+            if acs_client is None and not olt_only_profile_change:
                 acs_client = _resolve_acs_client(db, ont)
+            acs_observed_fallback = (
+                _cached_acs_observation(db, ont)
+                if olt_only_profile_change and acs_client is None
+                else None
+            )
 
             # ── Read observed (parallel OLT + ACS) ──────────────────────────
             olt_result, acs_result = _read_observed_parallel(
-                olt_adapter, acs_client, target, deadline=deadline
+                olt_adapter,
+                acs_client,
+                target,
+                deadline=deadline,
+                acs_observed_fallback=acs_observed_fallback,
             )
 
             # ICMP reachability check on the mgmt IP. Runs from the reconciler
@@ -272,10 +285,6 @@ def reconcile_ont(
                     drift_after=plan.drifts,
                 )
 
-            # ── Success: commit desired-state mutation + observation ────────
-            if proposed_change:
-                apply_proposed_change(ont, target)
-
             # Reset the sweep-unreachable counter on any successful reconcile.
             # Capture the prior value so we can fire a resolution alert when
             # recovering from a previously-alerting unreachable streak.
@@ -287,8 +296,6 @@ def reconcile_ont(
                     serial_number=str(ont.serial_number or ""),
                     mgmt_ip=target.mgmt_ip,
                     before=prior_unreachable,
-                    trapper=ZabbixTrapper.from_env(),
-                    zabbix_host=target.mgmt_ip,
                 )
 
             # ── Verification re-read ────────────────────────────────────────
@@ -297,6 +304,12 @@ def reconcile_ont(
             # against the post-apply state. If actions_applied is empty
             # (drift was zero from the start), there is nothing to verify.
             if not apply_outcome.actions_applied:
+                if proposed_change:
+                    apply_proposed_change(
+                        ont,
+                        target,
+                        changed_fields=proposed_fields,
+                    )
                 return _finalise(
                     db,
                     ont,
@@ -310,7 +323,11 @@ def reconcile_ont(
                 )
 
             verify_olt_result, verify_acs_result = _read_observed_parallel(
-                olt_adapter, acs_client, target, deadline=deadline
+                olt_adapter,
+                acs_client,
+                target,
+                deadline=deadline,
+                acs_observed_fallback=acs_observed_fallback,
             )
             observed_after = OntObservedState(
                 last_reconciled_at=started_at,
@@ -416,6 +433,12 @@ def reconcile_ont(
                     drift_after=verify_plan.drifts,
                 )
 
+            if proposed_change:
+                apply_proposed_change(
+                    ont,
+                    target,
+                    changed_fields=proposed_fields,
+                )
             return _finalise(
                 db,
                 ont,
@@ -482,19 +505,31 @@ def _resolve_olt_adapter(db: Session, ont: OntUnit) -> Any:
 
 
 def _resolve_acs_client(db: Session, ont: OntUnit) -> Any:
-    """Production path: build a GenieACS client from the ONT's ACS binding."""
-    # Prefer the OntUnit's explicit ACS server FK. If absent, fall back to a
-    # default URL — most fleet ONTs share a single GenieACS instance.
-    from app.models.tr069 import Tr069AcsServer
-    from app.services.genieacs_client import GenieACSClient
+    """Build the client from observed linkage, then desired ACS policy.
 
-    if ont.tr069_acs_server_id:
-        server = db.execute(
-            select(Tr069AcsServer).where(Tr069AcsServer.id == ont.tr069_acs_server_id)
-        ).scalar_one_or_none()
-        if server is not None:
-            return GenieACSClient(base_url=server.base_url)
-    return GenieACSClient(base_url="http://localhost:7557")
+    During an ACS migration the ONT still informs to the previously linked
+    server. That server must deliver the ManagementServer URL change; the link
+    is moved to desired authority only after successful readback.
+    """
+    from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
+    from app.services.genieacs_client import create_genieacs_client
+    from app.services.network.acs_resolution import resolve_acs_for_ont
+
+    linked = db.scalars(
+        select(Tr069CpeDevice)
+        .where(Tr069CpeDevice.ont_unit_id == ont.id)
+        .where(Tr069CpeDevice.is_active.is_(True))
+        .limit(1)
+    ).first()
+    if linked is not None:
+        observed_server = db.get(Tr069AcsServer, linked.acs_server_id)
+        if observed_server is not None and observed_server.base_url:
+            return create_genieacs_client(observed_server.base_url)
+
+    resolution = resolve_acs_for_ont(db, ont)
+    if resolution.server is None:
+        raise RuntimeError(f"ONT {ont.id} has no active ACS assignment")
+    return create_genieacs_client(resolution.server.base_url)
 
 
 def _read_observed_parallel(
@@ -503,12 +538,24 @@ def _read_observed_parallel(
     desired: OntDesiredState,
     *,
     deadline: datetime,
+    acs_observed_fallback: AcsObservedFields | None = None,
 ):
     """Run OLT + ACS reads in parallel.
 
     Two I/O-bound calls, one each — a small thread pool is the right fit.
     The readers themselves don't share state, so no synchronisation needed.
     """
+    if acs_client is None:
+        return (
+            read_olt_state(olt_adapter, desired, deadline=deadline),
+            ReadResult(
+                success=True,
+                unreachable=False,
+                observed=acs_observed_fallback or _absent_acs(),
+                error=None,
+            ),
+        )
+
     with ThreadPoolExecutor(max_workers=2, thread_name_prefix="reconcile-read") as pool:
         olt_future = pool.submit(
             read_olt_state, olt_adapter, desired, deadline=deadline
@@ -517,6 +564,17 @@ def _read_observed_parallel(
         olt_result = olt_future.result()
         acs_result = acs_future.result()
     return olt_result, acs_result
+
+
+def _cached_acs_observation(db: Session, ont: OntUnit) -> AcsObservedFields:
+    """Carry forward ACS reality when an OLT-only reconcile skips ACS I/O."""
+    from app.models.ont_observation import OntObservation
+
+    row = db.scalars(
+        select(OntObservation).where(OntObservation.ont_unit_id == ont.id)
+    ).first()
+    observed = observed_from_ont_observation(row)
+    return observed.acs if observed is not None else _absent_acs()
 
 
 def _absent_olt() -> OltObservedFields:
@@ -533,6 +591,7 @@ def _absent_olt() -> OltObservedFields:
         olt_mgmt_vlan=None,
         olt_line_profile_id=None,
         olt_service_profile_id=None,
+        olt_tr069_profile_id=None,
         olt_service_ports=(),
     )
 

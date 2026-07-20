@@ -3,7 +3,8 @@
 Writes one ``AvailabilitySnapshot`` row per element (device / pop_site /
 pon_port) per day so the performance dashboard can chart availability trends
 without re-merging the whole alert history on every render. Mirrors
-``ip_pool_utilization_snapshot``. See INFRASTRUCTURE_SLA_PERFORMANCE.md Phase 2.
+``ip_pool_utilization_snapshot``. See the snapshot-retention contract in
+``INFRASTRUCTURE_SLA_PERFORMANCE.md``.
 """
 
 from __future__ import annotations

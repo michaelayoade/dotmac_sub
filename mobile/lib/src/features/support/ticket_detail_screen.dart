@@ -5,11 +5,13 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../config/env.dart';
 import '../../core/api_exception.dart';
 import '../../core/formatters.dart';
+import '../../core/semantic_colors.dart';
 import '../../models/ticket.dart';
 import '../../providers/data_providers.dart';
 import '../../widgets/async_value_view.dart';
 import '../../widgets/attachment_picker.dart';
 import '../../widgets/status_chip.dart';
+import 'chat_screen.dart';
 
 class TicketDetailScreen extends ConsumerStatefulWidget {
   const TicketDetailScreen({super.key, required this.ticketId});
@@ -50,8 +52,9 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen> {
       ref.invalidate(ticketProvider(widget.ticketId));
     } on ApiException catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(e.message)));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(e.message)));
       }
     } finally {
       if (mounted) setState(() => _sending = false);
@@ -66,13 +69,55 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen> {
     if (next != null && mounted) setState(() => _attachments = next);
   }
 
+  Future<void> _rateSupport(Ticket t) async {
+    final result = await showDialog<(int, String)>(
+      context: context,
+      builder: (_) => _SupportRatingDialog(initial: t.csatRating),
+    );
+    if (result == null) return;
+    final (rating, comment) = result;
+    try {
+      await ref
+          .read(supportRepositoryProvider)
+          .rateTicket(t.id, rating: rating, comment: comment);
+      ref.invalidate(ticketProvider(widget.ticketId));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Thanks for your feedback!')),
+        );
+      }
+    } on ApiException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(e.message)));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final ticket = ref.watch(ticketProvider(widget.ticketId));
     final comments = ref.watch(ticketCommentsProvider(widget.ticketId));
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Ticket')),
+      appBar: AppBar(
+        title: const Text('Ticket'),
+        actions: [
+          IconButton(
+            tooltip: 'Chat about this ticket',
+            icon: const Icon(Icons.chat_bubble_outline),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => ChatScreen(
+                  sessionEndpoint:
+                      '/me/chat/session?ticket_id=${widget.ticketId}',
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
       body: Column(
         children: [
           Expanded(
@@ -85,10 +130,12 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen> {
                   Row(
                     children: [
                       Expanded(
-                        child: Text(t.title,
-                            style: Theme.of(context).textTheme.titleLarge),
+                        child: Text(
+                          t.title,
+                          style: Theme.of(context).textTheme.titleLarge,
+                        ),
                       ),
-                      StatusChip.forTicket(t.status),
+                      StatusChip.fromPresentation(t.statusPresentation),
                     ],
                   ),
                   const SizedBox(height: 4),
@@ -114,8 +161,17 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen> {
                       ),
                     ),
                   const SizedBox(height: 16),
-                  Text('Conversation',
-                      style: Theme.of(context).textTheme.titleMedium),
+                  if (t.canRate) ...[
+                    _CsatCard(
+                      rating: t.csatRating,
+                      onRate: () => _rateSupport(t),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+                  Text(
+                    'Conversation',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
                   const SizedBox(height: 8),
                   comments.when(
                     loading: () => const Padding(
@@ -137,8 +193,12 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen> {
                           for (final c in visible)
                             Card(
                               child: Padding(
-                                padding:
-                                    const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                                padding: const EdgeInsets.fromLTRB(
+                                  16,
+                                  12,
+                                  16,
+                                  12,
+                                ),
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
@@ -146,13 +206,15 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen> {
                                     if (c.attachments.isNotEmpty) ...[
                                       const SizedBox(height: 8),
                                       _AttachmentStrip(
-                                          attachments: c.attachments),
+                                        attachments: c.attachments,
+                                      ),
                                     ],
                                     const SizedBox(height: 4),
                                     Text(
                                       Fmt.dateTime(c.createdAt),
-                                      style:
-                                          Theme.of(context).textTheme.bodySmall,
+                                      style: Theme.of(
+                                        context,
+                                      ).textTheme.bodySmall,
                                     ),
                                   ],
                                 ),
@@ -208,8 +270,10 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen> {
                             ? const SizedBox(
                                 height: 18,
                                 width: 18,
-                                child:
-                                    CircularProgressIndicator(strokeWidth: 2))
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
                             : const Icon(Icons.send),
                       ),
                     ],
@@ -311,12 +375,134 @@ class _AttachmentStrip extends StatelessWidget {
                     : Icons.insert_drive_file_outlined,
                 size: 18,
               ),
-              label: Text(
-                a.filename,
-                overflow: TextOverflow.ellipsis,
-              ),
+              label: Text(a.filename, overflow: TextOverflow.ellipsis),
               onPressed: a.url == null ? null : () => _openExternal(context, a),
             ),
+      ],
+    );
+  }
+}
+
+/// Support-satisfaction (CSAT) card on a resolved/closed ticket: shows the
+/// score once rated, otherwise invites a rating.
+class _CsatCard extends StatelessWidget {
+  const _CsatCard({required this.rating, required this.onRate});
+
+  final int? rating;
+  final VoidCallback onRate;
+
+  @override
+  Widget build(BuildContext context) {
+    final rated = rating != null;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    rated ? 'You rated this support' : 'How was your support?',
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 4),
+                  if (rated)
+                    Row(
+                      children: [
+                        for (var i = 1; i <= 5; i++)
+                          Icon(
+                            i <= rating! ? Icons.star : Icons.star_border,
+                            color: context.semantic.warning,
+                            size: 20,
+                          ),
+                      ],
+                    )
+                  else
+                    Text(
+                      'Let us know how we did resolving your ticket.',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            rated
+                ? TextButton(onPressed: onRate, child: const Text('Change'))
+                : FilledButton.tonalIcon(
+                    onPressed: onRate,
+                    icon: const Icon(Icons.star_outline, size: 18),
+                    label: const Text('Rate'),
+                  ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Star rating + optional comment for support CSAT. Pops `(rating, comment)`.
+class _SupportRatingDialog extends StatefulWidget {
+  const _SupportRatingDialog({this.initial});
+
+  final int? initial;
+
+  @override
+  State<_SupportRatingDialog> createState() => _SupportRatingDialogState();
+}
+
+class _SupportRatingDialogState extends State<_SupportRatingDialog> {
+  late int _rating = widget.initial ?? 0;
+  final _comment = TextEditingController();
+
+  @override
+  void dispose() {
+    _comment.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Rate your support'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              for (var i = 1; i <= 5; i++)
+                IconButton(
+                  onPressed: () => setState(() => _rating = i),
+                  icon: Icon(
+                    i <= _rating ? Icons.star : Icons.star_border,
+                    color: context.semantic.warning,
+                    size: 32,
+                  ),
+                ),
+            ],
+          ),
+          TextField(
+            controller: _comment,
+            decoration: const InputDecoration(labelText: 'Comment (optional)'),
+            maxLines: 3,
+            maxLength: 2000,
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _rating == 0
+              ? null
+              : () =>
+                  Navigator.of(context).pop((_rating, _comment.text.trim())),
+          child: const Text('Submit'),
+        ),
       ],
     );
   }

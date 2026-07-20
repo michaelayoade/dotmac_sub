@@ -1,3 +1,5 @@
+import 'status_presentation.dart';
+
 /// An uploaded file attached to a ticket or comment (mirrors the attachment
 /// objects the support API returns under `attachments`).
 class TicketAttachment {
@@ -53,11 +55,15 @@ class Ticket {
     this.updatedAt,
     this.resolvedAt,
     this.closedAt,
-  });
+    this.csatRating,
+    StatusPresentation? statusPresentation,
+  }) : statusPresentation =
+            statusPresentation ?? StatusPresentation.neutralFallback(status);
 
   final String id;
   final String title;
   final String status;
+  final StatusPresentation statusPresentation;
   final String priority;
   final String? number;
   final String? description;
@@ -70,13 +76,24 @@ class Ticket {
   final DateTime? resolvedAt;
   final DateTime? closedAt;
 
+  /// Support-satisfaction score (1-5) if the customer has rated this ticket.
+  final int? csatRating;
+
   bool get isOpen =>
       closedAt == null && status != 'closed' && status != 'resolved';
+
+  /// A resolved/closed ticket can be rated (CSAT on the support experience).
+  bool get canRate => status == 'resolved' || status == 'closed';
 
   factory Ticket.fromJson(Map<String, dynamic> json) => Ticket(
         id: json['id'].toString(),
         title: json['title'] as String? ?? '(no title)',
         status: json['status'] as String? ?? 'open',
+        statusPresentation: json['status_presentation'] is Map
+            ? StatusPresentation.fromJson(
+                (json['status_presentation'] as Map).cast<String, dynamic>(),
+              )
+            : null,
         priority: json['priority'] as String? ?? 'normal',
         number: json['number'] as String?,
         description: json['description'] as String?,
@@ -90,6 +107,7 @@ class Ticket {
         updatedAt: _toDate(json['updated_at']),
         resolvedAt: _toDate(json['resolved_at']),
         closedAt: _toDate(json['closed_at']),
+        csatRating: (json['csat_rating'] as num?)?.toInt(),
       );
 }
 

@@ -1,0 +1,63 @@
+{% extends "layouts/admin.html" %}
+{% from "admin/projects/_components.html" import project_card %}
+{% block title %}{{ page_title or 'Project Template' }}{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-2xl space-y-4">
+    <div>
+        <nav class="mb-2 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+            <a href="/admin/projects/templates" class="hover:text-emerald-600 dark:hover:text-emerald-400">Project Templates</a>
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            <span class="text-slate-900 dark:text-white">{{ page_title or 'Template' }}</span>
+        </nav>
+        <h1 class="font-display text-xl font-bold tracking-tight text-slate-900 dark:text-white">{{ page_title or 'Template' }}</h1>
+    </div>
+
+    {% if error %}
+    <div class="rounded-2xl border border-red-200 bg-red-50/90 p-4 text-sm text-red-800 dark:border-red-800 dark:bg-red-900/25 dark:text-red-100">{{ error }}</div>
+    {% endif %}
+
+    {% call project_card() %}
+    <form method="post"
+          action="{% if form_mode == 'edit' and template %}/admin/projects/templates/{{ template.id }}/edit{% else %}/admin/projects/templates{% endif %}"
+          class="space-y-5">
+        <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+        <div>
+            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Name <span class="text-red-500">*</span></label>
+            <input type="text" name="name" required value="{{ prefill.name }}"
+                   class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+        </div>
+        <div>
+            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Project Type</label>
+            <select name="project_type" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <option value="">— None —</option>
+                {% for t in project_types %}
+                <option value="{{ t }}" {% if prefill.project_type == t %}selected{% endif %}>{{ t|replace('_', ' ')|title }}</option>
+                {% endfor %}
+            </select>
+            <p class="mt-1 text-xs text-slate-400 dark:text-slate-500">One template per project type — new projects of this type auto-pick it.</p>
+        </div>
+        <div>
+            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Description</label>
+            <textarea name="description" rows="3"
+                      class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ prefill.description }}</textarea>
+        </div>
+        <div class="flex items-center justify-between border-t border-slate-200/70 pt-4 dark:border-slate-700/70">
+            <label class="inline-flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300" x-data>
+                <input type="hidden" name="is_active" value="{{ 'true' if prefill.is_active else 'false' }}" x-ref="activeFlag">
+                <input type="checkbox" class="rounded border-slate-300 text-emerald-600"
+                       {% if prefill.is_active %}checked{% endif %}
+                       @change="$refs.activeFlag.value = $event.target.checked ? 'true' : 'false'">
+                Active
+            </label>
+            <div class="flex items-center gap-2">
+                <a href="/admin/projects/templates" class="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">Cancel</a>
+                <button class="rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 px-4 py-2 text-sm font-semibold text-white shadow-sm shadow-emerald-500/20 transition hover:shadow-md">
+                    {% if form_mode == 'edit' %}Save Changes{% else %}Create Template{% endif %}
+                </button>
+            </div>
+        </div>
+    </form>
+    {% endcall %}
+</div>
+{% endblock %}

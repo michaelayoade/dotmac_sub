@@ -46,7 +46,8 @@ class SettingDomain(enum.Enum):
     subscription_engine = "subscription_engine"
     gis = "gis"
     scheduler = "scheduler"
-    vas = "vas"
+    field = "field"
+    integration = "integration"
 
 
 class DomainSetting(Base):

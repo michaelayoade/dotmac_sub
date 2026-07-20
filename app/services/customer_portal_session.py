@@ -16,6 +16,7 @@ from app.models.subscriber import Subscriber, SubscriberCategory
 from app.services.session_store import (
     delete_session,
     get_session_revocation_epoch,
+    list_sessions_for_principal,
     load_session,
     set_session_revocation_epoch,
     store_session,
@@ -31,6 +32,7 @@ _DEFAULT_REMEMBER_TTL = 2592000  # 30 days
 _DEFAULT_ABSOLUTE_TTL = 2592000  # 30 days
 
 _CUSTOMER_SESSIONS: dict[str, dict] = {}
+_CUSTOMER_SESSION_INDEX: dict[str, set[str]] = {}
 _CUSTOMER_SESSION_EPOCHS: dict[str, str] = {}
 _CUSTOMER_SESSION_PREFIX = "session:customer_portal"
 
@@ -91,6 +93,8 @@ def create_customer_session(
         session_payload,
         ttl_seconds,
         _CUSTOMER_SESSIONS,
+        principal_id=str(subscriber_id) if subscriber_id else None,
+        fallback_index=_CUSTOMER_SESSION_INDEX,
     )
     return session_token
 
@@ -124,7 +128,7 @@ def _customer_session_revoked(session: dict) -> bool:
     )
     if not epoch:
         return False
-    created_raw = session.get("created_at")
+    created_raw = session.get("revocation_exempted_at") or session.get("created_at")
     if not created_raw:
         return True
     try:
@@ -146,6 +150,54 @@ def revoke_customer_sessions_for_subscriber(
     )
     set_session_revocation_epoch(
         _CUSTOMER_SESSION_PREFIX, str(subscriber_id), ttl, _CUSTOMER_SESSION_EPOCHS
+    )
+
+
+def revoke_other_customer_sessions_for_subscriber(
+    subscriber_id: object,
+    current_session_token: str | None,
+    db: Session | None = None,
+) -> None:
+    """Invalidate a subscriber's other portal sessions while keeping this one."""
+    current_session = (
+        load_session(
+            _CUSTOMER_SESSION_PREFIX, current_session_token, _CUSTOMER_SESSIONS
+        )
+        if current_session_token
+        else None
+    )
+    ttl = max(
+        _session_ttl_seconds(remember=True, db=db),
+        _session_ttl_seconds(remember=False, db=db),
+        _absolute_ttl_seconds(db),
+    )
+    epoch = set_session_revocation_epoch(
+        _CUSTOMER_SESSION_PREFIX, str(subscriber_id), ttl, _CUSTOMER_SESSION_EPOCHS
+    )
+    if not current_session or str(current_session.get("subscriber_id")) != str(
+        subscriber_id
+    ):
+        return
+    now = datetime.now(UTC)
+    try:
+        expires_at = datetime.fromisoformat(str(current_session["expires_at"]))
+    except (KeyError, ValueError, TypeError):
+        return
+    if now >= expires_at:
+        invalidate_customer_session(current_session_token or "")
+        return
+    epoch_at = datetime.fromisoformat(epoch)
+    current_session["revocation_exempted_at"] = (
+        epoch_at + timedelta(microseconds=1)
+    ).isoformat()
+    store_session(
+        _CUSTOMER_SESSION_PREFIX,
+        current_session_token or "",
+        current_session,
+        max(1, int((expires_at - now).total_seconds())),
+        _CUSTOMER_SESSIONS,
+        principal_id=str(subscriber_id),
+        fallback_index=_CUSTOMER_SESSION_INDEX,
     )
 
 
@@ -189,13 +241,56 @@ def refresh_customer_session(
         session,
         max(1, int((new_expires_at - now).total_seconds())),
         _CUSTOMER_SESSIONS,
+        principal_id=str(session.get("subscriber_id"))
+        if session.get("subscriber_id")
+        else None,
+        fallback_index=_CUSTOMER_SESSION_INDEX,
     )
     return session
 
 
 def invalidate_customer_session(session_token: str) -> None:
     """Invalidate a customer session."""
-    delete_session(_CUSTOMER_SESSION_PREFIX, session_token, _CUSTOMER_SESSIONS)
+    session = load_session(_CUSTOMER_SESSION_PREFIX, session_token, _CUSTOMER_SESSIONS)
+    principal_id = str(session.get("subscriber_id")) if session else None
+    delete_session(
+        _CUSTOMER_SESSION_PREFIX,
+        session_token,
+        _CUSTOMER_SESSIONS,
+        principal_id=principal_id,
+        fallback_index=_CUSTOMER_SESSION_INDEX,
+    )
+
+
+def list_customer_sessions_for_subscriber(
+    subscriber_id: object,
+    current_session_token: str | None = None,
+) -> list[dict[str, object]]:
+    """List currently valid customer portal sessions for a subscriber."""
+    sessions = []
+    for token, payload in list_sessions_for_principal(
+        _CUSTOMER_SESSION_PREFIX,
+        str(subscriber_id),
+        _CUSTOMER_SESSIONS,
+        _CUSTOMER_SESSION_INDEX,
+    ):
+        active_payload = get_customer_session(token)
+        if not active_payload:
+            continue
+        sessions.append(
+            {
+                "token": token,
+                "created_at": active_payload.get("created_at"),
+                "expires_at": active_payload.get("expires_at"),
+                "is_current": bool(
+                    current_session_token and token == current_session_token
+                ),
+                "remember": bool(active_payload.get("remember")),
+                "username": active_payload.get("username"),
+            }
+        )
+    sessions.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+    return sessions
 
 
 def get_current_customer(session_token: str | None, db: Session) -> dict | None:

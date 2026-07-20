@@ -7,14 +7,22 @@ import logging
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, selectinload
 
-from app.models.billing import Invoice, InvoiceStatus, Payment, PaymentStatus, TaxRate
+from app.models.billing import (
+    CreditNote,
+    CreditNoteApplication,
+    CreditNoteStatus,
+    Invoice,
+    Payment,
+    PaymentStatus,
+    TaxRate,
+)
 from app.models.catalog import (
     AccessCredential,
     AddOn,
@@ -25,7 +33,9 @@ from app.models.catalog import (
 )
 from app.models.collections import DunningCase, DunningCaseStatus
 from app.models.communication_log import CommunicationLog
+from app.models.crm_sync_failure import CrmSyncFailure, CrmSyncFailureStatus
 from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.enforcement_lock import EnforcementLock
 from app.models.gis import (
     CustomerLocationChangeRequest,
     CustomerLocationChangeRequestStatus,
@@ -36,17 +46,19 @@ from app.models.network import (
     OntAssignment,
     SubscriberAdditionalRoute,
 )
+from app.models.payment_proof import PaymentProof, PaymentProofStatus
 from app.models.provisioning import ServiceOrder, ServiceOrderStatus
+from app.models.service_extension import ServiceExtensionEntry
 from app.models.subscriber import (
     ChannelType,
     Reseller,
     Subscriber,
     SubscriberCategory,
     SubscriberChannel,
+    SubscriberStatus,
     UserType,
 )
 from app.models.support import Ticket
-from app.models.usage import RadiusAccountingSession
 from app.schemas.geocoding import GeocodePreviewRequest
 from app.services import catalog as catalog_service
 from app.services import geocoding as geocoding_service
@@ -63,10 +75,34 @@ from app.services.audit_helpers import (
     resolve_actor_name,
 )
 from app.services.billing_settings import resolve_payment_due_days
+from app.services.collections import get_available_balance
 from app.services.credential_crypto import decrypt_credential
+from app.services.customer_support_links import ticket_customer_any_link_filter
+from app.services.invoice_collectibility import (
+    open_invoice_balance_for_accounts,
+    overdue_debt_filters_for_accounts,
+)
 from app.services.network._common import decode_huawei_hex_serial
+from app.services.network.radius_sessions import (
+    latest_open_accounting_sessions_by_subscription,
+)
+from app.services.nin_matching import mask_nin
+from app.services.status_presentation import (
+    access_session_status_presentation,
+    account_status_presentation,
+    invoice_status_presentation,
+    payment_status_presentation,
+    subscription_status_presentation,
+)
+from app.services.subscription_lifecycle_policy import (
+    is_customer_impact_service_status,
+    is_mrr_countable_service_status,
+)
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from app.models.usage import RadiusAccountingSession
 
 _RADIUS_CONNECTED_FRESH_SECONDS = 15 * 60
 
@@ -442,6 +478,7 @@ def _build_activity_items(
         invoices = (
             db.query(Invoice)
             .filter(Invoice.account_id.in_(account_ids))
+            .filter(Invoice.is_active.is_(True))
             .order_by(func.coalesce(Invoice.issued_at, Invoice.created_at).desc())
             .limit(8)
             .all()
@@ -449,19 +486,14 @@ def _build_activity_items(
         payments = (
             db.query(Payment)
             .filter(Payment.account_id.in_(account_ids))
+            .filter(Payment.is_active.is_(True))
             .order_by(func.coalesce(Payment.paid_at, Payment.created_at).desc())
             .limit(8)
             .all()
         )
         support_tickets = (
             db.query(Ticket)
-            .filter(
-                or_(
-                    Ticket.subscriber_id.in_(account_ids),
-                    Ticket.customer_account_id.in_(account_ids),
-                    Ticket.customer_person_id.in_(account_ids),
-                )
-            )
+            .filter(ticket_customer_any_link_filter(Ticket, account_ids))
             .order_by(Ticket.updated_at.desc())
             .limit(8)
             .all()
@@ -519,13 +551,14 @@ def _build_activity_items(
         )
 
     for payment in payments:
+        presentation = payment_status_presentation(payment.status)
         activity_items.append(
             {
                 "type": "payment",
                 "title": "Payment received"
                 if payment.status == PaymentStatus.succeeded
                 else "Payment update",
-                "description": _enum_label(payment.status),
+                "description": presentation.label,
                 "timestamp": _event_timestamp(payment.paid_at, payment.created_at),
                 "amount": float(payment.amount or 0),
             }
@@ -651,6 +684,7 @@ def _build_common_financials(db: Session, account_ids):
         invoices = (
             db.query(Invoice)
             .filter(Invoice.account_id.in_(account_ids))
+            .filter(Invoice.is_active.is_(True))
             .order_by(func.coalesce(Invoice.issued_at, Invoice.created_at).desc())
             .limit(10)
             .all()
@@ -658,17 +692,24 @@ def _build_common_financials(db: Session, account_ids):
         payments = (
             db.query(Payment)
             .filter(Payment.account_id.in_(account_ids))
+            .filter(Payment.is_active.is_(True))
             .order_by(func.coalesce(Payment.paid_at, Payment.created_at).desc())
             .limit(10)
             .all()
         )
 
-    balance_due = sum(
-        float(getattr(inv, "balance_due", 0) or 0)
-        for inv in invoices
-        if inv.status
-        in (InvoiceStatus.issued, InvoiceStatus.partially_paid, InvoiceStatus.overdue)
-    )
+    balance_due = float(open_invoice_balance_for_accounts(db, account_ids or []))
+
+    current_balance = Decimal("0.00")
+    for account_id in account_ids or []:
+        try:
+            current_balance += get_available_balance(db, str(account_id))
+        except Exception:
+            logger.warning(
+                "Failed to resolve current balance for customer account %s",
+                account_id,
+                exc_info=True,
+            )
 
     total_invoiced = 0
     total_paid = 0
@@ -679,26 +720,28 @@ def _build_common_financials(db: Session, account_ids):
         total_invoiced = (
             db.query(func.coalesce(func.sum(Invoice.total), 0))
             .filter(Invoice.account_id.in_(account_ids))
+            .filter(Invoice.is_active.is_(True))
             .scalar()
             or 0
         )
         total_paid = (
             db.query(func.coalesce(func.sum(Payment.amount), 0))
             .filter(Payment.account_id.in_(account_ids))
+            .filter(Payment.is_active.is_(True))
             .filter(Payment.status == PaymentStatus.succeeded)
             .scalar()
             or 0
         )
         overdue_invoices = (
             db.query(func.count(Invoice.id))
-            .filter(Invoice.account_id.in_(account_ids))
-            .filter(Invoice.status == InvoiceStatus.overdue)
+            .filter(*overdue_debt_filters_for_accounts(account_ids))
             .scalar()
             or 0
         )
         last_payment = (
             db.query(Payment)
             .filter(Payment.account_id.in_(account_ids))
+            .filter(Payment.is_active.is_(True))
             .filter(Payment.status == PaymentStatus.succeeded)
             .order_by(func.coalesce(Payment.paid_at, Payment.created_at).desc())
             .first()
@@ -706,20 +749,113 @@ def _build_common_financials(db: Session, account_ids):
         last_invoice = (
             db.query(Invoice)
             .filter(Invoice.account_id.in_(account_ids))
+            .filter(Invoice.is_active.is_(True))
             .order_by(func.coalesce(Invoice.issued_at, Invoice.created_at).desc())
             .first()
         )
 
     return {
         "invoices": invoices,
+        "invoice_status_presentations": {
+            str(invoice.id): invoice_status_presentation(invoice.status)
+            for invoice in invoices
+        },
         "payments": payments,
+        "payment_status_presentations": {
+            str(payment.id): payment_status_presentation(payment.status)
+            for payment in payments
+        },
         "balance_due": balance_due,
         "financials": {
+            "current_balance": current_balance,
             "total_invoiced": total_invoiced,
             "total_paid": total_paid,
             "overdue_invoices": overdue_invoices,
             "last_payment": last_payment,
             "last_invoice": last_invoice,
+        },
+    }
+
+
+def _build_admin_billing_workspace(
+    db: Session, account_ids: list[UUID]
+) -> dict[str, object]:
+    if not account_ids:
+        return {
+            "payment_proofs": [],
+            "credit_notes": [],
+            "credit_applications": [],
+            "service_extensions": [],
+            "billing_workspace_counts": {
+                "pending_payment_proofs": 0,
+                "open_credit_notes": 0,
+                "open_credit_amount": Decimal("0.00"),
+                "service_extensions": 0,
+            },
+        }
+
+    payment_proofs = (
+        db.query(PaymentProof)
+        .filter(PaymentProof.account_id.in_(account_ids))
+        .order_by(PaymentProof.created_at.desc())
+        .limit(10)
+        .all()
+    )
+    credit_notes = (
+        db.query(CreditNote)
+        .options(selectinload(CreditNote.applications))
+        .filter(CreditNote.account_id.in_(account_ids))
+        .filter(CreditNote.is_active.is_(True))
+        .order_by(CreditNote.created_at.desc())
+        .limit(10)
+        .all()
+    )
+    credit_applications = (
+        db.query(CreditNoteApplication)
+        .options(
+            selectinload(CreditNoteApplication.credit_note),
+            selectinload(CreditNoteApplication.invoice),
+        )
+        .join(CreditNote, CreditNoteApplication.credit_note_id == CreditNote.id)
+        .filter(CreditNote.account_id.in_(account_ids))
+        .order_by(CreditNoteApplication.created_at.desc())
+        .limit(10)
+        .all()
+    )
+    service_extensions = (
+        db.query(ServiceExtensionEntry)
+        .options(selectinload(ServiceExtensionEntry.extension))
+        .filter(ServiceExtensionEntry.subscriber_id.in_(account_ids))
+        .order_by(ServiceExtensionEntry.created_at.desc())
+        .limit(10)
+        .all()
+    )
+
+    open_credit_notes = [
+        note
+        for note in credit_notes
+        if note.status in (CreditNoteStatus.issued, CreditNoteStatus.partially_applied)
+        and (note.total or Decimal("0.00")) > (note.applied_total or Decimal("0.00"))
+    ]
+    open_credit_amount = sum(
+        (note.total or Decimal("0.00")) - (note.applied_total or Decimal("0.00"))
+        for note in open_credit_notes
+    )
+
+    return {
+        "payment_proofs": payment_proofs,
+        "credit_notes": credit_notes,
+        "credit_applications": credit_applications,
+        "service_extensions": service_extensions,
+        "billing_workspace_counts": {
+            "pending_payment_proofs": sum(
+                1
+                for proof in payment_proofs
+                if proof.status == PaymentProofStatus.submitted
+            ),
+            "open_credit_notes": len(open_credit_notes),
+            "open_credit_amount": open_credit_amount,
+            "service_extensions": len(service_extensions),
         },
     }
 
@@ -754,13 +890,7 @@ def _build_relationship_data(db: Session, account_ids: list[UUID]) -> dict[str, 
 
     support_tickets = (
         db.query(Ticket)
-        .filter(
-            or_(
-                Ticket.subscriber_id.in_(account_ids),
-                Ticket.customer_account_id.in_(account_ids),
-                Ticket.customer_person_id.in_(account_ids),
-            )
-        )
+        .filter(ticket_customer_any_link_filter(Ticket, account_ids))
         .order_by(Ticket.updated_at.desc())
         .limit(10)
         .all()
@@ -1072,22 +1202,37 @@ def _connection_status_for_session(
     subscription: Subscription,
     session: RadiusAccountingSession | None,
 ) -> dict[str, object]:
+    def snapshot(
+        state: str,
+        *,
+        detail: str,
+        last_seen_at: datetime | None,
+        identifier: str | None,
+    ) -> dict[str, object]:
+        presentation = access_session_status_presentation(state)
+        return {
+            "state": state,
+            "label": presentation.label,
+            "detail": detail,
+            "last_seen_at": last_seen_at,
+            "identifier": identifier,
+            "status_presentation": presentation.model_dump(mode="json"),
+        }
+
     if subscription.status != SubscriptionStatus.active:
-        return {
-            "state": "inactive",
-            "label": "Not connected",
-            "detail": "Service is not active",
-            "last_seen_at": None,
-            "identifier": None,
-        }
+        return snapshot(
+            "inactive",
+            detail="Service is not active",
+            last_seen_at=None,
+            identifier=None,
+        )
     if not session:
-        return {
-            "state": "offline",
-            "label": "Not connected",
-            "detail": "No open RADIUS accounting session",
-            "last_seen_at": None,
-            "identifier": None,
-        }
+        return snapshot(
+            "offline",
+            detail="No open RADIUS accounting session",
+            last_seen_at=None,
+            identifier=None,
+        )
 
     last_seen_at = session.last_update_at or session.session_start or session.created_at
     last_seen_utc = last_seen_at
@@ -1098,38 +1243,23 @@ def _connection_status_for_session(
         and last_seen_utc
         >= datetime.now(UTC) - timedelta(seconds=_RADIUS_CONNECTED_FRESH_SECONDS)
     )
-    return {
-        "state": "connected" if is_fresh else "stale",
-        "label": "Connected" if is_fresh else "Last seen",
-        "detail": "Open RADIUS accounting session"
-        if is_fresh
-        else "Open session has stale accounting updates",
-        "last_seen_at": last_seen_at,
-        "identifier": session.framed_ip_address or session.session_id,
-    }
+    return snapshot(
+        "connected" if is_fresh else "stale",
+        detail=(
+            "Open RADIUS accounting session"
+            if is_fresh
+            else "Open session has stale accounting updates"
+        ),
+        last_seen_at=last_seen_at,
+        identifier=session.framed_ip_address or session.session_id,
+    )
 
 
 def _build_network_connection_snapshot(
     db: Session, subscriptions: list[Subscription]
 ) -> tuple[dict[str, object], dict[str, dict[str, object]]]:
     sub_ids = [sub.id for sub in subscriptions if getattr(sub, "id", None)]
-    sessions_by_sub: dict[UUID, RadiusAccountingSession] = {}
-    if sub_ids:
-        rows = (
-            db.query(RadiusAccountingSession)
-            .filter(RadiusAccountingSession.subscription_id.in_(sub_ids))
-            .filter(RadiusAccountingSession.session_end.is_(None))
-            .order_by(
-                RadiusAccountingSession.subscription_id.asc(),
-                RadiusAccountingSession.last_update_at.desc().nullslast(),
-                RadiusAccountingSession.session_start.desc().nullslast(),
-                RadiusAccountingSession.created_at.desc(),
-            )
-            .all()
-        )
-        for row in rows:
-            if row.subscription_id and row.subscription_id not in sessions_by_sub:
-                sessions_by_sub[row.subscription_id] = row
+    sessions_by_sub = latest_open_accounting_sessions_by_subscription(db, sub_ids)
 
     by_subscription: dict[str, dict[str, object]] = {}
     for sub in subscriptions:
@@ -1145,7 +1275,7 @@ def _build_network_connection_snapshot(
         status for status in by_subscription.values() if status["state"] == "stale"
     ]
     active_count = sum(
-        1 for sub in subscriptions if sub.status == SubscriptionStatus.active
+        1 for sub in subscriptions if is_customer_impact_service_status(sub.status)
     )
     if connected:
         label = "Connected"
@@ -1167,6 +1297,9 @@ def _build_network_connection_snapshot(
             "state": state,
             "label": label,
             "detail": detail,
+            "status_presentation": access_session_status_presentation(state).model_dump(
+                mode="json"
+            ),
             "connected_count": len(connected),
             "active_count": active_count,
         },
@@ -1223,6 +1356,7 @@ def _build_network_access_cards(
                 "subscription_id": sub_id,
                 "offer_name": sub.offer.name if sub.offer else "Subscription",
                 "status": status,
+                "status_presentation": subscription_status_presentation(raw_status),
                 "connection_status": connection_by_subscription.get(sub_id, {}),
                 "login": sub.login,
                 "ipv4_address": sub.ipv4_address,
@@ -1304,6 +1438,186 @@ def reveal_customer_pppoe_password(
     return password or "", bool(password)
 
 
+def _build_crm_sync_status(db: Session, customer: Subscriber) -> dict[str, Any]:
+    def _display_datetime(value: object) -> str | None:
+        if isinstance(value, datetime):
+            return value.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
+        if value:
+            return str(value)
+        return None
+
+    latest_failure = (
+        db.query(CrmSyncFailure)
+        .filter(CrmSyncFailure.entity == "subscriber")
+        .filter(CrmSyncFailure.external_id == str(customer.id))
+        .order_by(CrmSyncFailure.created_at.desc())
+        .first()
+    )
+    unresolved_failure = (
+        latest_failure
+        if latest_failure and latest_failure.status == CrmSyncFailureStatus.unresolved
+        else None
+    )
+    crm_meta = {}
+    metadata = customer.metadata_ if isinstance(customer.metadata_, dict) else {}
+    raw_crm_meta = metadata.get("crm_sync") if metadata else None
+    if isinstance(raw_crm_meta, dict):
+        crm_meta = raw_crm_meta
+
+    crm_subscriber_id = (
+        str(customer.crm_subscriber_id) if customer.crm_subscriber_id else None
+    )
+    last_success_at = crm_meta.get("last_success_at")
+    last_activity_at: object | None
+    if unresolved_failure:
+        status = "failed"
+        label = "Sync failed"
+        last_activity_at = (
+            unresolved_failure.updated_at or unresolved_failure.created_at
+        )
+    elif crm_subscriber_id:
+        status = "linked"
+        label = "Synced"
+        last_activity_at = last_success_at
+    else:
+        status = "pending"
+        label = "Pending sync"
+        last_activity_at = None
+
+    return {
+        "status": status,
+        "label": label,
+        "crm_subscriber_id": crm_subscriber_id,
+        "last_success_at": last_success_at,
+        "last_activity_at": last_activity_at,
+        "last_success_display": _display_datetime(last_success_at),
+        "last_activity_display": _display_datetime(last_activity_at),
+        "dead_letter_id": str(unresolved_failure.id) if unresolved_failure else None,
+        "error": unresolved_failure.error if unresolved_failure else None,
+        "attempts": unresolved_failure.attempts if unresolved_failure else 0,
+    }
+
+
+def _build_identity_profile(customer: Subscriber) -> dict[str, Any]:
+    gender_value = getattr(customer.gender, "value", "unknown")
+    nin_value = customer.nin or ""
+    required = {
+        "date_of_birth": bool(customer.date_of_birth),
+        "gender": gender_value not in {"", "unknown"},
+        "nin": bool(nin_value),
+    }
+    missing = [key for key, complete in required.items() if not complete]
+    return {
+        "nin_masked": mask_nin(nin_value) if nin_value else None,
+        "nin_verified": bool((customer.metadata_ or {}).get("nin_verified")),
+        "nin_last_checked_at": (customer.metadata_ or {}).get("nin_last_checked_at"),
+        "date_of_birth": customer.date_of_birth.isoformat()
+        if customer.date_of_birth
+        else None,
+        "gender": None if gender_value == "unknown" else gender_value,
+        "complete": not missing,
+        "missing": missing,
+        "missing_labels": ", ".join(item.replace("_", " ") for item in missing),
+        "completed_count": sum(1 for value in required.values() if value),
+        "total_count": len(required),
+    }
+
+
+def _build_access_repair_state(
+    db: Session,
+    customer: Subscriber,
+    subscriptions: list[Subscription],
+) -> dict[str, Any]:
+    active_subscriptions = [
+        subscription
+        for subscription in subscriptions
+        if subscription.status == SubscriptionStatus.active
+    ]
+    if not active_subscriptions:
+        return {
+            "enabled": False,
+            "needed": False,
+            "reason": "No active subscriptions to repair.",
+        }
+
+    active_credentials_count = int(
+        db.query(func.count(AccessCredential.id))
+        .filter(AccessCredential.subscriber_id == customer.id)
+        .filter(AccessCredential.is_active.is_(True))
+        .scalar()
+        or 0
+    )
+    if active_credentials_count <= 0:
+        return {
+            "enabled": False,
+            "needed": False,
+            "reason": "No active access credentials to refresh.",
+        }
+
+    active_lock_count = int(
+        db.query(func.count(EnforcementLock.id))
+        .filter(EnforcementLock.subscriber_id == customer.id)
+        .filter(EnforcementLock.is_active.is_(True))
+        .scalar()
+        or 0
+    )
+    if active_lock_count > 0:
+        return {
+            "enabled": False,
+            "needed": False,
+            "reason": "Blocked by an active suspension lock.",
+        }
+
+    active_dunning_count = int(
+        db.query(func.count(DunningCase.id))
+        .filter(DunningCase.account_id == customer.id)
+        .filter(
+            DunningCase.status.in_([DunningCaseStatus.open, DunningCaseStatus.paused])
+        )
+        .scalar()
+        or 0
+    )
+    if active_dunning_count > 0:
+        return {
+            "enabled": False,
+            "needed": False,
+            "reason": "Blocked by an active dunning case.",
+        }
+
+    if customer.lifecycle_override_status is not None:
+        return {
+            "enabled": False,
+            "needed": False,
+            "reason": "Blocked by a manual lifecycle override.",
+        }
+
+    stale_reasons: list[str] = []
+    if customer.status != SubscriberStatus.active:
+        stale_reasons.append(f"account status is {customer.status.value}")
+    stale_access_count = sum(
+        1
+        for subscription in active_subscriptions
+        if (subscription.access_state or "") != "active"
+    )
+    if stale_access_count:
+        stale_reasons.append(
+            f"{stale_access_count} active subscription access state(s) are stale"
+        )
+
+    if not stale_reasons:
+        return {
+            "enabled": False,
+            "needed": False,
+            "reason": "No repair needed; account and access state already look active.",
+        }
+
+    return {
+        "enabled": True,
+        "needed": True,
+        "reason": "Repair needed: " + "; ".join(stale_reasons) + ".",
+    }
+
+
 def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, Any]:
     """Build unified customer detail snapshot.
 
@@ -1371,18 +1685,21 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
     finance_data = _build_common_financials(db, account_ids)
     invoices = finance_data["invoices"]
     payments = finance_data["payments"]
+    invoice_status_presentations = finance_data["invoice_status_presentations"]
+    payment_status_presentations = finance_data["payment_status_presentations"]
     balance_due = finance_data["balance_due"]
     financials = finance_data["financials"]
     active_subscriptions = sum(
-        1 for sub in subscriptions if sub.status == SubscriptionStatus.active
+        1 for sub in subscriptions if is_customer_impact_service_status(sub.status)
     )
     monthly_recurring = sum(
         float(getattr(sub, "unit_price", 0) or 0)
         for sub in subscriptions
-        if sub.status == SubscriptionStatus.active
+        if is_mrr_countable_service_status(sub.status)
     )
     financials["monthly_recurring"] = monthly_recurring
     relationship_data = _build_relationship_data(db, account_ids)
+    billing_workspace = _build_admin_billing_workspace(db, account_ids)
 
     # Address resolution with fallback
     if not addresses:
@@ -1501,12 +1818,27 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
 
     return {
         "customer": customer,
+        "customer_status_presentation": account_status_presentation(
+            customer.status,
+            is_active=customer.is_active,
+        ),
         "customer_type": "person",
         "customer_name": customer_name,
         "organization": organization,
         "subscribers": subscribers,
         "accounts": accounts,
+        "account_status_presentations": {
+            str(account.id): account_status_presentation(
+                account.status,
+                is_active=account.is_active,
+            )
+            for account in accounts
+        },
         "subscriptions": subscriptions,
+        "subscription_status_presentations": {
+            str(subscription.id): subscription_status_presentation(subscription.status)
+            for subscription in subscriptions
+        },
         "account_lookup": account_lookup,
         "addresses": addresses,
         "primary_address": primary_address,
@@ -1515,6 +1847,8 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
         "contacts": contacts,
         "invoices": invoices,
         "payments": payments,
+        "invoice_status_presentations": invoice_status_presentations,
+        "payment_status_presentations": payment_status_presentations,
         "notifications": notifications,
         "stats": stats,
         "financials": financials,
@@ -1522,11 +1856,19 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
         "has_any_subscribers": total_subscribers > 0,
         "activity_items": activity_items,
         "customer_user_access": customer_user_access,
+        "crm_sync_status": _build_crm_sync_status(db, customer),
+        "identity_profile": _build_identity_profile(customer),
         "pppoe_access": pppoe_access,
         "billing_policy": _billing_policy_snapshot(db, accounts),
+        "billing_workspace": billing_workspace,
         "network_connection_status": network_connection_status,
         "connection_by_subscription": connection_by_subscription,
         "network_access_cards": network_access_cards,
+        "access_repair_state": _build_access_repair_state(
+            db,
+            customer,
+            subscriptions,
+        ),
         "pending_location_request": pending_location_request,
         **relationship_data,
     }

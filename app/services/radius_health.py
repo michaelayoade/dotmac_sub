@@ -1,0 +1,338 @@
+"""RADIUS health monitor (operations strategy priority 2).
+
+Customer experience often fails before a router does: accounting stops
+flowing, sessions go stale, or enforcement drifts (suspended customers still
+online). This service derives those signals from the external radacct DB and
+the reconciled ``radius_active_sessions`` view, pushes the trend series to
+VictoriaMetrics, and hands the latest counters to the admin-alert evaluator
+via the shared task heartbeat.
+
+Deliberately DB-derived only in this phase — synthetic auth probes (RTT,
+timeout/resend counters from the server's point of view) need a RADIUS
+protocol client and land separately.
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import UTC, datetime, timedelta
+
+from sqlalchemy import func, or_, select
+from sqlalchemy import inspect as sa_inspect
+from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
+
+HEARTBEAT_TASK = "radius_health"
+
+# Advisory-lock key for the single-flight health task ("rHl").
+ADVISORY_LOCK_KEY = 0x72_48_6C
+
+# An OPEN radacct session whose interim update is older than this is stale —
+# either the NAS stopped sending accounting or the session died without a
+# Stop. Default 3x a typical 5-minute interim interval.
+DEFAULT_STALE_SESSION_SECONDS = 900
+
+# RFC 2865 string attributes have a 253-octet payload. Treat an external
+# radacct schema with a smaller NAS-Port-Id column as unhealthy: PostgreSQL
+# rejects the entire accounting row when a vendor sends a longer interface ID.
+MIN_NASPORTID_CAPACITY = 253
+
+_vm_writer = None
+
+
+def _writer():
+    global _vm_writer
+    if _vm_writer is None:
+        from app.services.bandwidth_metrics_adapter import VictoriaMetricsWriter
+
+        _vm_writer = VictoriaMetricsWriter()
+    return _vm_writer
+
+
+def _radacct_schema_signals(conn) -> dict[str, int]:
+    """Return whether radacct can persist any valid NAS-Port-Id value."""
+    columns = {
+        column["name"]: column for column in sa_inspect(conn).get_columns("radacct")
+    }
+    column = columns.get("nasportid")
+    if column is None:
+        return {"radacct_schema_ok": 0, "radacct_nasportid_capacity": 0}
+    length = getattr(column["type"], "length", None)
+    # TEXT and equivalent unbounded types report no length.
+    capacity = MIN_NASPORTID_CAPACITY if length is None else int(length)
+    return {
+        "radacct_schema_ok": int(capacity >= MIN_NASPORTID_CAPACITY),
+        "radacct_nasportid_capacity": capacity,
+    }
+
+
+def _radacct_signals(
+    db: Session, *, now: datetime, stale_after_seconds: int
+) -> dict[str, int | float | None]:
+    """Accounting-plane signals read from every configured external radacct DB.
+
+    ``acct_freshness_seconds`` is the age of the NEWEST interim update across
+    open sessions — if accounting stops flowing entirely, this climbs at
+    wall-clock speed. ``radacct_read_ok`` is 0 when any configured source
+    failed to answer (partial data must not masquerade as health).
+    """
+    from app.services.radius_session_reconcile import (
+        _active_external_sync_configs,
+        _get_external_engine,
+        _radacct_table,
+    )
+
+    configs = _active_external_sync_configs(db)
+    if not configs:
+        return {
+            "radacct_read_ok": 0,
+            "radacct_schema_ok": 0,
+            "radacct_nasportid_capacity": 0,
+            "open_sessions": 0,
+            "stale_open_sessions": 0,
+            "acct_freshness_seconds": None,
+        }
+
+    radacct = _radacct_table()
+    open_sessions = 0
+    stale_open = 0
+    newest_update: datetime | None = None
+    read_ok = 1
+    schema_ok = 1
+    nasportid_capacity = MIN_NASPORTID_CAPACITY
+    for config in configs:
+        try:
+            engine = _get_external_engine(config["db_url"])
+            with engine.connect() as conn:
+                schema = _radacct_schema_signals(conn)
+                schema_ok = min(schema_ok, schema["radacct_schema_ok"])
+                nasportid_capacity = min(
+                    nasportid_capacity, schema["radacct_nasportid_capacity"]
+                )
+                total, newest = conn.execute(
+                    select(
+                        func.count(),
+                        func.max(
+                            func.coalesce(
+                                radacct.c.acctupdatetime, radacct.c.acctstarttime
+                            )
+                        ),
+                    ).where(radacct.c.acctstoptime.is_(None))
+                ).one()
+                # Aware cutoff, same convention as the session reconcile's
+                # radacct reads (FreeRADIUS pg schema uses timestamptz).
+                stale_cutoff = now - timedelta(seconds=stale_after_seconds)
+                stale = conn.execute(
+                    select(func.count())
+                    .where(radacct.c.acctstoptime.is_(None))
+                    .where(
+                        func.coalesce(radacct.c.acctupdatetime, radacct.c.acctstarttime)
+                        < stale_cutoff
+                    )
+                ).scalar()
+        except Exception:
+            logger.exception(
+                "radius_health_radacct_read_failed source=%s", config.get("name")
+            )
+            read_ok = 0
+            schema_ok = 0
+            continue
+        open_sessions += int(total or 0)
+        stale_open += int(stale or 0)
+        if newest is not None:
+            if newest.tzinfo is None:
+                newest = newest.replace(tzinfo=UTC)
+            if newest_update is None or newest > newest_update:
+                newest_update = newest
+
+    freshness: float | None = None
+    if newest_update is not None:
+        freshness = max(0.0, (now - newest_update).total_seconds())
+    return {
+        "radacct_read_ok": read_ok,
+        "radacct_schema_ok": schema_ok,
+        "radacct_nasportid_capacity": nasportid_capacity,
+        "open_sessions": open_sessions,
+        "stale_open_sessions": stale_open,
+        "acct_freshness_seconds": freshness,
+    }
+
+
+def _enforcement_signals(db: Session) -> dict[str, int]:
+    """Session-vs-billing drift, from the reconciled live-session view.
+
+    ``blocked_access_*``: sessions, distinct subscriptions, and distinct
+    customer accounts whose shared access resolver says should be blocked.
+    Multiple sessions for one service must not be reported as multiple
+    customers. ``paid_active_without_session``: ACTIVE
+    subscriptions with a RADIUS login and no live session — a trend metric,
+    not an alert (a powered-off router is legitimate).
+    """
+    from app.models.catalog import Subscription, SubscriptionStatus
+    from app.models.radius_active_session import RadiusActiveSession
+    from app.models.subscriber import Subscriber, SubscriberStatus
+    from app.services.subscriber_access_policy import (
+        RADIUS_BLOCKING_SUBSCRIBER_STATUSES,
+    )
+
+    active_sessions = int(
+        db.execute(select(func.count()).select_from(RadiusActiveSession)).scalar() or 0
+    )
+
+    blocked_predicate = or_(
+        Subscription.status.in_(
+            (SubscriptionStatus.suspended, SubscriptionStatus.blocked)
+        ),
+        Subscriber.status.in_(RADIUS_BLOCKING_SUBSCRIBER_STATUSES),
+    )
+    blocked_sessions, blocked_subscriptions, blocked_accounts = db.execute(
+        select(
+            func.count(RadiusActiveSession.id),
+            func.count(func.distinct(RadiusActiveSession.subscription_id)),
+            func.count(func.distinct(Subscription.subscriber_id)),
+        )
+        .select_from(RadiusActiveSession)
+        .join(
+            Subscription,
+            Subscription.id == RadiusActiveSession.subscription_id,
+        )
+        .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
+        .where(blocked_predicate)
+    ).one()
+    blocked_sessions = int(blocked_sessions or 0)
+    blocked_subscriptions = int(blocked_subscriptions or 0)
+    blocked_accounts = int(blocked_accounts or 0)
+
+    session_logins = select(RadiusActiveSession.username)
+    paid_without_session = int(
+        db.execute(
+            select(func.count())
+            .select_from(Subscription)
+            .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
+            .where(
+                Subscription.status == SubscriptionStatus.active,
+                Subscriber.status == SubscriberStatus.active,
+                Subscriber.is_active.is_(True),
+                Subscription.login.isnot(None),
+                Subscription.login != "",
+                Subscription.login.not_in(session_logins),
+            )
+        ).scalar()
+        or 0
+    )
+
+    return {
+        "active_sessions": active_sessions,
+        # Compatibility key now carries its documented unit: subscriptions.
+        "suspended_with_session": blocked_subscriptions,
+        "blocked_access_sessions": blocked_sessions,
+        "blocked_access_subscriptions": blocked_subscriptions,
+        "blocked_access_accounts": blocked_accounts,
+        "paid_active_without_session": paid_without_session,
+    }
+
+
+def _writer_equivalence_signals(db: Session) -> dict:
+    """Read-only migration gate for the remaining physical RADIUS writers."""
+    from app.services.radius_writer_equivalence import (
+        assess_radius_writer_equivalence,
+    )
+
+    report = assess_radius_writer_equivalence(db, probe_schema=True)
+    return {
+        "writer_target_count": report.target_count,
+        "writer_unique_target_count": report.unique_target_count,
+        "writer_targets_equivalent": int(report.all_targets_match_canonical),
+        "writer_schema_contract_ok": int(report.schema_contract_ok),
+        "writer_group_semantics_required": int(report.group_semantics_required),
+        "writer_single_owner_ready": int(report.ready_for_single_owner),
+        "writer_equivalence_report": report.as_dict(),
+    }
+
+
+def collect_radius_health(
+    db: Session,
+    *,
+    now: datetime | None = None,
+    stale_after_seconds: int = DEFAULT_STALE_SESSION_SECONDS,
+) -> dict:
+    """One health pass: radacct signals + enforcement drift, plain scalars."""
+    now = now or datetime.now(UTC)
+    health: dict = {"checked_at": now.isoformat()}
+    health.update(
+        _radacct_signals(db, now=now, stale_after_seconds=stale_after_seconds)
+    )
+    health.update(_enforcement_signals(db))
+    try:
+        health.update(_writer_equivalence_signals(db))
+    except Exception:
+        logger.exception("radius_writer_equivalence_probe_failed")
+        health.update(
+            {
+                "writer_targets_equivalent": 0,
+                "writer_schema_contract_ok": 0,
+                "writer_single_owner_ready": 0,
+            }
+        )
+    try:
+        from app.services.radius_probe import run_configured_probe
+
+        probe_fields, _result = run_configured_probe()
+        health.update(probe_fields)
+    except Exception:  # the probe is additive; never fail the health pass
+        logger.exception("radius_health_probe_failed")
+        health.setdefault("probe_configured", 0)
+    return health
+
+
+def push_radius_metrics(health: dict, *, now: datetime | None = None) -> dict[str, int]:
+    """Push the health counters to VictoriaMetrics as trend series."""
+    ts_ms = int((now or datetime.now(UTC)).timestamp() * 1000)
+    gauges = {
+        "radius_open_sessions": health.get("open_sessions"),
+        "radius_stale_open_sessions": health.get("stale_open_sessions"),
+        "radius_acct_freshness_seconds": health.get("acct_freshness_seconds"),
+        "radius_active_sessions": health.get("active_sessions"),
+        "radius_suspended_with_active_session": health.get("suspended_with_session"),
+        "radius_blocked_access_active_sessions": health.get("blocked_access_sessions"),
+        "radius_blocked_access_active_subscriptions": health.get(
+            "blocked_access_subscriptions"
+        ),
+        "radius_blocked_access_active_accounts": health.get("blocked_access_accounts"),
+        "radius_paid_active_without_session": health.get("paid_active_without_session"),
+        "radius_radacct_read_ok": health.get("radacct_read_ok"),
+        "radius_radacct_schema_ok": health.get("radacct_schema_ok"),
+        "radius_radacct_nasportid_capacity": health.get("radacct_nasportid_capacity"),
+        "radius_auth_rtt_ms": health.get("auth_rtt_ms"),
+        "radius_probe_ok": (
+            health.get("probe_ok") if health.get("probe_configured") else None
+        ),
+        "radius_probe_retries": (
+            health.get("probe_retries") if health.get("probe_configured") else None
+        ),
+        "radius_writer_target_count": health.get("writer_target_count"),
+        "radius_writer_unique_target_count": health.get("writer_unique_target_count"),
+        "radius_writer_targets_equivalent": health.get("writer_targets_equivalent"),
+        "radius_writer_schema_contract_ok": health.get("writer_schema_contract_ok"),
+        "radius_writer_group_semantics_required": health.get(
+            "writer_group_semantics_required"
+        ),
+        "radius_writer_single_owner_ready": health.get("writer_single_owner_ready"),
+    }
+    lines = [
+        f"{name} {float(value)} {ts_ms}"
+        for name, value in gauges.items()
+        if value is not None
+    ]
+    if not lines:
+        return {"radius_metric_lines": 0, "radius_metric_write_failed": 0}
+    write_result = _writer().write_prometheus_lines(
+        lines,
+        adapter="radius.health",
+        operation="radius_health",
+    )
+    return {
+        "radius_metric_lines": len(lines),
+        "radius_metric_write_failed": 0 if write_result.success else len(lines),
+    }

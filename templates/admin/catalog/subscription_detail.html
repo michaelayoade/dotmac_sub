@@ -1,16 +1,16 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import status_badge %}
+{% from "components/ui/macros.html" import status_presentation_badge %}
 
 {% block title %}Subscription {{ subscription.id | string | truncate(8, True, '') | upper }} - Admin{% endblock %}
 
 {% block content %}
 {% set offer_label = subscription.offer.name if subscription.offer else 'Subscription' %}
 {% set status_val = subscription.status.value if subscription.status else 'pending' %}
-{% set can_activate = status_val in ('pending', 'suspended', 'blocked', 'stopped', 'disabled') %}
+{% set can_activate = status_val == 'pending' %}
+{% set can_restore = status_val in ('suspended', 'blocked', 'stopped') %}
 {% set can_suspend = status_val == 'active' %}
-{% set can_cancel = status_val not in ('canceled', 'expired', 'archived') %}
+{% set can_cancel = status_val not in ('canceled', 'expired', 'disabled', 'hidden', 'archived') %}
 {% set can_change_plan = status_val in ('active', 'pending', 'suspended') %}
-{% set subscription_status_labels = {'active': 'Active', 'blocked': 'Blocked', 'suspended': 'Suspended', 'disabled': 'Disabled', 'pending': 'Pending', 'stopped': 'Stopped', 'hidden': 'Hidden', 'archived': 'Archived', 'canceled': 'Canceled', 'expired': 'Expired'} %}
 {% set provisioning_router = subscription.provisioning_nas_device %}
 {% set assigned_ipv4_list = [] %}
 {% for assignment in subscription.ip_assignments or [] %}
@@ -59,29 +59,37 @@
                 <div x-show="open" @click.away="open = false" x-transition x-cloak
                      class="absolute right-0 z-20 mt-2 w-56 rounded-xl border border-slate-200 bg-white py-2 shadow-xl dark:border-slate-700 dark:bg-slate-800">
                     {% if can_activate %}
-                    <button type="button" @click="open = false; runAction('activate')"
+                    <button type="button" @click="open = false; openLifecycle('activate')"
                             class="flex w-full items-center gap-2 px-4 py-2 text-sm text-emerald-600 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-900/20">
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-                        {{ "Resume" if status_val == 'suspended' else "Activate" }}
+                        Activate
+                    </button>
+                    {% endif %}
+                    {% if can_restore %}
+                    <button type="button" @click="open = false; openLifecycle('restore')"
+                            class="flex w-full items-center gap-2 px-4 py-2 text-sm text-emerald-600 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-900/20">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                        Restore
                     </button>
                     {% endif %}
                     {% if can_suspend %}
-                    <button type="button" @click="open = false; runAction('suspend')"
+                    <button type="button" @click="open = false; openLifecycle('suspend')"
                             class="flex w-full items-center gap-2 px-4 py-2 text-sm text-orange-600 hover:bg-orange-50 dark:text-orange-400 dark:hover:bg-orange-900/20">
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                         Suspend
                     </button>
                     {% endif %}
                     {% if can_change_plan %}
-                    <button type="button" @click="open = false; showChangePlanModal = true"
-                            class="flex w-full items-center gap-2 px-4 py-2 text-sm text-violet-600 hover:bg-violet-50 dark:text-violet-400 dark:hover:bg-violet-900/20">
+                    <button type="button" @click="open = false; openLifecycle('change_plan')"
+                            class="flex w-full items-center gap-2 px-4 py-2 text-sm text-primary-600 hover:bg-primary-50 dark:text-primary-400 dark:hover:bg-primary-900/20">
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/></svg>
                         Change Plan
                     </button>
                     {% endif %}
                     <div class="my-1 border-t border-slate-100 dark:border-slate-700"></div>
                     <form method="post" action="/admin/catalog/subscriptions/{{ subscription.id }}/force-reauth"
-                          onsubmit="return confirm('This will disconnect the active PPPoE session. The customer should reconnect automatically, but may be offline briefly.');">
+                          data-confirm="This disconnects the active PPPoE session. The customer should reconnect automatically but may be offline briefly."
+                          data-confirm-variant="warning" data-confirm-label="Disconnect session">
                         {% include "components/forms/csrf_input.html" %}
                         <button type="submit"
                                 class="flex w-full items-center gap-2 px-4 py-2 text-sm text-sky-600 hover:bg-sky-50 dark:text-sky-400 dark:hover:bg-sky-900/20">
@@ -91,7 +99,7 @@
                     </form>
                     {% if can_cancel %}
                     <div class="my-1 border-t border-slate-100 dark:border-slate-700"></div>
-                    <button type="button" @click="open = false; runAction('cancel')"
+                    <button type="button" @click="open = false; openLifecycle('cancel')"
                             class="flex w-full items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20">
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
                         Cancel Subscription
@@ -100,18 +108,22 @@
                 </div>
             </div>
 
-            {# Change Plan Modal #}
-            <div x-show="showChangePlanModal" x-transition.opacity x-cloak
+            {# Canonical lifecycle preview and confirmation modal #}
+            <div x-show="showLifecycleModal" x-transition.opacity x-cloak
                  class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
-                 @keydown.escape.window="showChangePlanModal = false">
-                <div @click.outside="showChangePlanModal = false"
-                     class="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-700 dark:bg-slate-800">
-                    <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Change Plan</h3>
-                    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Move this subscription to a different offer.</p>
-                    <div class="mt-4">
+                 @keydown.escape.window="closeLifecycle()">
+                <div @click.outside="closeLifecycle()"
+                     class="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-800"
+                     role="dialog" aria-modal="true" aria-labelledby="lifecycle-modal-title">
+                    <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                        <h3 id="lifecycle-modal-title" class="text-lg font-semibold text-slate-900 dark:text-white" x-text="actionTitle()"></h3>
+                        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Review the service, billing, and access impact before confirming.</p>
+                    </div>
+                    <div class="space-y-4 px-6 py-5">
+                    <div x-show="kind === 'change_plan'" x-cloak>
                         <label for="change-plan-target" class="block text-sm font-medium text-slate-700 dark:text-slate-300">New Plan</label>
-                        <select id="change-plan-target" x-model="targetOfferId"
-                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-violet-500 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <select id="change-plan-target" x-model="targetOfferId" @change="refreshPreview()"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                             <option value="">Select a plan</option>
                             {% for offer in offer_options or [] %}
                                 {% if offer.id != (subscription.offer_id | string) %}
@@ -120,15 +132,69 @@
                             {% endfor %}
                         </select>
                     </div>
-                    <div class="mt-6 flex items-center justify-end gap-3">
-                        <button type="button" @click="showChangePlanModal = false"
-                                class="rounded-lg px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200">
-                            Cancel
-                        </button>
-                        <button type="button" @click="runChangePlan()" :disabled="!targetOfferId || busy"
-                                class="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-violet-700 disabled:opacity-50">
-                            <span x-show="!busy">Change Plan</span>
-                            <span x-show="busy">Saving…</span>
+                    <div>
+                        <label for="lifecycle-timing" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Effective</label>
+                        <select id="lifecycle-timing" x-model="effectiveTiming" @change="timingChanged()"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="immediate">Immediately</option>
+                            <option value="next_cycle">At next billing cycle</option>
+                            <option value="scheduled">On a specific date</option>
+                        </select>
+                    </div>
+                    <div x-show="effectiveTiming === 'scheduled'" x-cloak>
+                        <label for="lifecycle-effective-at" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Effective date and time</label>
+                        <input id="lifecycle-effective-at" type="datetime-local" x-model="effectiveAt" @change="refreshPreview()"
+                               class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div>
+                        <label for="lifecycle-reason" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Reason</label>
+                        <textarea id="lifecycle-reason" x-model="reason" @change="refreshPreview()" rows="2"
+                                  class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                                  placeholder="Operational reason for this change"></textarea>
+                    </div>
+                    <div x-show="previewLoading" class="py-6 text-center text-sm text-slate-500 dark:text-slate-400">Loading current service state...</div>
+                    <template x-if="preview && !previewLoading">
+                        <div class="space-y-4">
+                            <div class="grid gap-3 sm:grid-cols-2">
+                                <div class="border-l-4 border-slate-300 bg-slate-50 px-4 py-3 dark:border-slate-600 dark:bg-slate-900/40">
+                                    <p class="text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Current state</p>
+                                    <p class="mt-1 text-sm font-semibold text-slate-900 dark:text-white" x-text="stateLabel(preview.current)"></p>
+                                </div>
+                                <div class="border-l-4 border-primary-500 bg-primary-50 px-4 py-3 dark:bg-primary-900/20">
+                                    <p class="text-xs font-semibold uppercase text-primary-700 dark:text-primary-300">Proposed state</p>
+                                    <p class="mt-1 text-sm font-semibold text-slate-900 dark:text-white" x-text="stateLabel(preview.proposed)"></p>
+                                </div>
+                            </div>
+                            <dl class="divide-y divide-slate-200 border-y border-slate-200 text-sm dark:divide-slate-700 dark:border-slate-700">
+                                <div class="flex justify-between gap-4 py-2"><dt class="text-slate-500 dark:text-slate-400">Effective</dt><dd class="text-right font-medium text-slate-800 dark:text-slate-200" x-text="formatDate(preview.effective_at)"></dd></div>
+                                <div class="flex justify-between gap-4 py-2"><dt class="text-slate-500 dark:text-slate-400">Billing impact</dt><dd class="text-right font-medium text-slate-800 dark:text-slate-200" x-text="humanize(preview.billing_impact.action)"></dd></div>
+                                <div x-show="hasMoneyImpact()" class="flex justify-between gap-4 py-2"><dt class="text-slate-500 dark:text-slate-400">Net amount</dt><dd class="text-right font-medium text-slate-800 dark:text-slate-200" x-text="money(preview.billing_impact.net_amount, preview.billing_impact.currency)"></dd></div>
+                                <template x-if="billingQuote()">
+                                    <div class="contents">
+                                        <div class="flex justify-between gap-4 py-2"><dt class="text-slate-500 dark:text-slate-400">Prepaid funding before</dt><dd class="text-right font-medium text-slate-800 dark:text-slate-200" x-text="money(billingQuote().prepaid_funding_before, billingQuote().currency)"></dd></div>
+                                        <div class="flex justify-between gap-4 py-2"><dt class="text-slate-500 dark:text-slate-400">Prepaid funding after</dt><dd class="text-right font-medium text-slate-800 dark:text-slate-200" x-text="money(billingQuote().prepaid_funding_after, billingQuote().currency)"></dd></div>
+                                        <div class="flex justify-between gap-4 py-2"><dt class="text-slate-500 dark:text-slate-400">Postpaid receivables</dt><dd class="text-right font-medium text-slate-800 dark:text-slate-200" x-text="money(billingQuote().postpaid_receivables, billingQuote().currency)"></dd></div>
+                                        <div class="flex justify-between gap-4 py-2"><dt class="text-slate-500 dark:text-slate-400">Collection-blocking balance</dt><dd class="text-right font-medium text-slate-800 dark:text-slate-200" x-text="money(billingQuote().collection_blocking_balance, billingQuote().currency)"></dd></div>
+                                        <div class="flex justify-between gap-4 py-2"><dt class="text-slate-500 dark:text-slate-400">Exact ledger result</dt><dd class="text-right font-medium text-slate-800 dark:text-slate-200" x-text="billingQuote().ledger_entry_type ? `${billingQuote().ledger_entry_type} / ${billingQuote().ledger_source} / ${money(billingQuote().ledger_amount, billingQuote().currency)}` : 'No ledger transaction'"></dd></div>
+                                        <div class="flex justify-between gap-4 py-2"><dt class="text-slate-500 dark:text-slate-400">Financial access consequence</dt><dd class="text-right font-medium text-slate-800 dark:text-slate-200" x-text="billingQuote().access_consequence || 'none_plan_change_only'"></dd></div>
+                                    </div>
+                                </template>
+                                <div class="flex justify-between gap-4 py-2"><dt class="text-slate-500 dark:text-slate-400">Access impact</dt><dd class="text-right font-medium text-slate-800 dark:text-slate-200" x-text="accessLabel()"></dd></div>
+                                <div class="flex justify-between gap-4 py-2"><dt class="text-slate-500 dark:text-slate-400">Session action</dt><dd class="text-right font-medium text-slate-800 dark:text-slate-200" x-text="humanize(preview.access_impact.session_action)"></dd></div>
+                            </dl>
+                            <div x-show="!preview.eligible" class="border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
+                                <p class="font-semibold">This change is not eligible.</p>
+                                <ul class="mt-1 list-disc pl-5"><template x-for="item in preview.eligibility_reasons" :key="item"><li x-text="humanize(item)"></li></template></ul>
+                            </div>
+                        </div>
+                    </template>
+                    <div x-show="errorMessage" x-cloak class="border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300" x-text="errorMessage"></div>
+                    </div>
+                    <div class="flex items-center justify-end gap-3 border-t border-slate-200 px-6 py-4 dark:border-slate-700">
+                        <button type="button" @click="closeLifecycle()" class="rounded-lg px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200">Close</button>
+                        <button type="button" @click="executeLifecycle()" :disabled="busy || previewLoading || !preview || !preview.eligible"
+                                class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50">
+                            <span x-text="busy ? 'Applying...' : confirmLabel()"></span>
                         </button>
                     </div>
                 </div>
@@ -140,53 +206,134 @@
         function subscriptionDetailActions() {
             return {
                 busy: false,
-                showChangePlanModal: false,
+                showLifecycleModal: false,
+                preview: null,
+                previewLoading: false,
+                errorMessage: '',
+                kind: '',
                 targetOfferId: '',
+                effectiveTiming: 'immediate',
+                effectiveAt: '',
+                reason: '',
+                idempotencyKey: '',
+                previewRequestId: 0,
                 subscriptionId: '{{ subscription.id }}',
-                csrfToken: (document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/) || [])[1] || '',
-                confirmMessages: {
-                    activate: 'Activate this subscription?',
-                    suspend: 'Suspend this subscription?',
-                    cancel: 'Cancel this subscription? This is destructive.',
+                csrfToken: document.querySelector('meta[name="csrf-token"]')?.content || decodeURIComponent((document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/) || [])[1] || ''),
+                openLifecycle(kind) {
+                    this.previewRequestId += 1;
+                    this.kind = kind;
+                    this.targetOfferId = '';
+                    this.effectiveTiming = 'immediate';
+                    this.effectiveAt = '';
+                    this.reason = '';
+                    this.idempotencyKey = '';
+                    this.preview = null;
+                    this.errorMessage = '';
+                    this.showLifecycleModal = true;
+                    if (kind !== 'change_plan') this.refreshPreview();
                 },
-                async runAction(action) {
-                    if (!confirm(this.confirmMessages[action])) return;
-                    this.busy = true;
+                closeLifecycle() {
+                    if (this.busy) return;
+                    this.previewRequestId += 1;
+                    this.previewLoading = false;
+                    this.showLifecycleModal = false;
+                },
+                timingChanged() {
+                    if (this.effectiveTiming !== 'scheduled') this.effectiveAt = '';
+                    this.refreshPreview();
+                },
+                actionTitle() {
+                    return this.humanize(this.kind || 'subscription change');
+                },
+                confirmLabel() {
+                    return this.effectiveTiming === 'immediate' ? 'Confirm change' : 'Schedule change';
+                },
+                humanize(value) {
+                    return String(value || '').replaceAll('_', ' ').replace(/\b\w/g, c => c.toUpperCase());
+                },
+                stateLabel(state) {
+                    if (!state) return '-';
+                    return `${this.humanize(state.status)} - ${state.offer_name || 'No plan'}`;
+                },
+                formatDate(value) {
+                    return value ? new Date(value).toLocaleString() : '-';
+                },
+                money(value, currency) {
+                    const amount = Number(value || 0);
+                    return `${currency || ''} ${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`.trim();
+                },
+                hasMoneyImpact() {
+                    return this.preview && Number(this.preview.billing_impact.net_amount || 0) !== 0;
+                },
+                billingQuote() {
+                    return this.preview?.billing_impact?.details?.quote || null;
+                },
+                accessLabel() {
+                    if (!this.preview) return '-';
+                    const access = this.preview.access_impact;
+                    return `${this.humanize(access.current_state || 'none')} to ${this.humanize(access.proposed_state || 'none')}`;
+                },
+                commandBody() {
+                    const body = new URLSearchParams({
+                        kind: this.kind,
+                        effective_timing: this.effectiveTiming,
+                        reason: this.reason,
+                        _csrf_token: this.csrfToken,
+                    });
+                    if (this.targetOfferId) body.set('target_offer_id', this.targetOfferId);
+                    if (this.effectiveTiming === 'scheduled' && this.effectiveAt) body.set('effective_at', new Date(this.effectiveAt).toISOString());
+                    return body;
+                },
+                async refreshPreview() {
+                    const requestId = ++this.previewRequestId;
+                    this.preview = null;
+                    this.idempotencyKey = '';
+                    this.errorMessage = '';
+                    if (!this.kind || (this.kind === 'change_plan' && !this.targetOfferId)) return;
+                    if (this.effectiveTiming === 'scheduled' && !this.effectiveAt) return;
+                    this.previewLoading = true;
                     try {
-                        const body = new URLSearchParams({
-                            subscription_ids: this.subscriptionId,
-                            _csrf_token: decodeURIComponent(this.csrfToken),
-                        });
-                        const resp = await fetch(`/admin/catalog/subscriptions/bulk/${action}`, {
+                        const resp = await fetch(`/admin/catalog/subscriptions/${this.subscriptionId}/lifecycle/preview`, {
                             method: 'POST',
-                            headers: { 'X-CSRF-Token': decodeURIComponent(this.csrfToken) },
-                            body,
+                            headers: { 'X-CSRF-Token': this.csrfToken },
+                            body: this.commandBody(),
                         });
-                        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-                        window.location.reload();
+                        const data = await resp.json();
+                        if (requestId !== this.previewRequestId) return;
+                        if (!resp.ok) throw new Error(data.message || `HTTP ${resp.status}`);
+                        this.preview = data;
+                        this.idempotencyKey = window.crypto?.randomUUID?.() || `${Date.now()}-${this.kind}`;
                     } catch (err) {
-                        alert('Action failed: ' + err.message);
-                        this.busy = false;
+                        if (requestId !== this.previewRequestId) return;
+                        this.errorMessage = err.message || 'Could not preview this change.';
+                    } finally {
+                        if (requestId === this.previewRequestId) this.previewLoading = false;
                     }
                 },
-                async runChangePlan() {
-                    if (!this.targetOfferId) return;
+                async executeLifecycle() {
+                    if (!this.preview || !this.preview.eligible) return;
                     this.busy = true;
+                    this.errorMessage = '';
                     try {
-                        const body = new URLSearchParams({
-                            subscription_ids: this.subscriptionId,
-                            target_offer_id: this.targetOfferId,
-                            _csrf_token: decodeURIComponent(this.csrfToken),
-                        });
-                        const resp = await fetch('/admin/catalog/subscriptions/bulk/change-plan', {
+                        const body = this.commandBody();
+                        body.set('expected_head', this.preview.expected_head);
+                        if (this.kind === 'change_plan' && this.effectiveTiming === 'immediate') {
+                            body.set('preview_fingerprint', this.billingQuote().preview_fingerprint);
+                            body.set('effective_at', this.preview.effective_at);
+                        }
+                        const resp = await fetch(`/admin/catalog/subscriptions/${this.subscriptionId}/lifecycle/execute`, {
                             method: 'POST',
-                            headers: { 'X-CSRF-Token': decodeURIComponent(this.csrfToken) },
+                            headers: {
+                                'X-CSRF-Token': this.csrfToken,
+                                'Idempotency-Key': this.idempotencyKey,
+                            },
                             body,
                         });
-                        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                        const data = await resp.json();
+                        if (!resp.ok) throw new Error(data.message || `HTTP ${resp.status}`);
                         window.location.reload();
                     } catch (err) {
-                        alert('Plan change failed: ' + err.message);
+                        this.errorMessage = err.message || 'The lifecycle change failed.';
                         this.busy = false;
                     }
                 },
@@ -209,6 +356,42 @@
         {{ error }}
     </div>
     {% endif %}
+    {% if scheduled_plan_change %}
+    <div class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800 dark:border-sky-800 dark:bg-sky-900/30 dark:text-sky-300">
+        <div>
+            <span class="font-medium">Scheduled plan change:</span>
+            moves to <span class="font-semibold">{{ scheduled_plan_change.offer_name }}</span>
+            on <span class="font-semibold">{{ scheduled_plan_change.effective_date.strftime('%b %d, %Y') }}</span>.
+        </div>
+        <form method="post"
+              action="/admin/catalog/subscriptions/{{ subscription.id }}/scheduled-change/{{ scheduled_plan_change.id }}/cancel"
+              data-confirm="Cancel this scheduled plan change?" data-confirm-variant="warning" data-confirm-label="Cancel change">
+            {% include "components/forms/csrf_input.html" %}
+            <button type="submit"
+                    class="rounded-lg border border-sky-300 px-3 py-1.5 text-xs font-medium text-sky-700 transition hover:bg-sky-100 dark:border-sky-700 dark:text-sky-300 dark:hover:bg-sky-900/50">
+                Cancel scheduled change
+            </button>
+        </form>
+    </div>
+    {% endif %}
+    {% for scheduled in scheduled_status_changes or [] %}
+    <div class="flex flex-wrap items-center justify-between gap-3 border-l-4 border-amber-500 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:bg-amber-900/20 dark:text-amber-200">
+        <div>
+            <span class="font-medium">Scheduled {{ scheduled.kind | replace('_', ' ') }}:</span>
+            effective {{ scheduled.effective_at | app_datetime('%b %d, %Y %H:%M') }}
+            <span class="text-amber-700 dark:text-amber-300">({{ scheduled.status }})</span>
+            {% if scheduled.reason %}<span class="block text-xs text-amber-700 dark:text-amber-300">{{ scheduled.reason }}</span>{% endif %}
+        </div>
+        {% if scheduled.cancelable %}
+        <form method="post"
+              action="/admin/catalog/subscriptions/{{ subscription.id }}/lifecycle/schedules/{{ scheduled.id }}/cancel-view"
+              data-confirm="Cancel this scheduled subscription change?" data-confirm-variant="warning" data-confirm-label="Cancel change">
+            {% include "components/forms/csrf_input.html" %}
+            <button type="submit" class="rounded-lg border border-amber-300 px-3 py-1.5 text-xs font-medium text-amber-800 transition hover:bg-amber-100 dark:border-amber-700 dark:text-amber-200 dark:hover:bg-amber-900/40">Cancel scheduled change</button>
+        </form>
+        {% endif %}
+    </div>
+    {% endfor %}
 
     <div class="grid gap-6 lg:grid-cols-3">
         <div class="lg:col-span-2 space-y-6">
@@ -219,7 +402,8 @@
                         <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">{{ subscription.id }}</p>
                     </div>
                     <div class="text-right">
-                        {{ status_badge(subscription_status_labels.get(status_val, status_val | replace('_', ' ') | title), status_val if status_val in subscription_status_labels else 'default') }}
+                        {# Status semantics from the subscription status presentation owner. #}
+                        {{ status_presentation_badge(subscription_status_presentation(subscription.status)) }}
                     </div>
                 </div>
                 <div class="mt-6 grid gap-4 sm:grid-cols-2">
@@ -239,7 +423,7 @@
                             {% if conn.identifier %}
                                 {{ conn.identifier }}
                             {% elif conn.last_seen_at %}
-                                Updated {{ conn.last_seen_at.strftime('%b %d, %Y %H:%M') }}
+                                Updated {{ conn.last_seen_at | app_datetime('%b %d, %Y %H:%M') }}
                             {% else %}
                                 {{ conn.detail | default('No open RADIUS accounting session') }}
                             {% endif %}
@@ -310,11 +494,11 @@
                     </div>
                     <div>
                         <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Start</p>
-                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.start_at.strftime('%b %d, %Y %H:%M') if subscription.start_at else '—' }}</p>
+                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.start_at | app_datetime('%b %d, %Y %H:%M', '—') }}</p>
                     </div>
                     <div x-data="{ showCommercialTerms: false }">
                         <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Next Billing</p>
-                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.next_billing_at.strftime('%b %d, %Y %H:%M') if subscription.next_billing_at else '—' }}</p>
+                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.next_billing_at | app_datetime('%b %d, %Y %H:%M', '—') }}</p>
                         <button type="button"
                                 @click="showCommercialTerms = true"
                                 class="mt-2 inline-flex cursor-pointer items-center gap-1.5 text-xs font-medium text-primary-600 transition hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300">
@@ -379,11 +563,11 @@
                     </div>
                     <div>
                         <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">End</p>
-                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.end_at.strftime('%b %d, %Y %H:%M') if subscription.end_at else '—' }}</p>
+                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.end_at | app_datetime('%b %d, %Y %H:%M', '—') }}</p>
                     </div>
                     <div>
                         <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Canceled At</p>
-                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.canceled_at.strftime('%b %d, %Y %H:%M') if subscription.canceled_at else '—' }}</p>
+                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.canceled_at | app_datetime('%b %d, %Y %H:%M', '—') }}</p>
                     </div>
                     <div class="sm:col-span-2">
                         <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Cancel Reason</p>
@@ -536,7 +720,7 @@
                         {% endif %}
                         <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
                             {% if conn.last_seen_at %}
-                                Updated {{ conn.last_seen_at.strftime('%b %d, %Y %H:%M') }}
+                                Updated {{ conn.last_seen_at | app_datetime('%b %d, %Y %H:%M') }}
                             {% else %}
                                 {{ conn.detail | default('No open RADIUS accounting session') }}
                             {% endif %}
@@ -584,7 +768,7 @@
                                 <div class="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
                                     <div class="flex items-center justify-between gap-3">
                                         <p class="text-sm font-medium text-slate-900 dark:text-white">{{ event.event_type.value | replace('_', ' ') | title }}</p>
-                                        <p class="text-xs text-slate-500 dark:text-slate-400">{{ event.created_at.strftime('%b %d, %Y %H:%M') if event.created_at else '—' }}</p>
+                                        <p class="text-xs text-slate-500 dark:text-slate-400">{{ event.created_at | app_datetime('%b %d, %Y %H:%M', '—') }}</p>
                                     </div>
                                     <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
                                         {{ event.from_status.value if event.from_status else '—' }} → {{ event.to_status.value if event.to_status else '—' }}
@@ -604,7 +788,7 @@
                                 <div class="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
                                     <div class="flex items-center justify-between gap-3">
                                         <p class="text-sm font-medium text-slate-900 dark:text-white">{{ error.error_type.value | replace('_', ' ') | title }}</p>
-                                        <p class="text-xs text-slate-500 dark:text-slate-400">{{ error.occurred_at.strftime('%b %d, %Y %H:%M') if error.occurred_at else '—' }}</p>
+                                        <p class="text-xs text-slate-500 dark:text-slate-400">{{ error.occurred_at | app_datetime('%b %d, %Y %H:%M', '—') }}</p>
                                     </div>
                                     <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ error.reply_message or error.detail or 'No detail recorded.' }}</p>
                                 </div>
@@ -624,7 +808,7 @@
                                         </p>
                                         <p class="text-xs text-slate-500 dark:text-slate-400">
                                             {% if radius_sync_evidence.internal_user and radius_sync_evidence.internal_user.last_sync_at %}
-                                            Synced {{ radius_sync_evidence.internal_user.last_sync_at.strftime('%b %d, %Y %H:%M') }}
+                                            Synced {{ radius_sync_evidence.internal_user.last_sync_at | app_datetime('%b %d, %Y %H:%M') }}
                                             {% else %}
                                             Not synced
                                             {% endif %}
@@ -643,7 +827,7 @@
                                         <p class="text-sm font-medium text-slate-900 dark:text-white">{{ radius_sync_evidence.nas_client_count }} NAS client registration{{ '' if radius_sync_evidence.nas_client_count == 1 else 's' }}</p>
                                         <p class="text-xs text-slate-500 dark:text-slate-400">
                                             {% if radius_sync_evidence.last_sync_run and radius_sync_evidence.last_sync_run.finished_at %}
-                                            Last sync {{ radius_sync_evidence.last_sync_run.finished_at.strftime('%b %d, %Y %H:%M') }}
+                                            Last sync {{ radius_sync_evidence.last_sync_run.finished_at | app_datetime('%b %d, %Y %H:%M') }}
                                             {% else %}
                                             No sync run recorded
                                             {% endif %}
@@ -670,9 +854,9 @@
                                         </p>
                                         <p class="text-xs text-slate-500 dark:text-slate-400">
                                             {% if radius_sync_evidence.external_run and radius_sync_evidence.external_run.finished_at %}
-                                            {{ radius_sync_evidence.external_run.finished_at.strftime('%b %d, %Y %H:%M') }}
+                                            {{ radius_sync_evidence.external_run.finished_at | app_datetime('%b %d, %Y %H:%M') }}
                                             {% elif radius_sync_evidence.external_run and radius_sync_evidence.external_run.started_at %}
-                                            Started {{ radius_sync_evidence.external_run.started_at.strftime('%b %d, %Y %H:%M') }}
+                                            Started {{ radius_sync_evidence.external_run.started_at | app_datetime('%b %d, %Y %H:%M') }}
                                             {% else %}
                                             No run recorded
                                             {% endif %}
@@ -705,7 +889,7 @@
                                             {% if enforcement_state.runtime_entry.updated_at %}
                                             {{ enforcement_state.runtime_entry.updated_at[:16] | replace('T', ' ') }}
                                             {% elif enforcement_state.last_event and enforcement_state.last_event.created_at %}
-                                            {{ enforcement_state.last_event.created_at.strftime('%b %d, %Y %H:%M') }}
+                                            {{ enforcement_state.last_event.created_at | app_datetime('%b %d, %Y %H:%M') }}
                                             {% else %}
                                             No recent enforcement record
                                             {% endif %}
@@ -729,6 +913,49 @@
                 {% include "admin/catalog/_network_path_panel.html" %}
             {% endif %}
 
+            <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="flex items-center justify-between gap-4">
+                    <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Customer Radio (Wireless CPE)</h3>
+                    <span class="text-xs text-slate-500 dark:text-slate-400">{{ registered_radios|length }} registered</span>
+                </div>
+                <div class="mt-4 space-y-3">
+                    {% for radio in registered_radios %}
+                    <div class="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                        <div class="flex items-center justify-between gap-3">
+                            <p class="font-mono text-sm font-medium text-slate-900 dark:text-white">{{ radio.mac_address or '—' }}</p>
+                            {% if radio.uisp_device_id %}
+                            <span class="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">Confirmed by UISP sync</span>
+                            {% elif radio.status.value == 'retired' %}
+                            <span class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">Retired</span>
+                            {% else %}
+                            <span class="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">Awaiting UISP adoption</span>
+                            {% endif %}
+                        </div>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                            {{ radio.model or 'Unknown model' }}{% if radio.vendor %} · {{ radio.vendor }}{% endif %}
+                            {% if radio.installed_at %} · installed {{ radio.installed_at | app_datetime('%b %d, %Y', include_tz=False) }}{% endif %}
+                        </p>
+                    </div>
+                    {% else %}
+                    <p class="text-sm text-slate-500 dark:text-slate-400">No radio registered yet. Recording the radio MAC at install links this customer to their wireless CPE without waiting for a MAC guess by the UISP sync.</p>
+                    {% endfor %}
+                </div>
+                <form method="post" action="/admin/catalog/subscriptions/{{ subscription.id }}/register-radio-mac" class="mt-4 flex flex-wrap items-end gap-3">
+                    <div class="flex-1 min-w-[220px]">
+                        <label for="radio-mac-address" class="block text-xs font-medium text-slate-600 dark:text-slate-300">Radio MAC address</label>
+                        <input id="radio-mac-address" name="mac_address" type="text" required
+                               placeholder="24:A4:3C:AA:BB:01"
+                               pattern="([0-9A-Fa-f]{2}[:\-\. ]?){5}[0-9A-Fa-f]{2}"
+                               class="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-sm text-slate-900 placeholder-slate-400 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+                    </div>
+                    <button type="submit"
+                            class="inline-flex items-center gap-2 rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                        Register radio MAC
+                    </button>
+                </form>
+            </div>
+
             <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800" x-data="{ open: false }">
                 <div class="flex items-center justify-between gap-4">
                     <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Domain Events</h3>
@@ -746,7 +973,7 @@
                             <div class="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
                                 <div class="flex items-center justify-between gap-3">
                                     <p class="text-sm font-medium text-slate-900 dark:text-white">{{ event.label }}</p>
-                                    <p class="text-xs text-slate-500 dark:text-slate-400">{{ event.created_at.strftime('%b %d, %Y %H:%M') if event.created_at else '—' }}</p>
+                                    <p class="text-xs text-slate-500 dark:text-slate-400">{{ event.created_at | app_datetime('%b %d, %Y %H:%M', '—') }}</p>
                                 </div>
                                 <p class="mt-1 font-mono text-xs text-slate-500 dark:text-slate-400">{{ event.event_type }}</p>
                                 <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ event.status }}{% if event.processed_at %} · processed{% endif %}</p>
@@ -773,7 +1000,7 @@
                             <div class="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
                                 <div class="flex items-center justify-between gap-3">
                                     <p class="text-sm font-medium text-slate-900 dark:text-white">{{ notification.subject }}</p>
-                                    <p class="text-xs text-slate-500 dark:text-slate-400">{{ notification.created_at.strftime('%b %d, %Y %H:%M') if notification.created_at else '—' }}</p>
+                                    <p class="text-xs text-slate-500 dark:text-slate-400">{{ notification.created_at | app_datetime('%b %d, %Y %H:%M', '—') }}</p>
                                 </div>
                                 <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ notification.channel }} · {{ notification.status }} · {{ notification.recipient }}</p>
                                 {% if notification.template_code %}
@@ -882,7 +1109,7 @@
                         <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</div>
                         {% endif %}
                         {% if activity.occurred_at %}
-                        <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at.strftime('%b %d, %Y at %H:%M') }}</div>
+                        <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at | app_datetime('%b %d, %Y at %H:%M') }}</div>
                         {% endif %}
                     </div>
                     {% endfor %}
@@ -905,12 +1132,12 @@
                         <div class="mt-3 space-y-2 text-sm">
                             <div class="flex justify-between">
                                 <span class="text-amber-700 dark:text-amber-400">Paused Since</span>
-                                <span class="font-medium text-amber-900 dark:text-amber-200">{{ vacation_hold.created_at.strftime('%b %d, %Y %H:%M') if vacation_hold.created_at else '—' }}</span>
+                                <span class="font-medium text-amber-900 dark:text-amber-200">{{ vacation_hold.created_at | app_datetime('%b %d, %Y %H:%M', '—') }}</span>
                             </div>
                             {% if vacation_hold.resume_at %}
                             <div class="flex justify-between">
                                 <span class="text-amber-700 dark:text-amber-400">Auto-Resume</span>
-                                <span class="font-medium text-amber-900 dark:text-amber-200">{{ vacation_hold.resume_at.strftime('%b %d, %Y %H:%M') }}</span>
+                                <span class="font-medium text-amber-900 dark:text-amber-200">{{ vacation_hold.resume_at | app_datetime('%b %d, %Y %H:%M') }}</span>
                             </div>
                             {% endif %}
                             {% if vacation_hold.notes %}

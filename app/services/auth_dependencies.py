@@ -1,10 +1,11 @@
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 
+from app.db import finish_read_transaction
 from app.db import get_db as _get_db
 from app.models.auth import ApiKey, SessionStatus
 from app.models.auth import Session as AuthSession
@@ -17,7 +18,11 @@ from app.models.rbac import (
     SystemUserPermission,
     SystemUserRole,
 )
-from app.services.auth import hash_api_key
+from app.services.auth import (
+    hash_api_key,
+    hash_api_key_candidates,
+    is_legacy_api_key_hash,
+)
 from app.services.auth_flow import (
     _load_rbac_claims,
     decode_access_token,
@@ -47,6 +52,20 @@ def _claims_from_payload_or_db(
     return list(resolved_roles), list(resolved_scopes)
 
 
+def claims_for_principal(
+    db: Session,
+    principal_id: str,
+    principal_type: str,
+    payload: dict[str, Any],
+) -> tuple[list[str], list[str]]:
+    """Roles/scopes for a principal — token claims first, RBAC tables otherwise.
+
+    Public entry point for auth surfaces that cannot use the HTTP dependency
+    stack (e.g. WebSocket handshakes).
+    """
+    return _claims_from_payload_or_db(db, principal_id, principal_type, payload)
+
+
 def _extract_bearer_token(authorization: str | None) -> str | None:
     if not authorization:
         return None
@@ -66,6 +85,35 @@ def _as_utc(value: datetime | None) -> datetime | None:
 
 def _is_jwt(token: str) -> bool:
     return token.count(".") == 2
+
+
+# "Last used" is observability, not an audit trail: refresh at most once per
+# window so hot keys don't pay a DB write (and commit) on every request.
+_API_KEY_LAST_USED_REFRESH = timedelta(minutes=5)
+
+
+def _touch_api_key_last_used(db: Session, api_key: ApiKey, now: datetime) -> None:
+    last_used = _as_utc(api_key.last_used_at)
+    if last_used is not None and now - last_used < _API_KEY_LAST_USED_REFRESH:
+        return
+    api_key.last_used_at = now
+    db.commit()
+
+
+def _maybe_upgrade_api_key_hash(db: Session, api_key: ApiKey, raw_key: str) -> None:
+    """Rehash a legacy (unsalted-sha256) key to HMAC on successful auth.
+
+    One-time per key: after the upgrade the stored hash is no longer legacy, so
+    later requests skip this. Committed unconditionally (not subject to the
+    last-used throttle) so the upgrade always persists.
+    """
+    if not is_legacy_api_key_hash(api_key.key_hash):
+        return
+    upgraded = hash_api_key(raw_key)
+    if is_legacy_api_key_hash(upgraded):
+        return  # no server secret configured (dev/test) — nothing to upgrade to
+    api_key.key_hash = upgraded
+    db.commit()
 
 
 def _has_audit_scope(payload: dict) -> bool:
@@ -125,6 +173,7 @@ def require_audit_auth(
             if request is not None:
                 request.state.actor_id = actor_id
                 request.state.actor_type = "user"
+            finish_read_transaction(db)
             return {"actor_type": "user", "actor_id": actor_id}
         session = (
             db.query(AuthSession)
@@ -139,6 +188,7 @@ def require_audit_auth(
             if request is not None:
                 request.state.actor_id = session_actor_id
                 request.state.actor_type = "user"
+            finish_read_transaction(db)
             return {"actor_type": "user", "actor_id": session_actor_id}
     # API keys are accepted only when they carry an explicit audit scope — the
     # same gate JWTs must pass (`_has_audit_scope`). A key with no/other scopes is
@@ -146,18 +196,19 @@ def require_audit_auth(
     if x_api_key:
         api_key = (
             db.query(ApiKey)
-            .filter(ApiKey.key_hash == hash_api_key(x_api_key))
+            .filter(ApiKey.key_hash.in_(hash_api_key_candidates(x_api_key)))
             .filter(ApiKey.is_active.is_(True))
             .filter(ApiKey.revoked_at.is_(None))
             .filter((ApiKey.expires_at.is_(None)) | (ApiKey.expires_at > now))
             .first()
         )
         if api_key and _has_audit_scope({"scopes": list(api_key.scopes or [])}):
-            api_key.last_used_at = now
-            db.commit()
+            _maybe_upgrade_api_key_hash(db, api_key, x_api_key)
+            _touch_api_key_last_used(db, api_key, now)
             if request is not None:
                 request.state.actor_id = str(api_key.id)
                 request.state.actor_type = "api_key"
+            finish_read_transaction(db)
             return {"actor_type": "api_key", "actor_id": str(api_key.id)}
     raise HTTPException(status_code=401, detail="Unauthorized")
 
@@ -174,7 +225,7 @@ def _api_key_principal(
     now = datetime.now(UTC)
     api_key = (
         db.query(ApiKey)
-        .filter(ApiKey.key_hash == hash_api_key(raw_key))
+        .filter(ApiKey.key_hash.in_(hash_api_key_candidates(raw_key)))
         .filter(ApiKey.is_active.is_(True))
         .filter(ApiKey.revoked_at.is_(None))
         .filter((ApiKey.expires_at.is_(None)) | (ApiKey.expires_at > now))
@@ -182,8 +233,8 @@ def _api_key_principal(
     )
     if not api_key:
         return None
-    api_key.last_used_at = now
-    db.commit()
+    _maybe_upgrade_api_key_hash(db, api_key, raw_key)
+    _touch_api_key_last_used(db, api_key, now)
     actor_id = str(api_key.id)
     owner = str(api_key.subscriber_id) if api_key.subscriber_id else actor_id
     auth = {
@@ -201,6 +252,7 @@ def _api_key_principal(
         request.state.actor_id = actor_id
         request.state.actor_type = "api_key"
         request.state.auth = auth
+    finish_read_transaction(db)
     return auth
 
 
@@ -271,6 +323,7 @@ def require_user_auth(
     if request is not None:
         request.state.actor_id = actor_id
         request.state.actor_type = "user"
+    finish_read_transaction(db)
     return {
         "subscriber_id": str(principal_id),
         "person_id": str(principal_id),
@@ -281,6 +334,24 @@ def require_user_auth(
         "scopes": scopes,
         "impersonated_by": payload.get("imp_by"),
     }
+
+
+def user_role_names(db: Session, user_id: object) -> set[str] | None:
+    """Role names for a system user — the RBAC owner's identity read.
+
+    Returns None when the user cannot be resolved (or has no roles relation),
+    so callers can distinguish "no roles" from "unknown user". Consumers map
+    roles to their own visibility; they must not fetch SystemUser directly.
+    """
+    from app.models.system_user import SystemUser
+
+    if not user_id:
+        return None
+    sys_user = db.get(SystemUser, str(user_id))
+    roles = getattr(sys_user, "roles", None)
+    if sys_user is None or roles is None:
+        return None
+    return {getattr(r, "name", "") for r in roles} if roles else set()
 
 
 def require_role(role_name: str):
@@ -318,18 +389,29 @@ def require_role(role_name: str):
             )
         if not link:
             raise HTTPException(status_code=403, detail="Forbidden")
+        finish_read_transaction(db)
         return auth
 
     return _require_role
 
 
 def _permission_domain_aliases(permission_key: str) -> list[str]:
-    """Return permission aliases used during customer->subscriber transition."""
+    """Return explicit compatibility aliases for permission-key transitions.
+
+    Legacy report API-key scopes remain read-only aliases during the granular
+    reports migration. They intentionally do not satisfy ``:export``.
+    """
     aliases = [permission_key]
     if permission_key.startswith("customer:"):
         aliases.append(permission_key.replace("customer:", "subscriber:", 1))
     elif permission_key.startswith("subscriber:"):
         aliases.append(permission_key.replace("subscriber:", "customer:", 1))
+    legacy_report_read_scope = {
+        "reports:billing:read": "reports:billing",
+        "reports:network:read": "reports:network",
+    }.get(permission_key)
+    if legacy_report_read_scope:
+        aliases.append(legacy_report_read_scope)
     return aliases
 
 
@@ -440,18 +522,124 @@ def has_permission(auth: dict, db: Session, permission_key: str) -> bool:
     return bool(has_role_permission or has_direct_permission)
 
 
+def effective_permission_keys(auth: dict, db: Session) -> frozenset[str]:
+    """All permission keys the principal effectively holds, for UI gating.
+
+    Returns the raw granted keys (scopes + role + direct); the ``admin`` role
+    collapses to the ``"*"`` sentinel meaning "everything". A requirement is
+    checked by expanding it with ``_expand_permission_keys`` against this set
+    (see ``can``), mirroring ``has_permission`` — so the UI can hide what the
+    principal cannot do while the route stays the authority.
+    """
+    roles = set(auth.get("roles") or [])
+    if "admin" in roles:
+        return frozenset({"*"})
+    keys: set[str] = set(auth.get("scopes") or [])
+    principal_id = auth["principal_id"]
+    principal_type = auth.get("principal_type", "subscriber")
+    if principal_type == "system_user":
+        role_rows = (
+            db.query(Permission.key)
+            .join(RolePermission, RolePermission.permission_id == Permission.id)
+            .join(Role, Role.id == RolePermission.role_id)
+            .join(SystemUserRole, SystemUserRole.role_id == Role.id)
+            .filter(SystemUserRole.system_user_id == principal_id)
+            .filter(Role.is_active.is_(True))
+            .filter(Permission.is_active.is_(True))
+        )
+        direct_rows = (
+            db.query(Permission.key)
+            .join(
+                SystemUserPermission,
+                SystemUserPermission.permission_id == Permission.id,
+            )
+            .filter(SystemUserPermission.system_user_id == principal_id)
+            .filter(Permission.is_active.is_(True))
+        )
+    else:
+        role_rows = (
+            db.query(Permission.key)
+            .join(RolePermission, RolePermission.permission_id == Permission.id)
+            .join(Role, Role.id == RolePermission.role_id)
+            .join(SubscriberRole, SubscriberRole.role_id == Role.id)
+            .filter(SubscriberRole.subscriber_id == principal_id)
+            .filter(Role.is_active.is_(True))
+            .filter(Permission.is_active.is_(True))
+        )
+        direct_rows = (
+            db.query(Permission.key)
+            .join(
+                SubscriberPermission,
+                SubscriberPermission.permission_id == Permission.id,
+            )
+            .filter(SubscriberPermission.subscriber_id == principal_id)
+            .filter(Permission.is_active.is_(True))
+        )
+    keys.update(key for (key,) in role_rows.all())
+    keys.update(key for (key,) in direct_rows.all())
+    return frozenset(keys)
+
+
+def load_permission_keys(auth: dict, db: Session) -> frozenset[str]:
+    """Compute and memoize the effective permission-key set on the request's
+    ``auth`` dict, so a later ``can`` check in a template needs no DB access."""
+    cached = auth.get("permission_keys")
+    if cached is None:
+        cached = effective_permission_keys(auth, db)
+        auth["permission_keys"] = cached
+    return cached
+
+
+def can(request, permission_key: str) -> bool:
+    """UI gate: may the current principal perform ``permission_key``?
+
+    Pure set logic over the keys ``require_permission`` cached on the request's
+    auth — no DB — so a template can hide actions the principal lacks. Denies
+    when the set is absent (e.g. an ungated page); the route remains the
+    authority that actually enforces access.
+    """
+    auth = getattr(getattr(request, "state", None), "auth", None)
+    if not isinstance(auth, dict):
+        return False
+    held = auth.get("permission_keys")
+    if held is None:
+        return False
+    if "*" in held:
+        return True
+    return bool(set(_expand_permission_keys(permission_key)) & set(held))
+
+
+def action_permitted(request, action) -> bool:
+    """Whether an ``Action`` contract should render for the current principal.
+
+    Combines the owner's eligibility (``allowed``) with the RBAC gate
+    (``permission``): a template shows the control only when the action is both
+    eligible and permitted. Duck-typed so it needs no import of the contract.
+    """
+    if not getattr(action, "allowed", False):
+        return False
+    permission = getattr(action, "permission", None)
+    return not permission or can(request, permission)
+
+
 def require_permission(permission_key: str):
     def _require_permission(
         auth=Depends(require_user_auth),
         db: Session = Depends(_get_db),
     ):
+        # Cache the principal's effective permissions on the request so the
+        # rendered page can hide actions they lack (the route below still
+        # authorizes). Admin resolves to "*" without a query.
+        load_permission_keys(auth, db)
         roles = set(auth.get("roles") or [])
         if "admin" in roles:
+            finish_read_transaction(db)
             return auth
 
         possible_keys = _expand_permission_keys(permission_key)
         scopes = set(auth.get("scopes") or [])
         if scopes & set(possible_keys):
+            finish_read_transaction(db)
             return auth
 
         permissions = (
@@ -483,6 +671,7 @@ def require_permission(permission_key: str):
                 auth.get("scopes"),
             )
             raise HTTPException(status_code=403, detail="Forbidden")
+        finish_read_transaction(db)
         return auth
 
     return _require_permission
@@ -495,10 +684,12 @@ def require_any_permission(*permission_keys: str):
         auth=Depends(require_user_auth),
         db: Session = Depends(_get_db),
     ):
+        load_permission_keys(auth, db)
         principal_id = auth["principal_id"]
         principal_type = auth.get("principal_type", "subscriber")
         roles = set(auth.get("roles") or [])
         if "admin" in roles:
+            finish_read_transaction(db)
             return auth
 
         # Expand all permission keys
@@ -507,6 +698,7 @@ def require_any_permission(*permission_keys: str):
             all_possible_keys.update(_expand_permission_keys(key))
         scopes = set(auth.get("scopes") or [])
         if scopes & all_possible_keys:
+            finish_read_transaction(db)
             return auth
 
         permissions = (
@@ -564,6 +756,7 @@ def require_any_permission(*permission_keys: str):
 
         if not has_role_permission and not has_direct_permission:
             raise HTTPException(status_code=403, detail="Forbidden")
+        finish_read_transaction(db)
         return auth
 
     return _require_any_permission

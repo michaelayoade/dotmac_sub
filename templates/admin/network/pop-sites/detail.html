@@ -5,7 +5,7 @@
 
 {% block head %}
 {% if pop_site.latitude and pop_site.longitude %}
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+<link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css"
       integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
 <style>
     #location-map { height: 200px; border-radius: 0.5rem; }
@@ -341,7 +341,7 @@
                                 <div class="flex items-center justify-between">
                                     <a href="/admin/network/pop-sites/{{ pop_site.id }}/files/{{ photo.id }}/download"
                                        class="text-xs text-primary-600 hover:text-primary-700">Download</a>
-                                    <form method="post" action="/admin/network/pop-sites/{{ pop_site.id }}/files/{{ photo.id }}/delete" onsubmit="return confirm('Delete this photo?');">
+                                    <form method="post" action="/admin/network/pop-sites/{{ pop_site.id }}/files/{{ photo.id }}/delete" data-confirm="Delete this photo?" data-confirm-label="Delete">
                                         {% include "components/forms/csrf_input.html" %}
                                         <input type="hidden" name="tab" value="gallery">
                                         <button type="submit" class="text-xs text-red-600 hover:text-red-700">Delete</button>
@@ -396,11 +396,11 @@
                                 <tr>
                                     <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">{{ doc.filename }}</td>
                                     <td class="px-4 py-3 text-sm text-slate-600 dark:text-slate-400">{{ doc.category_label }}</td>
-                                    <td class="px-4 py-3 text-sm text-slate-600 dark:text-slate-400">{{ doc.created_at.strftime('%Y-%m-%d %H:%M') if doc.created_at else '-' }}</td>
+                                    <td class="px-4 py-3 text-sm text-slate-600 dark:text-slate-400">{{ doc.created_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</td>
                                     <td class="px-4 py-3">
                                         <div class="flex items-center justify-end gap-3">
                                             <a href="/admin/network/pop-sites/{{ pop_site.id }}/files/{{ doc.id }}/download" class="text-xs text-primary-600 hover:text-primary-700">Download</a>
-                                            <form method="post" action="/admin/network/pop-sites/{{ pop_site.id }}/files/{{ doc.id }}/delete" onsubmit="return confirm('Delete this document?');">
+                                            <form method="post" action="/admin/network/pop-sites/{{ pop_site.id }}/files/{{ doc.id }}/delete" data-confirm="Delete this document?" data-confirm-label="Delete">
                                                 {% include "components/forms/csrf_input.html" %}
                                                 <input type="hidden" name="tab" value="documents">
                                                 <button type="submit" class="text-xs text-red-600 hover:text-red-700">Delete</button>
@@ -464,7 +464,7 @@
                                     <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ contact.notes }}</p>
                                     {% endif %}
                                 </div>
-                                <form method="post" action="/admin/network/pop-sites/{{ pop_site.id }}/contacts/{{ contact.id }}/delete" onsubmit="return confirm('Delete this contact?');">
+                                <form method="post" action="/admin/network/pop-sites/{{ pop_site.id }}/contacts/{{ contact.id }}/delete" data-confirm="Delete this contact?" data-confirm-label="Delete">
                                     {% include "components/forms/csrf_input.html" %}
                                     <button type="submit" class="text-xs text-red-600 hover:text-red-700">Delete</button>
                                 </form>
@@ -494,11 +494,11 @@
                     </div>
                     <div>
                         <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Created</p>
-                        <p class="text-sm text-slate-900 dark:text-white">{{ pop_site.created_at.strftime('%B %d, %Y') if pop_site.created_at else '-' }}</p>
+                        <p class="text-sm text-slate-900 dark:text-white">{{ pop_site.created_at | app_datetime('%B %d, %Y', '-', include_tz=False) }}</p>
                     </div>
                     <div>
                         <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Last Updated</p>
-                        <p class="text-sm text-slate-900 dark:text-white">{{ pop_site.updated_at.strftime('%B %d, %Y') if pop_site.updated_at else '-' }}</p>
+                        <p class="text-sm text-slate-900 dark:text-white">{{ pop_site.updated_at | app_datetime('%B %d, %Y', '-', include_tz=False) }}</p>
                     </div>
                 </div>
             </div>
@@ -529,7 +529,7 @@
                         <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</div>
                         {% endif %}
                         {% if activity.occurred_at %}
-                        <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at.strftime('%b %d, %Y at %H:%M') }}</div>
+                        <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at | app_datetime('%b %d, %Y at %H:%M') }}</div>
                         {% endif %}
                     </div>
                     {% endfor %}
@@ -545,7 +545,7 @@
 
 {% block scripts %}
 {% if pop_site.latitude and pop_site.longitude %}
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+<script src="/static/vendor/leaflet/leaflet.js"
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 <script>
 (function() {

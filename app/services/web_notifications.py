@@ -18,9 +18,19 @@ from app.schemas.notification import (
 )
 from app.services import email as email_service
 from app.services import notification as notification_service
+from app.services import notification_template_conditions as condition_service
 from app.services import notification_template_renderer as template_renderer
 from app.services import sms as sms_service
 from app.services.integrations.connectors import whatsapp as whatsapp_connector
+from app.services.list_query import (
+    ListDefinition,
+    ListFieldDefinition,
+    ListQuery,
+)
+from app.services.whatsapp_notification_templates import (
+    provider_template_from_template,
+    sync_whatsapp_registry_templates,
+)
 
 
 def channels() -> list[str]:
@@ -35,25 +45,143 @@ def delivery_statuses() -> list[str]:
     return [item.value for item in DeliveryStatus]
 
 
-def templates_list_context(
-    db: Session,
+# UI page contracts for the admin notification lists. Each is the
+# projection-boundary owner for its surface: it declares searchable/filterable
+# /sortable fields, default order and page sizes. The routes validate and submit
+# through the contract; the context functions remain the read owners that issue
+# the SQL via notification_service.
+NOTIFICATION_TEMPLATES_LIST_DEFINITION = ListDefinition(
+    key="notification_templates",
+    fields=(
+        ListFieldDefinition("search", "Search", searchable=True),
+        ListFieldDefinition("channel", "Channel", filterable=True),
+        ListFieldDefinition("status", "Status", filterable=True),
+        ListFieldDefinition("name", "Name", sortable=True),
+    ),
+    default_sort="name",
+    default_sort_dir="asc",
+    default_per_page=25,
+)
+
+NOTIFICATION_QUEUE_LIST_DEFINITION = ListDefinition(
+    key="notification_queue",
+    fields=(
+        ListFieldDefinition("status", "Status", filterable=True),
+        ListFieldDefinition("channel", "Channel", filterable=True),
+        ListFieldDefinition("created_at", "Created", sortable=True),
+    ),
+    default_sort="created_at",
+    default_sort_dir="desc",
+    default_per_page=25,
+)
+
+NOTIFICATION_HISTORY_LIST_DEFINITION = ListDefinition(
+    key="notification_history",
+    fields=(
+        ListFieldDefinition("status", "Status", filterable=True),
+        ListFieldDefinition("occurred_at", "Occurred", sortable=True),
+    ),
+    default_sort="occurred_at",
+    default_sort_dir="desc",
+    default_per_page=25,
+)
+
+
+def build_templates_list_query(
     *,
-    channel: str | None,
-    page: int,
-    per_page: int,
-) -> dict[str, object]:
-    offset = (page - 1) * per_page
+    channel: str | None = None,
+    status: str | None = None,
+    search: str | None = None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
+    page: int = 1,
+    per_page: int | None = None,
+) -> ListQuery:
+    """Normalise notification-template list params through the page contract."""
+    return NOTIFICATION_TEMPLATES_LIST_DEFINITION.build_query(
+        search=search,
+        filters={"channel": channel, "status": status},
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        page=page,
+        per_page=per_page,
+    )
+
+
+def build_queue_list_query(
+    *,
+    status: str | None = None,
+    channel: str | None = None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
+    page: int = 1,
+    per_page: int | None = None,
+) -> ListQuery:
+    """Normalise notification-queue list params through the page contract."""
+    return NOTIFICATION_QUEUE_LIST_DEFINITION.build_query(
+        search=None,
+        filters={"status": status, "channel": channel},
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        page=page,
+        per_page=per_page,
+    )
+
+
+def build_history_list_query(
+    *,
+    status: str | None = None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
+    page: int = 1,
+    per_page: int | None = None,
+) -> ListQuery:
+    """Normalise notification-history list params through the page contract."""
+    return NOTIFICATION_HISTORY_LIST_DEFINITION.build_query(
+        search=None,
+        filters={"status": status},
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        page=page,
+        per_page=per_page,
+    )
+
+
+def templates_list_context(db: Session, query: ListQuery) -> dict[str, object]:
+    """Read owner for the notification-template list (reads a validated query)."""
+    sync_whatsapp_registry_templates(db)
+    channel = query.filter_value("channel")
+    status = query.filter_value("status")
+    search = query.search
+    page = query.page
+    per_page = query.per_page
+    offset = query.offset
     effective_channel = channel if channel else None
+    effective_status = str(status or "").strip().lower()
+    is_active = (
+        True
+        if effective_status == "active"
+        else False
+        if effective_status == "inactive"
+        else None
+    )
+    effective_search = str(search or "").strip() or None
     template_list = notification_service.templates.list(
         db=db,
         channel=effective_channel,
-        is_active=None,
+        is_active=is_active,
+        search=effective_search,
         order_by="name",
-        order_dir="asc",
+        order_dir=query.sort_dir,
         limit=per_page,
         offset=offset,
     )
-    total = notification_service.templates.count(db=db, channel=effective_channel)
+    total = notification_service.templates.count(
+        db=db,
+        channel=effective_channel,
+        is_active=is_active,
+        search=effective_search,
+    )
     total_pages = (total + per_page - 1) // per_page if total else 1
     return {
         "templates": template_list,
@@ -62,6 +190,8 @@ def templates_list_context(
         "total": total,
         "total_pages": total_pages,
         "channel": channel,
+        "status": effective_status,
+        "search": effective_search or "",
         "channel_counts": notification_service.templates.channel_counts(db),
         "channels": channels(),
     }
@@ -73,6 +203,7 @@ def template_form_context(
     template_id: UUID | None = None,
     error: str | None = None,
 ) -> dict[str, object] | None:
+    sync_whatsapp_registry_templates(db)
     template = None
     if template_id is not None:
         template = notification_service.templates.get(
@@ -92,9 +223,11 @@ def template_form_context(
         else "New Notification Template",
         "submit_label": "Update Template" if is_edit else "Create Template",
         "template_variables": template_renderer.TEMPLATE_VARIABLES,
+        "condition_fields": condition_service.CONDITION_FIELD_HELP,
     }
     if template is not None:
         context["template"] = template
+        context["conditions_json"] = _conditions_to_json(template.conditions)
     if error:
         context["error"] = error
     return context
@@ -112,15 +245,18 @@ def create_template(
     channel: str,
     subject: str | None,
     body: str,
+    conditions_json: str | None = None,
 ):
     normalized_code = _normalize_template_code(code)
     template_renderer.validate_template_text(subject, body, code=normalized_code)
+    conditions = _parse_conditions_json(conditions_json)
     payload = NotificationTemplateCreate(
         name=name.strip(),
         code=normalized_code,
         channel=NotificationChannel(channel),
         subject=subject.strip() if subject else None,
         body=body.strip(),
+        conditions=conditions,
     )
     return notification_service.templates.create(db=db, payload=payload)
 
@@ -135,15 +271,18 @@ def update_template(
     subject: str | None,
     body: str,
     is_active: bool,
+    conditions_json: str | None = None,
 ):
     normalized_code = _normalize_template_code(code)
     template_renderer.validate_template_text(subject, body, code=normalized_code)
+    conditions = _parse_conditions_json(conditions_json)
     payload = NotificationTemplateUpdate(
         name=name.strip(),
         code=normalized_code,
         channel=NotificationChannel(channel),
         subject=subject.strip() if subject else None,
         body=body.strip(),
+        conditions=conditions,
         is_active=is_active,
     )
     return notification_service.templates.update(
@@ -151,8 +290,38 @@ def update_template(
     )
 
 
+def _parse_conditions_json(raw: str | None) -> dict:
+    text = (raw or "").strip()
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Conditions must be valid JSON: {exc.msg}") from exc
+    return condition_service.validate_conditions(parsed)
+
+
+def _conditions_to_json(conditions: object) -> str:
+    try:
+        normalized = condition_service.validate_conditions(conditions)
+    except condition_service.NotificationTemplateConditionError:
+        return json.dumps(conditions or {}, indent=2, sort_keys=True)
+    if not normalized:
+        return ""
+    return json.dumps(normalized, indent=2, sort_keys=True)
+
+
 def delete_template(db: Session, *, template_id: UUID) -> None:
     notification_service.templates.delete(db=db, template_id=str(template_id))
+
+
+def toggle_template(db: Session, *, template_id: UUID):
+    template = notification_service.templates.get(db=db, template_id=str(template_id))
+    return notification_service.templates.update(
+        db=db,
+        template_id=str(template_id),
+        payload=NotificationTemplateUpdate(is_active=not template.is_active),
+    )
 
 
 def preview_variables(test_variables_json: str | None) -> dict[str, str]:
@@ -189,6 +358,25 @@ def render_template_preview(
     }
 
 
+def render_template_preview_from_fields(
+    *,
+    channel: str,
+    subject: str | None,
+    body: str,
+    test_variables_json: str | None,
+) -> dict[str, object]:
+    variables = preview_variables(test_variables_json)
+    return {
+        "rendered_subject": template_renderer.render_template_text(
+            subject or "",
+            variables,
+        ),
+        "rendered_body": template_renderer.render_template_text(body, variables),
+        "variables": variables,
+        "channel": channel,
+    }
+
+
 def send_template_test(
     db: Session,
     *,
@@ -222,10 +410,12 @@ def send_template_test(
         )
         return f"Test email sent to {test_recipient}"
     if template.channel == NotificationChannel.whatsapp:
+        provider_template = provider_template_from_template(template)
         result = whatsapp_service.send_template_message(
             db=db,
             recipient=recipient,
-            template_name=template.code,
+            template_name=str((provider_template or {}).get("name") or template.code),
+            language=str((provider_template or {}).get("language") or "") or None,
             dry_run=False,
         )
         if not result.get("ok"):
@@ -286,37 +476,17 @@ def _whatsapp_channel_ready(db: Session) -> tuple[bool, str]:
 
 
 def bulk_notification_setup_context(db: Session) -> dict[str, object]:
+    sync_whatsapp_registry_templates(db)
     template_list = notification_service.templates.list(
         db=db,
         channel=None,
         is_active=True,
+        search=None,
         order_by="name",
         order_dir="asc",
         limit=500,
         offset=0,
     )
-    whatsapp_config = whatsapp_connector.load_whatsapp_config(db)
-    whatsapp_registry_templates = [
-        {
-            "id": (
-                f"whatsapp:{str(item.get('name') or '').strip()}:"
-                f"{str(item.get('language') or '').strip() or 'en'}"
-            ),
-            "name": str(item.get("name") or "").strip(),
-            "code": str(item.get("name") or "").strip(),
-            "language": str(item.get("language") or "").strip() or "en",
-            "label": (
-                f"{str(item.get('name') or '').strip()} "
-                f"({str(item.get('language') or '').strip() or 'en'})"
-            ),
-            "channel": NotificationChannel.whatsapp.value,
-            "subject": "",
-            "is_active": True,
-            "is_registry_template": True,
-        }
-        for item in whatsapp_config.get("templates", [])
-        if str(item.get("name") or "").strip()
-    ]
     channel_checks = {
         NotificationChannel.email.value: _email_channel_ready(db),
         NotificationChannel.sms.value: _sms_channel_ready(db),
@@ -338,9 +508,7 @@ def bulk_notification_setup_context(db: Session) -> dict[str, object]:
             "message": channel_checks.get(channel.value, (False, "Unsupported"))[1],
             "template_count": sum(
                 1 for template in template_list if template.channel == channel
-            )
-            if channel != NotificationChannel.whatsapp
-            else len(whatsapp_registry_templates),
+            ),
             "settings_url": (
                 "/admin/system/email"
                 if channel == NotificationChannel.email
@@ -355,37 +523,37 @@ def bulk_notification_setup_context(db: Session) -> dict[str, object]:
             NotificationChannel.whatsapp,
         )
     ]
-    templates_state = [
-        {
-            "id": str(template.id),
-            "name": template.name,
-            "code": template.code,
-            "language": "",
-            "label": template.name,
-            "channel": template.channel.value,
-            "subject": template.subject or "",
-            "is_active": bool(template.is_active),
-            "is_registry_template": False,
-        }
-        for template in template_list
-        if template.channel != NotificationChannel.whatsapp
-    ]
-    templates_state.extend(whatsapp_registry_templates)
+    templates_state = []
+    for template in template_list:
+        provider_template = provider_template_from_template(template)
+        language = str((provider_template or {}).get("language") or "")
+        templates_state.append(
+            {
+                "id": str(template.id),
+                "name": template.name,
+                "code": template.code,
+                "language": language,
+                "label": f"{template.name} ({language})" if language else template.name,
+                "channel": template.channel.value,
+                "subject": template.subject or "",
+                "is_active": bool(template.is_active),
+                "is_registry_template": bool(provider_template),
+                "provider_template_name": (provider_template or {}).get("name") or "",
+            }
+        )
     return {
         "bulk_notification_channels": channels_state,
         "bulk_notification_templates": templates_state,
     }
 
 
-def queue_context(
-    db: Session,
-    *,
-    status: str | None,
-    channel: str | None,
-    page: int,
-    per_page: int,
-) -> dict[str, object]:
-    offset = (page - 1) * per_page
+def queue_context(db: Session, query: ListQuery) -> dict[str, object]:
+    """Read owner for the notification-queue list (reads a validated query)."""
+    status = query.filter_value("status")
+    channel = query.filter_value("channel")
+    page = query.page
+    per_page = query.per_page
+    offset = query.offset
     notification_status = status if status else "queued"
     effective_channel = channel if channel else None
     notifications_list = notification_service.notifications.list(
@@ -394,7 +562,7 @@ def queue_context(
         status=notification_status,
         is_active=True,
         order_by="created_at",
-        order_dir="desc",
+        order_dir=query.sort_dir,
         limit=per_page,
         offset=offset,
     )
@@ -418,21 +586,19 @@ def queue_context(
     }
 
 
-def history_context(
-    db: Session,
-    *,
-    status: str | None,
-    page: int,
-    per_page: int,
-) -> dict[str, object]:
-    offset = (page - 1) * per_page
+def history_context(db: Session, query: ListQuery) -> dict[str, object]:
+    """Read owner for the notification-history list (reads a validated query)."""
+    status = query.filter_value("status")
+    page = query.page
+    per_page = query.per_page
+    offset = query.offset
     deliveries = notification_service.deliveries.list(
         db=db,
         notification_id=None,
         status=status if status else None,
         is_active=True,
         order_by="occurred_at",
-        order_dir="desc",
+        order_dir=query.sort_dir,
         limit=per_page,
         offset=offset,
     )

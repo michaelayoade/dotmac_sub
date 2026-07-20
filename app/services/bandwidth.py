@@ -735,26 +735,36 @@ class BandwidthSamples(ListResponseMixin):
                 status_code=403, detail="No account associated with user"
             )
 
+        live_statuses = [
+            SubscriptionStatus.active,
+            SubscriptionStatus.pending,
+            SubscriptionStatus.blocked,
+            SubscriptionStatus.suspended,
+            SubscriptionStatus.stopped,
+            SubscriptionStatus.disabled,
+            SubscriptionStatus.expired,
+        ]
+
         subscription = (
             db.query(Subscription)
             .filter(
                 Subscription.subscriber_id == UUID(str(subscriber_id)),
-                Subscription.status.in_(
-                    [
-                        SubscriptionStatus.active,
-                        SubscriptionStatus.pending,
-                        SubscriptionStatus.blocked,
-                        SubscriptionStatus.suspended,
-                        SubscriptionStatus.stopped,
-                        SubscriptionStatus.disabled,
-                        SubscriptionStatus.expired,
-                        SubscriptionStatus.canceled,
-                    ]
-                ),
+                Subscription.status.in_(live_statuses),
             )
             .order_by(Subscription.created_at.desc())
             .first()
         )
+
+        if not subscription:
+            subscription = (
+                db.query(Subscription)
+                .filter(
+                    Subscription.subscriber_id == UUID(str(subscriber_id)),
+                    Subscription.status == SubscriptionStatus.canceled,
+                )
+                .order_by(Subscription.created_at.desc())
+                .first()
+            )
 
         if not subscription:
             raise HTTPException(

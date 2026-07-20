@@ -25,6 +25,7 @@ from app.schemas.audit import AuditEventCreate
 from app.services import audit as audit_service
 from app.services import geocoding as geocoding_service
 from app.services import gis as gis_service
+from app.services.customer_context import optional_customer_subscriber_id
 
 logger = logging.getLogger(__name__)
 
@@ -249,7 +250,7 @@ def _request_summary(item: CustomerLocationChangeRequest) -> dict[str, Any]:
 
 
 def get_customer_location_page_context(db: Session, customer: dict) -> dict[str, Any]:
-    subscriber_id = customer.get("subscriber_id")
+    subscriber_id = optional_customer_subscriber_id(db, customer)
     if not subscriber_id:
         raise HTTPException(status_code=404, detail="Subscriber account not found")
 

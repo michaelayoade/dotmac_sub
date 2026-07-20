@@ -7,7 +7,7 @@ from fastapi import HTTPException
 
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscription_engine import SettingValueType
-from app.services import geocoding
+from app.services import geocoding, settings_spec
 
 # =============================================================================
 # Helper Function Tests
@@ -143,6 +143,77 @@ class TestSettingInt:
 
         result = geocoding._setting_int(db_session, "invalid_int", 99)
         assert result == 99
+
+
+class TestGeocodingThrottle:
+    """Tests for external geocoding request throttling."""
+
+    def setup_method(self):
+        geocoding._LAST_REQUEST_AT.clear()
+
+    def teardown_method(self):
+        geocoding._LAST_REQUEST_AT.clear()
+
+    def test_waits_between_external_requests(self, db_session):
+        db_session.add(
+            DomainSetting(
+                domain=SettingDomain.geocoding,
+                key="min_interval_ms",
+                value_text="1000",
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
+        with (
+            patch("app.services.geocoding.time.monotonic") as mock_monotonic,
+            patch("app.services.geocoding.time.sleep") as mock_sleep,
+        ):
+            mock_monotonic.side_effect = [10.0, 10.2, 11.0]
+            geocoding._throttle_geocoding_request(
+                db_session,
+                provider="nominatim",
+                base_url="https://nominatim.openstreetmap.org",
+            )
+            geocoding._throttle_geocoding_request(
+                db_session,
+                provider="nominatim",
+                base_url="https://nominatim.openstreetmap.org",
+            )
+
+        mock_sleep.assert_called_once()
+        assert mock_sleep.call_args.args[0] == pytest.approx(0.8)
+
+    def test_skips_self_hosted_base_url(self, db_session):
+        db_session.add(
+            DomainSetting(
+                domain=SettingDomain.geocoding,
+                key="min_interval_ms",
+                value_text="1000",
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
+        with patch("app.services.geocoding.time.sleep") as mock_sleep:
+            geocoding._throttle_geocoding_request(
+                db_session,
+                provider="nominatim",
+                base_url="http://127.0.0.1:8080",
+            )
+
+        mock_sleep.assert_not_called()
+
+
+def test_geocoding_provider_spec_matches_supported_runtime_providers():
+    provider_spec = settings_spec.get_spec(SettingDomain.geocoding, "provider")
+    interval_spec = settings_spec.get_spec(SettingDomain.geocoding, "min_interval_ms")
+
+    assert provider_spec is not None
+    assert provider_spec.allowed == {"nominatim", "google", "mapbox"}
+    assert interval_spec is not None
+    assert interval_spec.default == 1000
+    assert interval_spec.min_value == 0
 
 
 class TestComposeAddress:

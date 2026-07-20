@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import urlencode
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -21,8 +22,15 @@ from app.models.integration import (
     IntegrationTargetType,
 )
 from app.models.support import Ticket, TicketComment
+from app.schemas.status_presentation import StatusTone
 from app.services.common import coerce_uuid
+from app.services.ui_contracts import Action, Kpi, StateValue
 from app.services.web_integrations import _parse_json
+
+# A sync profile whose newest run is older than this multiple of its scheduled
+# interval is reported stale — the freshness signal an integration owner needs
+# to spot a wedged puller before the failure count climbs.
+_STALE_INTERVAL_MULTIPLE = 2
 
 
 def _enum_value(value: Any) -> str:
@@ -40,10 +48,9 @@ def ensure_default_crm_ticket_sync(db: Session) -> IntegrationJob:
             name="DotMac CRM",
             connector_type=ConnectorType.http,
             base_url=settings.crm_base_url,
-            auth_type=ConnectorAuthType.basic,
+            auth_type=ConnectorAuthType.api_key,
             auth_config={
-                "username": settings.crm_username,
-                "password": settings.crm_password,
+                "service_token": settings.crm_service_token,
             },
             timeout_sec=45,
             metadata_={"sync_adapter": "crm"},
@@ -147,7 +154,79 @@ def _daily_counts(db: Session, days: int = 14) -> list[dict[str, Any]]:
     ]
 
 
-def build_syncs_index_data(db: Session) -> dict[str, Any]:
+def _syncs_cohort_url(
+    *, direction: str | None = None, active: bool | None = None
+) -> str:
+    """Drill-down to the sync list filtered to exactly the cohort a KPI counts.
+
+    ``direction`` and ``active`` are the same filters the index route honours, so
+    a headline count and the profiles it summarises never diverge (KPI-parity).
+    """
+    params = {
+        "direction": direction,
+        "active": "1" if active else None,
+    }
+    query = urlencode({key: value for key, value in params.items() if value})
+    return "/admin/integrations/syncs" + (f"?{query}" if query else "")
+
+
+def _last_run_state(job: IntegrationJob, runs: list[IntegrationRun]) -> StateValue:
+    """Freshness of a sync profile's newest run as a State contract value.
+
+    Never-run profiles resolve to ``unknown`` (no run instant exists yet) so the
+    template shows an explicit absence rather than a zero/date stand-in; an
+    interval profile whose newest run is past its staleness window resolves to
+    ``stale`` so a wedged puller is visible before failures accrue.
+    """
+    latest = runs[0] if runs else None
+    started = getattr(latest, "started_at", None) if latest else None
+    if started is None:
+        return StateValue.unknown()
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=UTC)
+    interval = (
+        job.interval_minutes
+        if job.schedule_type == IntegrationScheduleType.interval
+        else None
+    )
+    if interval and datetime.now(UTC) - started > timedelta(
+        minutes=interval * _STALE_INTERVAL_MULTIPLE
+    ):
+        return StateValue.stale(started, as_of=started)
+    return StateValue.present(started, as_of=started)
+
+
+def _run_action(job: IntegrationJob) -> Action:
+    """Manual-run eligibility owned here, mirroring the route's disabled guard
+    (``sync_run`` refuses inactive jobs) so the button is never offered on a
+    profile the backend would reject."""
+    active = bool(job.is_active)
+    return Action(
+        key="run",
+        label="Run",
+        allowed=active,
+        reason=None if active else "Profile is disabled",
+        permission="system:settings:write",
+        tone=StatusTone.info if active else StatusTone.neutral,
+    )
+
+
+def _sync_row(job: IntegrationJob, runs: list[IntegrationRun]) -> dict[str, Any]:
+    latest = runs[0] if runs else None
+    return {
+        "job": job,
+        "last_run": _last_run_state(job, runs),
+        "status_val": (latest.status.value if latest and latest.status else "never"),
+        "run_action": _run_action(job),
+    }
+
+
+def build_syncs_index_data(
+    db: Session,
+    *,
+    direction: str | None = None,
+    active: bool | None = None,
+) -> dict[str, Any]:
     ensure_default_crm_ticket_sync(db)
     sync_jobs = (
         db.query(IntegrationJob)
@@ -163,17 +242,57 @@ def build_syncs_index_data(db: Session) -> dict[str, Any]:
         .limit(10)
         .all()
     )
+    # KPIs summarise the whole profile set and each drills into its own cohort;
+    # the displayed table is the drill-down, filtered to the active view so a
+    # tile's count always matches the rows its link produces.
+    want_direction = (direction or "").strip().lower() or None
+    displayed_jobs = [
+        job
+        for job in sync_jobs
+        if (want_direction is None or job.direction == want_direction)
+        and (active is not True or job.is_active)
+    ]
+    sync_rows = [
+        _sync_row(job, runs_by_job.get(str(job.id), [])) for job in displayed_jobs
+    ]
+    sync_kpis = {
+        "total": Kpi(
+            label="Profiles",
+            value=StateValue.present(len(sync_jobs)),
+            cohort_url=_syncs_cohort_url(),
+        ),
+        "active": Kpi(
+            label="Active",
+            value=StateValue.present(sum(1 for job in sync_jobs if job.is_active)),
+            cohort_url=_syncs_cohort_url(active=True),
+            tone=StatusTone.positive,
+        ),
+        "pull": Kpi(
+            label="Pull",
+            value=StateValue.present(
+                sum(1 for job in sync_jobs if job.direction == "pull")
+            ),
+            cohort_url=_syncs_cohort_url(direction="pull"),
+            tone=StatusTone.info,
+        ),
+        "push": Kpi(
+            label="Push",
+            value=StateValue.present(
+                sum(1 for job in sync_jobs if job.direction == "push")
+            ),
+            cohort_url=_syncs_cohort_url(direction="push"),
+            tone=StatusTone.warning,
+        ),
+    }
     return {
-        "sync_jobs": sync_jobs,
+        "sync_jobs": displayed_jobs,
+        "sync_rows": sync_rows,
         "runs_by_job": runs_by_job,
         "daily_counts": _daily_counts(db),
         "failed_records": failed_records,
-        "stats": {
-            "total": len(sync_jobs),
-            "active": sum(1 for job in sync_jobs if job.is_active),
-            "pull": sum(1 for job in sync_jobs if job.direction == "pull"),
-            "push": sum(1 for job in sync_jobs if job.direction == "push"),
-        },
+        "sync_kpis": sync_kpis,
+        "direction_filter": want_direction,
+        "active_only": active is True,
     }
 
 
@@ -229,20 +348,17 @@ def update_sync_profile(
     job.interval_minutes = interval_value
     job.trigger_mode = (trigger_mode or "").strip() or None
     if job.adapter_key == "crm" and job.action == "pull_tickets":
-        job.mapping_config = {
-            "primary": (mapping_primary or "").strip(),
-            "fallback": (mapping_fallback or "").strip(),
-            "ambiguous": (mapping_ambiguous or "").strip(),
-        }
         job.filter_config = {
             "page_size": int(page_size or 200),
             "max_pages": int(max_pages or 50),
             "sync_comments": bool(sync_comments),
         }
+        job.mapping_config = None
+        job.conflict_policy = None
     else:
         job.mapping_config = _parse_json(mapping_config, "mapping_config")
         job.filter_config = _parse_json(filter_config, "filter_config")
-    job.conflict_policy = (conflict_policy or "").strip() or None
+        job.conflict_policy = (conflict_policy or "").strip() or None
     job.is_active = is_active
     db.commit()
     db.refresh(job)

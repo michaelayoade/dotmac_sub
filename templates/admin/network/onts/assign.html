@@ -21,6 +21,7 @@
     <form method="POST" action="{{ action_url }}" class="space-y-6">
         {% include "components/forms/csrf_input.html" %}
         {% if return_to %}<input type="hidden" name="return_to" value="{{ return_to }}">{% endif %}
+        <input type="hidden" name="pon_port_id" value="{{ form.pon_port_id if form and form.pon_port_id else pon_port_id or '' }}">
 
         {# ONT Info Card #}
         <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
@@ -50,7 +51,7 @@
                             {% else %}
                             <span class="text-slate-400">TR-069-only onboarding (no OLT)</span>
                             {% endif %}
-                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Leave blank for TR-069-only assignment.</p>
+                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">A modeled PON is required for a customer service assignment.</p>
                         </dd>
                     </div>
                 </dl>
@@ -72,7 +73,7 @@
                 <div>
                     <label for="account_search" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Subscriber Account <span class="text-red-500">*</span></label>
                     <div class="relative mt-1" data-typeahead-url="/api/v1/search/subscribers" data-typeahead-min="2" data-typeahead-limit="10">
-                        <input type="text" id="account_search" name="account_search" autocomplete="off"
+                        <input type="text" id="account_search" autocomplete="off"
                             data-typeahead-input
                             value="{{ form.account_label if form else '' }}"
                             placeholder="Search by name, email, or account number..."
@@ -81,6 +82,17 @@
                         <div data-typeahead-results></div>
                     </div>
                     <p class="mt-1.5 text-xs text-slate-500 dark:text-slate-400">Type at least 2 characters to search. The subscriber's service address will be linked automatically.</p>
+                </div>
+
+                <div>
+                    <label for="subscription_search" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Service Subscription <span class="text-red-500">*</span></label>
+                    <div class="relative mt-1" data-typeahead-url="/api/v1/search/subscriptions" data-typeahead-min="2" data-typeahead-limit="10">
+                        <input type="text" id="subscription_search" autocomplete="off"
+                            data-typeahead-input value="{{ form.subscription_label if form else '' }}"
+                            class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <input type="hidden" name="subscription_id" data-typeahead-hidden value="{{ form.subscription_id if form else '' }}" required>
+                        <div data-typeahead-results></div>
+                    </div>
                 </div>
 
                 <div>

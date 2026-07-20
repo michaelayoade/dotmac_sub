@@ -4,9 +4,9 @@ import os
 
 from sqlalchemy.orm import Session
 
-from app.models.domain_settings import SettingDomain
+from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscription_engine import SettingValueType
-from app.schemas.settings import DomainSettingUpdate
+from app.services.channel_health_contracts import DEFAULT_CHANNEL_HEALTH_CONTRACTS
 from app.services.domain_settings import (
     DomainSettings,
     audit_settings,
@@ -28,7 +28,6 @@ from app.services.domain_settings import (
     subscriber_settings,
     tr069_settings,
     usage_settings,
-    vas_settings,
 )
 from app.services.secrets import is_openbao_ref
 from app.timezone import APP_TIMEZONE_NAME
@@ -37,6 +36,34 @@ logger = logging.getLogger(__name__)
 
 
 def seed_auth_settings(db: Session) -> None:
+    rotation_enabled = os.getenv("CREDENTIAL_ROTATION_ENABLED", "true")
+    auth_settings.ensure_by_key(
+        db,
+        key="credential_rotation_enabled",
+        value_type=SettingValueType.boolean,
+        value_text=rotation_enabled,
+        value_json=rotation_enabled.lower() in {"1", "true", "yes", "on"},
+    )
+    rotation_auto_apply = os.getenv("CREDENTIAL_ROTATION_AUTO_APPLY", "true")
+    auth_settings.ensure_by_key(
+        db,
+        key="credential_rotation_auto_apply",
+        value_type=SettingValueType.boolean,
+        value_text=rotation_auto_apply,
+        value_json=rotation_auto_apply.lower() in {"1", "true", "yes", "on"},
+    )
+    auth_settings.ensure_by_key(
+        db,
+        key="credential_rotation_interval_days",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("CREDENTIAL_ROTATION_INTERVAL_DAYS", "90"),
+    )
+    auth_settings.ensure_by_key(
+        db,
+        key="credential_rotation_grace_days",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("CREDENTIAL_ROTATION_GRACE_DAYS", "7"),
+    )
     auth_settings.ensure_by_key(
         db,
         key="jwt_algorithm",
@@ -104,6 +131,18 @@ def seed_auth_settings(db: Session) -> None:
         key="api_key_rate_max",
         value_type=SettingValueType.integer,
         value_text=os.getenv("API_KEY_RATE_MAX", "5"),
+    )
+    auth_settings.ensure_by_key(
+        db,
+        key="api_key_max_ttl_days",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("API_KEY_MAX_TTL_DAYS", "0"),
+    )
+    auth_settings.ensure_by_key(
+        db,
+        key="api_key_max_per_owner",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("API_KEY_MAX_PER_OWNER", "0"),
     )
     jwt_secret = os.getenv("JWT_SECRET")
     if jwt_secret and is_openbao_ref(jwt_secret):
@@ -199,13 +238,6 @@ def seed_imports_settings(db: Session) -> None:
 
 
 def seed_gis_settings(db: Session) -> None:
-    gis_settings.ensure_by_key(
-        db,
-        key="sync_enabled",
-        value_type=SettingValueType.boolean,
-        value_text="true",
-        value_json=True,
-    )
     gis_settings.ensure_by_key(
         db,
         key="sync_interval_minutes",
@@ -334,27 +366,11 @@ def seed_usage_settings(db: Session) -> None:
         value_type=SettingValueType.integer,
         value_text=os.getenv("FUP_EVALUATION_INTERVAL_SECONDS", "900"),
     )
-    accounting_enabled_raw = os.getenv("RADIUS_ACCOUNTING_IMPORT_ENABLED", "true")
-    usage_settings.ensure_by_key(
-        db,
-        key="radius_accounting_import_enabled",
-        value_type=SettingValueType.boolean,
-        value_text=accounting_enabled_raw,
-        value_json=accounting_enabled_raw.lower() in {"1", "true", "yes", "on"},
-    )
     usage_settings.ensure_by_key(
         db,
         key="radius_accounting_import_interval_seconds",
         value_type=SettingValueType.integer,
         value_text=os.getenv("RADIUS_ACCOUNTING_IMPORT_INTERVAL_SECONDS", "60"),
-    )
-    warning_enabled_raw = os.getenv("USAGE_WARNING_ENABLED", "true")
-    usage_settings.ensure_by_key(
-        db,
-        key="usage_warning_enabled",
-        value_type=SettingValueType.boolean,
-        value_text=warning_enabled_raw,
-        value_json=warning_enabled_raw.lower() in {"1", "true", "yes", "on"},
     )
     usage_settings.ensure_by_key(
         db,
@@ -415,20 +431,79 @@ def seed_notification_settings(db: Session) -> None:
         value_type=SettingValueType.integer,
         value_text=os.getenv("ALERT_NOTIFICATIONS_DEFAULT_DELAY_MINUTES", "0"),
     )
-    queue_enabled_raw = os.getenv("NOTIFICATION_QUEUE_ENABLED", "true")
-    notification_settings.ensure_by_key(
-        db,
-        key="notification_queue_enabled",
-        value_type=SettingValueType.boolean,
-        value_text=queue_enabled_raw,
-        value_json=queue_enabled_raw.lower() in {"1", "true", "yes", "on"},
-    )
     notification_settings.ensure_by_key(
         db,
         key="notification_queue_interval_seconds",
         value_type=SettingValueType.integer,
         value_text=os.getenv("NOTIFICATION_QUEUE_INTERVAL_SECONDS", "60"),
     )
+    escalation_delivery_enabled_raw = os.getenv(
+        "OPERATIONAL_ESCALATION_DELIVERY_ENABLED", "true"
+    )
+    notification_settings.ensure_by_key(
+        db,
+        key="operational_escalation_delivery_enabled",
+        value_type=SettingValueType.boolean,
+        value_text=escalation_delivery_enabled_raw,
+        value_json=escalation_delivery_enabled_raw.lower()
+        in {"1", "true", "yes", "on"},
+    )
+    notification_settings.ensure_by_key(
+        db,
+        key="operational_escalation_delivery_interval_seconds",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("OPERATIONAL_ESCALATION_DELIVERY_INTERVAL_SECONDS", "60"),
+    )
+    for key, env_name, default in [
+        ("notification_max_retries", "NOTIFICATION_MAX_RETRIES", "3"),
+        (
+            "notification_sending_timeout_minutes",
+            "NOTIFICATION_SENDING_TIMEOUT_MINUTES",
+            "10",
+        ),
+        (
+            "notification_retry_backoff_minutes",
+            "NOTIFICATION_RETRY_BACKOFF_MINUTES",
+            "1,5,15",
+        ),
+        (
+            "notification_per_channel_rate_limit",
+            "NOTIFICATION_PER_CHANNEL_RATE_LIMIT",
+            "50",
+        ),
+        ("sms_api_timeout_seconds", "SMS_API_TIMEOUT_SECONDS", "30"),
+        ("sms_max_length", "SMS_MAX_LENGTH", "160"),
+        ("notification_quiet_hours_start", "NOTIFICATION_QUIET_HOURS_START", "22:00"),
+        ("notification_quiet_hours_end", "NOTIFICATION_QUIET_HOURS_END", "07:00"),
+        (
+            "notification_dedupe_window_minutes",
+            "NOTIFICATION_DEDUPE_WINDOW_MINUTES",
+            "0",
+        ),
+    ]:
+        notification_settings.ensure_by_key(
+            db,
+            key=key,
+            value_type=SettingValueType.integer
+            if default.isdigit()
+            else SettingValueType.string,
+            value_text=os.getenv(env_name, default),
+        )
+    for key, env_name, default in [
+        (
+            "notification_quiet_hours_enabled",
+            "NOTIFICATION_QUIET_HOURS_ENABLED",
+            "false",
+        ),
+    ]:
+        raw = os.getenv(env_name, default)
+        notification_settings.ensure_by_key(
+            db,
+            key=key,
+            value_type=SettingValueType.boolean,
+            value_text=raw,
+            value_json=raw.lower() in {"1", "true", "yes", "on"},
+        )
 
 
 def _seed_missing_notification_templates(db: Session) -> int:
@@ -792,6 +867,17 @@ def _seed_missing_notification_templates(db: Session) -> int:
             ),
         },
         {
+            "code": "payment_reversed",
+            "name": "Payment Reversed",
+            "channel": NotificationChannel.email,
+            "subject": "Payment reversed",
+            "body": (
+                "Dear {subscriber_name},\n\n"
+                "A settled payment of {amount} was reversed on your account. "
+                "Please contact billing if you need more information."
+            ),
+        },
+        {
             "code": "usage_warning",
             "name": "Usage Warning",
             "channel": NotificationChannel.email,
@@ -988,14 +1074,6 @@ def seed_notification_templates(db: Session) -> None:
 
 
 def seed_collections_settings(db: Session) -> None:
-    enabled_raw = os.getenv("DUNNING_ENABLED", "true")
-    collections_settings.ensure_by_key(
-        db,
-        key="dunning_enabled",
-        value_type=SettingValueType.boolean,
-        value_text=enabled_raw,
-        value_json=enabled_raw.lower() in {"1", "true", "yes", "on"},
-    )
     collections_settings.ensure_by_key(
         db,
         key="dunning_interval_seconds",
@@ -1004,17 +1082,58 @@ def seed_collections_settings(db: Session) -> None:
     )
     collections_settings.ensure_by_key(
         db,
+        key="prepaid_balance_sweep_interval_seconds",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("PREPAID_BALANCE_SWEEP_INTERVAL_SECONDS", "3600"),
+    )
+    collections_settings.ensure_by_key(
+        db,
         key="suspension_notification_dedupe_hours",
         value_type=SettingValueType.integer,
-        value_text=os.getenv(
-            "COLLECTIONS_SUSPENSION_NOTIFICATION_DEDUPE_HOURS", "24"
-        ),
+        value_text=os.getenv("COLLECTIONS_SUSPENSION_NOTIFICATION_DEDUPE_HOURS", "24"),
     )
     collections_settings.ensure_by_key(
         db,
         key="prepaid_blocking_time",
         value_type=SettingValueType.string,
         value_text=os.getenv("PREPAID_BLOCKING_TIME", "08:00"),
+    )
+    collections_settings.ensure_by_key(
+        db,
+        key="enforcement_window_mode",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("ENFORCEMENT_WINDOW_MODE", "audit"),
+    )
+    collections_settings.ensure_by_key(
+        db,
+        key="enforcement_window_start",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("ENFORCEMENT_WINDOW_START", ""),
+    )
+    collections_settings.ensure_by_key(
+        db,
+        key="enforcement_window_end",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("ENFORCEMENT_WINDOW_END", ""),
+    )
+    enforcement_skip_weekends = os.getenv("ENFORCEMENT_SKIP_WEEKENDS", "false")
+    collections_settings.ensure_by_key(
+        db,
+        key="enforcement_skip_weekends",
+        value_type=SettingValueType.boolean,
+        value_text=enforcement_skip_weekends,
+        value_json=enforcement_skip_weekends.lower() in {"1", "true", "yes", "on"},
+    )
+    enforcement_skip_holidays_raw = os.getenv("ENFORCEMENT_SKIP_HOLIDAYS", "[]")
+    try:
+        enforcement_skip_holidays = json.loads(enforcement_skip_holidays_raw)
+    except json.JSONDecodeError:
+        enforcement_skip_holidays = []
+    collections_settings.ensure_by_key(
+        db,
+        key="enforcement_skip_holidays",
+        value_type=SettingValueType.json,
+        value_json=enforcement_skip_holidays,
     )
     prepaid_skip_weekends_raw = os.getenv("PREPAID_SKIP_WEEKENDS", "false")
     collections_settings.ensure_by_key(
@@ -1037,21 +1156,21 @@ def seed_collections_settings(db: Session) -> None:
     )
     collections_settings.ensure_by_key(
         db,
-        key="prepaid_grace_days",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("PREPAID_GRACE_DAYS", "0"),
-    )
-    collections_settings.ensure_by_key(
-        db,
-        key="prepaid_deactivation_days",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("PREPAID_DEACTIVATION_DAYS", "0"),
-    )
-    collections_settings.ensure_by_key(
-        db,
-        key="prepaid_default_min_balance",
+        key="prepaid_enforcement_activation_at",
         value_type=SettingValueType.string,
-        value_text=os.getenv("PREPAID_DEFAULT_MIN_BALANCE", "0.00"),
+        value_text=os.getenv("PREPAID_ENFORCEMENT_ACTIVATION_AT", ""),
+    )
+    collections_settings.ensure_by_key(
+        db,
+        key="prepaid_readiness_max_age_minutes",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("PREPAID_READINESS_MAX_AGE_MINUTES", "60"),
+    )
+    collections_settings.ensure_by_key(
+        db,
+        key="prepaid_activation_max_grace_days",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("PREPAID_ACTIVATION_MAX_GRACE_DAYS", "0"),
     )
     collections_settings.ensure_by_key(
         db,
@@ -1135,6 +1254,26 @@ def seed_geocoding_settings(db: Session) -> None:
     )
     geocoding_settings.ensure_by_key(
         db,
+        key="min_interval_ms",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("GEOCODING_MIN_INTERVAL_MS", "1000"),
+    )
+    geocoding_settings.ensure_by_key(
+        db,
+        key="google_api_key",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("GEOCODING_GOOGLE_API_KEY", ""),
+        is_secret=True,
+    )
+    geocoding_settings.ensure_by_key(
+        db,
+        key="mapbox_api_key",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("GEOCODING_MAPBOX_API_KEY", ""),
+        is_secret=True,
+    )
+    geocoding_settings.ensure_by_key(
+        db,
         key="batch_geocode_jobs_log",
         value_type=SettingValueType.json,
         value_json=[],
@@ -1144,47 +1283,6 @@ def seed_geocoding_settings(db: Session) -> None:
         key="batch_geocode_log_rows",
         value_type=SettingValueType.json,
         value_json=[],
-    )
-
-
-def seed_vas_settings(db: Session) -> None:
-    vas_settings.ensure_by_key(
-        db,
-        key="enabled",
-        value_type=SettingValueType.boolean,
-        value_text=os.getenv("VAS_ENABLED", "false"),
-        value_json=os.getenv("VAS_ENABLED", "false").strip().lower()
-        in {"1", "true", "yes", "on"},
-    )
-    vas_settings.ensure_by_key(
-        db,
-        key="topup_min",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("VAS_TOPUP_MIN", "100"),
-    )
-    vas_settings.ensure_by_key(
-        db,
-        key="topup_max_per_txn",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("VAS_TOPUP_MAX_PER_TXN", "50000"),
-    )
-    vas_settings.ensure_by_key(
-        db,
-        key="topup_daily_limit",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("VAS_TOPUP_DAILY_LIMIT", "100000"),
-    )
-    vas_settings.ensure_by_key(
-        db,
-        key="purchase_txn_limit",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("VAS_PURCHASE_TXN_LIMIT", "50000"),
-    )
-    vas_settings.ensure_by_key(
-        db,
-        key="auth_threshold",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("VAS_AUTH_THRESHOLD", "5000"),
     )
 
 
@@ -1235,6 +1333,44 @@ def seed_scheduler_settings(db: Session) -> None:
         value_type=SettingValueType.integer,
         value_text=os.getenv("CELERY_BEAT_REFRESH_MINUTES", "5"),
     )
+    event_dispatch_enabled = os.getenv("EVENT_DISPATCH_ENABLED", "true")
+    scheduler_settings.ensure_by_key(
+        db,
+        key="event_dispatch_enabled",
+        value_type=SettingValueType.boolean,
+        value_text=event_dispatch_enabled,
+        value_json=event_dispatch_enabled.lower() in {"1", "true", "yes", "on"},
+    )
+    scheduler_settings.ensure_by_key(
+        db,
+        key="event_dispatch_interval_seconds",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("EVENT_DISPATCH_INTERVAL_SECONDS", "60"),
+    )
+    scheduler_settings.ensure_by_key(
+        db,
+        key="event_dispatch_batch_size",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("EVENT_DISPATCH_BATCH_SIZE", "100"),
+    )
+    for key, env_name, default in [
+        ("crm_ticket_pull_interval_minutes", "CRM_TICKET_PULL_INTERVAL_MINUTES", "5"),
+        ("crm_cache_list_seconds", "CRM_CACHE_LIST_SECONDS", "60"),
+        ("crm_cache_detail_seconds", "CRM_CACHE_DETAIL_SECONDS", "30"),
+        ("crm_retry_max_attempts", "CRM_RETRY_MAX_ATTEMPTS", "2"),
+        ("crm_retry_max_sleep_seconds", "CRM_RETRY_MAX_SLEEP_SECONDS", "8"),
+        (
+            "crm_reachability_circuit_seconds",
+            "CRM_REACHABILITY_CIRCUIT_SECONDS",
+            "30",
+        ),
+    ]:
+        scheduler_settings.ensure_by_key(
+            db,
+            key=key,
+            value_type=SettingValueType.integer,
+            value_text=os.getenv(env_name, default),
+        )
 
 
 def seed_radius_settings(db: Session) -> None:
@@ -1263,14 +1399,6 @@ def seed_radius_settings(db: Session) -> None:
         value_type=SettingValueType.integer,
         value_text=os.getenv("RADIUS_AUTH_TIMEOUT_SEC", "3"),
     )
-    coa_enabled_raw = os.getenv("RADIUS_COA_ENABLED", "true")
-    radius_settings.ensure_by_key(
-        db,
-        key="coa_enabled",
-        value_type=SettingValueType.boolean,
-        value_text=coa_enabled_raw,
-        value_json=coa_enabled_raw.lower() in {"1", "true", "yes", "on"},
-    )
     radius_settings.ensure_by_key(
         db,
         key="coa_dictionary_path",
@@ -1295,6 +1423,58 @@ def seed_radius_settings(db: Session) -> None:
         value_type=SettingValueType.string,
         value_text=os.getenv("RADIUS_SUSPENDED_ADDRESS_LIST", "suspended"),
     )
+    group_routing_raw = os.getenv("RADIUS_GROUP_ROUTING_ENABLED", "false")
+    radius_settings.ensure_by_key(
+        db,
+        key="group_routing_enabled",
+        value_type=SettingValueType.boolean,
+        value_text=group_routing_raw,
+        value_json=group_routing_raw.lower() in {"1", "true", "yes", "on"},
+    )
+    for key, env_name, default in (
+        ("active_group_name", "RADIUS_ACTIVE_GROUP_NAME", "dotmac-active"),
+        (
+            "suspended_group_name",
+            "RADIUS_SUSPENDED_GROUP_NAME",
+            "dotmac-suspended",
+        ),
+        ("captive_group_name", "RADIUS_CAPTIVE_GROUP_NAME", "dotmac-captive"),
+    ):
+        radius_settings.ensure_by_key(
+            db,
+            key=key,
+            value_type=SettingValueType.string,
+            value_text=os.getenv(env_name, default),
+        )
+    radius_settings.ensure_by_key(
+        db,
+        key="access_group_priority",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("RADIUS_ACCESS_GROUP_PRIORITY", "0"),
+    )
+    for key, env_name, default in (
+        (
+            "enforcement_reconciler_max_kicks",
+            "ENFORCEMENT_RECONCILER_MAX_KICKS",
+            "25",
+        ),
+        (
+            "enforcement_reconciler_unserviceable_grace_seconds",
+            "ENFORCEMENT_RECONCILER_UNSERVICEABLE_GRACE_SECONDS",
+            "1200",
+        ),
+        (
+            "enforcement_reconciler_ghost_stale_seconds",
+            "ENFORCEMENT_RECONCILER_GHOST_STALE_SECONDS",
+            "7200",
+        ),
+    ):
+        radius_settings.ensure_by_key(
+            db,
+            key=key,
+            value_type=SettingValueType.integer,
+            value_text=os.getenv(env_name, default),
+        )
     refresh_raw = os.getenv("RADIUS_REFRESH_SESSIONS_ON_PROFILE_CHANGE", "true")
     radius_settings.ensure_by_key(
         db,
@@ -1353,11 +1533,30 @@ def seed_radius_settings(db: Session) -> None:
 
 
 def seed_billing_settings(db: Session) -> None:
+    legacy_provider = (
+        db.query(DomainSetting)
+        .filter(
+            DomainSetting.domain == SettingDomain.billing,
+            DomainSetting.key == "default_payment_provider_type",
+            DomainSetting.is_active.is_(True),
+        )
+        .first()
+    )
+    legacy_primary = str(getattr(legacy_provider, "value_text", "") or "").strip()
+    if legacy_primary not in {"paystack", "flutterwave"}:
+        legacy_primary = "paystack"
     billing_settings.ensure_by_key(
         db,
         key="default_currency",
         value_type=SettingValueType.string,
         value_text=os.getenv("BILLING_DEFAULT_CURRENCY", "NGN"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="prepaid_reconstruction_attestation_public_key_ref",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("PREPAID_RECONSTRUCTION_ATTESTATION_PUBLIC_KEY_REF", ""),
+        is_secret=True,
     )
     billing_settings.ensure_by_key(
         db,
@@ -1377,12 +1576,6 @@ def seed_billing_settings(db: Session) -> None:
         value_type=SettingValueType.string,
         value_text=os.getenv("BILLING_DEFAULT_PAYMENT_METHOD_TYPE", "card"),
     )
-    billing_settings.ensure_by_key(
-        db,
-        key="default_payment_provider_type",
-        value_type=SettingValueType.string,
-        value_text=os.getenv("BILLING_DEFAULT_PAYMENT_PROVIDER_TYPE", "paystack"),
-    )
     payment_failover_enabled_raw = os.getenv(
         "BILLING_PAYMENT_GATEWAY_FAILOVER_ENABLED", "true"
     )
@@ -1397,7 +1590,9 @@ def seed_billing_settings(db: Session) -> None:
         db,
         key="payment_gateway_primary_provider",
         value_type=SettingValueType.string,
-        value_text=os.getenv("BILLING_PAYMENT_GATEWAY_PRIMARY_PROVIDER", "paystack"),
+        value_text=os.getenv(
+            "BILLING_PAYMENT_GATEWAY_PRIMARY_PROVIDER", legacy_primary
+        ),
     )
     billing_settings.ensure_by_key(
         db,
@@ -1450,29 +1645,11 @@ def seed_billing_settings(db: Session) -> None:
             os.getenv("BILLING_INVOICE_DUE_DAYS", "14"),
         ),
     )
-    auto_suspend_raw = os.getenv("BILLING_AUTO_SUSPEND_ON_OVERDUE", "true")
-    billing_settings.ensure_by_key(
-        db,
-        key="auto_suspend_on_overdue",
-        value_type=SettingValueType.boolean,
-        value_text=auto_suspend_raw,
-        value_json=auto_suspend_raw.lower() in {"1", "true", "yes", "on"},
-    )
     billing_settings.ensure_by_key(
         db,
         key="autopay_max_consecutive_failures",
         value_type=SettingValueType.integer,
         value_text=os.getenv("BILLING_AUTOPAY_MAX_CONSECUTIVE_FAILURES", "3"),
-    )
-    prepaid_monthly_invoicing_raw = os.getenv(
-        "PREPAID_MONTHLY_INVOICING_ENABLED", "false"
-    )
-    billing_settings.ensure_by_key(
-        db,
-        key="prepaid_monthly_invoicing_enabled",
-        value_type=SettingValueType.boolean,
-        value_text=prepaid_monthly_invoicing_raw,
-        value_json=prepaid_monthly_invoicing_raw.lower() in {"1", "true", "yes", "on"},
     )
     customer_balance_notifications_raw = os.getenv(
         "BILLING_CUSTOMER_BALANCE_NOTIFICATIONS_ENABLED", "true"
@@ -1487,12 +1664,6 @@ def seed_billing_settings(db: Session) -> None:
     )
     billing_settings.ensure_by_key(
         db,
-        key="suspension_grace_hours",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("BILLING_SUSPENSION_GRACE_HOURS", "48"),
-    )
-    billing_settings.ensure_by_key(
-        db,
         key="expiry_reminder_days",
         value_type=SettingValueType.string,
         value_text=os.getenv("BILLING_EXPIRY_REMINDER_DAYS", "7"),
@@ -1502,24 +1673,6 @@ def seed_billing_settings(db: Session) -> None:
         key="invoice_reminder_days",
         value_type=SettingValueType.string,
         value_text=os.getenv("BILLING_INVOICE_REMINDER_DAYS", "7,1"),
-    )
-    billing_settings.ensure_by_key(
-        db,
-        key="dunning_escalation_days",
-        value_type=SettingValueType.string,
-        value_text=os.getenv("BILLING_DUNNING_ESCALATION_DAYS", "3,7,14,30"),
-    )
-    billing_settings.ensure_by_key(
-        db,
-        key="blocking_period_days",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("BILLING_BLOCKING_PERIOD_DAYS", "0"),
-    )
-    billing_settings.ensure_by_key(
-        db,
-        key="deactivation_period_days",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("BILLING_DEACTIVATION_PERIOD_DAYS", "0"),
     )
     billing_settings.ensure_by_key(
         db,
@@ -1673,6 +1826,7 @@ def seed_billing_settings(db: Session) -> None:
         value_type=SettingValueType.integer,
         value_text=os.getenv("BILLING_INVOICE_NUMBER_PADDING", "6"),
     )
+
     billing_settings.ensure_by_key(
         db,
         key="invoice_number_start",
@@ -1739,6 +1893,10 @@ def seed_billing_settings(db: Session) -> None:
         value_text=os.getenv("FLUTTERWAVE_SECRET_HASH", ""),
         is_secret=True,
     )
+
+    from app.services.payment_routing import backfill_legacy_provider_routes
+
+    backfill_legacy_provider_routes(db)
 
 
 def seed_catalog_settings(db: Session) -> None:
@@ -1850,21 +2008,21 @@ def seed_catalog_settings(db: Session) -> None:
 def seed_subscriber_settings(db: Session) -> None:
     subscriber_settings.ensure_by_key(
         db,
-        key="default_account_status",
-        value_type=SettingValueType.string,
-        value_text=os.getenv("SUBSCRIBER_DEFAULT_ACCOUNT_STATUS", "active"),
-    )
-    subscriber_settings.ensure_by_key(
-        db,
         key="default_address_type",
         value_type=SettingValueType.string,
         value_text=os.getenv("SUBSCRIBER_DEFAULT_ADDRESS_TYPE", "service"),
     )
     subscriber_settings.ensure_by_key(
         db,
-        key="default_contact_role",
+        key="default_country_code",
         value_type=SettingValueType.string,
-        value_text=os.getenv("SUBSCRIBER_DEFAULT_CONTACT_ROLE", "primary"),
+        value_text=os.getenv("DEFAULT_COUNTRY_CODE", "234"),
+    )
+    subscriber_settings.ensure_by_key(
+        db,
+        key="identity_sensitive_automation_min_confidence",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("IDENTITY_SENSITIVE_AUTOMATION_MIN_CONFIDENCE", "MEDIUM"),
     )
     subscriber_number_enabled_raw = os.getenv("SUBSCRIBER_NUMBER_ENABLED", "true")
     subscriber_settings.ensure_by_key(
@@ -1892,31 +2050,11 @@ def seed_subscriber_settings(db: Session) -> None:
         value_type=SettingValueType.integer,
         value_text=os.getenv("SUBSCRIBER_NUMBER_START", "1"),
     )
-    account_number_enabled_raw = os.getenv("SUBSCRIBER_ACCOUNT_NUMBER_ENABLED", "true")
-    subscriber_settings.ensure_by_key(
-        db,
-        key="account_number_enabled",
-        value_type=SettingValueType.boolean,
-        value_text=account_number_enabled_raw,
-        value_json=account_number_enabled_raw.lower() in {"1", "true", "yes", "on"},
-    )
     subscriber_settings.ensure_by_key(
         db,
         key="account_number_prefix",
         value_type=SettingValueType.string,
         value_text=os.getenv("SUBSCRIBER_ACCOUNT_NUMBER_PREFIX", "ACC-"),
-    )
-    subscriber_settings.ensure_by_key(
-        db,
-        key="account_number_padding",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("SUBSCRIBER_ACCOUNT_NUMBER_PADDING", "6"),
-    )
-    subscriber_settings.ensure_by_key(
-        db,
-        key="account_number_start",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("SUBSCRIBER_ACCOUNT_NUMBER_START", "1"),
     )
 
 
@@ -2164,14 +2302,7 @@ def seed_projects_settings(db: Session) -> None:
 
 
 def seed_inventory_settings(db: Session) -> None:
-    """Seed minimal inventory settings required by services/tests."""
-    inventory_settings = DomainSettings(SettingDomain.inventory)
-    inventory_settings.ensure_by_key(
-        db,
-        key="default_reservation_status",
-        value_type=SettingValueType.string,
-        value_text=os.getenv("INVENTORY_DEFAULT_RESERVATION_STATUS", "pending"),
-    )
+    """Seed provisioning defaults historically grouped with inventory."""
     provisioning_settings.ensure_by_key(
         db,
         key="default_appointment_status",
@@ -2242,39 +2373,9 @@ def seed_network_policy_settings(db: Session) -> None:
     )
     network_settings.ensure_by_key(
         db,
-        key="default_olt_port_type",
-        value_type=SettingValueType.string,
-        value_text=os.getenv("NETWORK_DEFAULT_OLT_PORT_TYPE", "pon"),
-    )
-    network_settings.ensure_by_key(
-        db,
         key="default_fiber_strand_status",
         value_type=SettingValueType.string,
         value_text=os.getenv("NETWORK_DEFAULT_FIBER_STRAND_STATUS", "available"),
-    )
-    api_kick_enabled_raw = os.getenv(
-        "NETWORK_MIKROTIK_API_SESSION_KICK_ENABLED", "true"
-    )
-    network_settings.upsert_by_key(
-        db,
-        key="mikrotik_api_session_kick_enabled",
-        payload=DomainSettingUpdate(
-            value_type=SettingValueType.boolean,
-            value_text=api_kick_enabled_raw,
-            value_json=api_kick_enabled_raw.lower() in {"1", "true", "yes", "on"},
-        ),
-    )
-    network_settings.ensure_by_key(
-        db,
-        key="default_splitter_input_ports",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("NETWORK_DEFAULT_SPLITTER_INPUT_PORTS", "1"),
-    )
-    network_settings.ensure_by_key(
-        db,
-        key="default_splitter_output_ports",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("NETWORK_DEFAULT_SPLITTER_OUTPUT_PORTS", "8"),
     )
     # Fiber installation planning cost rates
     network_settings.ensure_by_key(
@@ -2304,22 +2405,6 @@ def seed_network_policy_settings(db: Session) -> None:
 
 
 def seed_network_settings(db: Session) -> None:
-    kill_enabled_raw = os.getenv("NETWORK_MIKROTIK_SESSION_KILL_ENABLED", "true")
-    network_settings.ensure_by_key(
-        db,
-        key="mikrotik_session_kill_enabled",
-        value_type=SettingValueType.boolean,
-        value_text=kill_enabled_raw,
-        value_json=kill_enabled_raw.lower() in {"1", "true", "yes", "on"},
-    )
-    block_enabled_raw = os.getenv("NETWORK_ADDRESS_LIST_BLOCK_ENABLED", "true")
-    network_settings.ensure_by_key(
-        db,
-        key="address_list_block_enabled",
-        value_type=SettingValueType.boolean,
-        value_text=block_enabled_raw,
-        value_json=block_enabled_raw.lower() in {"1", "true", "yes", "on"},
-    )
     network_settings.ensure_by_key(
         db,
         key="default_mikrotik_address_list",
@@ -2356,6 +2441,12 @@ def seed_radius_policy_settings(db: Session) -> None:
 
 
 def seed_network_monitoring_settings(db: Session) -> None:
+    network_monitoring_settings.ensure_by_key(
+        db,
+        key="channel_health_contracts",
+        value_type=SettingValueType.json,
+        value_json=json.loads(json.dumps(DEFAULT_CHANNEL_HEALTH_CONTRACTS)),
+    )
     network_monitoring_settings.ensure_by_key(
         db,
         key="server_health_disk_warn_pct",
@@ -2406,15 +2497,21 @@ def seed_network_monitoring_settings(db: Session) -> None:
     )
     network_monitoring_settings.ensure_by_key(
         db,
-        key="core_device_ping_interval_seconds",
+        key="celery_long_running_task_minutes",
         value_type=SettingValueType.integer,
-        value_text=os.getenv("CORE_DEVICE_PING_INTERVAL_SECONDS", "120"),
+        value_text=os.getenv("CELERY_LONG_RUNNING_TASK_MINUTES", "30"),
     )
     network_monitoring_settings.ensure_by_key(
         db,
-        key="core_device_snmp_walk_interval_seconds",
+        key="celery_reserved_backlog_threshold",
         value_type=SettingValueType.integer,
-        value_text=os.getenv("CORE_DEVICE_SNMP_WALK_INTERVAL_SECONDS", "300"),
+        value_text=os.getenv("CELERY_RESERVED_BACKLOG_THRESHOLD", "100"),
+    )
+    network_monitoring_settings.ensure_by_key(
+        db,
+        key="celery_queue_backlog_threshold",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("CELERY_QUEUE_BACKLOG_THRESHOLD", "500"),
     )
     radius_settings.ensure_by_key(
         db,
@@ -2485,22 +2582,9 @@ def seed_comms_settings(db: Session) -> None:
     )
     comms_settings.ensure_by_key(
         db,
-        key="meta_oauth_redirect_uri",
-        value_type=SettingValueType.string,
-        value_text=os.getenv("META_OAUTH_REDIRECT_URI", ""),
-    )
-    comms_settings.ensure_by_key(
-        db,
         key="meta_graph_api_version",
         value_type=SettingValueType.string,
         value_text=os.getenv("META_GRAPH_API_VERSION", "v19.0"),
-    )
-    comms_settings.ensure_by_key(
-        db,
-        key="meta_access_token_override",
-        value_type=SettingValueType.string,
-        value_text=os.getenv("META_ACCESS_TOKEN_OVERRIDE", ""),
-        is_secret=True,
     )
     comms_settings.ensure_by_key(
         db,
@@ -2568,30 +2652,14 @@ def seed_wireguard_settings(db: Session) -> None:
         value_type=SettingValueType.integer,
         value_text=os.getenv("WIREGUARD_LOG_RETENTION_DAYS", "90"),
     )
-    # Log cleanup task settings
-    log_cleanup_enabled = os.getenv("WIREGUARD_LOG_CLEANUP_ENABLED", "true")
-    network_settings.ensure_by_key(
-        db,
-        key="wireguard_log_cleanup_enabled",
-        value_type=SettingValueType.boolean,
-        value_text=log_cleanup_enabled,
-        value_json=log_cleanup_enabled.lower() in {"1", "true", "yes", "on"},
-    )
+    # Log cleanup cadence; enablement is canonical ``vpn.log_cleanup``.
     network_settings.ensure_by_key(
         db,
         key="wireguard_log_cleanup_interval_seconds",
         value_type=SettingValueType.integer,
         value_text=os.getenv("WIREGUARD_LOG_CLEANUP_INTERVAL_SECONDS", "86400"),
     )
-    # Token cleanup settings
-    token_cleanup_enabled = os.getenv("WIREGUARD_TOKEN_CLEANUP_ENABLED", "true")
-    network_settings.ensure_by_key(
-        db,
-        key="wireguard_token_cleanup_enabled",
-        value_type=SettingValueType.boolean,
-        value_text=token_cleanup_enabled,
-        value_json=token_cleanup_enabled.lower() in {"1", "true", "yes", "on"},
-    )
+    # Token cleanup cadence; enablement is canonical ``vpn.token_cleanup``.
     network_settings.ensure_by_key(
         db,
         key="wireguard_token_cleanup_interval_seconds",

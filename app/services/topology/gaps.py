@@ -1,13 +1,13 @@
-"""Topology-gaps report + match-rate (Phase 1, Task 8).
+"""Topology-gaps report and customer-path match rate.
 
 Surfaces what the reconcile could not resolve so it can be fixed instead of
 silently lost:
-- Zabbix-synced nodes with no confident provisioning-device match (unmatched or
-  ambiguous both land as matched_device_id IS NULL in Phase 1).
+- Reconciled nodes with no confident provisioning-device match (unmatched or
+  ambiguous both land as ``matched_device_id IS NULL``).
 - Active subscriptions whose resolve_customer_path returns a gap.
 
 The match-rate (% of active subscriptions resolving to a complete
-ONT -> device -> basestation path) is the Phase 1 exit metric, and doubles as
+ONT → device → basestation path) is the reconciliation cutover metric and doubles as
 the empirical answer to "how many customers have no resolvable path" (open
 decision C re: wireless).
 """
@@ -15,20 +15,28 @@ decision C re: wireless).
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models.catalog import NasDevice, Subscription, SubscriptionStatus
-from app.models.network import OLTDevice, OntAssignment, OntUnit
+from app.models.network import (
+    CPEDevice,
+    DeviceStatus,
+    OLTDevice,
+    OntAssignment,
+    OntUnit,
+)
 from app.models.network_monitoring import NetworkDevice, PopSite
+from app.models.radius_active_session import RadiusActiveSession
 from app.services.topology.customer_path import (
     GAP_NO_BASESTATION,
     GAP_NO_NODE,
     GAP_NO_ONT,
 )
-from app.services.topology.zabbix_reconcile import SOURCE
+from app.services.topology.sources import RECONCILED_SOURCE as SOURCE
 
 DEFAULT_TABLE_PER_PAGE = 50
 
@@ -149,13 +157,153 @@ def _device_node_state(
     return state
 
 
-def _subscription_gap_rows(db: Session) -> tuple[int, list[dict]]:
+def _wireless_subscriber_state(
+    db: Session, subscriber_ids: set
+) -> dict[object, tuple[bool, bool]]:
+    """{subscriber_id: (has_node, has_node_with_existing_pop_site)} for the
+    wireless arm — the batched mirror of customer_path._active_wireless_cpe.
+
+    Per subscriber, the SAME radio the canonical resolver would pick (active
+    CPE with a parent AP, not UISP-vanished; most recently uisp-synced first,
+    id tie-break) decides the verdict. A subscriber whose selected radio's
+    parent node row is missing is omitted entirely, matching the resolver's
+    fall-through to the NAS arm.
+    """
+    if not subscriber_ids:
+        return {}
+    cpe_rows = db.execute(
+        select(CPEDevice.subscriber_id, CPEDevice.parent_network_device_id)
+        .where(
+            CPEDevice.subscriber_id.in_(subscriber_ids),
+            CPEDevice.parent_network_device_id.is_not(None),
+            CPEDevice.status == DeviceStatus.active,
+            or_(
+                CPEDevice.last_uisp_status.is_(None),
+                CPEDevice.last_uisp_status != "vanished",
+            ),
+        )
+        .order_by(
+            CPEDevice.uisp_synced_at.desc().nullslast(),
+            CPEDevice.id,
+        )
+    ).all()
+    # First row per subscriber = the radio _active_wireless_cpe would return.
+    selected_parent: dict[object, object] = {}
+    for row in cpe_rows:
+        selected_parent.setdefault(row.subscriber_id, row.parent_network_device_id)
+    if not selected_parent:
+        return {}
+
+    ap_pop_by_node = {
+        row.id: row.pop_site_id
+        for row in db.execute(
+            select(NetworkDevice.id, NetworkDevice.pop_site_id).where(
+                NetworkDevice.id.in_(set(selected_parent.values()))
+            )
+        )
+    }
+    pop_ids = {pid for pid in ap_pop_by_node.values() if pid is not None}
+    existing_pop_ids = set()
+    if pop_ids:
+        existing_pop_ids = set(
+            db.execute(select(PopSite.id).where(PopSite.id.in_(pop_ids))).scalars()
+        )
+
+    state: dict[object, tuple[bool, bool]] = {}
+    for subscriber_id, node_id in selected_parent.items():
+        if node_id not in ap_pop_by_node:
+            continue  # node row gone: resolver falls through to the NAS arm
+        state[subscriber_id] = (
+            True,
+            ap_pop_by_node[node_id] in existing_pop_ids,
+        )
+    return state
+
+
+# Medium labels for the per-subscription classification. "unknown" is the
+# no-access-device case (always GAP_NO_ONT): the sub has no ONT, no resolvable
+# radio, and no provisioning NAS, so we cannot tell what medium it should be.
+MEDIUM_FIBER = "fiber"
+MEDIUM_WIRELESS = "wireless"
+MEDIUM_NAS = "nas"
+MEDIUM_UNKNOWN = "unknown"
+
+
+def _live_nas_by_subscription(
+    db: Session, active_subs: Sequence, subscriber_ids: set
+) -> dict[object, object]:
+    """{subscription_id: live nas_device_id} — the batched mirror of
+    customer_path._live_session_nas_device_id.
+
+    Applies the SAME sibling-subscription filter: a session explicitly bound to
+    a *different* subscription of the same subscriber is excluded (only the
+    subscription's own session, or a session with no subscription binding, is
+    eligible). Per subscription, the SAME session the canonical resolver would
+    pick decides the NAS: prefer this subscription's own binding, then freshest
+    (last_update desc nulls-last, session_start desc, id). Reads only
+    nas_device_id (a UUID FK) — no raw radacct/inet columns.
+    """
+    if not subscriber_ids:
+        return {}
+    rows = db.execute(
+        select(
+            RadiusActiveSession.subscriber_id,
+            RadiusActiveSession.subscription_id,
+            RadiusActiveSession.nas_device_id,
+            RadiusActiveSession.last_update,
+            RadiusActiveSession.session_start,
+            RadiusActiveSession.id,
+        ).where(
+            RadiusActiveSession.subscriber_id.in_(subscriber_ids),
+            RadiusActiveSession.nas_device_id.is_not(None),
+        )
+    ).all()
+    if not rows:
+        return {}
+    by_subscriber: defaultdict[object, list] = defaultdict(list)
+    for row in rows:
+        by_subscriber[row.subscriber_id].append(row)
+
+    def _order_key(session_row, sub_id):
+        # Ascending sort => first element is the row the DB order_by would
+        # return: own-subscription binding first, then last_update desc
+        # (nulls last), then session_start desc, then id.
+        last_update = session_row.last_update
+        session_start = session_row.session_start
+        return (
+            0 if session_row.subscription_id == sub_id else 1,
+            last_update is None,
+            -last_update.timestamp() if last_update is not None else 0.0,
+            -session_start.timestamp() if session_start is not None else 0.0,
+            session_row.id,
+        )
+
+    result: dict[object, object] = {}
+    for sub in active_subs:
+        candidates = [
+            row
+            for row in by_subscriber.get(sub.subscriber_id, [])
+            if row.subscription_id == sub.id or row.subscription_id is None
+        ]
+        if candidates:
+            best = min(candidates, key=lambda row: _order_key(row, sub.id))
+            result[sub.id] = best.nas_device_id
+    return result
+
+
+def classify_active_subscriptions(db: Session) -> list[dict]:
     # NOTE: This is a batched (set-based) reimplementation of the per-subscription
     # gap classification in ``resolve_customer_path`` (app/services/topology/
     # customer_path.py), avoiding an N+1 across all active subscriptions. The two
     # MUST stay in sync — ``resolve_customer_path`` remains the canonical reader
     # for a single subscription's path; this function must produce the same
     # GAP_NO_ONT / GAP_NO_NODE / GAP_NO_BASESTATION verdict in aggregate.
+    #
+    # Returns one row per ACTIVE subscription:
+    #   {"id": <subscription id>, "medium": MEDIUM_*, "gap": GAP_* | None}
+    # ``gap is None`` means the E2E path resolved completely. The gaps page and
+    # the coverage-metrics exporter both consume this so the two can never
+    # disagree.
     active_subs = db.execute(
         select(
             Subscription.id,
@@ -167,7 +315,7 @@ def _subscription_gap_rows(db: Session) -> tuple[int, list[dict]]:
         .order_by(Subscription.id)
     ).all()
     if not active_subs:
-        return 0, []
+        return []
 
     subscriber_ids = {row.subscriber_id for row in active_subs}
     assignment_rows = db.execute(
@@ -204,11 +352,15 @@ def _subscription_gap_rows(db: Session) -> tuple[int, list[dict]]:
         existing_olt_ids = set(
             db.execute(select(OLTDevice.id).where(OLTDevice.id.in_(olt_ids))).scalars()
         )
+    # Live-session NAS per subscription (mirror of resolve_customer_path's
+    # live arm). The NAS existence + node-state lookups below must cover BOTH
+    # the static provisioning NAS ids and the live-session NAS ids.
+    live_nas_by_sub = _live_nas_by_subscription(db, active_subs, subscriber_ids)
     nas_ids = {
         row.provisioning_nas_device_id
         for row in active_subs
         if row.provisioning_nas_device_id is not None
-    }
+    } | set(live_nas_by_sub.values())
     existing_nas_ids = set()
     if nas_ids:
         existing_nas_ids = set(
@@ -216,8 +368,9 @@ def _subscription_gap_rows(db: Session) -> tuple[int, list[dict]]:
         )
     olt_node_state = _device_node_state(db, device_type="olt", device_ids=olt_ids)
     nas_node_state = _device_node_state(db, device_type="nas", device_ids=nas_ids)
+    wireless_state = _wireless_subscriber_state(db, subscriber_ids)
 
-    gap_rows: list[dict] = []
+    classified: list[dict] = []
     for row in active_subs:
         assignment_ont_ids = assignments_by_subscriber[row.subscriber_id]
         if row.service_address_id is not None:
@@ -228,8 +381,12 @@ def _subscription_gap_rows(db: Session) -> tuple[int, list[dict]]:
                 assignment_ont_ids = address_assignment_ids
 
         selected_ont_id = assignment_ont_ids[0] if assignment_ont_ids else None
-        has_access_device = selected_ont_id is not None or (
-            row.provisioning_nas_device_id in existing_nas_ids
+        live_nas_id = live_nas_by_sub.get(row.id)
+        live_nas_exists = live_nas_id is not None and live_nas_id in existing_nas_ids
+        has_access_device = (
+            selected_ont_id is not None
+            or row.provisioning_nas_device_id in existing_nas_ids
+            or live_nas_exists
         )
         has_node = False
         has_complete_path = False
@@ -245,15 +402,46 @@ def _subscription_gap_rows(db: Session) -> tuple[int, list[dict]]:
             else:
                 has_access_device = True
 
-        if (
-            selected_ont_id is None
-            and row.provisioning_nas_device_id in existing_nas_ids
-        ):
-            node_exists, complete_node = nas_node_state.get(
-                row.provisioning_nas_device_id, (False, False)
+        # Wireless before NAS, mirroring resolve_customer_path: the radio ->
+        # AP arm is finer than the coarse NAS fallback. The AP node IS the
+        # topology node, so a resolvable radio grants access device + node.
+        medium = MEDIUM_UNKNOWN
+        if selected_ont_id is not None:
+            medium = MEDIUM_FIBER
+        elif row.subscriber_id in wireless_state:
+            medium = MEDIUM_WIRELESS
+            has_access_device = True
+            has_node, has_complete_path = wireless_state[row.subscriber_id]
+        else:
+            # NAS arm, mirroring resolve_customer_path's live>static precedence:
+            # the live-session NAS wins only when it resolves to a COMPLETE path
+            # (node + basestation); otherwise fall back to the static
+            # provisioning NAS; otherwise keep a live-only partial. This keeps
+            # the batched classifier in sync with the canonical resolver so the
+            # coverage/match-rate metric never disagrees.
+            static_nas_id = row.provisioning_nas_device_id
+            live_complete = (
+                live_nas_exists and nas_node_state.get(live_nas_id, (False, False))[1]
             )
-            has_node = node_exists
-            has_complete_path = complete_node
+            if live_complete:
+                medium = MEDIUM_NAS
+                has_access_device = True
+                has_node = True
+                has_complete_path = True
+            elif static_nas_id in existing_nas_ids:
+                medium = MEDIUM_NAS
+                has_access_device = True
+                has_node, has_complete_path = nas_node_state.get(
+                    static_nas_id, (False, False)
+                )
+            elif live_nas_exists:
+                # Live NAS was the only access device (no static NAS) but did
+                # not resolve completely: keep its partial node state.
+                medium = MEDIUM_NAS
+                has_access_device = True
+                has_node, has_complete_path = nas_node_state.get(
+                    live_nas_id, (False, False)
+                )
 
         gap = None
         if not has_access_device:
@@ -262,10 +450,18 @@ def _subscription_gap_rows(db: Session) -> tuple[int, list[dict]]:
             gap = GAP_NO_NODE
         elif not has_complete_path:
             gap = GAP_NO_BASESTATION
-        if gap:
-            gap_rows.append({"id": row.id, "gap": gap})
+        classified.append({"id": row.id, "medium": medium, "gap": gap})
 
-    return len(active_subs), gap_rows
+    return classified
+
+
+def _subscription_gap_rows(db: Session) -> tuple[int, list[dict]]:
+    """(active subscription count, [{id, gap}] for unresolved subs) — the
+    shape the gaps page renders; derived from classify_active_subscriptions."""
+    classified = classify_active_subscriptions(db)
+    return len(classified), [
+        {"id": row["id"], "gap": row["gap"]} for row in classified if row["gap"]
+    ]
 
 
 def topology_gaps(

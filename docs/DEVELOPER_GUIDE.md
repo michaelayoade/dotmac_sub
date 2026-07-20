@@ -289,32 +289,37 @@ UI work in this repo is governed by the design docs, not by ad hoc taste.
 
 Read these before making substantial UI changes:
 
+- `docs/UI_INFORMATION_AND_ACTION_STANDARD.md`
 - `docs/PRODUCTION_UI_BRIEF.md`
 - `docs/FRONTEND_SPEC.md`
 - `docs/DESIGN_REVIEW_CHECKLIST.md`
 
 Use them in this order:
 
-1. `PRODUCTION_UI_BRIEF.md`
-   This is the policy layer. It defines density, page anatomy, semantic color use, dashboard rules, HTMX stability rules, and review standards.
-2. `FRONTEND_SPEC.md`
+1. `UI_INFORMATION_AND_ACTION_STANDARD.md`
+   This defines information relevance, progressive depth, state provenance, table contracts, and action ownership.
+2. `PRODUCTION_UI_BRIEF.md`
+   This defines density, page anatomy, semantic color use, dashboard rules, HTMX stability rules, and visual policy.
+3. `FRONTEND_SPEC.md`
    This is the implementation layer. It documents context shapes, route/template contracts, macro usage, and module-specific UI expectations.
-3. `DESIGN_REVIEW_CHECKLIST.md`
+4. `DESIGN_REVIEW_CHECKLIST.md`
    This is the merge gate. Use it before submitting or approving UI-heavy changes.
 
 ### Required Workflow For UI Changes
 
 For any admin UI change, redesign, shared macro update, or new template:
 
-1. Check the page type in `PRODUCTION_UI_BRIEF.md`.
+1. Define or review the page contract in `UI_INFORMATION_AND_ACTION_STANDARD.md`.
+   Name the audience, decision, data owner, action owner, first-viewport information, and required depth.
+2. Check the page type in `PRODUCTION_UI_BRIEF.md`.
    Determine whether the page is a dashboard, list page, detail page, or form-driven work surface.
-2. Reuse shared macros first.
+3. Reuse shared macros first.
    Prefer `page_header`, `card`, `filter_bar`, `stats_card`, `data_table`, `status_badge`, and related macros over page-local patterns.
-3. Keep the first viewport task-oriented.
+4. Keep the first viewport task-oriented.
    Do not let decorative treatments push the work surface below the fold.
-4. Run the design checklist.
+5. Run the design checklist.
    Use `docs/DESIGN_REVIEW_CHECKLIST.md` and mark non-applicable items as `N/A`.
-5. Reflect shared changes in docs.
+6. Reflect shared changes in docs.
    If you introduce a new standard UI pattern, update `docs/FRONTEND_SPEC.md`.
 
 ### Pull Request Expectation

@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
+from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.notification import (
     Notification,
     NotificationChannel,
     NotificationStatus,
 )
-from app.tasks.notifications import _deliver_notification_queue
+from app.services.branding_config import get_brand
+from app.tasks.notifications import (
+    _deliver_notification_queue,
+    deliver_inbound_smtp_health_probe,
+)
 
 
 def _queued_notification(
@@ -18,6 +25,73 @@ def _queued_notification(
         body=body,
         status=NotificationStatus.queued,
         is_active=True,
+    )
+
+
+def _set_notification_setting(db, key: str, value: str) -> None:
+    db.add(
+        DomainSetting(
+            domain=SettingDomain.notification,
+            key=key,
+            value_text=value,
+            is_active=True,
+        )
+    )
+    db.commit()
+
+
+def test_inbound_smtp_probe_uses_delivery_gate_and_fixed_payload(
+    db_session, monkeypatch
+):
+    captured: dict = {}
+    monkeypatch.setattr(
+        "app.tasks.notifications.communication_eligibility.may_send",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        "app.tasks.notifications.email_service.send_email",
+        lambda **kwargs: captured.update(kwargs) or True,
+    )
+
+    assert (
+        deliver_inbound_smtp_health_probe(
+            db_session,
+            recipient="probe@dotmac.io",
+            message_id="<probe-1@sub.local>",
+            marker="team_inbox_smtp_e2e",
+        )
+        is True
+    )
+    assert captured["activity"] == "observability_smtp_probe"
+    assert captured["track"] is False
+    assert captured["headers"] == {
+        "Message-ID": "<probe-1@sub.local>",
+        "X-Dotmac-Probe": "team_inbox_smtp_e2e",
+    }
+
+
+def test_inbound_smtp_probe_respects_all_scope_suppression(db_session, monkeypatch):
+    monkeypatch.setattr(
+        "app.tasks.notifications.communication_eligibility.may_send",
+        lambda *_args, **_kwargs: False,
+    )
+
+    def _unexpected_send(**_kwargs):
+        raise AssertionError("suppressed probe must not reach the transport")
+
+    monkeypatch.setattr(
+        "app.tasks.notifications.email_service.send_email",
+        _unexpected_send,
+    )
+
+    assert (
+        deliver_inbound_smtp_health_probe(
+            db_session,
+            recipient="probe@dotmac.io",
+            message_id="<probe-2@sub.local>",
+            marker="team_inbox_smtp_e2e",
+        )
+        is False
     )
 
 
@@ -102,8 +176,11 @@ def test_deliver_notification_queue_brands_plain_text_email(db_session, monkeypa
     assert email.status == NotificationStatus.delivered
     # Plain text is wrapped in the branded template with a text/plain part.
     assert "<!DOCTYPE html>" in captured["body_html"]
-    assert "#FF0000" in captured["body_html"]
-    assert "#008000" in captured["body_html"]
+    # Identity accents come from the branding owner. Assert against the
+    # resolved values so a rebrand cannot diverge from outgoing email.
+    brand = get_brand()
+    assert brand["primary_color"] in captured["body_html"]
+    assert brand["secondary_color"] in captured["body_html"]
     assert "/static/branding/favicon/icon-192.png" in captured["body_html"]
     assert "static/illustrations/email-header.png" not in captured["body_html"]
     assert "Your invoice is overdue.<br>Please pay soon." in captured["body_html"]
@@ -196,3 +273,66 @@ def test_deliver_notification_queue_expires_stale_notifications(
     assert stale.status == NotificationStatus.canceled
     assert stale.last_error == "expired_in_queue"
     assert fresh.status == NotificationStatus.delivered
+
+
+def test_deliver_notification_queue_applies_per_channel_rate_limit(
+    db_session, monkeypatch
+):
+    _set_notification_setting(db_session, "notification_per_channel_rate_limit", "1")
+    first = _queued_notification(
+        channel=NotificationChannel.sms,
+        recipient="+2348000000001",
+        body="SMS one",
+    )
+    second = _queued_notification(
+        channel=NotificationChannel.sms,
+        recipient="+2348000000002",
+        body="SMS two",
+    )
+    db_session.add_all([first, second])
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "app.tasks.notifications.sms_service.send_sms", lambda **_: True
+    )
+
+    from app.tasks.notifications import _deliver_notification_queue_stats
+
+    stats = _deliver_notification_queue_stats(db_session, batch_size=10)
+
+    db_session.refresh(first)
+    db_session.refresh(second)
+    assert stats["delivered"] == 1
+    assert stats["rate_limited"] == 1
+    assert first.status == NotificationStatus.delivered
+    assert second.status == NotificationStatus.queued
+
+
+def test_deliver_notification_queue_schedules_failed_retry_with_backoff(
+    db_session, monkeypatch
+):
+    _set_notification_setting(db_session, "notification_max_retries", "3")
+    _set_notification_setting(db_session, "notification_retry_backoff_minutes", "7")
+    sms = _queued_notification(
+        channel=NotificationChannel.sms,
+        recipient="+2348000000001",
+        body="SMS body",
+    )
+    db_session.add(sms)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "app.tasks.notifications.sms_service.send_sms", lambda **_: False
+    )
+
+    from app.tasks.notifications import _deliver_notification_queue_stats
+
+    before_run = datetime.now(UTC)
+    stats = _deliver_notification_queue_stats(db_session, batch_size=10)
+
+    db_session.refresh(sms)
+    assert stats["retried"] == 1
+    assert sms.status == NotificationStatus.failed
+    assert sms.retry_count == 1
+    assert sms.send_at is not None
+    assert sms.send_at.replace(tzinfo=UTC) >= before_run + timedelta(minutes=6)

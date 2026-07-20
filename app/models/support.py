@@ -1,6 +1,7 @@
 import enum
 import uuid
 from datetime import UTC, datetime
+from typing import ClassVar
 
 from sqlalchemy import (
     JSON,
@@ -28,6 +29,7 @@ class TicketStatus(enum.Enum):
     lastmile_rerun = "lastmile_rerun"
     site_under_construction = "site_under_construction"
     on_hold = "on_hold"
+    pending_confirmation = "pending_confirmation"
     resolved = "resolved"
     closed = "closed"
     canceled = "canceled"
@@ -78,15 +80,16 @@ class Ticket(Base):
     customer_account_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscribers.id")
     )
-    lead_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    lead_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("leads.id", ondelete="RESTRICT")
+    )
     customer_person_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscribers.id")
     )
-    created_by_person_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscribers.id")
-    )
-    # Assignment fields can reference internal system users. Legacy rows may still
-    # contain subscriber IDs, so keep them as plain UUIDs instead of subscriber FKs.
+    # Creator and assignment fields can reference internal system users or CRM
+    # staff. Legacy rows may still contain subscriber IDs, so keep them as plain
+    # UUIDs instead of subscriber FKs.
+    created_by_person_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     assigned_to_person_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     technician_person_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     ticket_manager_person_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -111,7 +114,17 @@ class Ticket(Base):
         default=TicketPriority.normal.value,
         nullable=False,
     )
-    ticket_type: Mapped[str | None] = mapped_column(String(80))
+    ticket_type: Mapped[str | None] = mapped_column(String(120))
+    # NCC quarterly complaints return (①): the classification is derived from
+    # the ticket's text on save and STORED here, so the filing projects a
+    # captured decision instead of re-guessing at report time. ``*_source`` is
+    # "derived" or "agent"; an agent value is never re-derived.
+    # See app/services/ncc_categorisation.py.
+    ncc_category: Mapped[str | None] = mapped_column(String(80))
+    ncc_category_source: Mapped[str | None] = mapped_column(String(16))
+    ncc_subcategory: Mapped[str | None] = mapped_column(String(120))
+    ncc_subcategory_source: Mapped[str | None] = mapped_column(String(16))
+    erpnext_id: Mapped[str | None] = mapped_column(String(100))
     channel: Mapped[TicketChannel] = mapped_column(
         Enum(TicketChannel, values_callable=lambda x: [e.value for e in x]),
         default=TicketChannel.web,
@@ -145,6 +158,17 @@ class Ticket(Base):
         onupdate=lambda: datetime.now(UTC),
     )
 
+    @property
+    def csat_rating(self) -> int | None:
+        """Support-satisfaction score (1-5) if the customer rated this ticket.
+        Backed by ``metadata.csat.rating`` (see support.Tickets.set_satisfaction)
+        and surfaced as a first-class field on TicketRead."""
+        meta = self.metadata_ if isinstance(self.metadata_, dict) else None
+        csat = meta.get("csat") if meta else None
+        if isinstance(csat, dict) and isinstance(csat.get("rating"), int | float):
+            return int(csat["rating"])
+        return None
+
     comments = relationship(
         "TicketComment", back_populates="ticket", cascade="all, delete-orphan"
     )
@@ -154,6 +178,7 @@ class Ticket(Base):
     sla_events = relationship(
         "TicketSlaEvent", back_populates="ticket", cascade="all, delete-orphan"
     )
+    lead = relationship("Lead", foreign_keys=[lead_id])
 
 
 class TicketAssignee(Base):
@@ -247,9 +272,7 @@ class TicketMerge(Base):
         UUID(as_uuid=True), ForeignKey("support_tickets.id"), primary_key=True
     )
     reason: Mapped[str | None] = mapped_column(Text)
-    merged_by_person_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscribers.id")
-    )
+    merged_by_person_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -273,12 +296,48 @@ class TicketLink(Base):
         UUID(as_uuid=True), ForeignKey("support_tickets.id"), nullable=False
     )
     link_type: Mapped[str] = mapped_column(String(80), nullable=False)
-    created_by_person_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscribers.id")
-    )
+    created_by_person_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
+
+
+class TicketAccessToken(Base):
+    """Magic-link token letting a customer confirm (or dispute) a ticket's
+    resolution without logging in. Only a SHA-256 digest of the capability is
+    persisted; the raw token exists in memory only while its link is created."""
+
+    __tablename__ = "ticket_access_tokens"
+    __table_args__ = (
+        Index("ix_ticket_access_tokens_token_hash", "token_hash", unique=True),
+        Index("ix_ticket_access_tokens_ticket_id", "ticket_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    ticket_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("support_tickets.id"), nullable=False
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    raw_token: ClassVar[str | None] = None
+    purpose: Mapped[str] = mapped_column(
+        String(40), default="resolution_confirm", nullable=False
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    accessed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    responded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    ticket = relationship("Ticket")
 
 
 class AutomationTrigger(enum.Enum):

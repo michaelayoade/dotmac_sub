@@ -102,6 +102,56 @@ class VictoriaMetricsWriter:
             f"bandwidth_sample_count{{{labels}}} {agg.sample_count} {timestamp_ms}",
         ]
 
+    def write_prometheus_lines(
+        self,
+        lines: list[str],
+        *,
+        adapter: str = "bandwidth.metrics",
+        operation: str = "write_prometheus_lines",
+    ) -> WriteResult:
+        """Write Prometheus text-format lines in a single HTTP request.
+
+        This is the one VictoriaMetrics push path in the app — bandwidth
+        aggregates and the topology coverage exporter both go through it.
+
+        Args:
+            lines: Prometheus exposition-format lines (``name{labels} value ts``).
+            adapter: Failure-counter label identifying the caller.
+            operation: Failure-counter label identifying the operation.
+
+        Returns:
+            WriteResult with success status and count of written lines.
+        """
+        if not lines:
+            return WriteResult(success=True, written=0)
+
+        content = "\n".join(lines)
+
+        try:
+            client = self._get_client()
+            response = client.post(
+                f"{self.base_url}/api/v1/import/prometheus",
+                content=content,
+                headers={"Content-Type": "text/plain"},
+            )
+            response.raise_for_status()
+            logger.debug(
+                "Wrote %d lines to VictoriaMetrics (%s)",
+                len(lines),
+                operation,
+            )
+            return WriteResult(success=True, written=len(lines))
+        except httpx.HTTPError as e:
+            error_msg = str(e)
+            from app.metrics import VICTORIAMETRICS_WRITE_FAILURES
+
+            VICTORIAMETRICS_WRITE_FAILURES.labels(
+                adapter=adapter,
+                operation=operation,
+            ).inc()
+            logger.error("Failed to write to VictoriaMetrics: %s", error_msg)
+            return WriteResult(success=False, written=0, error=error_msg)
+
     def write_aggregates_batch(
         self,
         aggregates: list[BandwidthAggregate],
@@ -122,32 +172,15 @@ class VictoriaMetricsWriter:
         for agg in aggregates:
             all_lines.extend(self._format_aggregate_lines(agg))
 
-        content = "\n".join(all_lines)
-
-        try:
-            client = self._get_client()
-            response = client.post(
-                f"{self.base_url}/api/v1/import/prometheus",
-                content=content,
-                headers={"Content-Type": "text/plain"},
-            )
-            response.raise_for_status()
-            logger.debug(
-                "Wrote %d aggregates (%d lines) to VictoriaMetrics",
-                len(aggregates),
-                len(all_lines),
-            )
+        result = self.write_prometheus_lines(
+            all_lines,
+            adapter="bandwidth.metrics",
+            operation="write_aggregates_batch",
+        )
+        if result.success:
+            # Written count is aggregates, not raw lines, for this caller.
             return WriteResult(success=True, written=len(aggregates))
-        except httpx.HTTPError as e:
-            error_msg = str(e)
-            from app.metrics import VICTORIAMETRICS_WRITE_FAILURES
-
-            VICTORIAMETRICS_WRITE_FAILURES.labels(
-                adapter="bandwidth.metrics",
-                operation="write_aggregates_batch",
-            ).inc()
-            logger.error("Failed to write aggregates to VictoriaMetrics: %s", error_msg)
-            return WriteResult(success=False, written=0, error=error_msg)
+        return result
 
     def health_check(self) -> bool:
         """Check if VictoriaMetrics is healthy."""

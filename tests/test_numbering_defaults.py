@@ -86,16 +86,6 @@ def test_subscriber_account_number_derives_from_subscriber_number(db_session, pe
         "account_number_prefix",
         DomainSettingUpdate(value_text="ACX-"),
     )
-    settings_api.upsert_subscriber_setting(
-        db_session,
-        "account_number_padding",
-        DomainSettingUpdate(value_text="3"),
-    )
-    settings_api.upsert_subscriber_setting(
-        db_session,
-        "account_number_start",
-        DomainSettingUpdate(value_text="9"),
-    )
     subscriber = subscriber_service.subscribers.create(
         db_session,
         SubscriberCreate(person_id=person.id),

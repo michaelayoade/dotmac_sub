@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from app.models.network import (
     OLTDevice,
     OltOntRegistration,
@@ -8,6 +10,7 @@ from app.models.network import (
     PonPort,
 )
 from app.services.network.ont_topology_reconcile import (
+    OntTopologyRepairReviewRequired,
     reconcile_ont_pon_ports_from_registrations,
 )
 
@@ -53,7 +56,7 @@ def test_reconcile_ont_pon_ports_dry_run_does_not_update(db_session):
     assert ont.port == "7"
 
 
-def test_reconcile_ont_pon_ports_apply_updates_ont_and_assignment(db_session):
+def test_reconcile_ont_pon_ports_apply_is_retired(db_session):
     olt = OLTDevice(name="Topology Apply OLT")
     wrong_pon = PonPort(olt=olt, name="0/4/3", port_number=3, is_active=True)
     target_pon = PonPort(olt=olt, name="0/2/3", port_number=3, is_active=True)
@@ -80,20 +83,18 @@ def test_reconcile_ont_pon_ports_apply_updates_ont_and_assignment(db_session):
     db_session.add_all([olt, wrong_pon, target_pon, ont, assignment, registration])
     db_session.commit()
 
-    result = reconcile_ont_pon_ports_from_registrations(db_session, apply=True)
+    with pytest.raises(OntTopologyRepairReviewRequired, match="reviewed"):
+        reconcile_ont_pon_ports_from_registrations(db_session, apply=True)
 
-    assert result.updated == 1
-    assert result.created_pon_ports == 0
-    assert result.candidates[0].changed is True
     db_session.refresh(ont)
     db_session.refresh(assignment)
-    assert ont.pon_port_id == target_pon.id
-    assert assignment.pon_port_id == target_pon.id
-    assert ont.board == "0/2"
+    assert ont.pon_port_id == wrong_pon.id
+    assert assignment.pon_port_id == wrong_pon.id
+    assert ont.board == "0/4"
     assert ont.port == "3"
 
 
-def test_reconcile_ont_pon_ports_matches_hex_registration_to_ascii_ont(db_session):
+def test_reconcile_ont_pon_ports_dry_run_matches_canonical_serial(db_session):
     olt = OLTDevice(name="Topology Canonical OLT")
     wrong_pon = PonPort(olt=olt, name="0/4/9", port_number=9, is_active=True)
     target_pon = PonPort(olt=olt, name="0/2/9", port_number=9, is_active=True)
@@ -116,19 +117,20 @@ def test_reconcile_ont_pon_ports_matches_hex_registration_to_ascii_ont(db_sessio
     db_session.add_all([olt, wrong_pon, target_pon, ont, assignment, registration])
     db_session.commit()
 
-    result = reconcile_ont_pon_ports_from_registrations(db_session, apply=True)
+    result = reconcile_ont_pon_ports_from_registrations(db_session)
 
-    assert result.updated == 1
+    assert result.updated == 0
     assert result.missing_from_db == 0
+    assert len(result.candidates) == 1
     db_session.refresh(ont)
     db_session.refresh(assignment)
-    assert ont.pon_port_id == target_pon.id
-    assert assignment.pon_port_id == target_pon.id
-    assert ont.board == "0/2"
+    assert ont.pon_port_id == wrong_pon.id
+    assert assignment.pon_port_id == wrong_pon.id
+    assert ont.board == "0/4"
     assert ont.port == "9"
 
 
-def test_reconcile_ont_pon_ports_apply_creates_missing_pon_port(db_session):
+def test_reconcile_ont_pon_ports_dry_run_does_not_create_missing_pon(db_session):
     olt = OLTDevice(name="Topology Create OLT")
     wrong_pon = PonPort(olt=olt, name="0/2/1", port_number=1, is_active=True)
     ont = OntUnit(
@@ -150,20 +152,21 @@ def test_reconcile_ont_pon_ports_apply_creates_missing_pon_port(db_session):
     db_session.add_all([olt, wrong_pon, ont, assignment, registration])
     db_session.commit()
 
-    result = reconcile_ont_pon_ports_from_registrations(db_session, apply=True)
+    result = reconcile_ont_pon_ports_from_registrations(db_session)
 
-    assert result.updated == 1
-    assert result.created_pon_ports == 1
-    target_pon = (
+    assert result.updated == 0
+    assert result.created_pon_ports == 0
+    assert result.candidates[0].created_pon_port is True
+    assert (
         db_session.query(PonPort)
         .filter(PonPort.olt_id == olt.id, PonPort.name == "0/1/1")
-        .one()
+        .count()
+        == 0
     )
     db_session.refresh(ont)
     db_session.refresh(assignment)
-    assert target_pon.port_number == 1
-    assert ont.pon_port_id == target_pon.id
-    assert assignment.pon_port_id == target_pon.id
+    assert ont.pon_port_id == wrong_pon.id
+    assert assignment.pon_port_id == wrong_pon.id
 
 
 def test_reconcile_ont_pon_ports_counts_missing_and_invalid(db_session):

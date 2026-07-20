@@ -272,6 +272,12 @@ class UsageSummary {
   final int totalBytes;
   final String totalSource; // samples | sessions | quota | lifetime
   final bool isAuthoritative;
+
+  /// Billing-grade headline total when the server says this window is
+  /// authoritative. Zero is a valid value; null means the loaded summary is
+  /// estimated and must not be replaced with a client-side reconstruction.
+  int? get authoritativeTotalBytes => isAuthoritative ? totalBytes : null;
+
   final String? bucket; // minute | hour | day | null
 
   /// Mean throughput over the window (rx+tx bits/s) — the "average speed".

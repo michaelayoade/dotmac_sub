@@ -2,9 +2,11 @@
 
 import json
 import logging
+import time
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import or_
+from sqlalchemy.orm import Session
 
 from app.celery_app import celery_app
 from app.models.domain_settings import SettingDomain
@@ -15,13 +17,22 @@ from app.models.notification import (
     NotificationDelivery,
     NotificationStatus,
 )
+from app.services import communication_eligibility
 from app.services import email as email_service
 from app.services import push as push_service
 from app.services import sms as sms_service
+from app.services.communication_intents import record_delivery_outcome
 from app.services.db_session_adapter import db_session_adapter
 from app.services.email_template import render_email_bodies
+from app.services.ephemeral_communication_actions import (
+    EphemeralActionRejected,
+    has_ephemeral_action,
+    materialize_email,
+)
 from app.services.integrations.connectors import whatsapp as whatsapp_service
+from app.services.observability import record_notification_queue_result
 from app.services.settings_spec import resolve_value
+from app.services.whatsapp_notification_templates import provider_template_from_template
 
 logger = logging.getLogger(__name__)
 
@@ -70,13 +81,64 @@ def _max_queue_age_hours(db) -> int:
         return DEFAULT_MAX_QUEUE_AGE_HOURS
 
 
+def _notification_setting_int(db, key: str, default: int) -> int:
+    value = resolve_value(db, SettingDomain.notification, key)
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _max_retries(db) -> int:
+    return max(
+        1, _notification_setting_int(db, "notification_max_retries", MAX_RETRIES)
+    )
+
+
+def _sending_timeout_minutes(db) -> int:
+    return max(
+        2,
+        _notification_setting_int(
+            db,
+            "notification_sending_timeout_minutes",
+            SENDING_TIMEOUT_MINUTES,
+        ),
+    )
+
+
+def _per_channel_rate_limit(db) -> int:
+    return max(
+        1,
+        _notification_setting_int(db, "notification_per_channel_rate_limit", 50),
+    )
+
+
+def _retry_backoff_minutes(db, retry_count: int) -> int:
+    value = resolve_value(
+        db,
+        SettingDomain.notification,
+        "notification_retry_backoff_minutes",
+    )
+    raw_steps = str(value or "1,5,15").split(",")
+    steps: list[int] = []
+    for raw in raw_steps:
+        try:
+            steps.append(max(1, int(raw.strip())))
+        except ValueError:
+            continue
+    if not steps:
+        steps = [1, 5, 15]
+    index = min(max(retry_count - 1, 0), len(steps) - 1)
+    return steps[index]
+
+
 def _expire_stale_notifications(db, now) -> int:
     """Cancel undelivered notifications that have sat in the queue too long."""
     max_age_hours = _max_queue_age_hours(db)
     if max_age_hours <= 0:
         return 0
     cutoff = now - timedelta(hours=max_age_hours)
-    expired = (
+    expired_notifications = (
         db.query(Notification)
         .filter(Notification.is_active.is_(True))
         .filter(
@@ -92,25 +154,27 @@ def _expire_stale_notifications(db, now) -> int:
         # Deliberately future-scheduled sends are expired only once their
         # send_at is itself past the cutoff.
         .filter((Notification.send_at.is_(None)) | (Notification.send_at < cutoff))
-        .update(
-            {
-                "status": NotificationStatus.canceled,
-                "last_error": "expired_in_queue",
-            },
-            synchronize_session=False,
-        )
+        .all()
     )
-    if expired:
+    for notification in expired_notifications:
+        notification.status = NotificationStatus.canceled
+        notification.last_error = "expired_in_queue"
+        record_delivery_outcome(db, notification)
+    if expired_notifications:
         db.commit()
         logger.info(
-            "Expired %d stale notifications older than %dh", expired, max_age_hours
+            "Expired %d stale notifications older than %dh",
+            len(expired_notifications),
+            max_age_hours,
         )
-    return int(expired or 0)
+    return len(expired_notifications)
 
 
 def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int]:
     now = datetime.now(UTC)
-    stuck_threshold = now - timedelta(minutes=SENDING_TIMEOUT_MINUTES)
+    max_retries = _max_retries(db)
+    stuck_threshold = now - timedelta(minutes=_sending_timeout_minutes(db))
+    channel_limit = _per_channel_rate_limit(db)
 
     expired = _expire_stale_notifications(db, now)
 
@@ -140,7 +204,7 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
                 # Failed notifications eligible for retry (under max retries)
                 (
                     (Notification.status == NotificationStatus.failed)
-                    & (Notification.retry_count < MAX_RETRIES)
+                    & (Notification.retry_count < max_retries)
                 ),
             )
         )
@@ -153,8 +217,17 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
     retried = 0
     failed = 0
     reclaimed = 0
+    suppressed = 0
     stuck_dropped = 0
+    rate_limited = 0
+    materialization_rejected = 0
+    channel_counts: dict[NotificationChannel, int] = {}
     for notification in notifications:
+        current_count = channel_counts.get(notification.channel, 0)
+        if current_count >= channel_limit:
+            rate_limited += 1
+            continue
+        channel_counts[notification.channel] = current_count + 1
         # Reclaim handling: a notification still in "sending" was stuck past the
         # timeout — the worker likely crashed mid-send, possibly AFTER the
         # provider was already called. Apply the per-channel reclaim policy
@@ -167,9 +240,10 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
                 notification.status = NotificationStatus.failed
                 notification.last_error = "stuck_sending_not_resent (at-most-once)"
                 stuck_dropped += 1
+                record_delivery_outcome(db, notification)
                 db.commit()
                 continue
-            if notification.retry_count > MAX_RETRIES:
+            if notification.retry_count > max_retries:
                 notification.status = NotificationStatus.failed
                 notification.last_error = "stuck_sending_reclaim_exhausted"
                 failed += 1
@@ -178,6 +252,7 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
                     notification.id,
                     notification.retry_count,
                 )
+                record_delivery_outcome(db, notification)
                 db.commit()
                 continue
             reclaimed += 1
@@ -186,28 +261,94 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
                 "(at-least-once, attempt %d/%d)",
                 notification.id,
                 notification.retry_count,
-                MAX_RETRIES,
+                max_retries,
             )
+        # The consent gate. This is the ONLY place all four transports are
+        # called, so it is the only place the check is guaranteed to run --
+        # putting it in each caller means the one that forgets is the one that
+        # mails an unsubscribed customer.
+        #
+        # A marketing suppression stops marketing and nothing else: an
+        # unsubscribe must never stop an invoice. `may_send` owns that rule.
+        if not communication_eligibility.may_send(
+            db,
+            channel=notification.channel,
+            address=notification.recipient,
+            category=notification.category,
+        ):
+            notification.status = NotificationStatus.canceled
+            notification.last_error = "suppressed"
+            suppressed += 1
+            logger.info(
+                "Notification %s suppressed (channel=%s category=%s)",
+                notification.id,
+                notification.channel.value,
+                notification.category,
+            )
+            record_delivery_outcome(db, notification)
+            db.commit()
+            continue
+
         # Update status before sending
         notification.status = NotificationStatus.sending
+        record_delivery_outcome(db, notification)
         db.commit()
 
         subject = notification.subject or "Notification"
         body = notification.body or ""
+        delivery_metadata = dict(notification.metadata_ or {})
+        ephemeral_delivery = has_ephemeral_action(notification)
         try:
             if notification.channel == NotificationChannel.email:
-                # Queue bodies are usually plain text — wrap them in the
-                # branded template and keep the text as the text/plain part.
-                body_html, body_text = render_email_bodies(body, subject=subject)
+                sender_key: str | None
+                activity: str
+                body_html: str
+                body_text: str | None
+                if ephemeral_delivery:
+                    rendered = materialize_email(db, notification)
+                    subject = rendered.subject
+                    body_html = rendered.body_html
+                    body_text = rendered.body_text
+                    sender_key = rendered.sender_key
+                    activity = rendered.activity
+                else:
+                    # Queue bodies are usually plain text — wrap them in the
+                    # branded template and keep the text as the text/plain part.
+                    resolved_brand = None
+                    if notification.subscriber_id:
+                        from app.services.brand_profiles import resolve_brand
+
+                        resolved_brand = resolve_brand(
+                            db, subscriber_id=notification.subscriber_id
+                        ).to_dict()
+                    configured_html = delivery_metadata.get("body_html")
+                    configured_text = delivery_metadata.get("body_text")
+                    if isinstance(configured_html, str) and configured_html.strip():
+                        body_html = configured_html
+                        body_text = (
+                            configured_text
+                            if isinstance(configured_text, str)
+                            else body
+                        )
+                    else:
+                        body_html, body_text = render_email_bodies(
+                            body, subject=subject, brand=resolved_brand
+                        )
+                    sender_key = str(delivery_metadata.get("sender_key") or "") or None
+                    activity = str(
+                        delivery_metadata.get("activity") or "notification_queue"
+                    )
                 success = email_service.send_email(
                     db=db,
                     to_email=notification.recipient,
                     subject=subject,
                     body_html=body_html,
                     body_text=body_text,
+                    sender_key=sender_key,
                     track=False,
-                    activity="notification_queue",
+                    activity=activity,
                     notification_id=str(notification.id),
+                    sensitive_content=ephemeral_delivery,
                 )
             elif notification.channel == NotificationChannel.sms:
                 success = sms_service.send_sms(
@@ -219,11 +360,18 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
                 )
             elif notification.channel == NotificationChannel.whatsapp:
                 whatsapp_payload = None
+                configured_template = delivery_metadata.get("whatsapp_template")
+                if isinstance(configured_template, dict) and configured_template.get(
+                    "name"
+                ):
+                    whatsapp_payload = configured_template
                 if body:
                     try:
                         parsed_body = json.loads(body)
-                        if isinstance(parsed_body, dict) and parsed_body.get(
-                            "__whatsapp_template__"
+                        if (
+                            isinstance(parsed_body, dict)
+                            and parsed_body.get("__whatsapp_template__")
+                            and whatsapp_payload is None
                         ):
                             whatsapp_payload = parsed_body
                     except json.JSONDecodeError:
@@ -238,11 +386,19 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
                         dry_run=False,
                     )
                 elif notification.template:
+                    provider_template = provider_template_from_template(
+                        notification.template
+                    )
                     result = whatsapp_service.send_template_message(
                         db=db,
                         recipient=notification.recipient,
-                        template_name=notification.template.code,
-                        variables={},
+                        template_name=str(
+                            (provider_template or {}).get("name")
+                            or notification.template.code
+                        ),
+                        language=str((provider_template or {}).get("language") or "")
+                        or None,
+                        variables=(provider_template or {}).get("variables") or {},
                         dry_run=False,
                     )
                 else:
@@ -285,9 +441,30 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
                 notification.last_error = (
                     f"unsupported_channel:{notification.channel.value}"
                 )
+        except EphemeralActionRejected as exc:
+            notification.status = NotificationStatus.canceled
+            notification.last_error = f"ephemeral_action_rejected:{exc.code}"
+            materialization_rejected += 1
+            logger.warning(
+                "Ephemeral notification %s rejected during materialization (%s)",
+                notification.id,
+                exc.code,
+            )
+            record_delivery_outcome(db, notification)
+            db.commit()
+            continue
         except Exception as exc:
             success = False
-            notification.last_error = str(exc)
+            if ephemeral_delivery:
+                # An exception raised after materialization may carry rendered
+                # content. Never persist or log its message.
+                notification.last_error = "ephemeral_delivery_failed"
+                logger.warning(
+                    "Ephemeral notification %s failed during delivery",
+                    notification.id,
+                )
+            else:
+                notification.last_error = str(exc)
 
         if success:
             notification.status = NotificationStatus.delivered
@@ -296,8 +473,9 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
             delivered += 1
         else:
             notification.retry_count = (notification.retry_count or 0) + 1
-            if notification.retry_count >= MAX_RETRIES:
+            if notification.retry_count >= max_retries:
                 notification.status = NotificationStatus.failed
+                notification.send_at = None
                 failed += 1
                 logger.warning(
                     "Notification %s permanently failed after %d retries: %s",
@@ -308,15 +486,19 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
             else:
                 # Schedule for retry — set back to failed, will be picked up next run
                 notification.status = NotificationStatus.failed
+                notification.send_at = now + timedelta(
+                    minutes=_retry_backoff_minutes(db, notification.retry_count)
+                )
                 retried += 1
                 logger.info(
                     "Notification %s retry %d/%d scheduled",
                     notification.id,
                     notification.retry_count,
-                    MAX_RETRIES,
+                    max_retries,
                 )
             if not notification.last_error:
                 notification.last_error = "send_failed"
+        record_delivery_outcome(db, notification)
         db.commit()
 
     return {
@@ -325,7 +507,10 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
         "failed": failed,
         "expired": expired,
         "reclaimed": reclaimed,
+        "suppressed": suppressed,
         "stuck_dropped": stuck_dropped,
+        "rate_limited": rate_limited,
+        "materialization_rejected": materialization_rejected,
     }
 
 
@@ -333,17 +518,60 @@ def _deliver_notification_queue(db, batch_size: int = 50) -> int:
     return _deliver_notification_queue_stats(db, batch_size=batch_size)["delivered"]
 
 
+def deliver_inbound_smtp_health_probe(
+    db: Session,
+    *,
+    recipient: str,
+    message_id: str,
+    marker: str,
+) -> bool:
+    """Deliver one fixed operational probe through the canonical email path."""
+    if not communication_eligibility.may_send(
+        db,
+        channel=NotificationChannel.email,
+        address=recipient,
+        category="observability",
+    ):
+        logger.error("inbound_smtp_health_probe_suppressed recipient=%s", recipient)
+        return False
+    return email_service.send_email(
+        db=db,
+        to_email=recipient,
+        subject="[Dotmac probe] Team inbox SMTP delivery",
+        body_html=(
+            "<p>Synthetic channel-health probe. This message verifies "
+            "canonical outbound SMTP and inbound team-inbox delivery.</p>"
+        ),
+        body_text=(
+            "Synthetic channel-health probe. This message verifies canonical "
+            "outbound SMTP and inbound team-inbox delivery."
+        ),
+        track=False,
+        activity="observability_smtp_probe",
+        headers={"Message-ID": message_id, "X-Dotmac-Probe": marker},
+    )
+
+
 @celery_app.task(name="app.tasks.notifications.deliver_notification_queue")
 def deliver_notification_queue() -> dict[str, int]:
     """Process queued notifications and retry failed ones."""
+    started = time.monotonic()
     with db_session_adapter.session() as session:
         result = _deliver_notification_queue_stats(session)
+        record_notification_queue_result(
+            session,
+            task_name="app.tasks.notifications.deliver_notification_queue",
+            result=result,
+            duration_seconds=time.monotonic() - started,
+        )
+        session.commit()
         logger.info(
             "Notification queue processed: delivered=%d, retried=%d, failed=%d, "
-            "expired=%d",
+            "expired=%d, rate_limited=%d",
             result["delivered"],
             result["retried"],
             result["failed"],
             result["expired"],
+            result["rate_limited"],
         )
         return result

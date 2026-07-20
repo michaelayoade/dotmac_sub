@@ -131,7 +131,7 @@
                             {{ proof.reference or '—' }}
                         </td>
                         <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
-                            {{ proof.paid_at.strftime('%Y-%m-%d') if proof.paid_at else '—' }}
+                            {{ proof.paid_at | app_datetime('%Y-%m-%d', '—', include_tz=False) }}
                         </td>
                         <td class="whitespace-nowrap px-6 py-4">
                             {% set st = proof.status.value if proof.status else 'submitted' %}
@@ -144,7 +144,7 @@
                             {% endif %}
                         </td>
                         <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
-                            {{ proof.created_at.strftime('%Y-%m-%d %H:%M') if proof.created_at else '—' }}
+                            {{ proof.created_at | app_datetime('%Y-%m-%d %H:%M', '—') }}
                         </td>
                         <td class="whitespace-nowrap px-6 py-4 text-right">
                             <div class="flex items-center justify-end gap-2 opacity-0 transition-opacity group-hover:opacity-100">

@@ -168,7 +168,7 @@
                         <p class="text-sm font-medium text-slate-900 dark:text-white">{{ job.order_type.value | title if job.order_type else 'Service Order' }}</p>
                         <p class="text-xs text-slate-500 dark:text-slate-400">
                             {{ job.assigned_technician.person.first_name if job.assigned_technician and job.assigned_technician.person else 'Unassigned' }} -
-                            {{ job.completed_at.strftime('%b %d') if job.completed_at else job.updated_at.strftime('%b %d') if job.updated_at else '-' }}
+                            {{ job.completed_at | app_datetime('%b %d', include_tz=False) if job.completed_at else job.updated_at | app_datetime('%b %d', '-', include_tz=False) }}
                         </p>
                     </div>
                     {{ status_badge("Completed", variant="success") }}

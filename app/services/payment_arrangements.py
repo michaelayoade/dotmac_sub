@@ -5,6 +5,7 @@ from calendar import monthrange
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import cast
+from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -125,18 +126,47 @@ def get_account_outstanding_balance(db: Session, subscriber_id: str) -> Decimal:
     Service-level equivalent of the portal-context helper; arrangements may
     only cover what is actually owed and overdue.
     """
-    from sqlalchemy import func
+    from app.services.invoice_collectibility import collection_blocking_balance
 
-    from app.models.billing import Invoice, InvoiceStatus
+    return collection_blocking_balance(db, subscriber_id)
 
-    total = (
-        db.query(func.coalesce(func.sum(Invoice.balance_due), 0))
-        .filter(Invoice.account_id == coerce_uuid(subscriber_id))
-        .filter(Invoice.status == InvoiceStatus.overdue)
-        .filter(Invoice.is_active.is_(True))
+
+def active_arrangement_shield_reason(db: Session, account_id: object) -> str | None:
+    """Return the owner-produced collection shield for one account."""
+    arrangement_id = (
+        db.query(PaymentArrangement.id)
+        .filter(PaymentArrangement.subscriber_id == coerce_uuid(account_id))
+        .filter(PaymentArrangement.status == ArrangementStatus.active)
+        .filter(PaymentArrangement.is_active.is_(True))
+        .order_by(PaymentArrangement.created_at.asc())
+        .limit(1)
         .scalar()
     )
-    return Decimal(str(total or 0))
+    return f"active payment arrangement {arrangement_id}" if arrangement_id else None
+
+
+def bulk_active_arrangement_shield_reasons(
+    db: Session, account_ids: set[UUID]
+) -> dict[UUID, str]:
+    """Return active-arrangement shields for a dunning cohort in one query."""
+    if not account_ids:
+        return {}
+    ids = {coerce_uuid(account_id) for account_id in account_ids}
+    rows = (
+        db.query(PaymentArrangement.subscriber_id, PaymentArrangement.id)
+        .filter(PaymentArrangement.subscriber_id.in_(ids))
+        .filter(PaymentArrangement.status == ArrangementStatus.active)
+        .filter(PaymentArrangement.is_active.is_(True))
+        .order_by(
+            PaymentArrangement.subscriber_id.asc(),
+            PaymentArrangement.created_at.asc(),
+        )
+        .all()
+    )
+    reasons: dict[UUID, str] = {}
+    for account_id, arrangement_id in rows:
+        reasons.setdefault(account_id, f"active payment arrangement {arrangement_id}")
+    return reasons
 
 
 class PaymentArrangements(ListResponseMixin):

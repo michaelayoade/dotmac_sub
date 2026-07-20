@@ -20,7 +20,7 @@ from app.models.domain_settings import SettingDomain
 from app.models.radius import RadiusUser
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services import auth_flow as auth_flow_service
-from app.services import customer_portal, radius_auth
+from app.services import customer_credential_enrollment, customer_portal, radius_auth
 from app.services import module_manager as module_manager_service
 from app.services.auth_flow import verify_password
 from app.services.rate_limiter_adapter import allow_operation
@@ -246,6 +246,77 @@ def customer_forgot_password_submit(request: Request, db: Session, email: str):
     )
 
 
+def customer_credential_enrollment_page(
+    request: Request,
+    db: Session,
+    token: str,
+    *,
+    error: str | None = None,
+    username: str = "",
+    status_code: int = 200,
+):
+    """Render the self-care credential form without consuming its capability."""
+
+    return templates.TemplateResponse(
+        request,
+        "customer/auth/credential-enrollment.html",
+        {
+            "token": token,
+            "username": username,
+            "error": error,
+            "password_min_length": auth_flow_service.password_min_length(db),
+        },
+        status_code=status_code,
+    )
+
+
+def customer_credential_enrollment_submit(
+    request: Request,
+    db: Session,
+    *,
+    token: str,
+    password: str,
+    password_confirm: str,
+    username: str = "",
+):
+    """Translate the self-care form into the canonical enrollment command."""
+
+    if password != password_confirm:
+        return customer_credential_enrollment_page(
+            request,
+            db,
+            token,
+            error="Passwords do not match",
+            username=username,
+            status_code=400,
+        )
+    try:
+        customer_credential_enrollment.complete_referral_enrollment(
+            db,
+            token=token,
+            new_password=password,
+            username=username or None,
+        )
+    except customer_credential_enrollment.CustomerCredentialEnrollmentError as exc:
+        error = (
+            str(exc)
+            if exc.status_code in {400, 409, 422}
+            else "This enrollment link is invalid, expired, or already used."
+        )
+        return customer_credential_enrollment_page(
+            request,
+            db,
+            token,
+            error=error,
+            username=username,
+            status_code=exc.status_code,
+        )
+    return RedirectResponse(
+        url="/portal/auth/login?enrollment=success",
+        status_code=303,
+    )
+
+
 def customer_verify_email_page(request: Request, db: Session, token: str):
     """Verify an email address from the link in the verification email."""
     try:
@@ -301,8 +372,15 @@ def customer_login_submit(
             if not local_credential.is_active:
                 raise ValueError("Account disabled. Please contact support.")
             now = datetime.now(UTC)
-            if local_credential.locked_until and local_credential.locked_until > now:
-                raise ValueError("Account locked. Please try again later.")
+            locked_until = local_credential.locked_until
+            if locked_until and locked_until.tzinfo is None:
+                locked_until = locked_until.replace(tzinfo=UTC)
+            if locked_until and locked_until > now:
+                raise ValueError(
+                    auth_flow_service.lockout_detail(
+                        "Account locked", locked_until=locked_until
+                    )
+                )
             if not verify_password(password, local_credential.password_hash):
                 local_password_failed = True
             else:
@@ -337,7 +415,12 @@ def customer_login_submit(
                 window_seconds=900,
             )
             if not decision.allowed:
-                raise ValueError("Account locked. Please try again later.")
+                raise ValueError(
+                    auth_flow_service.lockout_detail(
+                        "Account locked",
+                        retry_after_seconds=decision.retry_after_seconds,
+                    )
+                )
 
             # Try RADIUS server authentication first
             radius_authenticated = False

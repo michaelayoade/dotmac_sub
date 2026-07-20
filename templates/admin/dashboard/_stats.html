@@ -32,75 +32,70 @@
 {% set pon_unknown = pon_interface_summary.unknown if pon_interface_summary else 0 %}
 {% set pon_total = pon_interface_summary.total if pon_interface_summary else 0 %}
 {% set total_alarms_count = stats.alarms_critical + stats.alarms_major + stats.alarms_minor + stats.alarms_warning %}
-{% set overdue_receivables = stats.ar_90|default(0) %}
 {% set active_pct = ((stats.active_subscribers / stats.total_subscribers * 100) if stats.total_subscribers > 0 else 0) | round(1) %}
 {% set dev_pct = ((dev_online / dev_total * 100) if dev_total > 0 else 0) | round(1) %}
 {% set ont_pct = ((ont_on / ont_total * 100) if ont_total > 0 else 0) | round(1) %}
 
+{# Headline values, tone, and drill-down cohort come from dashboard_kpis
+   (app.services.web_admin_dashboard); this template only reads the contract and
+   renders presentation (colour, helper text, progress). A KPI whose value is
+   not present renders its placeholder, never a 0. #}
+{% set online_v = dashboard_kpis.online.value %}
+{% set collections_v = dashboard_kpis.collections.value %}
+{% set overdue_v = dashboard_kpis.overdue.value %}
 <section data-tour-id="dashboard-kpis" class="grid grid-cols-2 gap-4 lg:grid-cols-4" hx-get="/admin/dashboard/stats" hx-trigger="every 180s" hx-swap="outerHTML">
+    {% if show_subscribers %}
     {{ kpi_tile(
-        "Subscribers",
-        stats.total_subscribers,
-        "/admin/customers",
+        dashboard_kpis.total_subscribers.label,
+        dashboard_kpis.total_subscribers.value.value,
+        dashboard_kpis.total_subscribers.cohort_url,
         "amber",
         "%d active, %+d this month" % (stats.active_subscribers, stats.subscribers_change|default(0)),
         progress=active_pct
     ) }}
+    {% endif %}
+    {% if show_subscribers or show_network %}
     {{ kpi_tile(
-        "Online Sessions",
-        online_count,
-        "/admin/network/sessions",
+        dashboard_kpis.online.label,
+        online_v.value if online_v.is_present else online_v.placeholder,
+        dashboard_kpis.online.cohort_url,
         "emerald",
-        "Authenticated RADIUS sessions"
+        ("%d active RADIUS session%s" | format(online_sessions, 's' if online_sessions != 1 else '')) if online_v.is_present else "Live session data unavailable"
     ) }}
+    {% endif %}
+    {% if show_network %}
     {{ kpi_tile(
-        "Network Devices",
-        "%d / %d" | format(dev_online, dev_total),
-        "/admin/network/monitoring",
+        dashboard_kpis.network_devices.label,
+        dashboard_kpis.network_devices.value.value,
+        dashboard_kpis.network_devices.cohort_url,
         "blue",
         "%d offline" % dev_offline if dev_offline else "All reachable",
         progress=dev_pct
     ) }}
-    {{ kpi_tile(
-        "ONT Service",
-        "%d / %d" | format(ont_on, ont_total),
-        "/admin/network/onts",
-        "violet",
-        "%d low signal · PON %d/%d" | format(ont_low_signal, ont_olt_on, ont_olt_off)
-            if ont_total else
-        "Service status with raw PON overlay",
-        progress=ont_pct
-    ) }}
+    {% endif %}
     {% if show_financials %}
     {{ kpi_tile(
-        "Revenue This Month",
-        "₦%s" | format("{:,.0f}".format(stats.monthly_revenue)),
-        "/admin/billing",
+        dashboard_kpis.collections.label,
+        collections_v.value if collections_v.is_present else collections_v.placeholder,
+        dashboard_kpis.collections.cohort_url,
         "emerald",
-        "Paid invoices in current billing period"
+        "Payments received this month" if collections_v.is_present else "Billing data unavailable"
     ) }}
     {{ kpi_tile(
-        "Overdue",
-        "₦%s" | format("{:,.0f}".format(overdue_receivables)),
-        "/admin/billing",
+        dashboard_kpis.overdue.label,
+        overdue_v.value if overdue_v.is_present else overdue_v.placeholder,
+        dashboard_kpis.overdue.cohort_url,
         "rose",
-        "Outstanding receivables"
+        "Outstanding receivables" if overdue_v.is_present else "Billing data unavailable"
     ) }}
     {% endif %}
     {% if show_network and total_alarms_count > 0 %}
     {{ kpi_tile(
-        "Alarms",
-        total_alarms_count,
-        "/admin/network/alarms",
+        dashboard_kpis.alarms.label,
+        dashboard_kpis.alarms.value.value,
+        dashboard_kpis.alarms.cohort_url,
         "rose",
         "%d critical" % stats.alarms_critical
     ) }}
     {% endif %}
-    {{ kpi_tile(
-        "PON Interfaces",
-        "%d / %d" | format(pon_up, pon_total),
-        "/admin/network/pon-interfaces",
-        "cyan",
-        "%d down, %d unknown" % (pon_down, pon_unknown) if pon_total else "No monitored PON interfaces"
-    ) }}
 </section>

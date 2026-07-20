@@ -1,5 +1,5 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import status_badge %}
+{% from "components/ui/macros.html" import status_badge, pagination as table_pagination %}
 
 {% block title %}VLANs - Admin{% endblock %}
 
@@ -38,23 +38,27 @@
         </div>
     </div>
 
-    <!-- OLT Filter -->
-    {% if olt_devices and olt_devices | length > 1 %}
-    <div class="flex items-center gap-3">
-        <label for="olt_filter" class="text-sm font-medium text-slate-700 dark:text-slate-300">Filter by OLT:</label>
-        <select id="olt_filter"
-                onchange="window.location.href = this.value ? '/admin/network/vlans?olt_id=' + this.value : '/admin/network/vlans'"
-                class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-            <option value="">All OLTs</option>
-            {% for olt in olt_devices %}
-            <option value="{{ olt.id }}" {% if selected_olt and selected_olt.id == olt.id %}selected{% endif %}>{{ olt.name }}</option>
-            {% endfor %}
-        </select>
-        {% if selected_olt %}
-        <a href="/admin/network/vlans" class="text-sm text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">Clear filter</a>
+    <form method="GET" action="/admin/network/vlans" class="flex flex-col gap-3 border-y border-slate-200/70 py-4 sm:flex-row sm:items-end dark:border-slate-700/70">
+        <div class="min-w-0 flex-1">
+            <label for="vlan-search" class="mb-1 block text-xs font-medium text-slate-700 dark:text-slate-300">Search</label>
+            <input id="vlan-search" type="search" name="search" value="{{ search }}" placeholder="VLAN tag, name, or description"
+                   class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+        </div>
+        <div class="w-full sm:w-64">
+            <label for="olt-filter" class="mb-1 block text-xs font-medium text-slate-700 dark:text-slate-300">OLT</label>
+            <select id="olt-filter" name="olt_id" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                <option value="">All OLTs</option>
+                {% for olt in olt_devices %}
+                <option value="{{ olt.id }}" {% if selected_olt_id == (olt.id | string) %}selected{% endif %}>{{ olt.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <input type="hidden" name="per_page" value="{{ pagination.per_page }}">
+        <button type="submit" class="inline-flex h-[38px] items-center justify-center rounded-lg bg-primary-600 px-4 text-sm font-semibold text-white hover:bg-primary-700">Filter</button>
+        {% if search or selected_olt_id %}
+        <a href="/admin/network/vlans" class="inline-flex h-[38px] items-center justify-center rounded-lg border border-slate-300 px-4 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-800">Clear</a>
         {% endif %}
-    </div>
-    {% endif %}
+    </form>
 
     <!-- Stats -->
     <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -187,6 +191,15 @@
                 </tbody>
             </table>
         </div>
+        {{ table_pagination(
+            pagination.page,
+            pagination.total_pages,
+            pagination.total,
+            pagination.per_page,
+            "/admin/network/vlans",
+            extra_params="&olt_id=" ~ selected_olt_id ~ "&search=" ~ (search | urlencode),
+            item_label="VLANs"
+        ) }}
     </div>
 </div>
 {% endblock %}

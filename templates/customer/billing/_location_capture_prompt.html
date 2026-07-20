@@ -1,0 +1,102 @@
+{% if location_prompt %}
+<section class="rounded-2xl border border-sky-200 bg-gradient-to-br from-sky-50 to-white p-6 shadow-premium dark:border-sky-900/50 dark:from-sky-900/20 dark:to-stone-800"
+         aria-labelledby="location-capture-title">
+    <div class="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+        <div class="max-w-2xl">
+            <p class="text-xs font-semibold uppercase tracking-wide text-sky-700 dark:text-sky-300">Service location check</p>
+            <h2 id="location-capture-title" class="mt-1 text-xl font-display font-bold text-stone-900 dark:text-white">Confirm where your service is installed</h2>
+            <p class="mt-2 text-sm text-stone-600 dark:text-stone-300">
+                Share your device location while you are at the premises. We use it to verify regulatory location records; it does not request a service move.
+            </p>
+            <dl class="mt-4 grid gap-2 text-sm sm:grid-cols-3">
+                {% for field in location_prompt.fields %}
+                <div class="rounded-xl bg-white/80 px-3 py-2 dark:bg-stone-800/70">
+                    <dt class="text-xs font-medium text-stone-500 dark:text-stone-400">{{ field.label }}</dt>
+                    <dd class="mt-0.5 font-semibold text-stone-800 dark:text-stone-100">{{ field.value or 'Not recorded' }}</dd>
+                </div>
+                {% endfor %}
+            </dl>
+        </div>
+
+        <div class="w-full rounded-xl border border-stone-200 bg-white p-4 lg:max-w-md dark:border-stone-700 dark:bg-stone-800">
+            <form id="location-capture-form" method="POST" action="/portal/location/confirm" class="space-y-3">
+                {% include "components/forms/csrf_input.html" %}
+                <input id="location-capture-latitude" type="hidden" name="latitude">
+                <input id="location-capture-longitude" type="hidden" name="longitude">
+                <input id="location-capture-accuracy" type="hidden" name="accuracy_m">
+                <div class="grid grid-cols-2 gap-2">
+                    <label class="text-xs font-medium text-stone-600 dark:text-stone-300">
+                        State
+                        <input name="claimed_state" value="{{ location_prompt.claimed_state }}"
+                               class="mt-1 w-full rounded-lg border border-stone-300 px-2.5 py-2 text-sm dark:border-stone-600 dark:bg-stone-700 dark:text-white">
+                    </label>
+                    <label class="text-xs font-medium text-stone-600 dark:text-stone-300">
+                        LGA
+                        <input name="claimed_lga" value="{{ location_prompt.claimed_lga }}"
+                               class="mt-1 w-full rounded-lg border border-stone-300 px-2.5 py-2 text-sm dark:border-stone-600 dark:bg-stone-700 dark:text-white">
+                    </label>
+                </div>
+                <label class="block text-xs font-medium text-stone-600 dark:text-stone-300">
+                    Postcode
+                    <input name="claimed_postcode" inputmode="numeric" pattern="[0-9]{6}" maxlength="6"
+                           value="{{ location_prompt.claimed_postcode }}"
+                           class="mt-1 w-full rounded-lg border border-stone-300 px-2.5 py-2 text-sm dark:border-stone-600 dark:bg-stone-700 dark:text-white">
+                </label>
+                <p id="location-capture-status" class="text-xs text-stone-500 dark:text-stone-400">Location has not been read yet.</p>
+                <div class="flex flex-wrap gap-2">
+                    <button id="location-capture-read" type="button"
+                            class="rounded-lg border border-sky-300 bg-sky-50 px-3 py-2 text-xs font-semibold text-sky-700 hover:bg-sky-100 dark:border-sky-700 dark:bg-sky-900/30 dark:text-sky-200">
+                        Use my current location
+                    </button>
+                    <button id="location-capture-submit" type="submit" disabled
+                            class="rounded-lg bg-sky-600 px-3 py-2 text-xs font-semibold text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50">
+                        Confirm location
+                    </button>
+                </div>
+            </form>
+            {% if location_prompt.snooze_allowed %}
+            <form method="POST" action="/portal/location/snooze" class="mt-3">
+                {% include "components/forms/csrf_input.html" %}
+                <button type="submit" class="text-xs font-medium text-stone-500 hover:text-stone-700 dark:text-stone-400 dark:hover:text-stone-200">Remind me later</button>
+            </form>
+            {% endif %}
+        </div>
+    </div>
+</section>
+
+<script>
+(function() {
+    const readButton = document.getElementById('location-capture-read');
+    const submitButton = document.getElementById('location-capture-submit');
+    const latitude = document.getElementById('location-capture-latitude');
+    const longitude = document.getElementById('location-capture-longitude');
+    const accuracy = document.getElementById('location-capture-accuracy');
+    const status = document.getElementById('location-capture-status');
+    if (!readButton || !submitButton || !latitude || !longitude || !accuracy || !status) return;
+
+    readButton.addEventListener('click', () => {
+        if (!navigator.geolocation) {
+            status.textContent = 'This browser cannot read your location.';
+            return;
+        }
+        readButton.disabled = true;
+        status.textContent = 'Reading your location…';
+        navigator.geolocation.getCurrentPosition(
+            (position) => {
+                latitude.value = String(position.coords.latitude);
+                longitude.value = String(position.coords.longitude);
+                accuracy.value = String(position.coords.accuracy || '');
+                status.textContent = `Location ready (about ${Math.round(position.coords.accuracy || 0)} m accuracy).`;
+                submitButton.disabled = false;
+                readButton.disabled = false;
+            },
+            () => {
+                status.textContent = 'Location permission was denied or no fix was available.';
+                readButton.disabled = false;
+            },
+            { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+        );
+    });
+})();
+</script>
+{% endif %}

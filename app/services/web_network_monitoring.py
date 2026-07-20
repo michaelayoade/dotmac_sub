@@ -12,6 +12,7 @@ from html import escape
 from typing import Any
 
 import httpx
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.services.audit_helpers import build_audit_activities_for_types
@@ -36,7 +37,13 @@ def active_monitoring_devices(db: Session) -> list:
 
 
 def monitoring_page_data(
-    db: Session, *, format_duration, format_bps, query: str | None = None
+    db: Session,
+    *,
+    format_duration,
+    format_bps,
+    query: str | None = None,
+    page: int = 1,
+    per_page: int = 50,
 ) -> dict[str, object]:
     """Return payload for network monitoring dashboard.
 
@@ -67,7 +74,7 @@ def monitoring_page_data(
     data["ont_olt_link_summary"] = get_onu_olt_status_summary(db)
     data["pon_outages"] = get_pon_outage_summary(db)
 
-    # ONT status trend chart (Phase 4 — 24h time-series)
+    # ONT status trend chart (24-hour time series)
     data["ont_service_trend"] = _get_onu_status_trend(db, hours=24)
 
     # ONU authorization trend (Phase 6D — new registrations per day, 30 days)
@@ -80,29 +87,24 @@ def monitoring_page_data(
     data["last_refreshed_at"] = datetime.now(UTC)
 
     # Device health metrics table (CPU, memory, temperature per device)
-    data["device_health"] = _get_device_health_table(db, query=query)
-    data["device_health_total"] = len(data["device_health"])
+    device_health, device_health_pagination = _get_device_health_page(
+        db, query=query, page=page, per_page=per_page
+    )
+    data["device_health"] = device_health
+    data["device_health_total"] = device_health_pagination["total"]
+    data["device_health_pagination"] = device_health_pagination
 
     return data
 
 
 def dispatch_monitoring_refresh(*, request_id: str | None = None) -> None:
-    """Enqueue a cache warm so the page's ``?refresh=1`` actually refreshes.
+    """No-op refresh hook for the page's ``?refresh=1``.
 
-    The dashboard reads warmed caches (it no longer fans out to Zabbix on the
-    request thread), so a manual refresh means asking the warmer to re-populate
-    them now rather than fetching inline. Best-effort: a broker hiccup must not
-    break the page render.
+    The Zabbix cache warmer this used to enqueue was retired with the native
+    monitoring cutover; the dashboard reads native poll state directly, so
+    there is nothing to re-warm.
     """
-    try:
-        from app.tasks.monitoring_warm import warm_monitoring_caches
-
-        warm_monitoring_caches.delay()
-    except Exception:
-        logger.warning(
-            "monitoring_refresh_dispatch_failed",
-            extra={"event": "monitoring_refresh_dispatch_failed"},
-        )
+    del request_id
 
 
 def monitoring_index_context(
@@ -111,6 +113,8 @@ def monitoring_index_context(
     format_duration,
     format_bps,
     query: str | None = None,
+    page: int = 1,
+    per_page: int = 50,
 ) -> dict[str, object]:
     """Build the full monitoring dashboard context payload."""
     data = monitoring_page_data(
@@ -118,6 +122,8 @@ def monitoring_index_context(
         format_duration=format_duration,
         format_bps=format_bps,
         query=query,
+        page=page,
+        per_page=per_page,
     )
     data["vpn_tunnels"] = get_vpn_tunnel_status()
     data["site_reachability"] = get_site_reachability(db)
@@ -262,7 +268,12 @@ def format_bytes(value: int) -> str:
 
 
 def alarms_page_data(
-    db: Session, *, severity: str | None, status: str | None
+    db: Session,
+    *,
+    severity: str | None,
+    status: str | None,
+    page: int = 1,
+    per_page: int = 25,
 ) -> dict[str, object]:
     """Return payload for monitoring alarms page."""
     from app.models.network_monitoring import (
@@ -289,30 +300,28 @@ def alarms_page_data(
             )
         except ValueError:
             pass
-    alarms = alarms_query.limit(100).all()
+    total = alarms_query.order_by(None).count()
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page = min(page, total_pages)
+    alarms = alarms_query.offset((page - 1) * per_page).limit(per_page).all()
     rules = (
         db.query(AlertRule)
         .filter(AlertRule.is_active.is_(True))
         .order_by(AlertRule.name)
         .all()
     )
+    severity_rows = (
+        db.query(Alert.severity, func.count(Alert.id))
+        .filter(Alert.status == AlertStatus.open)
+        .group_by(Alert.severity)
+        .all()
+    )
+    open_counts = {row[0].value: int(row[1]) for row in severity_rows}
     stats = {
-        "critical": sum(
-            1
-            for a in alarms
-            if a.severity == AlertSeverity.critical and a.status == AlertStatus.open
-        ),
-        "warning": sum(
-            1
-            for a in alarms
-            if a.severity == AlertSeverity.warning and a.status == AlertStatus.open
-        ),
-        "info": sum(
-            1
-            for a in alarms
-            if a.severity == AlertSeverity.info and a.status == AlertStatus.open
-        ),
-        "total_open": sum(1 for a in alarms if a.status == AlertStatus.open),
+        "critical": open_counts.get(AlertSeverity.critical.value, 0),
+        "warning": open_counts.get(AlertSeverity.warning.value, 0),
+        "info": open_counts.get(AlertSeverity.info.value, 0),
+        "total_open": sum(open_counts.values()),
     }
     return {
         "alarms": alarms,
@@ -320,6 +329,12 @@ def alarms_page_data(
         "stats": stats,
         "severity": severity,
         "status": status,
+        "pagination": {
+            "page": page,
+            "per_page": per_page,
+            "total": total,
+            "total_pages": total_pages,
+        },
     }
 
 
@@ -378,7 +393,7 @@ def _vm_range_query(
 
 
 def _get_onu_status_trend(db: Session, hours: int = 24) -> dict[str, Any]:
-    """Return current Zabbix ONT state in the chart-compatible shape."""
+    """Return the current ONT status rollup in the chart-compatible shape."""
     from app.services.network_monitoring import get_onu_status_summary
 
     now = datetime.now(UTC)
@@ -395,7 +410,7 @@ def _get_onu_status_trend(db: Session, hours: int = 24) -> dict[str, Any]:
         "olt_offline": [offline],
         "low_signal": [float(summary["low_signal"])],
         "has_data": bool(summary["total"]),
-        "source": "zabbix",
+        "source": "inventory",
         "hours": hours,
     }
 
@@ -693,7 +708,13 @@ def _get_network_activity_feed(db: Session, limit: int = 15) -> list[dict[str, A
     return items
 
 
-def _get_device_health_table(db: Session, query: str | None = None) -> list[dict]:
+def _get_device_health_page(
+    db: Session,
+    query: str | None = None,
+    *,
+    page: int = 1,
+    per_page: int = 50,
+) -> tuple[list[dict], dict[str, int | bool]]:
     """Build a device health summary with CPU, memory, temperature, uptime.
 
     Queries the latest DeviceMetric for each active device.
@@ -706,6 +727,11 @@ def _get_device_health_table(db: Session, query: str | None = None) -> list[dict
         MetricType,
         NetworkDevice,
     )
+    from app.services.device_operational_status import (
+        derive_operational_status,
+        warmer_is_stale,
+    )
+    from app.services.web_network_core_devices_forms import _format_uptime_short
 
     devices_query = db.query(NetworkDevice).filter(NetworkDevice.is_active.is_(True))
     term = (query or "").strip()
@@ -717,10 +743,27 @@ def _get_device_health_table(db: Session, query: str | None = None) -> list[dict
             | (NetworkDevice.mgmt_ip.ilike(like))
             | (NetworkDevice.vendor.ilike(like))
         )
-    devices = devices_query.order_by(NetworkDevice.name.asc()).limit(100).all()
+    per_page = min(max(int(per_page or 50), 10), 100)
+    total = devices_query.count()
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    current_page = min(max(page, 1), total_pages)
+    devices = (
+        devices_query.order_by(NetworkDevice.name.asc())
+        .offset((current_page - 1) * per_page)
+        .limit(per_page)
+        .all()
+    )
+    pagination: dict[str, int | bool] = {
+        "page": current_page,
+        "per_page": per_page,
+        "total": total,
+        "total_pages": total_pages,
+        "has_prev": current_page > 1,
+        "has_next": current_page < total_pages,
+    }
 
     if not devices:
-        return []
+        return [], pagination
 
     metric_fields = [
         (MetricType.cpu, "cpu"),
@@ -761,13 +804,28 @@ def _get_device_health_table(db: Session, query: str | None = None) -> list[dict
             latest_by_key[(device_id, metric_type)] = round(float(value), 1)
 
     results = []
+    warm_stale = warmer_is_stale()
     for device in devices:
+        operational = derive_operational_status(device, warm_stale=warm_stale)
         row: dict = {
             "id": str(device.id),
             "name": device.name or str(device.id)[:8],
             "ip": str(device.mgmt_ip or ""),
-            "status": device.status.value if device.status else "unknown",
+            "mgmt_ip": str(device.mgmt_ip or ""),
+            "status": operational.status,
+            "status_reason": operational.reason,
+            "status_presentation": operational.presentation,
+            "retry_pending": operational.retry_pending,
             "vendor": str(device.vendor or ""),
+            "health_status": None,
+            "max_concurrent_subscribers": getattr(
+                device, "max_concurrent_subscribers", None
+            ),
+            "current_subscriber_count": getattr(
+                device, "current_subscriber_count", None
+            ),
+            "last_ping_at": device.last_ping_at,
+            "last_snmp_at": device.last_snmp_at,
             "cpu": None,
             "memory": None,
             "temperature": None,
@@ -776,10 +834,18 @@ def _get_device_health_table(db: Session, query: str | None = None) -> list[dict
         for mt, field in metric_fields:
             value = latest_by_key.get((device.id, mt))
             if value is not None:
-                row[field] = value
+                row[field] = (
+                    _format_uptime_short(int(value)) if field == "uptime" else value
+                )
         results.append(row)
 
-    return results
+    return results, pagination
+
+
+def _get_device_health_table(db: Session, query: str | None = None) -> list[dict]:
+    """Compatibility wrapper for callers that only need the first 100 rows."""
+    rows, _pagination = _get_device_health_page(db, query=query, page=1, per_page=100)
+    return rows
 
 
 # ── Bulk actions on monitoring devices ────────────────────────────────

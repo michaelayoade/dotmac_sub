@@ -5,7 +5,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from sqlalchemy import and_, exists, func, or_, select
+from fastapi import HTTPException
+from sqlalchemy import and_, exists, func, not_, or_, select
 from sqlalchemy.orm import Session, aliased, defer, joinedload
 
 from app.models.network import (
@@ -54,6 +55,22 @@ class OntUnits(CRUDManager[OntUnit]):
 
     def __init__(self, subscriber_validator: SubscriberValidator | None = None) -> None:
         self._subscriber_validator = subscriber_validator
+
+    @classmethod
+    def create(cls, db: Session, payload: object, *, commit: bool = True) -> OntUnit:
+        values = cls._payload_dict(payload, exclude_unset=False)
+        if (
+            values.get("splitter_id") is not None
+            or values.get("splitter_port_id") is not None
+        ):
+            raise HTTPException(
+                status_code=410,
+                detail=(
+                    "Direct ONT/splitter attachment mutation is retired; use the "
+                    "reviewed network.fiber_access_attachments workflow."
+                ),
+            )
+        return super().create(db, payload, commit=commit)
 
     @staticmethod
     def list(
@@ -265,7 +282,7 @@ class OntUnits(CRUDManager[OntUnit]):
                 )
             )
 
-        zabbix_status_filter = (
+        runtime_status_filter = (
             olt_status if olt_status in {"online", "offline"} else None
         )
 
@@ -300,19 +317,15 @@ class OntUnits(CRUDManager[OntUnit]):
             }
             stmt = _apply_ordering(stmt, order_by, order_dir, allowed)
 
-        if zabbix_status_filter is not None:
-            from app.services.zabbix_ont_status import get_ont_snapshots_from_zabbix
+        if runtime_status_filter is not None:
+            from app.services.network.ont_status import effective_ont_online_clause
 
-            ordered_results = list(db.scalars(stmt).all())
-            snapshots = get_ont_snapshots_from_zabbix(db, ordered_results)
-            filtered_results = [
-                ont
-                for ont in ordered_results
-                if snapshots.get(str(ont.id))
-                and snapshots[str(ont.id)].status == zabbix_status_filter
-            ]
-            total = len(filtered_results)
-            return filtered_results[offset : offset + limit], total
+            online_clause = effective_ont_online_clause()
+            stmt = stmt.where(
+                online_clause
+                if runtime_status_filter == "online"
+                else not_(online_clause)
+            )
 
         count_stmt = select(func.count()).select_from(stmt.order_by(None).subquery())
         total = db.scalar(count_stmt) or 0
@@ -324,8 +337,24 @@ class OntUnits(CRUDManager[OntUnit]):
         return super().get(db, unit_id)
 
     @classmethod
-    def update(cls, db: Session, unit_id: str, payload: OntUnitUpdate) -> OntUnit:  # type: ignore[override]
-        return super().update(db, unit_id, payload)
+    def update(
+        cls,
+        db: Session,
+        unit_id: str,
+        payload: OntUnitUpdate,
+        *,
+        commit: bool = True,
+    ) -> OntUnit:  # type: ignore[override]
+        values = cls._payload_dict(payload, exclude_unset=True)
+        if {"splitter_id", "splitter_port_id"} & values.keys():
+            raise HTTPException(
+                status_code=410,
+                detail=(
+                    "Direct ONT/splitter attachment mutation is retired; use the "
+                    "reviewed network.fiber_access_attachments workflow."
+                ),
+            )
+        return super().update(db, unit_id, payload, commit=commit)
 
     @classmethod
     def delete(cls, db: Session, unit_id: str) -> None:  # type: ignore[override]

@@ -1,5 +1,5 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import status_badge %}
+{% from "components/ui/macros.html" import status_badge, status_presentation_badge %}
 
 {% block title %}{{ customer_name }} - Customer - Admin{% endblock %}
 
@@ -16,7 +16,7 @@
 <div x-data="customerDetail()" class="space-y-6">
     {% if map_data %}
     <!-- Leaflet CSS for mini-map -->
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css"
           integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="">
     <style>
         #customer-mini-map { height: 200px; }
@@ -50,31 +50,6 @@
                         <svg class="h-10 w-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
                     </div>
                     {% endif %}
-                    <!-- Status indicator -->
-                    {% set status_icon = customer.status.value if customer.status else ('active' if customer.is_active else 'inactive') %}
-                    {% set status_ring = {
-                        'active': 'bg-indigo-500',
-                        'blocked': 'bg-rose-500',
-                        'suspended': 'bg-amber-500',
-                        'disabled': 'bg-slate-500',
-                        'new': 'bg-blue-500',
-                        'canceled': 'bg-rose-400',
-                        'delinquent': 'bg-orange-500',
-                        'inactive': 'bg-slate-400'
-                    } %}
-                    <span class="absolute -bottom-1 -right-1 flex h-6 w-6 items-center justify-center rounded-full ring-4 ring-white dark:ring-slate-900 {{ status_ring.get(status_icon, 'bg-slate-400') }}">
-                        {% if status_icon == 'active' %}
-                        <svg class="h-3.5 w-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/></svg>
-                        {% elif status_icon in ['blocked', 'canceled'] %}
-                        <svg class="h-3.5 w-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M6 18L18 6M6 6l12 12"/></svg>
-                        {% elif status_icon == 'suspended' or status_icon == 'delinquent' %}
-                        <svg class="h-3.5 w-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
-                        {% elif status_icon == 'new' %}
-                        <svg class="h-3.5 w-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                        {% else %}
-                        <svg class="h-3.5 w-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M20 12H4"/></svg>
-                        {% endif %}
-                    </span>
                 </div>
                 <div>
                     <div class="flex flex-wrap items-center gap-3">
@@ -90,13 +65,11 @@
                             Individual
                         </span>
                         {% endif %}
-                        {% set cs = customer.status.value if customer.status else ('active' if customer.is_active else 'inactive') %}
-                        {% set status_labels = {'active': 'Active', 'blocked': 'Blocked', 'suspended': 'Suspended', 'disabled': 'Disabled', 'new': 'New', 'canceled': 'Canceled', 'delinquent': 'Delinquent', 'inactive': 'Inactive'} %}
-                        {{ status_badge(status_labels.get(cs, cs|title), cs, size="sm") }}
+                        {{ status_presentation_badge(customer_status_presentation, pulse=(customer_status_presentation.value == 'active'), size="sm") }}
                         {% if customer.captive_redirect_enabled %}
-                        <span class="inline-flex items-center gap-1 rounded-lg bg-cyan-50 px-2 py-0.5 text-xs font-medium text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300" title="Captive portal redirect enabled">
+                        <span class="inline-flex items-center gap-1 rounded-lg bg-cyan-50 px-2 py-0.5 text-xs font-medium text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300" title="Residential captive-access opt-in requested; eligibility and network readiness still apply">
                             <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9"/></svg>
-                            Captive Portal
+                            Captive Opt-in
                         </span>
                         {% endif %}
                     </div>
@@ -116,7 +89,7 @@
                         <span class="flex items-center gap-1.5">
                             {% set start_date = customer.account_start_date or customer.created_at %}
                             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
-                            Customer since {{ start_date.strftime('%B %Y') if start_date else 'N/A' }}
+                            Customer since {{ start_date | app_datetime('%B %Y', 'N/A', include_tz=False) }}
                         </span>
                     </div>
                 </div>
@@ -347,6 +320,75 @@
         <div class="grid gap-6 lg:grid-cols-3">
             <!-- Left Column: Contact + Login As Customer -->
             <div class="space-y-6">
+                <!-- CRM Sync Status -->
+                {% set crm_status = crm_sync_status|default({}) %}
+                {% set identity = identity_profile|default({}) %}
+                {% set crm_tone = 'negative' if crm_status.status == 'failed' else 'positive' if crm_status.status == 'linked' else 'warning' %}
+                <div class="status-panel status-panel-{{ crm_tone }} rounded-2xl border shadow-sm">
+                    <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
+                        <h3 class="font-semibold text-slate-900 dark:text-white">CRM Sync</h3>
+                        <span class="status-tone status-tone-{{ crm_tone }} inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold">
+                            {% if crm_status.status == 'failed' %}
+                            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>
+                            {% elif crm_status.status == 'linked' %}
+                            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                            {% else %}
+                            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                            {% endif %}
+                            {{ crm_status.label or 'Pending sync' }}
+                        </span>
+                    </div>
+                    <div class="space-y-3 p-5">
+                        <div class="grid gap-3 sm:grid-cols-2">
+                            <div class="min-w-0 rounded-xl border border-slate-200/80 bg-slate-50/60 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/30">
+                                <p class="text-xs font-medium text-slate-500 dark:text-slate-400">CRM Subscriber ID</p>
+                                <p class="mt-1 truncate font-mono text-sm font-semibold text-slate-900 dark:text-white">{{ crm_status.crm_subscriber_id or 'Not linked' }}</p>
+                            </div>
+                            <div class="min-w-0 rounded-xl border border-slate-200/80 bg-slate-50/60 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/30">
+                                <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Last Sync</p>
+                                <p class="mt-1 truncate text-sm font-semibold text-slate-900 dark:text-white">{{ crm_status.last_success_display or crm_status.last_activity_display or 'Not recorded' }}</p>
+                            </div>
+                        </div>
+                        {% if crm_status.error %}
+                        <div class="status-panel status-panel-negative rounded-xl border px-3 py-2">
+                            <div class="flex items-start justify-between gap-3">
+                                <div class="min-w-0">
+                                    <p class="status-foreground status-tone-negative text-xs font-semibold uppercase tracking-wide">Dead Letter</p>
+                                    <p class="status-foreground status-tone-negative mt-1 break-words text-sm">{{ crm_status.error }}</p>
+                                    <p class="status-foreground status-tone-negative mt-1 text-xs opacity-80">Attempts: {{ crm_status.attempts }}</p>
+                                </div>
+                                <a href="/admin/integrations" class="status-foreground status-tone-negative shrink-0 text-xs font-semibold hover:opacity-80">View</a>
+                            </div>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+
+                {% set identity_tone = 'positive' if identity.complete else 'warning' %}
+                <div class="status-panel status-panel-{{ identity_tone }} rounded-2xl border shadow-sm">
+                    <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
+                        <h3 class="font-semibold text-slate-900 dark:text-white">Identity Profile</h3>
+                        <span class="status-tone status-tone-{{ identity_tone }} inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold">
+                            {{ identity.completed_count or 0 }}/{{ identity.total_count or 0 }} complete
+                        </span>
+                    </div>
+                    <div class="space-y-3 p-5">
+                        <div class="grid gap-3 sm:grid-cols-2">
+                            <div class="min-w-0 rounded-xl border border-slate-200/80 bg-slate-50/60 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/30">
+                                <p class="text-xs font-medium text-slate-500 dark:text-slate-400">NIN</p>
+                                <p class="mt-1 text-sm font-semibold text-slate-900 dark:text-white">{{ identity.nin_masked or 'Not provided' }}</p>
+                            </div>
+                            <div class="min-w-0 rounded-xl border border-slate-200/80 bg-slate-50/60 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/30">
+                                <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Verification</p>
+                                <p class="mt-1 text-sm font-semibold text-slate-900 dark:text-white">{{ 'Verified' if identity.nin_verified else 'Unverified' }}</p>
+                            </div>
+                        </div>
+                        {% if identity.missing_labels %}
+                        <p class="status-foreground status-tone-warning text-xs">Missing: {{ identity.missing_labels }}</p>
+                        {% endif %}
+                    </div>
+                </div>
+
                 <!-- Contact Information Card -->
                 <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
                     <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
@@ -396,6 +438,15 @@
                                 {% else %}
                                 <p class="text-sm text-slate-400 dark:text-slate-500">Not provided</p>
                                 {% endif %}
+                            </div>
+                        </div>
+                        <div class="flex items-start gap-3">
+                            <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-violet-50 text-violet-600 dark:bg-violet-900/30 dark:text-violet-400">
+                                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6M7 4h10a2 2 0 012 2v12a2 2 0 01-2 2H7a2 2 0 01-2-2V6a2 2 0 012-2z"/></svg>
+                            </div>
+                            <div>
+                                <p class="text-xs font-medium text-slate-500 dark:text-slate-400">NIN</p>
+                                <p class="text-sm font-medium text-slate-900 dark:text-white">{{ identity.nin_masked or 'Not provided' }}</p>
                             </div>
                         </div>
                         <div class="flex items-start gap-3">
@@ -578,7 +629,9 @@
                                     </p>
                                     {% endif %}
                                 </div>
-                                <button type="submit" class="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-amber-700">
+                                <button type="submit"
+                                        onclick="return confirm('Open the customer portal AS this customer? You get their full read-write session (payments, plan changes); the action is audited.')"
+                                        class="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-amber-700">
                                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"/></svg>
                                     Open Portal
                                 </button>
@@ -634,7 +687,7 @@
                             <div class="min-w-0 rounded-xl border border-slate-200/80 bg-slate-50/60 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/30">
                                 <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Last Login</p>
                                 <p class="mt-1 text-sm font-semibold text-slate-700 dark:text-slate-300">
-                                    {{ customer_user_access.last_login_at.strftime('%b %d, %Y %H:%M') if customer_user_access.last_login_at else 'Never' }}
+                                    {{ customer_user_access.last_login_at | app_datetime('%b %d, %Y %H:%M', 'Never') }}
                                 </p>
                             </div>
                         </div>
@@ -679,7 +732,7 @@
                         </div>
                         <p class="text-xs text-slate-500 dark:text-slate-400">
                             {% if customer_user_access.invite_sent_at %}
-                            Invite sent {{ customer_user_access.invite_sent_at.strftime('%b %d, %Y %H:%M') }}.
+                            Invite sent {{ customer_user_access.invite_sent_at | app_datetime('%b %d, %Y %H:%M') }}.
                             {% else %}
                             No invite sent yet.
                             {% endif %}
@@ -722,18 +775,6 @@
                                     <div class="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-blue-100 to-blue-50 text-blue-600 dark:from-blue-900/40 dark:to-blue-900/20 dark:text-blue-400">
                                         <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
                                     </div>
-                                    {% set subscriber_status_dot = subscriber.status.value if subscriber.status else ('active' if subscriber.is_active else 'inactive') %}
-                                    {% set subscriber_status_ring = {
-                                        'active': 'bg-indigo-500',
-                                        'blocked': 'bg-rose-500',
-                                        'suspended': 'bg-amber-500',
-                                        'disabled': 'bg-slate-500',
-                                        'new': 'bg-blue-500',
-                                        'canceled': 'bg-rose-400',
-                                        'delinquent': 'bg-orange-500',
-                                        'inactive': 'bg-slate-400'
-                                    } %}
-                                    <span class="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full ring-2 ring-white dark:ring-slate-800 {{ subscriber_status_ring.get(subscriber_status_dot, 'bg-slate-400') }}"></span>
                                 </div>
                                 <div>
                                     <p class="text-sm font-semibold text-slate-900 dark:text-white">
@@ -744,9 +785,8 @@
                                 </div>
                             </div>
                             <div class="flex items-center gap-3">
-                                {% set subscriber_status = subscriber.status.value if subscriber.status else ('active' if subscriber.is_active else 'inactive') %}
-                                {% set subscriber_status_labels = {'active': 'Active', 'blocked': 'Blocked', 'suspended': 'Suspended', 'disabled': 'Disabled', 'new': 'New', 'canceled': 'Canceled', 'delinquent': 'Delinquent', 'inactive': 'Inactive'} %}
-                                {{ status_badge(subscriber_status_labels.get(subscriber_status, subscriber_status | title), subscriber_status if subscriber_status in subscriber_status_labels else 'default', size="sm") }}
+                                {% set subscriber_status_presentation = account_status_presentations.get(subscriber.id|string) %}
+                                {{ status_presentation_badge(subscriber_status_presentation, pulse=(subscriber_status_presentation.value == 'active'), size="sm") }}
                                 <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
                             </div>
                         </a>
@@ -791,21 +831,12 @@
                         <div class="px-5 py-4">
                             <div class="flex items-start justify-between">
                                 <div class="flex items-start gap-3">
-                                    <div class="flex h-10 w-10 items-center justify-center rounded-xl {% if sub_status == 'active' %}bg-green-50 text-green-600 dark:bg-green-900/30 dark:text-green-400{% elif sub_status in ['pending', 'suspended', 'delinquent'] %}bg-amber-50 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400{% elif sub_status in ['blocked', 'canceled', 'expired'] %}bg-rose-50 text-rose-600 dark:bg-rose-900/30 dark:text-rose-400{% else %}bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400{% endif %}">
-                                        {% if sub_status == 'active' %}
-                                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                                        {% elif sub_status in ['blocked', 'canceled', 'expired'] %}
-                                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-                                        {% elif sub_status in ['pending', 'suspended', 'delinquent'] %}
-                                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                                        {% else %}
-                                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4"/></svg>
-                                        {% endif %}
+                                    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400">
+                                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M12 5l7 7-7 7"/></svg>
                                     </div>
                                     <div>
                                         <a href="/admin/catalog/subscriptions/{{ subscription.id }}" class="text-sm font-semibold text-slate-900 transition-colors hover:text-amber-600 dark:text-white dark:hover:text-amber-400">{{ subscription.offer.name if subscription.offer else 'Subscription' }}</a>
-                                        {% set sub_status_labels = {'active': 'Active', 'blocked': 'Blocked', 'suspended': 'Suspended', 'disabled': 'Disabled', 'pending': 'Pending', 'stopped': 'Stopped', 'hidden': 'Hidden', 'archived': 'Archived', 'canceled': 'Canceled', 'expired': 'Expired'} %}
-                                        {{ status_badge(sub_status_labels.get(sub_status, sub_status|replace('_', ' ')|title), sub_status if sub_status in sub_status_labels else 'default', size="sm") }}
+                                        {{ status_presentation_badge(subscription_status_presentations.get(subscription.id|string), pulse=(sub_status == 'active'), size="sm") }}
                                         {% if show_service_assignments %}
                                         <div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
                                             {% if subscription.login %}
@@ -848,7 +879,7 @@
                 <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
                     <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
                         <div class="flex items-center gap-2">
-                            <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400">
+                            <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-primary-100 text-primary-600 dark:bg-primary-900/30 dark:text-primary-400">
                                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.142 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"/></svg>
                             </div>
                             <h3 class="font-semibold text-slate-900 dark:text-white">Network Access</h3>
@@ -861,20 +892,8 @@
                                 <p class="text-sm font-medium text-slate-900 dark:text-white">{{ card.offer_name }}</p>
                                 <div class="flex flex-wrap items-center justify-end gap-2">
                                     {% set card_conn = card.connection_status or {} %}
-                                    {% set card_conn_state = card_conn.state | default('offline') %}
-                                    <span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium
-                                        {% if card_conn_state == 'connected' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300
-                                        {% elif card_conn_state == 'stale' %}bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300
-                                        {% else %}bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300{% endif %}">
-                                        <span class="h-1.5 w-1.5 rounded-full
-                                            {% if card_conn_state == 'connected' %}bg-emerald-500
-                                            {% elif card_conn_state == 'stale' %}bg-amber-500
-                                            {% else %}bg-slate-400{% endif %}"></span>
-                                        {{ card_conn.label | default('Not connected') }}
-                                    </span>
-                                    {% set na_status = card.status %}
-                                    {% set na_labels = {'active': 'Active', 'blocked': 'Blocked', 'suspended': 'Suspended', 'disabled': 'Disabled'} %}
-                                    {{ status_badge(na_labels.get(na_status, na_status|title), na_status if na_status in na_labels else 'default', size="sm") }}
+                                    {{ status_presentation_badge(card_conn.status_presentation, size="sm") }}
+                                    {{ status_presentation_badge(card.status_presentation, size="sm") }}
                                 </div>
                             </div>
                             <div class="grid grid-cols-2 gap-3 text-sm">
@@ -883,7 +902,7 @@
                                 <div>
                                     <p class="text-xs text-slate-500 dark:text-slate-400">Connection</p>
                                     <p class="font-mono font-medium text-slate-900 dark:text-white">
-                                        {{ card_conn.identifier or ('Updated ' ~ card_conn.last_seen_at.strftime('%b %d, %H:%M')) }}
+                                        {{ card_conn.identifier or ('Updated ' ~ card_conn.last_seen_at | app_datetime('%b %d, %H:%M')) }}
                                     </p>
                                 </div>
                                 {% endif %}
@@ -944,7 +963,7 @@
                         </div>
                         <div>
                             <h3 class="font-semibold text-amber-900 dark:text-amber-200">Pending pin correction</h3>
-                            <p class="text-xs text-amber-700 dark:text-amber-300/80">Submitted {{ plr.created_at.strftime('%Y-%m-%d %H:%M') }} · awaiting review</p>
+                            <p class="text-xs text-amber-700 dark:text-amber-300/80">Submitted {{ plr.created_at | app_datetime('%Y-%m-%d %H:%M') }} · awaiting review</p>
                         </div>
                     </div>
                     <div class="space-y-3 p-5">
@@ -1042,6 +1061,19 @@
                                 class="mt-2 inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60">
                             Save coordinates
                         </button>
+                        {% if location_capture_enabled %}
+                        <button type="button"
+                                id="customer-location-confirm-btn"
+                                data-latitude-input="customer-map-latitude"
+                                data-longitude-input="customer-map-longitude"
+                                data-claimed-state="{{ customer.region or '' }}"
+                                data-claimed-lga="{{ customer.lga or '' }}"
+                                data-claimed-postcode="{{ customer.postal_code or '' }}"
+                                class="mt-2 ml-2 inline-flex items-center gap-2 rounded-lg border border-sky-300 bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-sky-700 dark:bg-sky-900/20 dark:text-sky-300">
+                            Confirm for NCC ledger
+                        </button>
+                        <p id="customer-location-confirm-status" class="mt-2 text-xs text-slate-500 dark:text-slate-400"></p>
+                        {% endif %}
                     </div>
                     <div class="px-5 pb-4 pt-2 text-xs text-slate-500 dark:text-slate-400">
                         <div id="customer-map-nearby-assets"></div>
@@ -1088,6 +1120,19 @@
                                 class="inline-flex items-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 dark:border-emerald-700/50 dark:bg-emerald-900/20 dark:text-emerald-300 disabled:cursor-not-allowed disabled:opacity-60">
                             Save coordinates
                         </button>
+                        {% if location_capture_enabled %}
+                        <button type="button"
+                                id="customer-location-confirm-btn"
+                                data-latitude-input="customer-latitude"
+                                data-longitude-input="customer-longitude"
+                                data-claimed-state="{{ customer.region or '' }}"
+                                data-claimed-lga="{{ customer.lga or '' }}"
+                                data-claimed-postcode="{{ customer.postal_code or '' }}"
+                                class="ml-2 inline-flex items-center gap-2 rounded-lg border border-sky-300 bg-sky-50 px-3 py-2 text-xs font-semibold text-sky-700 hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-sky-700 dark:bg-sky-900/20 dark:text-sky-300">
+                            Confirm for NCC ledger
+                        </button>
+                        <p id="customer-location-confirm-status" class="text-xs text-slate-500 dark:text-slate-400"></p>
+                        {% endif %}
                     </div>
                     {% else %}
                     <div class="px-5 py-8 text-center">
@@ -1123,7 +1168,7 @@
                                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
                             </div>
                             {% elif activity.type == 'payment' %}
-                            <div class="flex h-9 w-9 items-center justify-center rounded-full bg-green-100 text-green-600 ring-4 ring-white dark:bg-green-900/30 dark:text-green-400 dark:ring-slate-800">
+                            <div class="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-slate-600 ring-4 ring-white dark:bg-slate-700 dark:text-slate-300 dark:ring-slate-800">
                                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1"/></svg>
                             </div>
                             {% elif activity.type == 'subscription' %}
@@ -1164,7 +1209,7 @@
                             </p>
                             {% endif %}
                             <p class="mt-0.5 text-xs text-slate-400 dark:text-slate-500">
-                                {{ activity.timestamp.strftime('%b %d, %Y at %I:%M %p') if activity.timestamp else 'Unknown time' }}
+                                {{ activity.timestamp | app_datetime('%b %d, %Y at %I:%M %p', 'Unknown time') }}
                                 {% if activity.amount %}<span class="ml-2 font-medium text-slate-600 dark:text-slate-400">₦{{ '{:,.0f}'.format(activity.amount) }}</span>{% endif %}
                             </p>
                         </div>
@@ -1188,12 +1233,12 @@
                         <div class="flex-1 min-w-0 pt-1">
                             <p class="text-sm text-slate-700 dark:text-slate-300">
                                 <span class="font-medium text-slate-900 dark:text-white">Invoice {{ invoice.invoice_number | default('created') }}</span>
-                                {% set inv_status = invoice.status.value if invoice.status is not string and invoice.status else (invoice.status | default('draft')) %}
-                                <span class="text-slate-500 dark:text-slate-400"> - {{ inv_status | title }}</span>
+                                {% set invoice_presentation = invoice_status_presentations.get(invoice.id|string) %}
+                                <span class="text-slate-500 dark:text-slate-400"> - {{ invoice_presentation.label }}</span>
                             </p>
                             <p class="mt-0.5 text-xs text-slate-400 dark:text-slate-500">
                                 {% set inv_date = invoice.issued_at or invoice.created_at %}
-                                {{ inv_date.strftime('%b %d, %Y') if inv_date else 'Unknown' }}
+                                {{ inv_date | app_datetime('%b %d, %Y', 'Unknown', include_tz=False) }}
                                 {% set amount = invoice.total_amount if invoice.total_amount is defined and invoice.total_amount is not none else (invoice.total if invoice.total is not none else 0) %}
                                 <span class="ml-2 font-medium text-slate-600 dark:text-slate-400">₦{{ '{:,.0f}'.format(amount) }}</span>
                             </p>
@@ -1204,6 +1249,7 @@
                     </div>
                     {% endfor %}
                     {% for payment in payments[:2] %}
+                    {% set payment_presentation = payment_status_presentations.get(payment.id|string) %}
                     <div class="relative flex gap-4">
                         <div class="relative z-10 flex-shrink-0">
                             <div class="flex h-9 w-9 items-center justify-center rounded-full bg-green-100 text-green-600 ring-4 ring-white dark:bg-green-900/30 dark:text-green-400 dark:ring-slate-800">
@@ -1212,13 +1258,12 @@
                         </div>
                         <div class="flex-1 min-w-0 pt-1">
                             <p class="text-sm text-slate-700 dark:text-slate-300">
-                                <span class="font-medium text-slate-900 dark:text-white">Payment received</span>
-                                {% set pay_status = payment.status.value if payment.status is not string and payment.status else (payment.status | default('pending')) %}
-                                <span class="text-slate-500 dark:text-slate-400"> - {{ pay_status | title }}</span>
+                                <span class="font-medium text-slate-900 dark:text-white">Payment</span>
+                                <span class="text-slate-500 dark:text-slate-400"> - {{ payment_presentation.label }}</span>
                             </p>
                             <p class="mt-0.5 text-xs text-slate-400 dark:text-slate-500">
-                                {{ (payment.paid_at or payment.created_at).strftime('%b %d, %Y at %I:%M %p') if payment.paid_at or payment.created_at else 'Unknown' }}
-                                <span class="ml-2 font-medium text-green-600 dark:text-green-400">₦{{ '{:,.0f}'.format(payment.amount | default(0)) }}</span>
+                                {{ (payment.paid_at or payment.created_at) | app_datetime('%b %d, %Y at %I:%M %p', 'Unknown') }}
+                                <span class="ml-2 font-medium text-slate-600 dark:text-slate-300">₦{{ '{:,.0f}'.format(payment.amount | default(0)) }}</span>
                             </p>
                         </div>
                     </div>
@@ -1240,7 +1285,11 @@
     <!-- Tab Content: Billing -->
     <div x-show="activeTab === 'billing'" x-cloak class="space-y-6">
         <!-- Billing Overview Cards -->
-        <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+            <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+                <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Current Balance</p>
+                <p class="mt-2 text-3xl font-bold tabular-nums text-slate-900 dark:text-white">₦{{ '{:,.2f}'.format(financials.current_balance | default(0)) }}</p>
+            </div>
             <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
                 <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Balance Due</p>
                 <p class="mt-2 text-3xl font-bold tabular-nums text-slate-900 dark:text-white">₦{{ '{:,.2f}'.format(stats.balance_due | default(0)) }}</p>
@@ -1259,7 +1308,71 @@
             </div>
         </div>
 
-        <div class="grid gap-6 lg:grid-cols-2">
+        {% set billing_workspace = billing_workspace | default({}) %}
+        {% set billing_counts = billing_workspace.billing_workspace_counts | default({}) %}
+        {% set payment_proofs = billing_workspace.payment_proofs | default([]) %}
+        {% set credit_notes = billing_workspace.credit_notes | default([]) %}
+        {% set credit_applications = billing_workspace.credit_applications | default([]) %}
+        {% set service_extension_entries = billing_workspace.service_extensions | default([]) %}
+        {% set billing_account_id = accounts[0].id if accounts and accounts|length == 1 else customer.id %}
+
+        <div class="grid gap-3 lg:grid-cols-[1fr_auto] lg:items-center">
+            <div class="overflow-x-auto rounded-2xl border border-slate-200/70 bg-slate-50 p-1 shadow-sm dark:border-slate-700/70 dark:bg-slate-900/40">
+                <div class="flex min-w-max gap-1">
+                    {% for tab in [
+                        {'id': 'overview', 'label': 'Overview', 'count': none},
+                        {'id': 'invoices', 'label': 'Invoices', 'count': invoices|length},
+                        {'id': 'payments', 'label': 'Payments', 'count': payments|length},
+                        {'id': 'proofs', 'label': 'Proofs', 'count': payment_proofs|length},
+                        {'id': 'credits', 'label': 'Credits', 'count': credit_notes|length},
+                        {'id': 'extensions', 'label': 'Extensions', 'count': service_extension_entries|length},
+                        {'id': 'activity', 'label': 'Activity', 'count': credit_applications|length}
+                    ] %}
+                    <button type="button"
+                            @click="billingSubTab = '{{ tab.id }}'"
+                            :class="billingSubTab === '{{ tab.id }}' ? 'bg-white text-slate-950 shadow-sm ring-1 ring-slate-200 dark:bg-slate-800 dark:text-white dark:ring-slate-700' : 'text-slate-600 hover:bg-white/70 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/70 dark:hover:text-white'"
+                            class="inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold transition">
+                        {{ tab.label }}
+                        {% if tab.count is not none %}
+                        <span class="rounded-full bg-slate-200 px-1.5 py-0.5 text-[11px] font-bold text-slate-700 dark:bg-slate-700 dark:text-slate-300">{{ tab.count }}</span>
+                        {% endif %}
+                    </button>
+                    {% endfor %}
+                </div>
+            </div>
+            <div class="flex flex-wrap gap-2 lg:justify-end">
+                <a href="/admin/billing/credits/new?account_id={{ billing_account_id }}"
+                   class="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v12m6-6H6"/></svg>
+                    Issue Credit
+                </a>
+                <a href="/admin/billing/service-extensions/new"
+                   class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+                    <svg class="h-4 w-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3M5 11h14M7 21h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                    Extend Service
+                </a>
+            </div>
+        </div>
+
+        <div x-show="billingSubTab === 'overview'" x-cloak class="grid gap-4 md:grid-cols-3">
+            <div class="rounded-2xl border border-cyan-200/70 bg-cyan-50 p-4 shadow-sm dark:border-cyan-900/50 dark:bg-slate-800">
+                <p class="text-xs font-semibold uppercase tracking-wider text-cyan-700 dark:text-cyan-300">Pending Proofs</p>
+                <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">{{ billing_counts.pending_payment_proofs | default(0) }}</p>
+                <button type="button" @click="billingSubTab = 'proofs'" class="mt-2 text-xs font-semibold text-cyan-700 hover:text-cyan-800 dark:text-cyan-300">Review proofs</button>
+            </div>
+            <div class="rounded-2xl border border-emerald-200/70 bg-emerald-50 p-4 shadow-sm dark:border-emerald-900/50 dark:bg-emerald-950/20">
+                <p class="text-xs font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-300">Open Credits</p>
+                <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">₦{{ '{:,.2f}'.format(billing_counts.open_credit_amount | default(0)) }}</p>
+                <button type="button" @click="billingSubTab = 'credits'" class="mt-2 text-xs font-semibold text-emerald-700 hover:text-emerald-800 dark:text-emerald-300">{{ billing_counts.open_credit_notes | default(0) }} available credit note{{ 's' if (billing_counts.open_credit_notes | default(0)) != 1 else '' }}</button>
+            </div>
+            <div class="rounded-2xl border border-indigo-200/70 bg-indigo-50 p-4 shadow-sm dark:border-indigo-900/50 dark:bg-slate-800">
+                <p class="text-xs font-semibold uppercase tracking-wider text-indigo-700 dark:text-indigo-300">Service Extensions</p>
+                <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">{{ billing_counts.service_extensions | default(0) }}</p>
+                <button type="button" @click="billingSubTab = 'extensions'" class="mt-2 text-xs font-semibold text-indigo-700 hover:text-indigo-800 dark:text-indigo-300">View extension history</button>
+            </div>
+        </div>
+
+        <div x-show="billingSubTab === 'overview'" x-cloak class="grid gap-6 lg:grid-cols-2">
             <!-- Recent Invoices -->
             <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
                 <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
@@ -1269,28 +1382,20 @@
                 {% if invoices %}
                 <div class="divide-y divide-slate-100 dark:divide-slate-700">
                     {% for invoice in invoices[:5] %}
-                    {% set status = invoice.status | default('draft') %}
-                    {% set status_val = status.value if status is not string else status %}
                     <a href="/admin/billing/invoices/{{ invoice.id }}" class="flex items-center justify-between px-5 py-3 transition hover:bg-slate-50 dark:hover:bg-slate-700/30">
                         <div class="flex items-center gap-3">
-                            <div class="flex h-9 w-9 items-center justify-center rounded-lg {% if status_val == 'paid' %}bg-green-50 text-green-600 dark:bg-green-900/30 dark:text-green-400{% elif status_val == 'overdue' %}bg-red-50 text-red-600 dark:bg-red-900/30 dark:text-red-400{% else %}bg-amber-50 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400{% endif %}">
+                            <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-primary-50 text-primary-600 dark:bg-primary-900/30 dark:text-primary-400">
                                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
                             </div>
                             <div>
                                 <p class="text-sm font-medium text-slate-900 dark:text-white">{{ invoice.invoice_number | default('Invoice') }}</p>
-                                <p class="text-xs text-slate-500 dark:text-slate-400">{{ (invoice.issued_at or invoice.created_at).strftime('%b %d, %Y') if (invoice.issued_at or invoice.created_at) else 'N/A' }}</p>
+                                <p class="text-xs text-slate-500 dark:text-slate-400">{{ (invoice.issued_at or invoice.created_at) | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }}</p>
                             </div>
                         </div>
                         <div class="text-right">
                             {% set amount = invoice.total_amount if invoice.total_amount is defined and invoice.total_amount is not none else (invoice.total if invoice.total is not none else 0) %}
                             <p class="text-sm font-semibold text-slate-900 dark:text-white">₦{{ '{:,.2f}'.format(amount) }}</p>
-                            {% if status_val == 'paid' %}
-                            <span class="text-xs text-green-600 dark:text-green-400">Paid</span>
-                            {% elif status_val == 'overdue' %}
-                            <span class="text-xs text-red-600 dark:text-red-400">Overdue</span>
-                            {% else %}
-                            <span class="text-xs text-amber-600 dark:text-amber-400">{{ status_val | title }}</span>
-                            {% endif %}
+                            {{ status_presentation_badge(invoice_status_presentations.get(invoice.id|string), size="sm") }}
                         </div>
                     </a>
                     {% endfor %}
@@ -1306,25 +1411,25 @@
             <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
                 <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
                     <h3 class="font-semibold text-slate-900 dark:text-white">Recent Payments</h3>
-                    <a href="/admin/billing/payments" class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">View all</a>
+                    <a href="/admin/billing/payments" class="text-xs font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">View all</a>
                 </div>
                 {% if payments %}
                 <div class="divide-y divide-slate-100 dark:divide-slate-700">
                     {% for payment in payments[:5] %}
-                    {% set pay_status = payment.status.value if payment.status is not string and payment.status else (payment.status | default('pending')) %}
+                    {% set payment_presentation = payment_status_presentations.get(payment.id|string) %}
                     <div class="flex items-center justify-between px-5 py-3">
                         <div class="flex items-center gap-3">
-                            <div class="flex h-9 w-9 items-center justify-center rounded-lg {% if pay_status == 'succeeded' %}bg-green-50 text-green-600 dark:bg-green-900/30 dark:text-green-400{% elif pay_status == 'failed' %}bg-red-50 text-red-600 dark:bg-red-900/30 dark:text-red-400{% else %}bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400{% endif %}">
+                            <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-primary-50 text-primary-600 dark:bg-primary-900/30 dark:text-primary-400">
                                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                             </div>
                             <div>
                                 <p class="text-sm font-medium text-slate-900 dark:text-white">{{ (payment.id|string)[0:8] | upper }}</p>
-                                <p class="text-xs text-slate-500 dark:text-slate-400">{{ payment.paid_at.strftime('%b %d, %Y') if payment.paid_at else payment.created_at.strftime('%b %d, %Y') }}</p>
+                                <p class="text-xs text-slate-500 dark:text-slate-400">{{ payment.paid_at | app_datetime('%b %d, %Y', include_tz=False) if payment.paid_at else payment.created_at | app_datetime('%b %d, %Y', include_tz=False) }}</p>
                             </div>
                         </div>
                         <div class="text-right">
                             <p class="text-sm font-semibold text-slate-900 dark:text-white">₦{{ '{:,.2f}'.format(payment.amount | default(0)) }}</p>
-                            <span class="text-xs {% if pay_status == 'succeeded' %}text-green-600 dark:text-green-400{% elif pay_status == 'failed' %}text-red-600 dark:text-red-400{% else %}text-slate-500{% endif %}">{{ pay_status | title }}</span>
+                            {{ status_presentation_badge(payment_presentation, size="sm") }}
                         </div>
                     </div>
                     {% endfor %}
@@ -1335,6 +1440,199 @@
                 </div>
                 {% endif %}
             </div>
+        </div>
+
+        <div x-show="billingSubTab === 'invoices'" x-cloak class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
+                <h3 class="font-semibold text-slate-900 dark:text-white">Invoices</h3>
+                <a href="/admin/billing/invoices?customer_ref={{ customer.id }}" class="text-xs font-semibold text-amber-600 hover:text-amber-700 dark:text-amber-400">Open invoice list</a>
+            </div>
+            {% if invoices %}
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-slate-100 dark:divide-slate-700">
+                    <thead class="bg-slate-50 dark:bg-slate-900/40">
+                        <tr>
+                            <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Invoice</th>
+                            <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Date</th>
+                            <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Status</th>
+                            <th class="px-5 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">Balance</th>
+                            <th class="px-5 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">Total</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+                        {% for invoice in invoices %}
+                        <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/30">
+                            <td class="px-5 py-3">
+                                <a href="/admin/billing/invoices/{{ invoice.id }}" class="text-sm font-semibold text-slate-900 hover:text-amber-600 dark:text-white dark:hover:text-amber-400">{{ invoice.invoice_number | default((invoice.id|string)[:8]|upper) }}</a>
+                            </td>
+                            <td class="px-5 py-3 text-sm text-slate-500 dark:text-slate-400">{{ (invoice.issued_at or invoice.created_at) | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }}</td>
+                            <td class="px-5 py-3">{{ status_presentation_badge(invoice_status_presentations.get(invoice.id|string), size="sm") }}</td>
+                            <td class="px-5 py-3 text-right text-sm font-semibold tabular-nums text-slate-900 dark:text-white">₦{{ '{:,.2f}'.format(invoice.balance_due | default(0)) }}</td>
+                            <td class="px-5 py-3 text-right text-sm font-semibold tabular-nums text-slate-900 dark:text-white">₦{{ '{:,.2f}'.format(invoice.total_amount if invoice.total_amount is defined and invoice.total_amount is not none else invoice.total | default(0)) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="px-5 py-10 text-center text-sm text-slate-500 dark:text-slate-400">No invoices found.</div>
+            {% endif %}
+        </div>
+
+        <div x-show="billingSubTab === 'payments'" x-cloak class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
+                <h3 class="font-semibold text-slate-900 dark:text-white">Payments</h3>
+                <a href="/admin/billing/payments/new?account={{ billing_account_id }}" class="text-xs font-semibold text-amber-600 hover:text-amber-700 dark:text-amber-400">Record payment</a>
+            </div>
+            {% if payments %}
+            <div class="divide-y divide-slate-100 dark:divide-slate-700">
+                {% for payment in payments %}
+                {% set payment_presentation = payment_status_presentations.get(payment.id|string) %}
+                <a href="/admin/billing/payments/{{ payment.id }}" class="flex items-center justify-between gap-4 px-5 py-3 transition hover:bg-slate-50 dark:hover:bg-slate-700/30">
+                    <div>
+                        <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ payment.receipt_number or (payment.id|string)[:8]|upper }}</p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">{{ payment.paid_at | app_datetime('%b %d, %Y', include_tz=False) if payment.paid_at else payment.created_at | app_datetime('%b %d, %Y', include_tz=False) }}</p>
+                    </div>
+                    <div class="text-right">
+                        <p class="text-sm font-bold tabular-nums text-slate-900 dark:text-white">₦{{ '{:,.2f}'.format(payment.amount | default(0)) }}</p>
+                        <div class="mt-1">{{ status_presentation_badge(payment_presentation, size="sm") }}</div>
+                    </div>
+                </a>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="px-5 py-10 text-center text-sm text-slate-500 dark:text-slate-400">No payments recorded.</div>
+            {% endif %}
+        </div>
+
+        <div x-show="billingSubTab === 'proofs'" x-cloak class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
+                <h3 class="font-semibold text-slate-900 dark:text-white">Payment Proofs</h3>
+                <a href="/admin/billing/payment-proofs" class="text-xs font-semibold text-amber-600 hover:text-amber-700 dark:text-amber-400">Review queue</a>
+            </div>
+            {% if payment_proofs %}
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-slate-100 dark:divide-slate-700">
+                    <thead class="bg-slate-50 dark:bg-slate-900/40">
+                        <tr>
+                            <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Reference</th>
+                            <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Bank</th>
+                            <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Submitted</th>
+                            <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Status</th>
+                            <th class="px-5 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">Amount</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+                        {% for proof in payment_proofs %}
+                        {% set proof_status = proof.status.value if proof.status else 'submitted' %}
+                        <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/30">
+                            <td class="px-5 py-3">
+                                <a href="/admin/billing/payment-proofs/{{ proof.id }}" class="text-sm font-semibold text-slate-900 hover:text-amber-600 dark:text-white dark:hover:text-amber-400">{{ proof.reference or (proof.id|string)[:8]|upper }}</a>
+                                {% if proof.payment_id %}<p class="text-xs text-slate-500 dark:text-slate-400">Payment {{ (proof.payment_id|string)[:8]|upper }}</p>{% endif %}
+                            </td>
+                            <td class="px-5 py-3 text-sm text-slate-600 dark:text-slate-300">{{ proof.bank_name or 'N/A' }}</td>
+                            <td class="px-5 py-3 text-sm text-slate-500 dark:text-slate-400">{{ proof.created_at | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }}</td>
+                            <td class="px-5 py-3 text-sm text-slate-600 dark:text-slate-300">{{ proof_status | title }}</td>
+                            <td class="px-5 py-3 text-right text-sm font-bold tabular-nums text-slate-900 dark:text-white">{{ proof.currency }} {{ '{:,.2f}'.format(proof.amount | default(0)) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="px-5 py-10 text-center text-sm text-slate-500 dark:text-slate-400">No payment proofs submitted for this customer.</div>
+            {% endif %}
+        </div>
+
+        <div x-show="billingSubTab === 'credits'" x-cloak class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
+                <h3 class="font-semibold text-slate-900 dark:text-white">Credit Notes</h3>
+                <a href="/admin/billing/credits/new?account_id={{ billing_account_id }}" class="text-xs font-semibold text-emerald-600 hover:text-emerald-700 dark:text-emerald-400">Issue credit</a>
+            </div>
+            {% if credit_notes %}
+            <div class="divide-y divide-slate-100 dark:divide-slate-700">
+                {% for credit in credit_notes %}
+                {% set credit_status = credit.status.value if credit.status else 'draft' %}
+                {% set credit_available = (credit.total or 0) - (credit.applied_total or 0) %}
+                <div class="flex flex-col gap-3 px-5 py-4 md:flex-row md:items-center md:justify-between">
+                    <div>
+                        <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ credit.credit_number or (credit.id|string)[:8]|upper }}</p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">{{ credit.created_at | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }} · {{ credit_status | replace('_', ' ') | title }}</p>
+                        {% if credit.memo %}<p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ credit.memo }}</p>{% endif %}
+                    </div>
+                    <div class="flex items-center gap-4 md:text-right">
+                        <div>
+                            <p class="text-sm font-bold tabular-nums text-slate-900 dark:text-white">{{ credit.currency }} {{ '{:,.2f}'.format(credit.total | default(0)) }}</p>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">{{ credit.currency }} {{ '{:,.2f}'.format(credit_available) }} available</p>
+                        </div>
+                        {% if credit_available > 0 %}
+                        <button type="button" @click="billingSubTab = 'invoices'" class="rounded-lg border border-emerald-200 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 dark:border-emerald-900/60 dark:text-emerald-300 dark:hover:bg-emerald-950/30">Apply via invoice</button>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="px-5 py-10 text-center text-sm text-slate-500 dark:text-slate-400">No credit notes found.</div>
+            {% endif %}
+        </div>
+
+        <div x-show="billingSubTab === 'extensions'" x-cloak class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
+                <h3 class="font-semibold text-slate-900 dark:text-white">Service Extension History</h3>
+                <a href="/admin/billing/service-extensions/new" class="text-xs font-semibold text-indigo-600 hover:text-indigo-700 dark:text-indigo-400">Create extension</a>
+            </div>
+            {% if service_extension_entries %}
+            <div class="divide-y divide-slate-100 dark:divide-slate-700">
+                {% for entry in service_extension_entries %}
+                {% set extension = entry.extension %}
+                {% set extension_status = extension.status.value if extension and extension.status else 'applied' %}
+                <a href="/admin/billing/service-extensions/{{ extension.id if extension else entry.extension_id }}" class="block px-5 py-4 transition hover:bg-slate-50 dark:hover:bg-slate-700/30">
+                    <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                        <div>
+                            <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ extension.reason if extension else 'Service extension' }}</p>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">
+                                {{ entry.created_at | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }}
+                                {% if extension %} · {{ extension.days }} day{{ 's' if extension.days != 1 else '' }} · {{ extension_status | title }}{% endif %}
+                            </p>
+                        </div>
+                        <div class="text-sm text-slate-600 dark:text-slate-300 md:text-right">
+                            <p>Previous: {{ entry.previous_next_billing_at | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }}</p>
+                            <p>New: {{ entry.new_next_billing_at | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }}</p>
+                        </div>
+                    </div>
+                </a>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="px-5 py-10 text-center text-sm text-slate-500 dark:text-slate-400">No service extensions applied to this customer.</div>
+            {% endif %}
+        </div>
+
+        <div x-show="billingSubTab === 'activity'" x-cloak class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
+                <h3 class="font-semibold text-slate-900 dark:text-white">Credit Application Activity</h3>
+                <a href="/admin/billing/ledger?account={{ billing_account_id }}" class="text-xs font-semibold text-amber-600 hover:text-amber-700 dark:text-amber-400">View ledger</a>
+            </div>
+            {% if credit_applications %}
+            <div class="divide-y divide-slate-100 dark:divide-slate-700">
+                {% for application in credit_applications %}
+                <div class="flex flex-col gap-3 px-5 py-4 md:flex-row md:items-center md:justify-between">
+                    <div>
+                        <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ application.credit_note.credit_number if application.credit_note else (application.credit_note_id|string)[:8]|upper }}</p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">
+                            Applied {{ application.created_at | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }}
+                            {% if application.invoice %} to {{ application.invoice.invoice_number or (application.invoice.id|string)[:8]|upper }}{% endif %}
+                        </p>
+                        {% if application.memo %}<p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ application.memo }}</p>{% endif %}
+                    </div>
+                    <p class="text-sm font-bold tabular-nums text-emerald-700 dark:text-emerald-300">₦{{ '{:,.2f}'.format(application.amount | default(0)) }}</p>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="px-5 py-10 text-center text-sm text-slate-500 dark:text-slate-400">No credit applications recorded.</div>
+            {% endif %}
         </div>
     </div>
 
@@ -1443,10 +1741,31 @@
                 {% if accounts and accounts|length == 1 %}
                     {% set subscription_link = "/admin/catalog/subscriptions/new?account_id=" ~ accounts[0].id %}
                 {% endif %}
-                <a href="{{ subscription_link }}" class="inline-flex items-center gap-1 text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">
-                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
-                    New Subscription
-                </a>
+                <div class="flex flex-wrap items-center justify-end gap-2">
+                    {% set repair_state = access_repair_state | default({'enabled': false, 'reason': 'Repair is not available.'}) %}
+                    {% if repair_state.enabled %}
+                    <button type="button"
+                            hx-post="/admin/customers/{{ customer_type }}/{{ customer.id }}/repair-access-state"
+                            hx-confirm="Repair access state for this customer?"
+                            title="{{ repair_state.reason }}"
+                            class="inline-flex items-center gap-1.5 rounded-lg border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 shadow-sm transition hover:bg-sky-100 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 dark:border-sky-900/60 dark:bg-sky-900/20 dark:text-sky-300 dark:hover:bg-sky-900/40 dark:focus:ring-offset-slate-800">
+                        <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                        Repair Access State
+                    </button>
+                    {% else %}
+                    <button type="button"
+                            disabled
+                            title="{{ repair_state.reason }}"
+                            class="inline-flex cursor-not-allowed items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-400 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-500">
+                        <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                        Repair Access State
+                    </button>
+                    {% endif %}
+                    <a href="{{ subscription_link }}" class="inline-flex items-center gap-1 text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">
+                        <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                        New Subscription
+                    </a>
+                </div>
             </div>
             {% if subscriptions %}
             <div class="divide-y divide-slate-100 dark:divide-slate-700">
@@ -1463,20 +1782,13 @@
                 <div x-show="showAllSubscriptions || '{{ sub_status }}' === 'active'" x-cloak class="px-5 py-4 hover:bg-slate-50 dark:hover:bg-slate-700/30 transition">
                     <div class="flex items-start justify-between">
                         <div class="flex items-start gap-4">
-                            <div class="flex h-12 w-12 items-center justify-center rounded-xl {% if sub_status == 'active' %}bg-green-50 text-green-600 dark:bg-green-900/30 dark:text-green-400{% elif sub_status in ['pending', 'suspended'] %}bg-amber-50 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400{% else %}bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400{% endif %}">
-                                {% if sub_status == 'active' %}
-                                <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                                {% elif sub_status == 'suspended' %}
-                                <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                                {% else %}
-                                <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                                {% endif %}
+                            <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400">
+                                <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M12 5l7 7-7 7"/></svg>
                             </div>
                             <div>
                                 <div class="flex items-center gap-2">
                                     <a href="/admin/catalog/subscriptions/{{ subscription.id }}" class="text-sm font-semibold text-slate-900 transition-colors hover:text-amber-600 dark:text-white dark:hover:text-amber-400">{{ subscription.offer.name if subscription.offer else 'Subscription' }}</a>
-                                    {% set sub_status_labels = {'active': 'Active', 'blocked': 'Blocked', 'suspended': 'Suspended', 'disabled': 'Disabled', 'pending': 'Pending', 'stopped': 'Stopped', 'hidden': 'Hidden', 'archived': 'Archived', 'canceled': 'Canceled', 'expired': 'Expired'} %}
-                                    {{ status_badge(sub_status_labels.get(sub_status, sub_status|replace('_', ' ')|title), sub_status if sub_status in sub_status_labels else 'default', size="sm") }}
+                                    {{ status_presentation_badge(subscription_status_presentations.get(subscription.id|string), pulse=(sub_status == 'active'), size="sm") }}
                                 </div>
                                 <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
                                     {% if account and account.account_number %}
@@ -1512,7 +1824,7 @@
                                     {% if show_service_assignments and subscription.next_billing_at %}
                                     <span class="flex items-center gap-1">
                                         <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
-                                        Next bill: {{ subscription.next_billing_at.strftime('%b %d, %Y') }}
+                                        Next bill: {{ subscription.next_billing_at | app_datetime('%b %d, %Y', include_tz=False) }}
                                     </span>
                                     {% endif %}
                                 </div>
@@ -1542,17 +1854,9 @@
                                 {% endif %}
                                 {% if show_service_assignments %}
                                 {% set sub_conn = (connection_by_subscription or {}).get(subscription.id|string, {}) %}
-                                {% set sub_conn_state = sub_conn.state | default('offline') %}
-                                <p class="flex w-24 items-center justify-center gap-1 whitespace-nowrap text-[10px] font-medium
-                                    {% if sub_conn_state == 'connected' %}text-emerald-600 dark:text-emerald-400
-                                    {% elif sub_conn_state == 'stale' %}text-amber-600 dark:text-amber-400
-                                    {% else %}text-slate-500 dark:text-slate-400{% endif %}">
-                                    <span class="h-1.5 w-1.5 rounded-full
-                                        {% if sub_conn_state == 'connected' %}bg-emerald-500
-                                        {% elif sub_conn_state == 'stale' %}bg-amber-500
-                                        {% else %}bg-slate-400{% endif %}"></span>
-                                    {{ sub_conn.label | default('Not connected') }}
-                                </p>
+                                <div class="w-24 text-center">
+                                    {{ status_presentation_badge(sub_conn.status_presentation, size="sm") }}
+                                </div>
                                 {% endif %}
                             </div>
                         </div>
@@ -1732,7 +2036,7 @@
                                 <p class="truncate text-sm font-semibold text-slate-900 dark:text-white">{{ log.subject or log.recipient or log.channel.value | replace('_', ' ') | title }}</p>
                                 <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ log.channel.value | replace('_', ' ') | title }} · {{ log.direction.value | title }} · {{ log.status.value | title }}</p>
                             </div>
-                            <span class="whitespace-nowrap text-xs text-slate-500 dark:text-slate-400">{{ (log.sent_at or log.created_at).strftime('%b %d, %Y') if (log.sent_at or log.created_at) else 'N/A' }}</span>
+                            <span class="whitespace-nowrap text-xs text-slate-500 dark:text-slate-400">{{ (log.sent_at or log.created_at) | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }}</span>
                         </div>
                         {% if log.body %}
                         <p class="mt-2 line-clamp-2 text-sm text-slate-600 dark:text-slate-300">{{ log.body }}</p>
@@ -1756,7 +2060,7 @@
                     {% for order in service_orders %}
                     <a href="/admin/provisioning/orders/{{ order.id }}" class="block px-5 py-4 transition hover:bg-slate-50 dark:hover:bg-slate-700/30">
                         <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ order.order_type.value | replace('_', ' ') | title if order.order_type else 'Service Order' }}</p>
-                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ order.status.value | replace('_', ' ') | title }} · {{ order.created_at.strftime('%b %d, %Y') if order.created_at else 'N/A' }}</p>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ order.status.value | replace('_', ' ') | title }} · {{ order.created_at | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }}</p>
                     </a>
                     {% endfor %}
                 </div>
@@ -1858,7 +2162,7 @@
                             {% for case in dunning_cases[:3] %}
                             <div class="rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-900/40">
                                 <p class="text-sm font-medium text-slate-900 dark:text-white">{{ case.status.value | title }} case</p>
-                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Step {{ case.current_step or 0 }} · {{ case.started_at.strftime('%b %d, %Y') if case.started_at else 'N/A' }}</p>
+                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Step {{ case.current_step or 0 }} · {{ case.started_at | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }}</p>
                             </div>
                             {% endfor %}
                         </div>
@@ -1905,7 +2209,7 @@
                 <div x-show="networkDetailModalType === 'cpe'" class="space-y-3">
                     {% if cpe_devices %}
                     {% for cpe in cpe_devices %}
-                    <a href="/admin/network/cpes/{{ cpe.id }}" class="block rounded-xl border border-slate-200 px-4 py-3 transition hover:border-blue-200 hover:bg-blue-50/60 dark:border-slate-700 dark:hover:border-blue-900/60 dark:hover:bg-blue-900/10">
+                    <a href="/admin/network/cpes/{{ cpe.id }}" class="block rounded-xl border border-slate-200 px-4 py-3 transition hover:border-primary-200 hover:bg-primary-50/60 dark:border-slate-700 dark:hover:border-primary-900/60 dark:hover:bg-primary-900/10">
                         <div class="flex items-start justify-between gap-4">
                             <div class="min-w-0">
                                 <p class="truncate text-sm font-semibold text-slate-900 dark:text-white">{{ cpe.serial_number or cpe.mac_address or 'Unknown CPE' }}</p>
@@ -1914,7 +2218,8 @@
                                 <p class="mt-1 font-mono text-xs text-slate-500 dark:text-slate-400">{{ cpe.mac_address }}</p>
                                 {% endif %}
                             </div>
-                            <span class="shrink-0 rounded-full px-2 py-0.5 text-xs font-medium {% if cpe.status and cpe.status.value == 'active' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400{% else %}bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400{% endif %}">
+                            {% set cpe_tone = 'positive' if cpe.status and cpe.status.value == 'active' else 'neutral' %}
+                            <span class="status-tone status-tone-{{ cpe_tone }} shrink-0 rounded-full px-2 py-0.5 text-xs font-medium">
                                 {{ cpe.status.value | title if cpe.status else 'Unknown' }}
                             </span>
                         </div>
@@ -2244,10 +2549,10 @@
                     </div>
                     <div>
                         <label class="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">Template</label>
-                        <select x-model="sendMessageForm.templateId" class="block w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-amber-300 focus:outline-none focus:ring-4 focus:ring-amber-500/15 dark:border-slate-700 dark:bg-slate-950 dark:text-white">
+                        <select x-model="sendMessageForm.templateId" @change="handleTemplateSelection()" class="block w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-amber-300 focus:outline-none focus:ring-4 focus:ring-amber-500/15 dark:border-slate-700 dark:bg-slate-950 dark:text-white">
                             <option value="">Select a template</option>
                             <template x-for="template in templatesForSelectedChannel()" :key="template.id">
-                                <option :value="template.id" x-text="template.name"></option>
+                                <option :value="template.id" x-text="template.label || template.name"></option>
                             </template>
                         </select>
                     </div>
@@ -2267,7 +2572,7 @@
                 <p class="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">Selected Template</p>
                 <template x-if="selectedTemplate()">
                     <div class="mt-2 space-y-2">
-                        <p class="text-sm font-semibold text-slate-900 dark:text-white" x-text="selectedTemplate().name"></p>
+                        <p class="text-sm font-semibold text-slate-900 dark:text-white" x-text="selectedTemplate().label || selectedTemplate().name"></p>
                         <p class="text-xs text-slate-500 dark:text-slate-400" x-text="selectedTemplate().code"></p>
                         <p class="rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-600 dark:bg-slate-800 dark:text-slate-300" x-show="selectedTemplate().subject" x-text="selectedTemplate().subject"></p>
                     </div>
@@ -2276,10 +2581,43 @@
                     <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">Choose a template to queue the message for this customer.</p>
                 </template>
             </div>
+            <div x-show="selectedTemplate() && sendMessageForm.channel === 'whatsapp'"
+                 class="rounded-xl border border-slate-200 bg-white px-4 py-4 dark:border-slate-700 dark:bg-slate-900">
+                <div class="flex items-start justify-between gap-4">
+                    <div>
+                        <p class="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">WhatsApp Parameters</p>
+                        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Values are sent as Meta template body parameters.</p>
+                    </div>
+                    <span x-show="whatsappTemplateLoading" class="text-xs font-semibold text-amber-600 dark:text-amber-300">Loading...</span>
+                </div>
+                <p x-show="whatsappTemplateError" class="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-300" x-text="whatsappTemplateError"></p>
+                <template x-if="whatsappTemplateBody">
+                    <p class="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-600 dark:bg-slate-800 dark:text-slate-300" x-text="whatsappTemplateBody"></p>
+                </template>
+                <div class="mt-4 grid gap-3 sm:grid-cols-2" x-show="whatsappTemplateVariables.length">
+                    <template x-for="variable in whatsappTemplateVariables" :key="variable.key">
+                        <div>
+                            <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300" x-text="variableLabel(variable)"></label>
+                            <select x-model="sendMessageForm.templateVariables[variable.key].source"
+                                    class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-950 dark:text-white">
+                                <template x-for="option in whatsappVariableSourceOptions" :key="option.value">
+                                    <option :value="option.value" x-text="option.label"></option>
+                                </template>
+                            </select>
+                            <input x-show="sendMessageForm.templateVariables[variable.key].source === 'custom'"
+                                   x-model="sendMessageForm.templateVariables[variable.key].custom_value"
+                                   class="mt-2 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-950 dark:text-white"
+                                   placeholder="Type a custom value">
+                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400" x-show="sendMessageForm.templateVariables[variable.key].source && sendMessageForm.templateVariables[variable.key].source !== 'custom'">Resolved separately for this customer at send time.</p>
+                        </div>
+                    </template>
+                </div>
+                <p class="mt-3 text-sm text-slate-500 dark:text-slate-400" x-show="!whatsappTemplateLoading && !whatsappTemplateVariables.length && !whatsappTemplateError">This template has no body variables.</p>
+            </div>
         </div>
         <div class="mt-6 flex items-center justify-end gap-3">
             <button type="button" @click.prevent.stop="closeSendMessageModal($event)" class="rounded-lg px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200">Cancel</button>
-            <button type="button" @click.prevent.stop="queueMessage($event)" class="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50" :disabled="!sendMessageForm.templateId || messageLoading">
+            <button type="button" @click.prevent.stop="queueMessage($event)" class="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50" :disabled="!sendMessageForm.templateId || !hasRequiredWhatsAppMappings() || messageLoading">
                 <span x-show="!messageLoading">Queue Message</span>
                 <span x-show="messageLoading" class="flex items-center gap-2">
                     <svg class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/></svg>
@@ -2317,6 +2655,7 @@ function customerDetail(config = {}) {
         statsLoaded: false,
         statsLoading: false,
         activeTab: 'overview',
+        billingSubTab: 'overview',
         serviceSubTab: 'subscriptions',
         showAllSubscriptions: false,
         showAddressModal: false,
@@ -2327,8 +2666,23 @@ function customerDetail(config = {}) {
         messageLoading: false,
         sendMessageForm: {
             channel: 'email',
-            templateId: ''
+            templateId: '',
+            templateVariables: {}
         },
+        whatsappTemplateLoading: false,
+        whatsappTemplateError: '',
+        whatsappTemplateBody: '',
+        whatsappTemplateVariables: [],
+        whatsappVariableSourceOptions: [
+            { value: '', label: 'Select field' },
+            { value: 'first_name', label: 'First Name' },
+            { value: 'last_name', label: 'Last Name' },
+            { value: 'full_name', label: 'Full Name' },
+            { value: 'email', label: 'Email' },
+            { value: 'phone', label: 'Phone Number' },
+            { value: 'account_number', label: 'Account Number' },
+            { value: 'custom', label: 'Custom (free text)' }
+        ],
         convertOpen: false,
         convertId: null,
         convertName: "",
@@ -2390,7 +2744,8 @@ function customerDetail(config = {}) {
             );
             this.sendMessageForm = {
                 channel: requestedChannel ? requestedChannel.id : (firstChannel ? firstChannel.id : 'email'),
-                templateId: ''
+                templateId: '',
+                templateVariables: {}
             };
             this.syncTemplateForChannel();
         },
@@ -2422,7 +2777,109 @@ function customerDetail(config = {}) {
         syncTemplateForChannel() {
             const matching = this.templatesForSelectedChannel();
             if (!matching.find((template) => template.id === this.sendMessageForm.templateId)) {
-                this.sendMessageForm.templateId = matching[0] ? matching[0].id : '';
+                this.sendMessageForm.templateId = '';
+            }
+            this.handleTemplateSelection();
+        },
+
+        resetWhatsappTemplateDetails() {
+            this.whatsappTemplateLoading = false;
+            this.whatsappTemplateError = '';
+            this.whatsappTemplateBody = '';
+            this.whatsappTemplateVariables = [];
+            this.sendMessageForm.templateVariables = {};
+        },
+
+        variableLabel(variable) {
+            const label = variable.label || `Field ${variable.index}`;
+            const example = variable.example || 'Value';
+            return `${label} (e.g. ${example})`;
+        },
+
+        whatsappMappingStorageKey() {
+            const template = this.selectedTemplate();
+            if (!template) return '';
+            return `whatsapp-template-mapping:${template.provider_template_name || template.code || template.name}:${template.language || ''}`;
+        },
+
+        applySavedWhatsappMapping(values) {
+            const key = this.whatsappMappingStorageKey();
+            if (!key) return values;
+            try {
+                const saved = JSON.parse(localStorage.getItem(key) || '{}');
+                Object.keys(values).forEach((variableKey) => {
+                    if (saved[variableKey] && typeof saved[variableKey] === 'object') {
+                        values[variableKey] = {
+                            source: saved[variableKey].source || '',
+                            custom_value: saved[variableKey].custom_value || ''
+                        };
+                    }
+                });
+            } catch (_error) {
+                return values;
+            }
+            return values;
+        },
+
+        rememberWhatsappMapping() {
+            if (this.sendMessageForm.channel !== 'whatsapp') return;
+            const key = this.whatsappMappingStorageKey();
+            if (!key) return;
+            localStorage.setItem(key, JSON.stringify(this.sendMessageForm.templateVariables || {}));
+        },
+
+        hasRequiredWhatsAppMappings() {
+            if (this.sendMessageForm.channel !== 'whatsapp') return true;
+            return this.whatsappTemplateVariables.every((variable) => {
+                const mapping = this.sendMessageForm.templateVariables[variable.key] || {};
+                return Boolean(mapping.source);
+            });
+        },
+
+        templateBodyFromComponents(components) {
+            const body = (components || []).find((component) => String(component.type || '').toUpperCase() === 'BODY');
+            return body ? (body.text || '') : '';
+        },
+
+        async handleTemplateSelection() {
+            this.resetWhatsappTemplateDetails();
+            const template = this.selectedTemplate();
+            if (!template || this.sendMessageForm.channel !== 'whatsapp') return;
+            this.whatsappTemplateLoading = true;
+            try {
+                const params = new URLSearchParams({
+                    name: template.provider_template_name || template.code || template.name,
+                    language: template.language || ''
+                });
+                const response = await fetch(`/admin/customers/bulk/whatsapp-template?${params.toString()}`, {
+                    headers: {
+                        'Accept': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                });
+                const raw = await response.text();
+                let data = {};
+                try {
+                    data = raw ? JSON.parse(raw) : {};
+                } catch (_parseError) {
+                    throw new Error(response.ok
+                        ? 'Could not parse WhatsApp template details.'
+                        : `Could not load WhatsApp template details (HTTP ${response.status}).`);
+                }
+                if (!response.ok) {
+                    throw new Error(data.detail || data.message || 'Could not load WhatsApp template details');
+                }
+                this.whatsappTemplateBody = this.templateBodyFromComponents(data.components || []);
+                this.whatsappTemplateVariables = data.variables || [];
+                const values = {};
+                this.whatsappTemplateVariables.forEach((variable) => {
+                    values[variable.key] = { source: '', custom_value: '' };
+                });
+                this.sendMessageForm.templateVariables = this.applySavedWhatsappMapping(values);
+            } catch (error) {
+                this.whatsappTemplateError = error.message || 'Could not load WhatsApp template details';
+            } finally {
+                this.whatsappTemplateLoading = false;
             }
         },
 
@@ -2435,10 +2892,57 @@ function customerDetail(config = {}) {
                 this.syncTemplateForChannel();
                 return;
             }
+            if (!this.hasRequiredWhatsAppMappings()) {
+                alert('Select a source for every WhatsApp template field before queueing.');
+                return;
+            }
+            this.rememberWhatsappMapping();
 
             this.messageLoading = true;
             try {
                 const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || document.cookie.match(/csrf_token=([^;]+)/)?.[1] || '';
+                const payload = {
+                    selection: {
+                        mode: 'selected',
+                        ids: [this.customerId]
+                    },
+                    channel: this.sendMessageForm.channel,
+                    template_id: template.id,
+                    template_variables: this.sendMessageForm.templateVariables || {}
+                };
+                const previewResponse = await fetch('/admin/customers/bulk/send-message', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest',
+                        ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {})
+                    },
+                    body: JSON.stringify({ ...payload, preview_only: true })
+                });
+                if (!previewResponse.ok) {
+                    const error = await previewResponse.json().catch(() => ({}));
+                    alert(error.detail || 'Failed to preview the message. Please try again.');
+                    return;
+                }
+                const preview = await previewResponse.json();
+                const previewSuppressed = preview.suppressed || [];
+                const previewOpenTicketExcluded = previewSuppressed.filter((item) => item.reason_code === 'open_ticket');
+                const previewOtherSuppressed = Math.max((preview.suppressed_count || 0) - previewOpenTicketExcluded.length, 0);
+                const previewMessageParts = [
+                    `Send ${selectedChannelMeta().label} template "${template.label || template.name}" to this customer?`,
+                    `Queue ${preview.queued_count || 0} message(s).`
+                ];
+                if (previewOpenTicketExcluded.length) {
+                    previewMessageParts.push(`Exclude ${previewOpenTicketExcluded.length} customer(s) with open tickets.`);
+                }
+                if (previewOtherSuppressed) {
+                    previewMessageParts.push(`Suppress ${previewOtherSuppressed} other customer(s).`);
+                }
+                if ((preview.skipped || []).length) {
+                    previewMessageParts.push(`Skip ${(preview.skipped || []).length} customer(s) with missing contact details.`);
+                }
+                if (!confirm(previewMessageParts.join(' '))) return;
+
                 const response = await fetch('/admin/customers/bulk/send-message', {
                     method: 'POST',
                     headers: {
@@ -2447,10 +2951,13 @@ function customerDetail(config = {}) {
                         ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {})
                     },
                     body: JSON.stringify({
-                        customer_ids: [{ id: this.customerId, type: this.customerType }],
-                        filters: {},
-                        channel: this.sendMessageForm.channel,
-                        template_id: template.id
+                        ...payload,
+                        selection: {
+                            ...payload.selection,
+                            expected_count: preview.matched_count || 0,
+                            expected_scope_token: preview.scope_token
+                        },
+                        confirmed: true
                     })
                 });
 
@@ -2461,7 +2968,12 @@ function customerDetail(config = {}) {
                         ? ' Delivery has been started.'
                         : (result.queued_count ? ' Delivery is queued, but the dispatcher could not be started automatically.' : '');
                     this.closeSendMessageModal();
-                    alert(`Queued ${result.queued_count || 0} notification(s).${deliveryMessage}${result.suppressed_count ? ` ${result.suppressed_count} were suppressed by customer preferences.` : ''}${result.skipped?.length ? ` ${result.skipped.length} customer(s) were skipped due to missing contact details.` : ''}`);
+                    const suppressed = result.suppressed || [];
+                    const openTicketExcluded = suppressed.filter((item) => item.reason_code === 'open_ticket');
+                    const otherSuppressed = Math.max((result.suppressed_count || 0) - openTicketExcluded.length, 0);
+                    const openTicketNames = openTicketExcluded.slice(0, 10).map((item) => item.name).join(', ');
+                    const openTicketMore = openTicketExcluded.length > 10 ? `, and ${openTicketExcluded.length - 10} more` : '';
+                    alert(`Queued ${result.queued_count || 0} notification(s).${deliveryMessage}${openTicketExcluded.length ? ` ${openTicketExcluded.length} excluded because they have open tickets: ${openTicketNames}${openTicketMore}.` : ''}${otherSuppressed ? ` ${otherSuppressed} suppressed by preferences, dedupe, or other template conditions.` : ''}${result.skipped?.length ? ` ${result.skipped.length} customer(s) were skipped due to missing contact details.` : ''}`);
                 } else {
                     const error = await response.json().catch(() => ({}));
                     alert(error.detail || 'Failed to queue the message. Please try again.');
@@ -2551,7 +3063,7 @@ function customerDetail(config = {}) {
 </script>
 
 {% if map_data %}
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+<script src="/static/vendor/leaflet/leaflet.js"
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 <script>
 (function() {
@@ -2583,19 +3095,19 @@ function customerDetail(config = {}) {
 
     const icons = {
         customer: L.divIcon({
-            html: '<div style="background:linear-gradient(135deg,#10b981,#059669);width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:3px solid white;box-shadow:0 4px 12px rgba(16,185,129,0.4)"><svg style="width:14px;height:14px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"/></svg></div>',
+            html: '<div style="background:linear-gradient(135deg,var(--color-semantic-positive-600),var(--color-semantic-positive-700));width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:3px solid white;box-shadow:0 4px 12px color-mix(in srgb,var(--color-semantic-positive-600) 40%,transparent)"><svg style="width:14px;height:14px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"/></svg></div>',
             className: '',
             iconSize: [28, 28],
             iconAnchor: [14, 14]
         }),
         fdh_cabinet: L.divIcon({
-            html: '<div style="background:linear-gradient(135deg,#8b5cf6,#7c3aed);width:22px;height:22px;border-radius:6px;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 8px rgba(139,92,246,0.4)"><svg style="width:12px;height:12px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M4 4a2 2 0 012-2h8a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V4z"/></svg></div>',
+            html: '<div style="background:linear-gradient(135deg,var(--color-data-1),var(--color-primary-700));width:22px;height:22px;border-radius:6px;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 8px color-mix(in srgb,var(--color-data-1) 40%,transparent)"><svg style="width:12px;height:12px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M4 4a2 2 0 012-2h8a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V4z"/></svg></div>',
             className: '',
             iconSize: [22, 22],
             iconAnchor: [11, 11]
         }),
         splice_closure: L.divIcon({
-            html: '<div style="background:linear-gradient(135deg,#14b8a6,#0d9488);width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 6px rgba(20,184,166,0.4)"></div>',
+            html: '<div style="background:linear-gradient(135deg,var(--color-accent-600),var(--color-accent-700));width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 6px color-mix(in srgb,var(--color-accent-600) 40%,transparent)"></div>',
             className: '',
             iconSize: [18, 18],
             iconAnchor: [9, 9]
@@ -2840,6 +3352,60 @@ function customerDetail(config = {}) {
             }
         });
     }
+})();
+</script>
+{% endif %}
+
+{% if location_capture_enabled %}
+<script>
+(function() {
+    const button = document.getElementById('customer-location-confirm-btn');
+    const statusEl = document.getElementById('customer-location-confirm-status');
+    if (!button || !statusEl) return;
+
+    function getCookie(name) {
+        const match = document.cookie.match(new RegExp('(^|;\\s*)' + name + '=([^;]*)'));
+        return match ? decodeURIComponent(match[2]) : '';
+    }
+
+    button.addEventListener('click', async () => {
+        const latitudeInput = document.getElementById(button.dataset.latitudeInput);
+        const longitudeInput = document.getElementById(button.dataset.longitudeInput);
+        const latitude = Number(latitudeInput?.value);
+        const longitude = Number(longitudeInput?.value);
+        if (!latitudeInput || !longitudeInput || Number.isNaN(latitude) || Number.isNaN(longitude)) {
+            statusEl.textContent = 'Enter valid latitude and longitude values first.';
+            return;
+        }
+        button.disabled = true;
+        statusEl.textContent = 'Reconciling the confirmed location…';
+        try {
+            const response = await fetch('/admin/customers/profile/{{ customer.id }}/confirm-location', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-Token': getCookie('csrf_token')
+                },
+                body: JSON.stringify({
+                    latitude,
+                    longitude,
+                    claimed_state: button.dataset.claimedState || null,
+                    claimed_lga: button.dataset.claimedLga || null,
+                    claimed_postcode: button.dataset.claimedPostcode || null
+                })
+            });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.detail || 'Location confirmation failed');
+            const captured = result.captured || [];
+            statusEl.textContent = captured.length
+                ? `Verified: ${captured.join(', ')}.`
+                : 'No field was auto-verified; the reconciliation needs review.';
+        } catch (error) {
+            statusEl.textContent = error.message || 'Location confirmation failed.';
+        } finally {
+            button.disabled = false;
+        }
+    });
 })();
 </script>
 {% endif %}

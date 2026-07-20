@@ -31,6 +31,7 @@ from app.models.network import (
     OntAuthorizationStatus,
     OntUnit,
     OnuOnlineStatus,
+    PollStatus,
     PonPort,
 )
 from app.models.network_monitoring import (
@@ -38,6 +39,7 @@ from app.models.network_monitoring import (
     DeviceMetric,
     DeviceRole,
     DeviceStatus,
+    DeviceType,
     DnsThreatAction,
     DnsThreatEvent,
     DnsThreatSeverity,
@@ -60,6 +62,8 @@ from app.models.notification import (
     NotificationStatus,
 )
 from app.models.radius import RadiusClient, RadiusServer
+from app.models.radius_active_session import RadiusActiveSession
+from app.models.router_management import Router, RouterStatus
 from app.models.subscriber import Address, AddressType, Subscriber
 from app.models.tr069 import (
     Tr069AcsServer,
@@ -77,8 +81,6 @@ from app.schemas.network import (
     IPv4AddressCreate,
     IPv6AddressCreate,
     OLTDeviceCreate,
-    OntAssignmentCreate,
-    OntAssignmentUpdate,
     OntUnitCreate,
     PonPortCreate,
 )
@@ -104,7 +106,6 @@ from app.services import web_network_ip as web_network_ip_service
 from app.services import web_network_olts as web_network_olts_service
 from app.services import web_network_speedtests as web_network_speedtests_service
 from app.services import web_network_tr069 as web_network_tr069_service
-from app.services import zabbix_ont_status
 from app.services.credential_crypto import is_encrypted
 from app.services.network import olt_operations as olt_operations_service
 from app.services.network import olt_ssh as olt_ssh_service
@@ -114,6 +115,30 @@ from app.services.network.cpe_tr069 import CpeTR069
 from app.services.network.ont_tr069 import OntTR069
 from app.web.admin import nas as nas_web
 from app.web_domains import network_home
+
+
+def _assign_ont(db_session, *, ont, pon, subscription):
+    olt = db_session.get(OLTDevice, pon.olt_id)
+    assert olt is not None
+    olt.is_active = True
+    db_session.commit()
+    return network_service.ont_assignment_commands.assign(
+        db_session,
+        ont_unit_id=ont.id,
+        subscription_id=subscription.id,
+        pon_port_id=pon.id,
+        subscriber_id=subscription.subscriber_id,
+        source="test",
+    ).assignment
+
+
+def _release_ont(db_session, assignment):
+    return network_service.ont_assignment_commands.release(
+        db_session,
+        assignment_id=assignment.id,
+        reason="test_inventory_parking",
+        source="test",
+    ).assignment
 
 
 def test_validate_ipv4_address_rejects_invalid_octet():
@@ -255,7 +280,7 @@ def test_nas_index_renders_status_cards_with_non_active_buckets(
         },
     )
 
-    response = nas_web.nas_index(request=request, db=db_session)
+    response = nas_web.nas_index(request=request, db=db_session, page=1)
 
     assert response.status_code == 200
     body = response.body.decode()
@@ -694,6 +719,73 @@ def test_core_devices_list_page_data_includes_uptime_ping_history_and_backup(
     assert payload["backup_map"][key]["status"] == "success"
 
 
+def test_core_network_table_shows_ping_result_and_device_tooltip():
+    template = Path("templates/admin/network/network-devices/index.html").read_text()
+
+    assert "POP: {{ device_pop_name }}" in template
+    assert "latest_ping.label if latest_ping else '-'" in template
+    assert "latest_ping.recorded_at | app_datetime('%Y-%m-%d %H:%M')" in template
+    assert "status-tone-{{ ping_tone }}" in template
+    assert "status-tone-dot-{{ ping_tone }}" in template
+
+
+def test_core_devices_list_page_data_prefers_live_status(db_session, monkeypatch):
+    monkeypatch.setattr(
+        "app.services.device_operational_status.warmer_is_stale", lambda now=None: False
+    )
+    parent = NetworkDevice(
+        name="Live Parent",
+        mgmt_ip="10.220.0.1",
+        status=DeviceStatus.online,
+        is_active=True,
+    )
+    db_session.add(parent)
+    db_session.flush()
+    child = NetworkDevice(
+        name="Live Child",
+        mgmt_ip="10.220.0.2",
+        parent_device_id=parent.id,
+        status=DeviceStatus.degraded,
+        live_status="up",
+        live_status_at=datetime.now(UTC),
+        is_active=True,
+    )
+    db_session.add(child)
+    db_session.commit()
+
+    payload = core_devices_forms.list_page_data(db_session, role=None, status="active")
+
+    displayed_child = next(item for item in payload["devices"] if item.id == child.id)
+    assert displayed_child.operational_status == "up"
+    assert displayed_child.status_presentation.tone.value == "positive"
+    assert payload["child_impacts"][str(parent.id)]["impacted"] is False
+
+
+def test_core_devices_list_page_data_marks_stale_live_status_retry_pending(
+    db_session, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.services.device_operational_status.warmer_is_stale", lambda now=None: True
+    )
+    device = NetworkDevice(
+        name="Stale Live Device",
+        mgmt_ip="10.220.0.3",
+        status=DeviceStatus.degraded,
+        live_status="up",
+        live_status_at=datetime.now(UTC) - timedelta(hours=1),
+        is_active=True,
+    )
+    db_session.add(device)
+    db_session.commit()
+
+    payload = core_devices_forms.list_page_data(db_session, role=None, status="active")
+
+    displayed = next(item for item in payload["devices"] if item.id == device.id)
+    assert displayed.operational_status == "up"
+    assert displayed.operational_retry_pending is True
+    assert displayed.status_presentation.tone.value == "positive"
+
+
 def test_create_bandwidth_graph_add_source_clone_and_public_toggle(db_session):
     device = NetworkDevice(
         name="Graph Core", mgmt_ip="192.0.2.120", snmp_enabled=True, is_active=True
@@ -1002,7 +1094,9 @@ def test_build_cpe_list_data_filters_and_stats(db_session, subscriber):
     assert data["stats"]["mikrotik"] == 1
 
 
-def test_build_cpe_list_data_hides_system_owned_inventory_rows(db_session, subscriber):
+def test_build_cpe_list_data_hides_system_owned_inventory_rows(
+    db_session, subscriber, subscription
+):
     network_service.cpe_devices.create(
         db_session,
         CPEDeviceCreate(
@@ -1024,19 +1118,8 @@ def test_build_cpe_list_data_hides_system_owned_inventory_rows(db_session, subsc
         db_session,
         OntUnitCreate(serial_number="PARKED-ONT-001"),
     )
-    assigned = network_service.ont_assignments.create(
-        db_session,
-        OntAssignmentCreate(
-            ont_unit_id=ont.id,
-            pon_port_id=pon.id,
-            account_id=subscriber.id,
-        ),
-    )
-    network_service.ont_assignments.update(
-        db_session,
-        str(assigned.id),
-        OntAssignmentUpdate(active=False),
-    )
+    assigned = _assign_ont(db_session, ont=ont, pon=pon, subscription=subscription)
+    _release_ont(db_session, assigned)
 
     parked_cpe = db_session.scalars(
         select(CPEDevice).where(CPEDevice.serial_number == "PARKED-ONT-001").limit(1)
@@ -1050,7 +1133,9 @@ def test_build_cpe_list_data_hides_system_owned_inventory_rows(db_session, subsc
     assert all(sub.user_type.value != "system_user" for sub in data["subscribers"])
 
 
-def test_collect_devices_excludes_system_owned_inventory_cpes(db_session, subscriber):
+def test_collect_devices_excludes_system_owned_inventory_cpes(
+    db_session, subscriber, subscription
+):
     network_service.cpe_devices.create(
         db_session,
         CPEDeviceCreate(
@@ -1072,15 +1157,8 @@ def test_collect_devices_excludes_system_owned_inventory_cpes(db_session, subscr
         db_session,
         OntUnitCreate(serial_number="PARKED-CORE-ONT"),
     )
-    assignment = network_service.ont_assignments.create(
-        db_session,
-        OntAssignmentCreate(
-            ont_unit_id=ont.id,
-            pon_port_id=pon.id,
-            account_id=subscriber.id,
-        ),
-    )
-    network_service.ont_assignments.delete(db_session, str(assignment.id))
+    assignment = _assign_ont(db_session, ont=ont, pon=pon, subscription=subscription)
+    _release_ont(db_session, assignment)
 
     devices = core_devices_inventory_service.collect_devices(db_session)
     cpe_serials = {
@@ -1088,9 +1166,18 @@ def test_collect_devices_excludes_system_owned_inventory_cpes(db_session, subscr
     }
     assert "VISIBLE-CORE-CPE" in cpe_serials
     assert "PARKED-CORE-ONT" not in cpe_serials
+    visible_cpe = next(
+        device
+        for device in devices
+        if device.get("serial_number") == "VISIBLE-CORE-CPE"
+    )
+    assert visible_cpe["status"] == "unknown"
+    assert visible_cpe["status_presentation"].tone.value == "neutral"
 
 
-def test_web_network_home_excludes_system_owned_inventory_cpes(db_session, subscriber):
+def test_web_network_home_excludes_system_owned_inventory_cpes(
+    db_session, subscriber, subscription
+):
     network_service.cpe_devices.create(
         db_session,
         CPEDeviceCreate(
@@ -1112,15 +1199,8 @@ def test_web_network_home_excludes_system_owned_inventory_cpes(db_session, subsc
         db_session,
         OntUnitCreate(serial_number="PARKED-WEB-ONT"),
     )
-    assignment = network_service.ont_assignments.create(
-        db_session,
-        OntAssignmentCreate(
-            ont_unit_id=ont.id,
-            pon_port_id=pon.id,
-            account_id=subscriber.id,
-        ),
-    )
-    network_service.ont_assignments.delete(db_session, str(assignment.id))
+    assignment = _assign_ont(db_session, ont=ont, pon=pon, subscription=subscription)
+    _release_ont(db_session, assignment)
 
     request = Request({"type": "http", "method": "GET", "path": "/web/network"})
     with patch("app.web_domains.templates.TemplateResponse") as render:
@@ -1343,7 +1423,7 @@ def test_tr069_dashboard_data_handles_joinedload_assignments_without_500(
 
 
 def test_tr069_dashboard_hides_system_owned_inventory_cpes_from_selector(
-    db_session, acs_server, subscriber
+    db_session, acs_server, subscriber, subscription
 ):
     visible_cpe = network_service.cpe_devices.create(
         db_session,
@@ -1366,15 +1446,8 @@ def test_tr069_dashboard_hides_system_owned_inventory_cpes_from_selector(
         db_session,
         OntUnitCreate(serial_number="PARKED-TR069-ONT"),
     )
-    assignment = network_service.ont_assignments.create(
-        db_session,
-        OntAssignmentCreate(
-            ont_unit_id=ont.id,
-            pon_port_id=pon.id,
-            account_id=subscriber.id,
-        ),
-    )
-    network_service.ont_assignments.delete(db_session, str(assignment.id))
+    assignment = _assign_ont(db_session, ont=ont, pon=pon, subscription=subscription)
+    _release_ont(db_session, assignment)
 
     data = web_network_tr069_service.tr069_dashboard_data(
         db_session,
@@ -1388,7 +1461,7 @@ def test_tr069_dashboard_hides_system_owned_inventory_cpes_from_selector(
 
 
 def test_tr069_dashboard_linked_inventory_cpe_uses_device_label_not_inventory_name(
-    db_session, acs_server, subscriber
+    db_session, acs_server, subscriber, subscription
 ):
     olt = network_service.olt_devices.create(
         db_session,
@@ -1402,15 +1475,8 @@ def test_tr069_dashboard_linked_inventory_cpe_uses_device_label_not_inventory_na
         db_session,
         OntUnitCreate(serial_number="LINKED-PARKED-ONT"),
     )
-    assignment = network_service.ont_assignments.create(
-        db_session,
-        OntAssignmentCreate(
-            ont_unit_id=ont.id,
-            pon_port_id=pon.id,
-            account_id=subscriber.id,
-        ),
-    )
-    network_service.ont_assignments.delete(db_session, str(assignment.id))
+    assignment = _assign_ont(db_session, ont=ont, pon=pon, subscription=subscription)
+    _release_ont(db_session, assignment)
 
     parked_cpe = db_session.scalars(
         select(CPEDevice).where(CPEDevice.serial_number == "LINKED-PARKED-ONT").limit(1)
@@ -1463,11 +1529,14 @@ def test_link_tr069_device_to_cpe_rejects_missing_cpe(db_session, acs_server):
 
 
 def test_link_tr069_device_to_cpe_rejects_parked_inventory_cpe(
-    db_session, acs_server, subscriber
+    db_session, acs_server, subscriber, subscription
 ):
     olt = network_service.olt_devices.create(
         db_session,
-        OLTDeviceCreate(name="TR069 Reject OLT", hostname="tr069-reject-olt.local"),
+        OLTDeviceCreate(
+            name="TR069 Reject OLT",
+            hostname="tr069-reject-olt.local",
+        ),
     )
     pon = network_service.pon_ports.create(
         db_session,
@@ -1477,15 +1546,8 @@ def test_link_tr069_device_to_cpe_rejects_parked_inventory_cpe(
         db_session,
         OntUnitCreate(serial_number="REJECT-PARKED-ONT"),
     )
-    assignment = network_service.ont_assignments.create(
-        db_session,
-        OntAssignmentCreate(
-            ont_unit_id=ont.id,
-            pon_port_id=pon.id,
-            account_id=subscriber.id,
-        ),
-    )
-    network_service.ont_assignments.delete(db_session, str(assignment.id))
+    assignment = _assign_ont(db_session, ont=ont, pon=pon, subscription=subscription)
+    _release_ont(db_session, assignment)
     parked_cpe = db_session.scalars(
         select(CPEDevice).where(CPEDevice.serial_number == "REJECT-PARKED-ONT").limit(1)
     ).first()
@@ -1528,6 +1590,7 @@ def test_network_map_context_includes_network_device_markers(db_session):
             pop_site_id=pop.id,
             role=DeviceRole.core,
             status=DeviceStatus.online,
+            live_status="up",
             is_active=True,
         )
     )
@@ -1541,12 +1604,13 @@ def test_network_map_context_includes_network_device_markers(db_session):
     ]
     assert len(device_features) == 1
     assert device_features[0]["properties"]["name"] == "Core Router 1"
-    assert device_features[0]["properties"]["status"] == "online"
+    assert device_features[0]["properties"]["status"] == "up"
+    assert device_features[0]["properties"]["status_presentation"]["tone"] == "positive"
     assert context["stats"]["network_devices"] == 1
     assert context["stats"]["network_devices_online"] == 1
 
 
-def test_network_map_context_uses_zabbix_ont_status(db_session, monkeypatch):
+def test_network_map_context_uses_effective_ont_status(db_session):
     ont = OntUnit(
         serial_number="ONT-MAP-1",
         name="Map ONT",
@@ -1554,17 +1618,10 @@ def test_network_map_context_uses_zabbix_ont_status(db_session, monkeypatch):
         use_gps=True,
         gps_latitude=9.07,
         gps_longitude=7.51,
-        olt_status=OnuOnlineStatus.offline,
+        olt_status=OnuOnlineStatus.online,
     )
     db_session.add(ont)
     db_session.commit()
-    monkeypatch.setattr(
-        network_map_service,
-        "get_ont_snapshots_from_zabbix",
-        lambda db, onts: {
-            str(item.id): zabbix_ont_status.OntSignalData(online=True) for item in onts
-        },
-    )
 
     context = network_map_service.build_network_map_context(db_session)
     ont_features = [
@@ -1577,6 +1634,80 @@ def test_network_map_context_uses_zabbix_ont_status(db_session, monkeypatch):
     assert ont_features[0]["properties"]["status"] == "online"
     assert context["stats"]["onts_online"] == 1
     assert context["stats"]["onts_offline"] == 0
+
+
+def test_monitoring_dashboard_stats_use_operational_state(db_session, monkeypatch):
+    monkeypatch.setattr(
+        "app.services.device_operational_status.warmer_is_stale", lambda now=None: False
+    )
+    monkeypatch.setattr("app.services.monitoring_coverage.get_coverage", lambda: None)
+    db_session.add_all(
+        [
+            NetworkDevice(
+                name="Observed Up",
+                status=DeviceStatus.online,
+                live_status="up",
+                is_active=True,
+            ),
+            NetworkDevice(
+                name="Observed Down",
+                status=DeviceStatus.online,
+                live_status="down",
+                is_active=True,
+            ),
+            NetworkDevice(
+                name="Observed Degraded",
+                status=DeviceStatus.online,
+                live_status="problem",
+                is_active=True,
+            ),
+            NetworkDevice(
+                name="Refresh Pending",
+                status=DeviceStatus.online,
+                live_status=None,
+                is_active=True,
+            ),
+            NetworkDevice(
+                name="Planned Maintenance",
+                status=DeviceStatus.maintenance,
+                live_status="down",
+                is_active=True,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    payload = monitoring_service.NetworkDevices.get_monitoring_dashboard_stats(
+        db_session,
+        format_duration=lambda value: str(value),
+        format_bps=lambda value: str(value),
+    )
+
+    assert payload["stats"] == {
+        "devices_total": 5,
+        "devices_online": 1,
+        "devices_offline": 1,
+        "devices_degraded": 1,
+        "devices_maintenance": 1,
+        "devices_retry_pending": 1,
+        "alarms_open": 0,
+        "subscribers_online": 0,
+    }
+    assert payload["device_status_chart"]["labels"] == [
+        "Up",
+        "Degraded",
+        "Down",
+        "Refresh pending",
+        "Maintenance",
+    ]
+    assert payload["device_status_chart"]["tones"] == [
+        "positive",
+        "warning",
+        "negative",
+        "warning",
+        "neutral",
+    ]
+    assert "colors" not in payload["device_status_chart"]
 
 
 def test_speedtest_form_parse_and_validate():
@@ -1816,7 +1947,10 @@ def test_topology_graph_builds_link_states_from_interface_metrics(db_session, po
     data = network_topology_service.list_nodes_and_edges(db_session)
     assert data["stats"]["node_count"] >= 2
     assert data["stats"]["edge_count"] >= 1
-    assert any(edge["util_state"] == "warning" for edge in data["edges"])
+    edge = next(edge for edge in data["edges"] if edge["id"] == str(link.id))
+    assert edge["utilization_pct"] == 60.0
+    assert edge["util_state"] == "moderate"
+    assert edge["utilization_basis"] == "max_direction"
 
 
 def test_core_device_validate_values_rejects_parent_cycle(db_session):
@@ -2186,8 +2320,8 @@ def test_consolidated_page_data_includes_ont_signal_data(db_session):
 
     signal_data = payload["signal_data"][str(ont.id)]
     assert signal_data["operational"] == "up"
-    assert signal_data["operational_label"] == "Up"
-    assert signal_data["operational_reason"] == "olt_online"
+    assert signal_data["status_presentation"].label == "Up"
+    assert signal_data["operational_reason"] == "last_confirmed_online_retry_pending"
 
 
 def test_consolidated_page_data_moves_network_devices_ending_in_olt_to_olt_bucket(
@@ -2217,11 +2351,13 @@ def test_consolidated_page_data_moves_network_devices_ending_in_olt_to_olt_bucke
     db_session.commit()
 
     payload = core_devices_views.consolidated_page_data(tab="core", db=db_session)
+    olt_payload = core_devices_views.consolidated_page_data(tab="olts", db=db_session)
 
     assert payload["stats"]["core_total"] == 1
     assert payload["stats"]["olt_total"] == 1
     assert [device.name for device in payload["core_devices"]] == ["Aggregation SW1"]
-    assert [olt.name for olt in payload["olts"]] == ["Aggregation OLT"]
+    assert payload["olts"] == []
+    assert [olt.name for olt in olt_payload["olts"]] == ["Aggregation OLT"]
     created_olt = db_session.scalars(
         select(OLTDevice).where(OLTDevice.mgmt_ip == "192.0.2.210")
     ).first()
@@ -2250,6 +2386,197 @@ def test_consolidated_page_data_includes_active_nas_inventory_devices(db_session
         device for device in payload["core_devices"] if device.name == "Fiber POP NAS"
     )
     assert included.detail_url.endswith(f"/admin/network/nas/devices/{included.id}")
+
+
+def test_devices_list_page_data_includes_core_network_devices(db_session):
+    core = NetworkDevice(
+        name="Distribution Switch 1",
+        hostname="dist-sw1.local",
+        mgmt_ip="192.0.2.240",
+        vendor="Ubiquiti",
+        model="EdgeSwitch",
+        serial_number="SW-001",
+        device_type=DeviceType.switch,
+        role=DeviceRole.distribution,
+        status=DeviceStatus.online,
+        is_active=True,
+    )
+    olt_monitor = NetworkDevice(
+        name="Lab Huawei OLT",
+        hostname="lab-olt.local",
+        mgmt_ip="192.0.2.241",
+        vendor="Huawei",
+        model="MA5608T",
+        device_type=DeviceType.switch,
+        role=DeviceRole.access,
+        status=DeviceStatus.online,
+        is_active=True,
+    )
+    olt = OLTDevice(
+        name="Lab Huawei OLT",
+        hostname="lab-olt.local",
+        mgmt_ip="192.0.2.241",
+        vendor="Huawei",
+        model="MA5608T",
+        is_active=True,
+    )
+    db_session.add_all([core, olt_monitor, olt])
+    db_session.commit()
+
+    from app.services.device_projection_reconcile import reconcile_device_projections
+
+    reconcile_device_projections(db_session)
+    query = core_devices_inventory_service.build_network_device_list_query()
+    payload = core_devices_inventory_service.devices_list_page_data(db_session, query)
+
+    names_by_type = {(device["name"], device["type"]) for device in payload["devices"]}
+    assert ("Distribution Switch 1", "core") in names_by_type
+    assert ("Lab Huawei OLT", "olt") in names_by_type
+    assert ("Lab Huawei OLT", "core") not in names_by_type
+    assert payload["stats"]["core"] == 1
+
+
+def test_devices_list_page_data_filters_core_network_devices(db_session):
+    db_session.add_all(
+        [
+            NetworkDevice(
+                name="Core Router 1",
+                mgmt_ip="192.0.2.242",
+                device_type=DeviceType.router,
+                role=DeviceRole.core,
+                status=DeviceStatus.online,
+                is_active=True,
+            ),
+            OLTDevice(
+                name="Access OLT",
+                mgmt_ip="192.0.2.243",
+                vendor="Huawei",
+                model="MA5800",
+                is_active=True,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    from app.services.device_projection_reconcile import reconcile_device_projections
+
+    reconcile_device_projections(db_session)
+    query = core_devices_inventory_service.build_network_device_list_query(
+        device_type="core"
+    )
+    payload = core_devices_inventory_service.devices_list_page_data(db_session, query)
+
+    assert [device["name"] for device in payload["devices"]] == ["Core Router 1"]
+    assert payload["type"] == "core"
+
+
+def test_network_devices_legacy_probe_statuses_are_refresh_pending():
+    """The Zabbix probe source was retired: every core-device row degrades to
+    a fixed refresh-pending placeholder (native reachability lives on the
+    poll columns / operational status)."""
+    statuses = core_devices_inventory_service._build_legacy_probe_statuses(
+        [
+            {"id": "device-a"},
+            {"id": "device-b"},
+            {"id": ""},
+        ]
+    )
+
+    assert set(statuses) == {"device-a", "device-b"}
+    for status in statuses.values():
+        assert status["ping_label"] == "Refresh pending"
+        assert status["ping_state"] == "unknown"
+        assert status["snmp_label"] == "Refresh pending"
+        assert status["snmp_state"] == "unknown"
+        assert status["ping_reason"] == "Legacy probe source is not configured"
+
+
+def test_consolidated_nas_inventory_inherits_linked_monitoring_status(
+    db_session, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.services.device_operational_status.warmer_is_stale",
+        lambda _now=None: False,
+    )
+    monitoring_device = NetworkDevice(
+        name="SPDC",
+        hostname="spdc",
+        mgmt_ip="160.119.127.83",
+        status=DeviceStatus.online,
+        role=DeviceRole.access,
+        live_status="up",
+        live_status_at=datetime.now(UTC),
+        zabbix_hostid="10736",
+    )
+    db_session.add(monitoring_device)
+    db_session.flush()
+    db_session.add(
+        NasDevice(
+            name="SPDC Access",
+            code="spdc-access",
+            vendor=NasVendor.mikrotik,
+            management_ip="160.119.127.83",
+            status=NasDeviceStatus.active,
+            network_device_id=monitoring_device.id,
+            zabbix_host_id="10696",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    payload = core_devices_views.consolidated_page_data(
+        tab="core", db=db_session, search="spdc"
+    )
+
+    included = next(
+        device for device in payload["core_devices"] if device.name == "SPDC Access"
+    )
+    assert included.live_status == "up"
+    assert included.zabbix_hostid == "10736"
+    assert included.operational.status == "up"
+
+
+def test_consolidated_nas_inventory_uses_direct_router_status_without_link(
+    db_session, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.services.device_operational_status.warmer_is_stale",
+        lambda _now=None: False,
+    )
+    nas = NasDevice(
+        name="Direct NAS",
+        code="direct-nas",
+        vendor=NasVendor.mikrotik,
+        management_ip="192.0.2.231",
+        status=NasDeviceStatus.active,
+        is_active=True,
+    )
+    db_session.add(nas)
+    db_session.flush()
+    db_session.add(
+        Router(
+            name="Direct NAS Router",
+            hostname="direct-nas",
+            management_ip="192.0.2.231",
+            rest_api_username="admin",
+            rest_api_password="enc:test",
+            status=RouterStatus.online,
+            nas_device_id=nas.id,
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    payload = core_devices_views.consolidated_page_data(
+        tab="core", db=db_session, search="direct nas"
+    )
+
+    included = next(
+        device for device in payload["core_devices"] if device.name == "Direct NAS"
+    )
+    assert included.zabbix_hostid is None
+    assert included.live_status == "up"
+    assert included.operational.status == "up"
 
 
 def test_olts_list_page_data_includes_network_devices_ending_in_olt(
@@ -2299,6 +2626,148 @@ def test_olts_list_page_data_includes_network_devices_ending_in_olt(
         ).first()
         is not None
     )
+
+
+def test_olts_list_page_data_uses_binary_operational_status(db_session):
+    now = datetime.now(UTC)
+    online = OLTDevice(
+        name="OLT Online",
+        mgmt_ip="192.0.2.221",
+        last_ping_at=now,
+        last_ping_ok=True,
+        last_poll_status=PollStatus.success,
+    )
+    offline = OLTDevice(
+        name="OLT Offline",
+        mgmt_ip="192.0.2.222",
+        last_ping_at=now,
+        last_ping_ok=False,
+    )
+    pending = OLTDevice(name="OLT Pending", mgmt_ip="192.0.2.223")
+    db_session.add_all([online, offline, pending])
+    db_session.commit()
+
+    payload = web_network_core_devices_service.olts_list_page_data(db_session)
+    rows = {item["name"]: item for item in payload["olts"]}
+
+    assert rows["OLT Online"]["operational_status"] == "up"
+    assert rows["OLT Online"]["status_presentation"].tone.value == "positive"
+    assert rows["OLT Online"]["runtime_retry_pending"] is False
+    assert rows["OLT Offline"]["operational_status"] == "down"
+    assert rows["OLT Offline"]["runtime_health_state"] == "attention"
+    assert rows["OLT Offline"]["status_presentation"].tone.value == "negative"
+    assert rows["OLT Pending"]["operational_status"] == "down"
+    assert rows["OLT Pending"]["runtime_health_state"] == "retry_pending"
+    assert rows["OLT Pending"]["runtime_retry_pending"] is True
+    assert rows["OLT Pending"]["status_presentation"].tone.value == "warning"
+    assert payload["stats"]["up"] == 1
+    assert payload["stats"]["down"] == 2
+    assert payload["stats"]["retry_pending"] == 1
+    assert payload["stats"]["attention"] == 1
+
+    offline_payload = web_network_core_devices_service.olts_list_page_data(
+        db_session, status="down"
+    )
+    assert {item["name"] for item in offline_payload["olts"]} == {
+        "OLT Offline",
+        "OLT Pending",
+    }
+
+    online_payload = web_network_core_devices_service.olts_list_page_data(
+        db_session, status="up"
+    )
+    assert [item["name"] for item in online_payload["olts"]] == ["OLT Online"]
+
+
+def test_olts_list_page_data_paginates_and_clamps_out_of_range_page(db_session):
+    db_session.add_all(
+        [
+            OLTDevice(
+                name=f"OLT Page {index:02d}",
+                mgmt_ip=f"198.51.100.{index + 1}",
+                is_active=True,
+            )
+            for index in range(11)
+        ]
+    )
+    db_session.commit()
+
+    payload = web_network_core_devices_service.olts_list_page_data(
+        db_session,
+        page=999,
+        per_page=10,
+    )
+
+    assert payload["pagination"] == {
+        "page": 2,
+        "per_page": 10,
+        "total": 11,
+        "total_pages": 2,
+        "has_prev": True,
+        "has_next": False,
+    }
+    assert len(payload["olts"]) == 1
+
+
+def test_onts_list_defaults_to_all_authorization_states_and_clamps_page(db_session):
+    onts = [
+        OntUnit(
+            serial_number=f"ONT-PAGE-{index:02d}",
+            is_active=True,
+            authorization_status=(
+                OntAuthorizationStatus.authorized
+                if index == 0
+                else OntAuthorizationStatus.pending
+            ),
+        )
+        for index in range(11)
+    ]
+    db_session.add_all(onts)
+    db_session.commit()
+
+    payload = core_devices_views.onts_list_page_data(
+        db_session,
+        page=999,
+        per_page=10,
+    )
+
+    assert payload["filters"]["authorization"] == "all"
+    assert payload["pagination"]["page"] == 2
+    assert payload["pagination"]["total"] == 11
+    assert len(payload["onts"]) == 1
+
+
+def test_onts_diagnostics_view_runs_one_inventory_query(db_session, monkeypatch):
+    db_session.add(
+        OntUnit(
+            serial_number="ONT-DIAGNOSTICS-ONE-QUERY",
+            is_active=True,
+            authorization_status=OntAuthorizationStatus.authorized,
+        )
+    )
+    db_session.commit()
+
+    original = network_service.ont_units.list_advanced
+    calls = 0
+
+    def counted_list_advanced(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(
+        network_service.ont_units, "list_advanced", counted_list_advanced
+    )
+
+    payload = core_devices_views.onts_list_page_data(
+        db_session,
+        view="diagnostics",
+        per_page=50,
+    )
+
+    assert calls == 1
+    assert payload["onts"] == ()
+    assert len(payload["diagnostics_onts"]) == 1
 
 
 def test_olt_detail_page_data_pon_rows_link_to_specific_pon(db_session):
@@ -2542,6 +3011,83 @@ def test_ont_tr069_persists_observed_runtime_fields(db_session, monkeypatch):
     assert refreshed.tr069_last_snapshot["raw_device"] == {}
 
 
+def test_ont_tr069_keeps_radius_framed_ip_as_observed_wan(db_session, monkeypatch):
+    olt = OLTDevice(name="OLT-TR069-RADIUS-RUNTIME", mgmt_ip="198.51.100.131")
+    db_session.add(olt)
+    db_session.flush()
+    subscriber = Subscriber(
+        first_name="Radius",
+        last_name="Runtime",
+        email="radius-runtime@example.com",
+    )
+    db_session.add(subscriber)
+    db_session.flush()
+    ont = OntUnit(
+        serial_number="ONT-TR069-RADIUS-RUNTIME-001",
+        is_active=True,
+        olt_device_id=olt.id,
+    )
+    db_session.add(ont)
+    db_session.flush()
+    db_session.add(
+        OntAssignment(
+            ont_unit_id=ont.id,
+            subscriber_id=subscriber.id,
+            active=True,
+            pppoe_username="100016329",
+            assigned_at=datetime.now(UTC),
+        )
+    )
+    db_session.add(
+        RadiusActiveSession(
+            username="100016329",
+            acct_session_id="sess-radius-runtime",
+            subscriber_id=subscriber.id,
+            framed_ip_address="172.16.145.51",
+            session_start=datetime.now(UTC) - timedelta(minutes=5),
+            last_update=datetime.now(UTC),
+        )
+    )
+    db_session.commit()
+
+    class _FakeClient:
+        @staticmethod
+        def get_device(_device_id):
+            return {}
+
+        @staticmethod
+        def parse_device_id(_device_id):
+            return ("HWTC7D", "EG8145V5", "HWTC7D4806C3")
+
+        @staticmethod
+        def extract_parameter_value(_device, path):
+            values = {
+                "VirtualParameters.WAN_IP": "172.16.204.34",
+                "VirtualParameters.WAN_Status": "Up",
+            }
+            return values.get(path)
+
+    ont_tr069_module = importlib.import_module("app.services.network.ont_tr069")
+    monkeypatch.setattr(
+        ont_tr069_module,
+        "resolve_genieacs",
+        lambda _db, _ont: (_FakeClient(), "fake-device-id"),
+    )
+
+    summary = OntTR069.get_device_summary(
+        db_session,
+        str(ont.id),
+        persist_observed_runtime=True,
+    )
+
+    assert summary.available is True
+    refreshed = db_session.get(OntUnit, ont.id)
+    assert refreshed is not None
+    assert refreshed.observed_wan_ip == "172.16.145.51"
+    assert refreshed.observed_pppoe_status == "Connected"
+    assert refreshed.tr069_last_snapshot["wan"]["WAN IP"] == "172.16.204.34"
+
+
 def test_ont_tr069_prefers_device_mac_over_first_lan_port(db_session, monkeypatch):
     olt = OLTDevice(name="OLT-TR069-MAC", mgmt_ip="198.51.100.130")
     db_session.add(olt)
@@ -2640,7 +3186,7 @@ def test_ont_tr069_uses_cached_snapshot_when_live_fetch_fails(db_session, monkey
 
 
 def test_ont_device_info_modal_does_not_allow_serial_number_change(
-    db_session, subscriber
+    db_session, subscription
 ):
     olt = network_service.olt_devices.create(
         db_session,
@@ -2658,14 +3204,7 @@ def test_ont_device_info_modal_does_not_allow_serial_number_change(
     )
     db_session.add(ont)
     db_session.flush()
-    network_service.ont_assignments.create(
-        db_session,
-        OntAssignmentCreate(
-            ont_unit_id=ont.id,
-            pon_port_id=pon.id,
-            account_id=subscriber.id,
-        ),
-    )
+    _assign_ont(db_session, ont=ont, pon=pon, subscription=subscription)
 
     result = ont_web_forms_service.update_device_info_from_form(
         db_session,

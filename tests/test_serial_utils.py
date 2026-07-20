@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from app.services.network.serial_utils import canonical, normalize, search_candidates
+from app.services.network.serial_utils import (
+    build_huawei_external_id,
+    canonical,
+    normalize,
+    parse_ont_id_on_olt,
+    search_candidates,
+)
 
 
 def test_canonical_matches_ascii_and_hex_huawei_serials() -> None:
@@ -35,3 +41,13 @@ def test_search_candidates_include_canonical_counterparts() -> None:
 def test_normalize_still_only_strips_formatting() -> None:
     assert normalize("48575443600AC29C") == "48575443600AC29C"
     assert normalize("HWTC-600A-C29C") == "HWTC600AC29C"
+
+
+def test_build_huawei_external_id_scopes_ont_id_to_fsp() -> None:
+    assert build_huawei_external_id("0/1/5", 0) == "huawei:0.1.5.0"
+    assert build_huawei_external_id("0/1/5", "11") == "huawei:0.1.5.11"
+
+
+def test_parse_ont_id_on_olt_accepts_scoped_huawei_fsp_format() -> None:
+    assert parse_ont_id_on_olt("huawei:0.1.5.0") == 0
+    assert parse_ont_id_on_olt("huawei:0.1.5.11") == 11

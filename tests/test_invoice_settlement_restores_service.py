@@ -10,7 +10,13 @@ from decimal import Decimal
 from app.models.billing import InvoiceStatus
 from app.models.catalog import BillingMode, Subscription, SubscriptionStatus
 from app.models.enforcement_lock import EnforcementReason
-from app.schemas.billing import InvoiceBulkVoidRequest, InvoiceCreate
+from app.schemas.billing import (
+    CreditNoteApplicationPreviewRequest,
+    CreditNoteApplyRequest,
+    CreditNoteIssuePreviewRequest,
+    InvoiceBulkVoidRequest,
+    InvoiceCreate,
+)
 from app.services import billing as billing_service
 from app.services.account_lifecycle import has_active_lock, suspend_subscription
 
@@ -85,3 +91,46 @@ def test_bulk_void_overdue_invoice_restores_service(
 
     db_session.refresh(sub)
     assert sub.status == SubscriptionStatus.active
+
+
+def test_credit_note_settlement_rechecks_access_and_restores_eligible_service(
+    db_session, subscriber, catalog_offer
+):
+    sub, invoice = _overdue_postpaid(db_session, subscriber, catalog_offer)
+    credit_note = billing_service.credit_notes.issue_system(
+        db_session,
+        CreditNoteIssuePreviewRequest(
+            account_id=subscriber.id,
+            currency=invoice.currency,
+            subtotal=invoice.balance_due,
+            total=invoice.balance_due,
+        ),
+        idempotency_key="credit-settlement-restoration-issue",
+        commit=True,
+    ).credit_note
+    preview = billing_service.credit_notes.preview_application(
+        db_session,
+        str(credit_note.id),
+        CreditNoteApplicationPreviewRequest(invoice_id=invoice.id),
+    )
+
+    result = billing_service.credit_notes.apply_with_evidence(
+        db_session,
+        str(credit_note.id),
+        CreditNoteApplyRequest(
+            invoice_id=invoice.id,
+            amount=preview.apply_amount,
+            preview_fingerprint=preview.fingerprint,
+            idempotency_key="credit-settlement-restore-test",
+        ),
+    )
+
+    db_session.refresh(sub)
+    db_session.refresh(invoice)
+    assert invoice.balance_due == Decimal("0.00")
+    assert result.preview is not None
+    assert result.preview.access_consequence == "recheck_after_receivable_settlement"
+    assert sub.status == SubscriptionStatus.active
+    assert not has_active_lock(
+        db_session, str(sub.id), reason=EnforcementReason.overdue
+    )

@@ -1,6 +1,6 @@
 """Admin network management base web routes."""
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -45,18 +45,77 @@ def network_hub(request: Request, db: Session = Depends(get_db)) -> HTMLResponse
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("network:device:read"))],
 )
+def _build_device_query(
+    *,
+    device_type: str | None,
+    type_filter: str | None,
+    search: str | None,
+    status: str | None,
+    vendor: str | None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
+    page: int = 1,
+    per_page: int | None = None,
+    offset: int | None = None,
+    limit: int | None = None,
+):
+    """Build the validated device ListQuery from loose route params.
+
+    Accepts either page/per_page or the offset/limit that
+    components/data/table_pagination.html emits. Falls back to defaults on
+    out-of-contract params rather than erroring the page.
+    """
+    if limit:
+        per_page = limit
+        page = ((offset or 0) // limit) + 1
+    selected_type = type_filter or device_type
+    try:
+        return web_network_core_devices_service.build_network_device_list_query(
+            device_type=selected_type,
+            status=status,
+            vendor=vendor,
+            search=search,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            page=page,
+            per_page=per_page,
+        )
+    except ValueError:
+        return web_network_core_devices_service.build_network_device_list_query(
+            page=max(page, 1)
+        )
+
+
 def devices_list(
     request: Request,
     device_type: str | None = None,
+    type_filter: str | None = Query(default=None, alias="type"),
     search: str | None = None,
     status: str | None = None,
     vendor: str | None = None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
+    page: int = Query(default=1, ge=1),
+    per_page: int | None = Query(default=None),
+    offset: int | None = Query(default=None),
+    limit: int | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    """List all network devices."""
-    page_data = web_network_core_devices_service.devices_list_page_data(
-        db, device_type=device_type, search=search, status=status, vendor=vendor
+    """List all network devices (SQL-paginated over the device projection)."""
+    list_query = _build_device_query(
+        device_type=device_type,
+        type_filter=type_filter,
+        search=search,
+        status=status,
+        vendor=vendor,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        page=page,
+        per_page=per_page,
+        offset=offset,
+        limit=limit,
     )
+    page_data = web_network_core_devices_service.devices_list_page_data(db, list_query)
     context = _base_context(request, db, active_page="devices")
     context.update(page_data)
     return templates.TemplateResponse("admin/network/devices/index.html", context)
@@ -68,9 +127,22 @@ def devices_list(
     dependencies=[Depends(require_permission("network:device:read"))],
 )
 def devices_search(
-    request: Request, search: str = "", db: Session = Depends(get_db)
+    request: Request,
+    search: str = "",
+    offset: int | None = Query(default=None),
+    limit: int | None = Query(default=None),
+    db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    devices = web_network_core_devices_service.devices_search_data(db, search)
+    list_query = _build_device_query(
+        device_type=None,
+        type_filter=None,
+        search=search,
+        status=None,
+        vendor=None,
+        offset=offset,
+        limit=limit,
+    )
+    devices = web_network_core_devices_service.devices_search_data(db, list_query)
     return templates.TemplateResponse(
         "admin/network/devices/_table_rows.html",
         {"request": request, "devices": devices},
@@ -84,14 +156,29 @@ def devices_search(
 )
 def devices_filter(
     request: Request,
+    device_type: str | None = None,
+    type_filter: str | None = Query(default=None, alias="type"),
     search: str | None = None,
     status: str | None = None,
     vendor: str | None = None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
+    offset: int | None = Query(default=None),
+    limit: int | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    devices = web_network_core_devices_service.devices_filter_data(
-        db, search=search, status=status, vendor=vendor
+    list_query = _build_device_query(
+        device_type=device_type,
+        type_filter=type_filter,
+        search=search,
+        status=status,
+        vendor=vendor,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        offset=offset,
+        limit=limit,
     )
+    devices = web_network_core_devices_service.devices_filter_data(db, list_query)
     return templates.TemplateResponse(
         "admin/network/devices/_table_rows.html",
         {"request": request, "devices": devices},
@@ -152,6 +239,22 @@ def device_reboot(request: Request, device_id: str, db: Session = Depends(get_db
         '<div class="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">'
         f"Reboot request queued for device {device_id}."
         "</div>"
+    )
+
+
+@router.get(
+    "/devices/{device_id}/reboot/preview",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:device:write"))],
+)
+def device_reboot_preview(
+    request: Request, device_id: str, db: Session = Depends(get_db)
+):
+    """Safe impact-preview step before the existing reboot command adapter."""
+    context = _base_context(request, db, active_page="devices")
+    context.update({"device_id": device_id, "affected": 1})
+    return templates.TemplateResponse(
+        "admin/network/devices/reboot_preview.html", context
     )
 
 

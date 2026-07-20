@@ -61,6 +61,40 @@ def customer_forgot_password_submit(
     return web_customer_auth_service.customer_forgot_password_submit(request, db, email)
 
 
+@router.get("/credential-enrollment", response_class=HTMLResponse)
+def customer_credential_enrollment_page(
+    request: Request,
+    token: str = Query("", max_length=4096),
+    db: Session = Depends(get_db),
+):
+    """Display the referral customer credential-enrollment form."""
+
+    return web_customer_auth_service.customer_credential_enrollment_page(
+        request, db, token
+    )
+
+
+@router.post("/credential-enrollment", response_class=HTMLResponse)
+def customer_credential_enrollment_submit(
+    request: Request,
+    token: str = Form(..., min_length=1, max_length=4096),
+    password: str = Form(..., min_length=1, max_length=255),
+    password_confirm: str = Form(..., min_length=1, max_length=255),
+    username: str = Form("", max_length=150, pattern=r"^\S*$"),
+    db: Session = Depends(get_db),
+):
+    """Create the customer-chosen local credential from the emailed token."""
+
+    return web_customer_auth_service.customer_credential_enrollment_submit(
+        request,
+        db,
+        token=token,
+        password=password,
+        password_confirm=password_confirm,
+        username=username,
+    )
+
+
 @router.get("/verify-email", response_class=HTMLResponse)
 def customer_verify_email_page(
     request: Request,

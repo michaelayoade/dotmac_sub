@@ -6,8 +6,57 @@ primary colour can be themed at runtime without a CSS rebuild.
 
 from __future__ import annotations
 
+import re
+
 DEFAULT_HEX = "#206a07"
 DEFAULT_SECONDARY_HEX = "#06b6d4"
+SEMANTIC_TONES = ("positive", "info", "warning", "negative", "neutral")
+DEFAULT_SEMANTIC_COLORS = {
+    "positive": "#15803d",
+    "info": "#1d4ed8",
+    "warning": "#a16207",
+    "negative": "#b91c1c",
+    "neutral": "#475569",
+}
+COLOR_SCALE_STEPS = (50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950)
+
+# Tailwind palette names still appear in older templates. They are compatibility
+# aliases only: the runtime brand stylesheet remaps every shade to a canonical
+# identity or semantic role so those classes cannot become a second colour
+# authority. New UI code should author primary/accent/semantic tokens directly.
+LEGACY_TAILWIND_PALETTE_ROLES = {
+    "red": "semantic-negative",
+    "rose": "semantic-negative",
+    "orange": "semantic-warning",
+    "amber": "semantic-warning",
+    "yellow": "semantic-warning",
+    "lime": "semantic-positive",
+    "green": "semantic-positive",
+    "emerald": "semantic-positive",
+    "sky": "semantic-info",
+    "blue": "semantic-info",
+    "cyan": "accent",
+    "teal": "accent",
+    "indigo": "primary",
+    "violet": "primary",
+    "purple": "primary",
+    "fuchsia": "accent",
+    "pink": "accent",
+}
+
+# Ordered, brand-derived colours for charts, maps, and other categorical data.
+# The keys are emitted as --color-data-1 ... --color-data-7 by theme.css.
+CATEGORICAL_COLOR_ROLES = (
+    "primary",
+    "accent",
+    "semantic-info",
+    "semantic-positive",
+    "semantic-warning",
+    "semantic-negative",
+    "semantic-neutral",
+)
+MIN_SEMANTIC_TEXT_CONTRAST = 4.5
+_SIX_DIGIT_HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 # step -> (mix_ratio, mix_toward_white)
 # Light steps mix the base toward white; dark steps mix toward black.
@@ -73,3 +122,40 @@ def generate_scale(hex_color: str) -> dict[int, str]:
         nb = _mix(b, ratio, toward_white)
         scale[step] = f"#{nr:02x}{ng:02x}{nb:02x}"
     return scale
+
+
+def _relative_luminance(hex_color: str) -> float:
+    r, g, b = _parse_hex(hex_color)
+
+    def linear(channel: int) -> float:
+        value = channel / 255
+        return value / 12.92 if value <= 0.04045 else ((value + 0.055) / 1.055) ** 2.4
+
+    return 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
+
+
+def contrast_ratio(first: str, second: str) -> float:
+    """Return the WCAG relative-luminance contrast ratio for two hex colors."""
+    lighter, darker = sorted(
+        (_relative_luminance(first), _relative_luminance(second)), reverse=True
+    )
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def semantic_color_contrast_ratios(hex_color: str) -> tuple[float, float]:
+    """Return light/dark text contrast produced by the semantic scale."""
+    scale = generate_scale(hex_color)
+    return (
+        contrast_ratio(scale[700], scale[50]),
+        contrast_ratio(scale[300], scale[900]),
+    )
+
+
+def is_accessible_semantic_color(hex_color: str) -> bool:
+    """Whether a semantic seed keeps status text at WCAG AA in both themes."""
+    if not _SIX_DIGIT_HEX.fullmatch(str(hex_color)):
+        return False
+    return all(
+        ratio >= MIN_SEMANTIC_TEXT_CONTRAST
+        for ratio in semantic_color_contrast_ratios(hex_color)
+    )

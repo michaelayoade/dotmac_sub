@@ -73,6 +73,10 @@ def _parse_routeros_uptime_to_seconds(value: object) -> int | None:
 
 
 def _mikrotik_api_port(device: NasDevice) -> int:
+    # Prefer the first-class column; fall back to the legacy tag, then 8728.
+    column_port = getattr(device, "mikrotik_api_port", None)
+    if isinstance(column_port, int) and 1 <= column_port <= 65535:
+        return column_port
     raw_port = prefixed_value_from_tags(device.tags, "mikrotik_api_port:")
     if raw_port:
         try:

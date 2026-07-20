@@ -90,6 +90,32 @@ def test_update_service_order_status(db_session, subscriber_account, subscriptio
     assert updated.status == ServiceOrderStatus.submitted
 
 
+def test_completing_service_order_activates_pending_subscription(
+    db_session, subscriber_account, subscription
+):
+    from app.models.catalog import SubscriptionStatus
+
+    subscription.status = SubscriptionStatus.pending
+    db_session.commit()
+    order = provisioning_service.service_orders.create(
+        db_session,
+        ServiceOrderCreate(
+            account_id=subscriber_account.id,
+            subscription_id=subscription.id,
+            status=ServiceOrderStatus.provisioning,
+        ),
+    )
+
+    provisioning_service.service_orders.update(
+        db_session,
+        str(order.id),
+        ServiceOrderUpdate(status=ServiceOrderStatus.active),
+    )
+
+    db_session.refresh(subscription)
+    assert subscription.status == SubscriptionStatus.active
+
+
 def test_canceled_service_order_cannot_be_revived(
     db_session, subscriber_account, subscription
 ):

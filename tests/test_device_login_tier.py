@@ -13,12 +13,12 @@ def test_wildcard_is_full():
     assert derive_router_tier(set(), {"*"}) == "full"
 
 
-def test_write_perms():
+def test_write_perms_map_to_limited_routeros_login():
     assert derive_router_tier(set(), {"router:write"}) == "write"
     assert derive_router_tier(set(), {"router:push_config"}) == "write"
 
 
-def test_read_perm():
+def test_read_perm_maps_to_limited_routeros_login():
     assert derive_router_tier(set(), {"router:read"}) == "read"
 
 

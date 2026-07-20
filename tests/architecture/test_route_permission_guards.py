@@ -46,6 +46,11 @@ _ALLOWLIST_PREFIXES = (
     "/api/v1/payment-proofs/me",
     "/api/v1/payment-proofs/reseller",
     "/api/v1/service-requests",
+    "/api/v1/field",
+    # Self-scoped vendor portal — authz is FieldVendorUser membership
+    # (require_native_vendor_context), same pattern as /api/v1/field and
+    # /api/v1/reseller. Behavior pinned by tests/test_vendor_portal_auth.py.
+    "/api/v1/vendor",
     "/api/v1/auth",
     "/api/v1/health",
     "/api/v1/tables",

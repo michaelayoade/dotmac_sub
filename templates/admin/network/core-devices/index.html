@@ -1,16 +1,9 @@
 {% extends "layouts/admin.html" %}
 {% from "components/ui/macros.html" import
     ambient_background, page_header, stats_card, card,
-    table_head, table_row, status_badge, empty_state,
+    table_head, table_row, status_presentation_badge, empty_state,
     animation_styles
 %}
-
-{% set device_status_variants = {
-    'online': 'online',
-    'degraded': 'warning',
-    'maintenance': 'info',
-    'offline': 'offline'
-} %}
 
 {% block title %}Core Network Devices - Admin{% endblock %}
 
@@ -141,7 +134,7 @@
                     {"label": "Vendor / Model"},
                     {"label": "Management IP"},
                     {"label": "Ping"},
-                    {"label": "Zabbix SNMP"},
+                    {"label": "SNMP"},
                     {"label": "Status"},
                     {"label": "Uptime"},
                     {"label": "Backup"},
@@ -225,8 +218,9 @@
                             {% endif %}
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap">
-                            {% set status_val = device.status.value if device.status else 'offline' %}
-                            {{ status_badge(status_val | title, variant=device_status_variants.get(status_val, 'offline')) }}
+                            <span title="{{ device.operational_reason | replace('_', ' ') }}">
+                                {{ status_presentation_badge(device.status_presentation, size="sm") }}
+                            </span>
                             {% set child_impact = child_impacts.get(device.id|string) if child_impacts else None %}
                             {% if child_impact and child_impact.impacted %}
                             <div class="mt-1">
@@ -255,7 +249,7 @@
                         <td class="px-6 py-4 whitespace-nowrap text-xs text-slate-500 dark:text-slate-400">
                             {% set backup = backup_map.get(device.id|string) if backup_map else None %}
                             {% if backup and backup.last_backup_at %}
-                            {{ backup.last_backup_at.strftime('%Y-%m-%d %H:%M') }}
+                            {{ backup.last_backup_at | app_datetime('%Y-%m-%d %H:%M') }}
                             {% else %}
                             -
                             {% endif %}

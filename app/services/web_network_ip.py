@@ -18,6 +18,7 @@ from sqlalchemy.orm import joinedload
 from app.models.catalog import NasDevice, Subscription
 from app.models.network import (
     IPAssignment,
+    IpPool,
     IPv4Address,
     IPv6Address,
     IPVersion,
@@ -33,6 +34,11 @@ from app.schemas.network import (
 from app.services import network as network_service
 from app.services.audit_helpers import diff_dicts, model_to_dict
 from app.services.common import coerce_uuid, validate_enum
+from app.services.list_query import (
+    ListDefinition,
+    ListFieldDefinition,
+    ListQuery,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1564,6 +1570,64 @@ def assign_ipv4_address(
     }
 
 
+# UI page contract for the admin IP-management addresses list. The
+# projection-boundary owner: it declares the searchable/filterable/sortable
+# fields, default order and page sizes. build_ip_management_data remains the read
+# owner. NOTE: the addresses list paginates a union of IPv4Address + IPv6Address
+# with one combined counter; making that union pagination correct is a separate
+# follow-up (see ui.ip_address_list_projection notes). This contract only owns
+# request-state validation, ordering and page sizing.
+IP_ADDRESS_LIST_DEFINITION = ListDefinition(
+    key="ip_addresses",
+    fields=(
+        ListFieldDefinition("search", "Search", searchable=True),
+        ListFieldDefinition("pool_filter", "Pool", filterable=True),
+        ListFieldDefinition("address", "Address", sortable=True),
+    ),
+    default_sort="address",
+    default_sort_dir="asc",
+    default_per_page=50,
+)
+
+
+def combined_address_window(
+    offset: int, limit: int, total_ipv4: int
+) -> tuple[int, int, int, int]:
+    """Window ``(offset, limit)`` over the concatenated IPv4-then-IPv6 sequence.
+
+    The addresses list renders all IPv4 rows first, then all IPv6 rows. Treating
+    that as one ordered sequence, this returns the per-family
+    ``(ipv4_offset, ipv4_take, ipv6_offset, ipv6_take)`` so a page contains at
+    most ``limit`` rows and successive pages never skip or repeat an address —
+    unlike applying the same offset/limit to each family independently.
+    """
+    ipv4_offset = min(offset, total_ipv4)
+    ipv4_take = max(0, min(limit, total_ipv4 - offset))
+    ipv6_offset = max(0, offset - total_ipv4)
+    ipv6_take = max(0, limit - ipv4_take)
+    return ipv4_offset, ipv4_take, ipv6_offset, ipv6_take
+
+
+def build_ip_address_list_query(
+    *,
+    search: str | None = None,
+    pool_filter: str | None = None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
+    page: int = 1,
+    per_page: int | None = None,
+) -> ListQuery:
+    """Normalise IP-address-list request params through the page contract."""
+    return IP_ADDRESS_LIST_DEFINITION.build_query(
+        search=search,
+        filters={"pool_filter": pool_filter},
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        page=page,
+        per_page=per_page,
+    )
+
+
 def build_ip_management_data(
     db,
     *,
@@ -1571,6 +1635,7 @@ def build_ip_management_data(
     search: str | None = None,
     pool_filter: str | None = None,
     address_limit: int = 50,
+    sort_dir: str = "asc",
 ) -> dict[str, object]:
     from sqlalchemy import func, select
     from sqlalchemy.orm import selectinload
@@ -1655,36 +1720,57 @@ def build_ip_management_data(
         or 0
     )
 
-    # Fetch paginated addresses with pool + assignment eager-loaded for the
-    # template's `addr.pool.name` and `addr.assignment.is_active` lookups.
-    ipv4_q = (
-        _addr_filters(
-            select(IPv4Address).options(
-                selectinload(IPv4Address.pool),
-                selectinload(IPv4Address.assignment),
-            ),
-            IPv4Address,
-        )
-        .order_by(IPv4Address.address.asc())
-        .limit(address_limit)
-        .offset(offset)
+    # Combined pagination across the concatenated IPv4-then-IPv6 ordering: apply
+    # the page window to the merged sequence so a page shows at most
+    # address_limit rows and pages align across the two families. Previously each
+    # family used the same offset/limit independently, so a page could show up to
+    # 2x address_limit rows and later pages skipped real addresses.
+    ipv4_offset, ipv4_take, ipv6_offset, ipv6_take = combined_address_window(
+        offset, address_limit, total_ipv4
     )
-    ipv4_addresses = list(db.scalars(ipv4_q).all())
-    _annotate_ipv4_additional_route_owners(db, ipv4_addresses)
 
-    ipv6_q = (
-        _addr_filters(
-            select(IPv6Address).options(
-                selectinload(IPv6Address.pool),
-                selectinload(IPv6Address.assignment),
-            ),
-            IPv6Address,
+    # Fetch the windowed addresses with pool + assignment eager-loaded for the
+    # template's `addr.pool.name` and `addr.assignment.is_active` lookups.
+    ipv4_addresses: list = []
+    if ipv4_take:
+        ipv4_q = (
+            _addr_filters(
+                select(IPv4Address).options(
+                    selectinload(IPv4Address.pool),
+                    selectinload(IPv4Address.assignment),
+                ),
+                IPv4Address,
+            )
+            .order_by(
+                IPv4Address.address.desc()
+                if sort_dir == "desc"
+                else IPv4Address.address.asc()
+            )
+            .limit(ipv4_take)
+            .offset(ipv4_offset)
         )
-        .order_by(IPv6Address.address.asc())
-        .limit(address_limit)
-        .offset(offset)
-    )
-    ipv6_addresses = list(db.scalars(ipv6_q).all())
+        ipv4_addresses = list(db.scalars(ipv4_q).all())
+        _annotate_ipv4_additional_route_owners(db, ipv4_addresses)
+
+    ipv6_addresses: list = []
+    if ipv6_take:
+        ipv6_q = (
+            _addr_filters(
+                select(IPv6Address).options(
+                    selectinload(IPv6Address.pool),
+                    selectinload(IPv6Address.assignment),
+                ),
+                IPv6Address,
+            )
+            .order_by(
+                IPv6Address.address.desc()
+                if sort_dir == "desc"
+                else IPv6Address.address.asc()
+            )
+            .limit(ipv6_take)
+            .offset(ipv6_offset)
+        )
+        ipv6_addresses = list(db.scalars(ipv6_q).all())
 
     total_addresses = total_ipv4 + total_ipv6
     total_pages = max(1, (total_addresses + address_limit - 1) // address_limit)
@@ -1721,6 +1807,7 @@ def get_ip_pool_new_form_data(db=None) -> dict[str, object]:
         "action_url": "/admin/network/ip-management/pools",
         "olt_devices": list_active_olts(db),
         "vlans": list_active_vlans(db),
+        "nas_devices": list_active_nas_devices(db),
     }
 
 
@@ -1742,6 +1829,17 @@ def list_active_ip_pools(db):
         order_dir="asc",
         limit=200,
         offset=0,
+    )
+
+
+def list_active_nas_devices(db):
+    if db is None:
+        return []
+    return (
+        db.query(NasDevice)
+        .filter(NasDevice.is_active.is_(True))
+        .order_by(NasDevice.name.asc())
+        .all()
     )
 
 
@@ -1853,6 +1951,7 @@ def parse_ip_pool_form(form) -> dict[str, object]:
         "gateway": form.get("gateway", "").strip() or None,
         "dns_primary": form.get("dns_primary", "").strip() or None,
         "dns_secondary": form.get("dns_secondary", "").strip() or None,
+        "nas_device_id": form.get("nas_device_id", "").strip() or None,
         "olt_device_id": form.get("olt_device_id", "").strip() or None,
         "vlan_id": form.get("vlan_id", "").strip() or None,
         "notes": form.get("notes", "").strip() or None,
@@ -1943,6 +2042,14 @@ def validate_ip_pool_values(values: dict[str, object]) -> str | None:
 
 
 def _ip_pool_scope_error(db, values: dict[str, object]) -> str | None:
+    nas_id = str(values.get("nas_device_id") or "").strip()
+    if nas_id:
+        try:
+            nas = db.get(NasDevice, coerce_uuid(nas_id))
+        except (TypeError, ValueError):
+            return "Selected BNG is invalid."
+        if nas is None or not nas.is_active:
+            return "Selected BNG was not found or is inactive."
     vlan_id = str(values.get("vlan_id") or "").strip()
     olt_id = str(values.get("olt_device_id") or "").strip()
     if not vlan_id:
@@ -1970,6 +2077,7 @@ def pool_form_snapshot(
         "gateway": values.get("gateway"),
         "dns_primary": values.get("dns_primary"),
         "dns_secondary": values.get("dns_secondary"),
+        "nas_device_id": values.get("nas_device_id"),
         "olt_device_id": values.get("olt_device_id"),
         "vlan_id": values.get("vlan_id"),
         "notes": values.get("notes"),
@@ -1999,6 +2107,7 @@ def pool_form_snapshot_from_model(pool) -> dict[str, object]:
         "gateway": pool.gateway,
         "dns_primary": pool.dns_primary,
         "dns_secondary": pool.dns_secondary,
+        "nas_device_id": str(pool.nas_device_id) if pool.nas_device_id else None,
         "olt_device_id": str(pool.olt_device_id) if pool.olt_device_id else None,
         "vlan_id": str(getattr(pool, "vlan_id", None) or "") or None,
         "notes": cleaned_notes,
@@ -2132,6 +2241,8 @@ def _nas_devices_using_pool(db, pool_id: str) -> list[NasDevice]:
     `NasDevice.tags` column (no FK), so this is the reverse lookup.
     """
     tag = f"radius_pool:{pool_id}"
+    pool = db.get(IpPool, coerce_uuid(pool_id))
+    directly_bound_id = getattr(pool, "nas_device_id", None)
     if _session_dialect_name(db) == "sqlite":
         devices = (
             db.query(NasDevice)
@@ -2139,11 +2250,20 @@ def _nas_devices_using_pool(db, pool_id: str) -> list[NasDevice]:
             .order_by(NasDevice.name.asc())
             .all()
         )
-        return [device for device in devices if tag in (device.tags or [])]
+        return [
+            device
+            for device in devices
+            if device.id == directly_bound_id or tag in (device.tags or [])
+        ]
     stmt = (
         select(NasDevice)
         .where(NasDevice.is_active.is_(True))
-        .where(NasDevice.tags.contains([tag]))
+        .where(
+            or_(
+                NasDevice.id == directly_bound_id,
+                NasDevice.tags.contains([tag]),
+            )
+        )
         .order_by(NasDevice.name.asc())
     )
     return list(db.execute(stmt).scalars().all())

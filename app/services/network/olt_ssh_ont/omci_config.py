@@ -188,7 +188,7 @@ def configure_ont_pppoe_omci(
     """Configure PPPoE WAN via OMCI (OLT-side, not TR-069).
 
     Uses the Huawei OLT command:
-        ont ipconfig <port> <ont-id> ip-index <idx> pppoe vlan <vlan>
+        ont ipconfig <port> <ont-id> ip-index <idx> pppoe vlan <vlan> priority <pri>
             user-account username <user> password <pass>
 
     This creates a PPPoE WAN connection on the ONT with the specified VLAN
@@ -224,7 +224,8 @@ def configure_ont_pppoe_omci(
         # Huawei MA5608T/MA5800 syntax for PPPoE via OMCI
         cmd = (
             f"ont ipconfig {port_num} {ont_id} ip-index {ip_index} "
-            f"pppoe vlan {vlan_id} user-account username {username} password {password}"
+            f"pppoe vlan {vlan_id} priority {priority} "
+            f"user-account username {username} password {password}"
         )
         _send_slow(channel, cmd)
         output = core._read_until_prompt(channel, config_prompt, timeout_sec=12)

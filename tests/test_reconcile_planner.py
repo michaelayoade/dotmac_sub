@@ -17,11 +17,13 @@ from app.services.network.reconcile import (
     AcsDeleteObject,
     AcsObservedFields,
     AcsSetDhcpServer,
+    AcsSetIpv6,
     AcsSetManagementServer,
     AcsSetNatEnabled,
     AcsSetPppoe,
-    AcsSetWifiPassword,
-    AcsSetWifiSsid,
+    AcsSetRemoteAccess,
+    AcsSetWanIp,
+    AcsSetWifiConfig,
     OltAuthorize,
     OltClearIphost,
     OltCreateServicePort,
@@ -37,6 +39,8 @@ from app.services.network.reconcile import (
     OntDesiredState,
     OntObservedState,
     Plan,
+    Tr069RemoteAccessParameterPaths,
+    Tr181WanParameterPaths,
     compute_plan,
 )
 
@@ -92,6 +96,30 @@ def _desired(**overrides) -> OntDesiredState:
     )
     defaults.update(overrides)
     return OntDesiredState(**defaults)
+
+
+def _tr181_wan_paths() -> Tr181WanParameterPaths:
+    return Tr181WanParameterPaths(
+        ip_enable="Device.IP.Interface.1.Enable",
+        dhcp_enable="Device.DHCPv4.Client.1.Enable",
+        ip_address="Device.IP.Interface.1.IPv4Address.1.IPAddress",
+        subnet_mask="Device.IP.Interface.1.IPv4Address.1.SubnetMask",
+        gateway="Device.Routing.Router.1.IPv4Forwarding.1.GatewayIPAddress",
+        dns_primary="Device.DNS.Client.Server.1.DNSServer",
+        dns_secondary="Device.DNS.Client.Server.2.DNSServer",
+        nat_enable="Device.NAT.InterfaceSetting.1.Enable",
+        vlan_enable="Device.Ethernet.VLANTermination.1.Enable",
+        vlan_id="Device.Ethernet.VLANTermination.1.VLANID",
+    )
+
+
+def _remote_paths() -> Tr069RemoteAccessParameterPaths:
+    return Tr069RemoteAccessParameterPaths(
+        ssh_enabled="InternetGatewayDevice.X_HW_UserInterface.SSHEnable",
+        ssh_port="InternetGatewayDevice.X_HW_UserInterface.SSHPort",
+        telnet_enabled="InternetGatewayDevice.X_HW_UserInterface.TelnetEnable",
+        telnet_port="InternetGatewayDevice.X_HW_UserInterface.TelnetPort",
+    )
 
 
 def _olt_observed(**overrides) -> OltObservedFields:
@@ -189,6 +217,9 @@ def _synced_observed(desired: OntDesiredState) -> OntObservedState:
             acs_observed_nat_enabled=desired.nat_enabled,
             acs_observed_dhcp_enabled=desired.dhcp_enabled,
             acs_observed_ssid=desired.wifi_ssid,
+            acs_observed_wifi_enabled=desired.wifi_enabled,
+            acs_observed_wifi_channel=desired.wifi_channel,
+            acs_observed_wifi_security_mode=desired.wifi_security_mode,
             acs_observed_periodic_inform_interval_sec=(
                 desired.periodic_inform_interval_sec
             ),
@@ -218,6 +249,164 @@ def test_synced_ont_produces_empty_plan():
     assert plan.required_surfaces == frozenset()
 
 
+def test_dual_stack_tr181_emits_ipv6_and_pd_action():
+    desired = _desired(ipv6_enabled=True, tr069_data_model_root="Device")
+    observed = _synced_observed(desired)
+    observed = dataclasses.replace(
+        observed,
+        acs=dataclasses.replace(
+            observed.acs,
+            acs_data_model_root="Device",
+            acs_observed_ipv6_enabled=False,
+        ),
+    )
+
+    plan = compute_plan(desired, observed, "sweep")
+
+    action = next(item for item in plan.actions if isinstance(item, AcsSetIpv6))
+    assert action.enabled is True
+    assert action.request_prefixes is True
+    assert action.interface_index == 1
+
+
+def test_dual_stack_tr098_is_visible_unrepairable_drift():
+    desired = _desired(
+        ipv6_enabled=True,
+        tr069_data_model_root="InternetGatewayDevice",
+    )
+    observed = _synced_observed(desired)
+    observed = dataclasses.replace(
+        observed,
+        acs=dataclasses.replace(
+            observed.acs,
+            acs_data_model_root="InternetGatewayDevice",
+            acs_observed_ipv6_enabled=False,
+        ),
+    )
+
+    plan = compute_plan(desired, observed, "sweep")
+
+    assert not any(isinstance(item, AcsSetIpv6) for item in plan.actions)
+    drift = next(item for item in plan.drifts if item.field == "ipv6_enabled")
+    assert drift.repairable is False
+
+
+def test_dhcp_wan_emits_reconciled_wan_ip_action():
+    desired = _desired(wan_mode="dhcp", nat_enabled=True)
+    observed = _synced_observed(desired)
+    observed = dataclasses.replace(
+        observed,
+        acs=dataclasses.replace(
+            observed.acs,
+            acs_data_model_root="InternetGatewayDevice",
+            acs_observed_wan_ip_enable=False,
+            acs_observed_wan_addressing_type="Static",
+        ),
+    )
+
+    plan = compute_plan(desired, observed, "sweep")
+
+    action = next(item for item in plan.actions if isinstance(item, AcsSetWanIp))
+    assert action.mode == "dhcp"
+    assert action.nat_enabled is True
+    assert action.vlan == 203
+
+
+def test_static_wan_action_carries_addressing_intent():
+    desired = _desired(
+        wan_mode="static",
+        nat_enabled=True,
+        wan_static_ip="198.51.100.10",
+        wan_static_subnet="255.255.255.248",
+        wan_static_gateway="198.51.100.9",
+        wan_static_dns="1.1.1.1,8.8.8.8",
+    )
+    observed = _synced_observed(desired)
+    observed = dataclasses.replace(
+        observed,
+        acs=dataclasses.replace(
+            observed.acs,
+            acs_data_model_root="InternetGatewayDevice",
+            acs_observed_wan_ip_enable=True,
+            acs_observed_wan_addressing_type="DHCP",
+        ),
+    )
+
+    action = next(
+        item
+        for item in compute_plan(desired, observed, "sync").actions
+        if isinstance(item, AcsSetWanIp)
+    )
+    assert action.mode == "static"
+    assert action.ip_address == "198.51.100.10"
+    assert action.gateway == "198.51.100.9"
+
+
+def test_static_wan_nat_or_dns_drift_replans_device_write():
+    desired = _desired(
+        wan_mode="static",
+        nat_enabled=False,
+        wan_static_ip="160.119.127.194",
+        wan_static_subnet="255.255.255.248",
+        wan_static_gateway="160.119.127.193",
+        wan_static_dns="1.1.1.1,8.8.8.8",
+    )
+    observed = _synced_observed(desired)
+    observed = dataclasses.replace(
+        observed,
+        acs=dataclasses.replace(
+            observed.acs,
+            acs_observed_wan_ip_enable=True,
+            acs_observed_wan_addressing_type="Static",
+            acs_observed_wan_vlan=203,
+            acs_observed_nat_enabled=True,
+            acs_observed_wan_ip_address="160.119.127.194",
+            acs_observed_wan_subnet_mask="255.255.255.248",
+            acs_observed_wan_gateway="160.119.127.193",
+            acs_observed_wan_dns_servers="1.1.1.1,8.8.8.8",
+        ),
+    )
+
+    assert any(
+        isinstance(item, AcsSetWanIp)
+        for item in compute_plan(desired, observed, "sweep").actions
+    )
+
+
+def test_tr181_static_missing_projected_dns_remains_drift():
+    desired = _desired(
+        wan_mode="static",
+        nat_enabled=False,
+        wan_static_ip="160.119.127.194",
+        wan_static_subnet="255.255.255.248",
+        wan_static_gateway="160.119.127.193",
+        wan_static_dns="1.1.1.1,8.8.8.8",
+        tr069_data_model_root="Device",
+        tr181_wan_paths=_tr181_wan_paths(),
+    )
+    observed = _synced_observed(desired)
+    observed = dataclasses.replace(
+        observed,
+        acs=dataclasses.replace(
+            observed.acs,
+            acs_data_model_root="Device",
+            acs_observed_wan_ip_enable=True,
+            acs_observed_wan_addressing_type="Static",
+            acs_observed_wan_vlan=203,
+            acs_observed_nat_enabled=False,
+            acs_observed_wan_ip_address="160.119.127.194",
+            acs_observed_wan_subnet_mask="255.255.255.248",
+            acs_observed_wan_gateway="160.119.127.193",
+            acs_observed_wan_dns_servers=None,
+        ),
+    )
+
+    assert any(
+        isinstance(item, AcsSetWanIp)
+        for item in compute_plan(desired, observed, "sweep").actions
+    )
+
+
 # ── Fresh authorization (TR-069 WAN path) ───────────────────────────────────
 
 
@@ -239,17 +428,35 @@ def test_fresh_authorize_emits_authorize_servicep_ipconfig_tr069_acs():
     # set NAT, set DHCP, set ManagementServer.
     assert AcsAddObject in action_types
     assert AcsSetPppoe in action_types
-    assert AcsSetWifiSsid in action_types
-    assert AcsSetWifiPassword in action_types  # fresh sync → push
+    assert AcsSetWifiConfig in action_types
+    wifi = next(item for item in plan.actions if isinstance(item, AcsSetWifiConfig))
+    assert wifi.ssid == desired.wifi_ssid
+    assert wifi.password_ref == desired.wifi_password_ref
     assert AcsSetDhcpServer in action_types
     assert AcsSetManagementServer in action_types
 
     # NAT defensive is emitted when nat_enabled observed != desired. Fresh
     # device has nat=None observed; the diff helper treats None as "no signal"
-    # so NAT push is skipped on a fresh device — it'll be enforced on the
-    # next sweep after the device informs.
-    # That's a real design choice; assert it explicitly.
+    # so NAT push is skipped until the device informs.
     assert AcsSetNatEnabled not in action_types
+
+
+def test_sweep_repairs_observed_tr069_profile_drift():
+    desired = _desired(tr069_profile_id=5)
+    observed = _synced_observed(desired)
+    observed = dataclasses.replace(
+        observed,
+        olt=dataclasses.replace(observed.olt, olt_tr069_profile_id=2),
+    )
+
+    plan = compute_plan(desired, observed, "sweep")
+
+    profile_actions = [
+        action for action in plan.actions if isinstance(action, OltTr069ServerConfig)
+    ]
+    assert len(profile_actions) == 1
+    assert profile_actions[0].profile_id == 5
+    assert any(drift.field == "olt_tr069_profile_id" for drift in plan.drifts)
 
 
 def test_fresh_authorize_requires_both_surfaces():
@@ -320,7 +527,13 @@ def test_bridge_mode_skips_pppoe_and_nat_actions():
 
 def test_wifi_password_pushed_on_sync_for_fresh_ont():
     plan = compute_plan(_desired(), _observed(), "sync")
-    assert AcsSetWifiPassword in _types(plan)
+    assert AcsSetWifiConfig in _types(plan)
+    assert (
+        next(
+            item for item in plan.actions if isinstance(item, AcsSetWifiConfig)
+        ).password_ref
+        == _desired().wifi_password_ref
+    )
 
 
 def test_wifi_password_pushed_on_bootstrap_regardless_of_olt_presence():
@@ -328,21 +541,21 @@ def test_wifi_password_pushed_on_bootstrap_regardless_of_olt_presence():
     even though the OLT still has the ONT in its table."""
     desired = _desired()
     plan = compute_plan(desired, _synced_observed(desired), "bootstrap")
-    assert AcsSetWifiPassword in _types(plan)
+    assert AcsSetWifiConfig in _types(plan)
 
 
 def test_wifi_password_skipped_on_sweep():
     """Sweeper never pushes the PSK — no observable to confirm drift."""
     desired = _desired()
     plan = compute_plan(desired, _synced_observed(desired), "sweep")
-    assert AcsSetWifiPassword not in _types(plan)
+    assert AcsSetWifiConfig not in _types(plan)
 
 
 def test_wifi_password_skipped_on_sync_when_ont_already_present():
     """A no-op sync on a present-and-synced ONT shouldn't re-push the PSK."""
     desired = _desired()
     plan = compute_plan(desired, _synced_observed(desired), "sync")
-    assert AcsSetWifiPassword not in _types(plan)
+    assert AcsSetWifiConfig not in _types(plan)
 
 
 def test_wifi_password_pushed_on_operator_password_change():
@@ -355,7 +568,8 @@ def test_wifi_password_pushed_on_operator_password_change():
         "sync",
         proposed_fields=frozenset({"wifi_password_ref"}),
     )
-    assert _types(plan) == [AcsSetWifiPassword]
+    assert _types(plan) == [AcsSetWifiConfig]
+    assert plan.actions[0].password_ref == "new-pass"
     assert OltModifyDescription not in _types(plan)
 
 
@@ -370,7 +584,7 @@ def test_wifi_password_change_not_re_emitted_on_verify_plan():
         proposed_fields=frozenset({"wifi_password_ref"}),
         force_proposed_writes=False,
     )
-    assert AcsSetWifiPassword not in _types(plan)
+    assert AcsSetWifiConfig not in _types(plan)
     assert OltModifyDescription not in _types(plan)
 
 
@@ -383,7 +597,8 @@ def test_wifi_ssid_change_scopes_out_unrelated_olt_drift():
         "sync",
         proposed_fields=frozenset({"wifi_ssid"}),
     )
-    assert _types(plan) == [AcsSetWifiSsid]
+    assert _types(plan) == [AcsSetWifiConfig]
+    assert plan.actions[0].ssid == "NEW_SSID"
 
 
 # ── WiFi SSID — observable, diff-driven ─────────────────────────────────────
@@ -394,7 +609,7 @@ def test_wifi_ssid_change_emits_only_ssid_action():
     observed = _synced_observed(_desired())  # observed reflects OLD ssid
     plan = compute_plan(desired, observed, "sync")
     types = _types(plan)
-    assert AcsSetWifiSsid in types
+    assert AcsSetWifiConfig in types
     # SSID-only change shouldn't drag the OLT side along.
     assert OltAuthorize not in types
     assert OltIpconfig not in types
@@ -403,7 +618,47 @@ def test_wifi_ssid_change_emits_only_ssid_action():
 def test_wifi_ssid_match_skips_ssid_action():
     desired = _desired()
     plan = compute_plan(desired, _synced_observed(desired), "sync")
-    assert AcsSetWifiSsid not in _types(plan)
+    assert AcsSetWifiConfig not in _types(plan)
+
+
+def test_wifi_fields_are_batched_and_security_is_native_for_tr098():
+    desired = _desired(
+        wifi_enabled=False,
+        wifi_channel=6,
+        wifi_security_mode="WPA2-Personal",
+        tr069_data_model_root="InternetGatewayDevice",
+    )
+    observed = _synced_observed(_desired())
+    observed = dataclasses.replace(
+        observed,
+        acs=dataclasses.replace(
+            observed.acs,
+            acs_data_model_root="InternetGatewayDevice",
+            acs_observed_wifi_enabled=True,
+            acs_observed_wifi_channel=1,
+            acs_observed_wifi_security_mode="WPA",
+            acs_observed_wifi_instance_index=7,
+        ),
+    )
+
+    plan = compute_plan(
+        desired,
+        observed,
+        "sync",
+        proposed_fields=frozenset(
+            {"wifi_enabled", "wifi_channel", "wifi_security_mode"}
+        ),
+    )
+
+    assert _types(plan) == [AcsSetWifiConfig]
+    action = plan.actions[0]
+    assert isinstance(action, AcsSetWifiConfig)
+    assert action.enabled is False
+    assert action.channel == 6
+    assert action.security_mode == "11i"
+    assert action.ssid is None
+    assert action.password_ref is None
+    assert ".WLANConfiguration.7." in action.paths.ssid
 
 
 # ── OMCI vs TR-069 selection ────────────────────────────────────────────────
@@ -615,6 +870,65 @@ def test_present_cr_credentials_skip_management_server_push():
     assert AcsSetManagementServer not in _types(plan)
 
 
+def test_acs_endpoint_drift_plans_verified_management_server_update():
+    desired = _desired(
+        acs_url="https://new-acs.example.net/cwmp",
+        acs_username="cwmp-user",
+        acs_password_ref="encrypted-cwmp-password",
+    )
+    observed = dataclasses.replace(
+        _synced_observed(desired),
+        acs=dataclasses.replace(
+            _synced_observed(desired).acs,
+            acs_observed_url="https://old-acs.example.net/cwmp",
+            acs_observed_username="old-user",
+            acs_observed_password_set=True,
+        ),
+    )
+
+    plan = compute_plan(desired, observed, "sweep")
+
+    action = next(a for a in plan.actions if isinstance(a, AcsSetManagementServer))
+    assert action.acs_url == "https://new-acs.example.net/cwmp"
+    assert action.acs_username == "cwmp-user"
+    assert action.acs_password_ref == "encrypted-cwmp-password"
+    assert any(d.field == "acs_management_server" for d in plan.drifts)
+
+
+def test_explicit_acs_password_rotation_forces_one_write_only_push():
+    desired = _desired(
+        acs_url="https://acs.example.net/cwmp",
+        acs_username="cwmp-user",
+        acs_password_ref="rotated-password",
+    )
+    observed = dataclasses.replace(
+        _synced_observed(desired),
+        acs=dataclasses.replace(
+            _synced_observed(desired).acs,
+            acs_observed_url=desired.acs_url,
+            acs_observed_username=desired.acs_username,
+            acs_observed_password_set=True,
+        ),
+    )
+
+    apply_phase = compute_plan(
+        desired,
+        observed,
+        "sweep",
+        proposed_fields=frozenset({"acs_password_ref"}),
+    )
+    verify_phase = compute_plan(
+        desired,
+        observed,
+        "sweep",
+        proposed_fields=frozenset({"acs_password_ref"}),
+        force_proposed_writes=False,
+    )
+
+    assert AcsSetManagementServer in _types(apply_phase)
+    assert AcsSetManagementServer not in _types(verify_phase)
+
+
 # ── Plan determinism ────────────────────────────────────────────────────────
 
 
@@ -648,6 +962,67 @@ def test_drift_records_match_action_count_for_fresh_authorize():
 def test_bootstrap_mode_pushes_wifi_password_on_synced_state():
     desired = _desired()
     plan = compute_plan(desired, _synced_observed(desired), "bootstrap")
-    assert AcsSetWifiPassword in _types(plan)
+    assert AcsSetWifiConfig in _types(plan)
     # ...but nothing else is required, so this should be the only action.
-    assert _types(plan) == [AcsSetWifiPassword]
+    assert _types(plan) == [AcsSetWifiConfig]
+
+
+def test_remote_access_enable_is_one_narrow_atomic_action():
+    desired = _desired(
+        wan_remote_access_enabled=True,
+        wan_remote_access_ssh_port=22,
+        remote_access_paths=_remote_paths(),
+    )
+    observed = _synced_observed(desired)
+    observed = dataclasses.replace(
+        observed,
+        acs=dataclasses.replace(
+            observed.acs,
+            acs_observed_remote_ssh_enabled=False,
+            acs_observed_remote_ssh_port=None,
+            acs_observed_remote_telnet_enabled=True,
+        ),
+    )
+
+    plan = compute_plan(
+        desired,
+        observed,
+        "sync",
+        proposed_fields=frozenset(
+            {
+                "wan_remote_access_enabled",
+                "wan_remote_access_expires_at",
+                "wan_remote_access_source_cidrs",
+            }
+        ),
+    )
+
+    assert _types(plan) == [AcsSetRemoteAccess]
+    action = plan.actions[0]
+    assert isinstance(action, AcsSetRemoteAccess)
+    assert action.ssh_enabled is True
+    assert action.ssh_port == 22
+    assert action.telnet_enabled is False
+
+
+def test_remote_access_enable_requires_ssh_telnet_and_port_readback():
+    desired = _desired(
+        wan_remote_access_enabled=True,
+        remote_access_paths=_remote_paths(),
+    )
+    observed = _synced_observed(desired)
+
+    plan = compute_plan(
+        desired,
+        observed,
+        "sync",
+        proposed_fields=frozenset({"wan_remote_access_enabled"}),
+        force_proposed_writes=False,
+    )
+
+    assert _types(plan) == [AcsSetRemoteAccess]
+    assert {drift.field for drift in plan.drifts} == {
+        "wan_remote_access_enabled",
+        "wan_remote_access_ssh_port",
+        "wan_remote_telnet_disabled",
+    }

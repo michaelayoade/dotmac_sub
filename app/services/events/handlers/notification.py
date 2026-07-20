@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 
@@ -10,16 +11,23 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.notification import (
-    Notification,
     NotificationChannel,
-    NotificationStatus,
     NotificationTemplate,
 )
+from app.schemas.notification import NotificationCreate
+from app.services import event_notification_policy
+from app.services.communication_intents import CommunicationIntent, submit
 from app.services.customer_notification_policy import (
-    is_notification_enabled_for_subscriber,
+    channel_disabled_in_config,
     resolve_subscriber_id_for_recipient,
 )
 from app.services.events.types import Event, EventType
+from app.services.notification import notifications as notification_service
+from app.services.notification_channel_policy import resolve_notification_channels
+from app.services.notification_template_conditions import (
+    NotificationTemplateConditionError,
+    conditions_match,
+)
 
 logger = logging.getLogger(__name__)
 _LOGGED_MISSING_TEMPLATE_CODES: set[str] = set()
@@ -32,38 +40,25 @@ CHANNEL_TEMPLATE_SUFFIXES: dict[NotificationChannel, str] = {
     NotificationChannel.webhook: "webhook",
 }
 
-# Channel -> (setting key, env key) for the per-channel enable flag. A channel
-# listed here is created in the fan-out only when its flag is truthy; channels
-# NOT listed (e.g. email) are never suppressed at creation. We key off the
-# explicit enable flag rather than provider `is_available()` because the latter
-# is an unreliable signal (it false-negatives for email even while email
-# delivers), so gating creation on it would drop every notification.
-_CHANNEL_ENABLE_FLAG: dict[NotificationChannel, tuple[str, str]] = {
-    NotificationChannel.sms: ("sms_enabled", "SMS_ENABLED"),
-}
-
-_DISABLED_VALUES = {"false", "0", "no", "off", "disabled"}
+_UNRESOLVED_TEMPLATE_RE = re.compile(r"\{\{?\s*[a-zA-Z0-9_]+\s*\}?\}")
 
 
 def _channel_disabled_in_config(db: Session, channel: NotificationChannel) -> bool:
-    """True only if ``channel`` is explicitly disabled by its enable flag.
+    return channel_disabled_in_config(db, channel)
 
-    Fail-open: any channel without a configured enable flag returns False (never
-    suppressed). Reads the same setting the provider uses, on the caller's
-    session, so it reflects live config without opening a new transaction.
-    """
-    flag = _CHANNEL_ENABLE_FLAG.get(channel)
-    if not flag:
-        return False
-    try:
-        from app.services.sms import _get_setting
 
-        value = _get_setting(db, flag[0], flag[1], "true")
-    except Exception:
-        # Never suppress on a lookup error — better a row that may fail at
-        # dispatch than a silently dropped notification.
-        return False
-    return str(value or "true").strip().lower() in _DISABLED_VALUES
+def _event_channels(
+    db: Session,
+    template_code: str,
+    category: str,
+    default_channels: tuple[NotificationChannel, ...],
+) -> tuple[NotificationChannel, ...]:
+    return resolve_notification_channels(
+        db,
+        template_code=template_code,
+        category=category,
+        default_channels=default_channels,
+    )
 
 
 @dataclass(frozen=True)
@@ -76,6 +71,25 @@ class EventNotificationSpec:
 
 
 EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
+    # Outage classifier (design docs/designs/OUTAGE_CLASSIFIER.md §P4). The
+    # outage notifier supplies the customer-safe {message} as event context; the
+    # channels here are the DEFAULT and remain config-overridable per type via
+    # the ``notification_event_<template_code>_channels`` setting — channel
+    # selection lives with the notification system, never in the outage notifier.
+    EventType.outage_area: EventNotificationSpec(
+        template_code="outage_area",
+        category="service",
+        channels=(NotificationChannel.email,),
+        subject="Service interruption in your area",
+        body="Dear {subscriber_name},\n\n{message}",
+    ),
+    EventType.outage_last_mile: EventNotificationSpec(
+        template_code="outage_last_mile",
+        category="service",
+        channels=(NotificationChannel.email,),
+        subject="About your connection",
+        body="Dear {subscriber_name},\n\n{message}",
+    ),
     EventType.subscriber_created: EventNotificationSpec(
         template_code="subscriber_created",
         category="account",
@@ -284,6 +298,17 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
             "A refund of {amount} has been processed on your account."
         ),
     ),
+    EventType.payment_reversed: EventNotificationSpec(
+        template_code="payment_reversed",
+        category="billing",
+        channels=(NotificationChannel.email,),
+        subject="Payment reversed",
+        body=(
+            "Dear {subscriber_name},\n\n"
+            "A settled payment of {amount} was reversed on your account. "
+            "Please contact billing if you need more information."
+        ),
+    ),
     EventType.arrangement_defaulted: EventNotificationSpec(
         template_code="arrangement_defaulted",
         category="billing",
@@ -451,16 +476,6 @@ EVENT_TYPE_TO_TEMPLATE = {
     for event_type, spec in EVENT_NOTIFICATION_SPECS.items()
 }
 
-BALANCE_NOTIFICATION_EVENTS: set[EventType] = {
-    EventType.invoice_created,
-    EventType.invoice_sent,
-    EventType.invoice_overdue,
-    EventType.subscription_suspension_warning,
-    EventType.arrangement_defaulted,
-}
-
-BILLING_SUSPENSION_REASONS = {"overdue", "dunning", "invoice_overdue"}
-
 
 class NotificationHandler:
     """Handler that queues customer notifications."""
@@ -468,6 +483,14 @@ class NotificationHandler:
     def handle(self, db: Session, event: Event) -> None:
         spec = EVENT_NOTIFICATION_SPECS.get(event.event_type)
         if spec is None:
+            return
+        if not event_notification_policy.event_notifications_enabled(
+            db, spec.template_code
+        ):
+            logger.info(
+                "Suppressed notification for event %s: event disabled by settings",
+                event.event_type.value,
+            )
             return
 
         # Back-office bookkeeping (e.g. the cutover credit reconcile) suppresses
@@ -483,7 +506,9 @@ class NotificationHandler:
             )
             return
 
-        if self._customer_balance_notifications_suppressed(db, event):
+        if event_notification_policy.customer_balance_notifications_suppressed(
+            db, event
+        ):
             logger.info(
                 "Suppressed customer balance notification for event %s",
                 event.event_type.value,
@@ -504,21 +529,19 @@ class NotificationHandler:
             (template.channel or NotificationChannel.email): template
             for template in templates
         }
-        for channel in spec.channels:
-            # Skip channels explicitly disabled in config, so we don't create a
-            # row per spec channel that can only fail at dispatch (e.g. SMS with
-            # sms_enabled=false / no provider — the source of the failed-SMS
-            # backlog). This checks the channel ENABLE FLAG (deterministic
-            # config intent), NOT provider reachability: `is_available()` is an
-            # unreliable signal here — it false-negatives for email even while
-            # email is delivering, so gating creation on it would suppress every
-            # notification. Fail-open: channels with no enable flag are never
-            # skipped here; transient send failures stay the dispatcher's job.
-            if _channel_disabled_in_config(db, channel):
-                logger.debug(
-                    "Skipping event %s on %s: channel disabled in config",
+        for channel in _event_channels(
+            db,
+            spec.template_code,
+            spec.category,
+            spec.channels,
+        ):
+            template = templates_by_channel.get(channel)
+            if template is None:
+                logger.info(
+                    "Suppressed notification for event %s on %s: no active template for code %s",
                     event.event_type.value,
                     channel.value,
+                    spec.template_code,
                 )
                 continue
             recipient = self._resolve_recipient(db, event, channel)
@@ -531,48 +554,93 @@ class NotificationHandler:
                 continue
 
             subscriber_id = self._resolve_subscriber_id(db, event, recipient)
-            # Hard account-status gate (overrides preferences): terminal accounts
-            # (canceled/disabled) get nothing; walled accounts (suspended/blocked)
-            # get only actionable categories. Never mail a churned/closed account.
-            if subscriber_id and not self._status_allows(
-                db, subscriber_id, spec.category
-            ):
-                logger.info(
-                    "Suppressed %s notification for event %s on %s to %s by account status",
-                    spec.category,
+            try:
+                if not conditions_match(
+                    db,
+                    subscriber_id=subscriber_id,
+                    conditions=template.conditions,
+                ):
+                    logger.info(
+                        "Suppressed notification for event %s on %s to %s by template conditions",
+                        event.event_type.value,
+                        channel.value,
+                        recipient,
+                    )
+                    continue
+            except NotificationTemplateConditionError as exc:
+                logger.error(
+                    "Suppressed notification for event %s on %s: invalid template conditions on %s: %s",
                     event.event_type.value,
                     channel.value,
-                    recipient,
+                    template.id,
+                    exc,
                 )
                 continue
-            if not is_notification_enabled_for_subscriber(
-                db,
-                subscriber_id=subscriber_id,
-                channel=channel,
-                category=spec.category,
-                recipient=recipient,
-            ):
-                logger.info(
-                    "Suppressed notification for event %s on %s to %s by preferences",
+            except Exception:
+                logger.exception(
+                    "Suppressed notification for event %s on %s: template condition evaluation failed for %s",
                     event.event_type.value,
                     channel.value,
-                    recipient,
+                    template.id,
                 )
                 continue
 
-            template = templates_by_channel.get(channel)
-            notification = Notification(
-                template_id=template.id if template else None,
-                subscriber_id=subscriber_id,
-                channel=channel,
-                event_type=spec.template_code,
-                category=spec.category,
-                recipient=recipient,
-                subject=self._render_subject(template, spec, context),
-                body=self._render_body(template, spec, context),
-                status=NotificationStatus.queued,
+            subject = self._render_subject(template, spec, context)
+            body = self._render_body(template, spec, context)
+            unresolved = sorted(
+                {
+                    *_UNRESOLVED_TEMPLATE_RE.findall(subject),
+                    *_UNRESOLVED_TEMPLATE_RE.findall(body),
+                }
             )
-            db.add(notification)
+            if unresolved:
+                logger.error(
+                    "Suppressed notification for event %s on %s: unresolved template variable(s) %s",
+                    event.event_type.value,
+                    channel.value,
+                    ", ".join(unresolved),
+                )
+                continue
+
+            if subscriber_id is None:
+                notification_service.queue_internal_notification(
+                    db,
+                    NotificationCreate(
+                        template_id=template.id,
+                        channel=channel,
+                        event_type=spec.template_code,
+                        category=spec.category,
+                        recipient=recipient,
+                        subject=subject,
+                        body=body,
+                    ),
+                )
+                queued_count = 1
+            else:
+                result = submit(
+                    db,
+                    CommunicationIntent(
+                        subscriber_id=subscriber_id,
+                        event_type=spec.template_code,
+                        category=spec.category,
+                        template_id=template.id,
+                        template_code=spec.template_code,
+                        subject=subject,
+                        body=body,
+                        channels=(channel,),
+                        persist_policy_suppressions=False,
+                        subscriber_recipients={channel: recipient},
+                    ),
+                )
+                queued_count = len(result.queued)
+            if queued_count == 0:
+                logger.info(
+                    "Suppressed notification for event %s on %s to %s by shared policy",
+                    event.event_type.value,
+                    channel.value,
+                    recipient,
+                )
+                continue
 
             logger.info(
                 "Queued notification for event %s on %s to %s",
@@ -580,57 +648,6 @@ class NotificationHandler:
                 channel.value,
                 recipient,
             )
-
-    def _status_allows(self, db: Session, subscriber_id, category: str) -> bool:
-        """Apply the account-status notification gate (kill-switch aware)."""
-        from app.models.domain_settings import SettingDomain
-        from app.models.subscriber import Subscriber
-        from app.services import settings_spec
-        from app.services.notification_status_policy import status_allows_notification
-
-        enabled = settings_spec.resolve_value(
-            db, SettingDomain.notification, "status_gate_enabled"
-        )
-        if enabled is False:
-            return True
-        subscriber = db.get(Subscriber, subscriber_id)
-        status = subscriber.status if subscriber else None
-        return status_allows_notification(status, category)
-
-    def _customer_balance_notifications_suppressed(
-        self, db: Session, event: Event
-    ) -> bool:
-        """Suppress customer-facing balance/debt notifications when disabled."""
-        from app.models.domain_settings import SettingDomain
-        from app.services import settings_spec
-
-        enabled = settings_spec.resolve_value(
-            db, SettingDomain.billing, "customer_balance_notifications_enabled"
-        )
-        if enabled is not False and str(enabled).lower() not in {
-            "0",
-            "false",
-            "no",
-            "off",
-            "",
-        }:
-            return False
-
-        if event.event_type in BALANCE_NOTIFICATION_EVENTS:
-            return True
-        return self._is_billing_suspension_event(event)
-
-    def _is_billing_suspension_event(self, event: Event) -> bool:
-        if event.event_type != EventType.subscription_suspended:
-            return False
-
-        reason = str(event.payload.get("reason") or "").strip().lower()
-        source = str(event.payload.get("source") or "").strip().lower()
-        return (
-            reason in BILLING_SUSPENSION_REASONS
-            or source in BILLING_SUSPENSION_REASONS
-            or source.startswith("invoice:")
-        )
 
     def _load_templates(
         self,

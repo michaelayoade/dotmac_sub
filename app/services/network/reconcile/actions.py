@@ -23,7 +23,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar
 
-from .state import WriteSurface
+from .state import (
+    Tr069RemoteAccessParameterPaths,
+    Tr069WifiParameterPaths,
+    Tr181WanParameterPaths,
+    WriteSurface,
+)
 
 # ── OLT-side actions ────────────────────────────────────────────────────────
 
@@ -348,6 +353,41 @@ class AcsSetWifiPassword:
 
 
 @dataclass(frozen=True)
+class AcsSetWifiConfig:
+    """Apply all changed WiFi fields in one CWMP transaction.
+
+    One combined request avoids a separate connection-request round trip for
+    every field. ``None`` means that field is not part of this action; ``False``
+    and channel ``0`` remain explicit values.
+    """
+
+    surface: ClassVar[WriteSurface] = "acs"
+    requires_reset: ClassVar[bool] = False
+
+    device_id: str
+    paths: Tr069WifiParameterPaths
+    enabled: bool | None = None
+    ssid: str | None = None
+    password_ref: str | None = None
+    channel: int | None = None
+    security_mode: str | None = None
+
+
+@dataclass(frozen=True)
+class AcsSetRemoteAccess:
+    """Apply SSH support access and forced Telnet shutdown atomically."""
+
+    surface: ClassVar[WriteSurface] = "acs"
+    requires_reset: ClassVar[bool] = False
+
+    device_id: str
+    paths: Tr069RemoteAccessParameterPaths
+    ssh_enabled: bool | None = None
+    ssh_port: int | None = None
+    telnet_enabled: bool | None = None
+
+
+@dataclass(frozen=True)
 class AcsSetNatEnabled:
     """``setParameterValues`` for ``WANPPPConnection.NATEnabled``.
 
@@ -363,6 +403,44 @@ class AcsSetNatEnabled:
     wcd_index: int
     instance_index: int
     enabled: bool
+
+
+@dataclass(frozen=True)
+class AcsSetIpv6:
+    """Enable IPv6 and DHCPv6-PD on a TR-181 WAN interface.
+
+    Huawei TR-098 IPv6 trees vary by firmware and are intentionally not
+    guessed here. Unsupported roots remain visible as unrepairable drift.
+    """
+
+    surface: ClassVar[WriteSurface] = "acs"
+    requires_reset: ClassVar[bool] = False
+
+    device_id: str
+    interface_index: int
+    enabled: bool
+    request_prefixes: bool
+
+
+@dataclass(frozen=True)
+class AcsSetWanIp:
+    """Configure a routed DHCP or static WANIPConnection."""
+
+    surface: ClassVar[WriteSurface] = "acs"
+    requires_reset: ClassVar[bool] = False
+
+    device_id: str
+    data_model_root: str
+    wcd_index: int
+    instance_index: int
+    mode: str
+    vlan: int
+    nat_enabled: bool
+    ip_address: str | None = None
+    subnet_mask: str | None = None
+    gateway: str | None = None
+    dns_servers: str | None = None
+    tr181_paths: Tr181WanParameterPaths | None = None
 
 
 @dataclass(frozen=True)
@@ -384,7 +462,7 @@ class AcsSetDhcpServer:
 
 @dataclass(frozen=True)
 class AcsSetManagementServer:
-    """``setParameterValues`` for ``ManagementServer.{ConnectionRequestUsername, ConnectionRequestPassword, PeriodicInformInterval}``.
+    """Set the ACS endpoint, CWMP credentials, CR credentials, and interval.
 
     Set CR credentials so future NBI ``?connection_request`` POSTs deliver
     synchronously (return 200) instead of queueing (return 202). Inform
@@ -399,6 +477,10 @@ class AcsSetManagementServer:
     cr_username: str
     cr_password_ref: str  # OpenBao path
     inform_interval_sec: int
+    data_model_root: str = "InternetGatewayDevice"
+    acs_url: str | None = None
+    acs_username: str | None = None
+    acs_password_ref: str | None = None
 
 
 # ── Type alias for everything the applier might see ─────────────────────────
@@ -427,7 +509,11 @@ AcsAction = (
     | AcsSetPppoe
     | AcsSetWifiSsid
     | AcsSetWifiPassword
+    | AcsSetWifiConfig
+    | AcsSetRemoteAccess
     | AcsSetNatEnabled
+    | AcsSetIpv6
+    | AcsSetWanIp
     | AcsSetDhcpServer
     | AcsSetManagementServer
 )
@@ -443,10 +529,14 @@ __all__ = (
     "AcsAddObject",
     "AcsDeleteObject",
     "AcsSetDhcpServer",
+    "AcsSetIpv6",
+    "AcsSetWanIp",
     "AcsSetManagementServer",
     "AcsSetNatEnabled",
     "AcsSetPppoe",
+    "AcsSetRemoteAccess",
     "AcsSetWifiPassword",
+    "AcsSetWifiConfig",
     "AcsSetWifiSsid",
     "OltAuthorize",
     "OltClearIphost",

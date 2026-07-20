@@ -147,6 +147,16 @@ class ServiceOrder(Base):
     subscription_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscriptions.id")
     )
+    sales_order_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("sales_orders.id", ondelete="SET NULL"),
+        index=True,
+    )
+    sales_order_line_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("sales_order_lines.id", ondelete="SET NULL"),
+        unique=True,
+    )
     status: Mapped[ServiceOrderStatus] = mapped_column(
         Enum(ServiceOrderStatus), default=ServiceOrderStatus.draft
     )
@@ -154,6 +164,7 @@ class ServiceOrder(Base):
         Enum(ServiceOrderType, values_callable=lambda x: [e.value for e in x]),
     )
     notes: Mapped[str | None] = mapped_column(Text)
+    execution_context: Mapped[dict | None] = mapped_column(JSON)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
@@ -166,6 +177,8 @@ class ServiceOrder(Base):
 
     subscriber = relationship("Subscriber", back_populates="service_orders")
     subscription = relationship("Subscription", back_populates="service_orders")
+    sales_order = relationship("SalesOrder")
+    sales_order_line = relationship("SalesOrderLine")
     appointments = relationship("InstallAppointment", back_populates="service_order")
     tasks = relationship("ProvisioningTask", back_populates="service_order")
     state_transitions = relationship(

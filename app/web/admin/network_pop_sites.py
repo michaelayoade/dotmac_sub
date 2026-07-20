@@ -1,6 +1,15 @@
 """Admin network POP sites web routes."""
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -35,10 +44,21 @@ def _base_context(
     dependencies=[Depends(require_permission("network:pop:read"))],
 )
 def pop_sites_list(
-    request: Request, status: str | None = None, db: Session = Depends(get_db)
+    request: Request,
+    status: str | None = None,
+    search: str | None = None,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(25, ge=10, le=100),
+    db: Session = Depends(get_db),
 ):
     """List all POP sites."""
-    page_data = web_network_pop_sites_service.list_page_data(db, status)
+    page_data = web_network_pop_sites_service.list_page_data(
+        db,
+        status,
+        search=search,
+        page=page,
+        per_page=per_page,
+    )
     context = _base_context(request, db, active_page="pop-sites")
     context.update(page_data)
     return templates.TemplateResponse("admin/network/pop-sites/index.html", context)

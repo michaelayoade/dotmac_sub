@@ -38,6 +38,7 @@ from app.services.genieacs_client import GenieACSError
 from app.services.network.ont_action_common import (
     ActionResult,
     detect_data_model_root,
+    genieacs_error_result,
     get_ont_client_or_error,
     persist_data_model_root,
     set_and_verify,
@@ -698,10 +699,7 @@ def set_pppoe_credentials(
             ont.serial_number,
             exc,
         )
-        return ActionResult(
-            success=False,
-            message=f"Failed to set PPPoE credentials: {exc}",
-        )
+        return genieacs_error_result(exc, "Failed to set PPPoE credentials")
 
 
 # ---------------------------------------------------------------------------
@@ -786,10 +784,7 @@ def set_wan_dhcp(
             ont.serial_number,
             exc,
         )
-        return ActionResult(
-            success=False,
-            message=f"Failed to set WAN DHCP: {exc}",
-        )
+        return genieacs_error_result(exc, "Failed to set WAN DHCP")
 
 
 # ---------------------------------------------------------------------------
@@ -900,10 +895,7 @@ def set_wan_static(
             ont.serial_number,
             exc,
         )
-        return ActionResult(
-            success=False,
-            message=f"Failed to set WAN static IP: {exc}",
-        )
+        return genieacs_error_result(exc, "Failed to set WAN static IP")
 
 
 # ---------------------------------------------------------------------------

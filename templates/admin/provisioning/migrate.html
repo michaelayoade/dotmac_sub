@@ -115,15 +115,6 @@
                 </select>
             </div>
             <div>
-                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Target OLT Port</label>
-                <select name="target_pon_port_id" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    <option value="">No change</option>
-                    {% for port in pon_ports %}
-                    <option value="{{ port.id }}">{{ port.name }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div>
                 <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Schedule (Optional)</label>
                 <input type="datetime-local" name="scheduled_at" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
             </div>

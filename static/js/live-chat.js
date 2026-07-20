@@ -1,6 +1,5 @@
-/* Live chat client. Brokers a session through the sub (which asserts the
- * authenticated customer/reseller identity to the CRM), then talks to the CRM
- * chat_widget channel directly: WebSocket for real-time, REST for send/history.
+/* Live chat client. Brokers a native team-inbox session through the sub, then
+ * talks to the sub widget API: WebSocket for real-time, REST for send/history.
  *
  * The browser never supplies identity — it only ever holds the opaque
  * visitor_token returned by the broker. */
@@ -42,6 +41,8 @@
     conversationId: null,
     typingTimer: null,
     reconnect: 0,
+    reconnectTimer: null,
+    gen: 0, // session generation; bumped on re-scope to invalidate stale sockets
   };
 
   // ── rendering ──────────────────────────────────────────────────────────
@@ -167,7 +168,7 @@
     return cookieValue("csrf_token");
   }
 
-  // ── CRM REST (direct, X-Visitor-Token) ─────────────────────────────────
+  // ── Widget REST (direct, X-Visitor-Token) ──────────────────────────────
   function crm(path, opts) {
     opts = opts || {};
     opts.headers = opts.headers || {};
@@ -246,6 +247,9 @@
   // ── WebSocket ──────────────────────────────────────────────────────────
   function connectWs() {
     if (!state.session || !state.session.ws_url) return;
+    // Bind this socket to the current session generation; a re-scope bumps
+    // state.gen so a stale socket's callbacks (esp. onclose reconnect) no-op.
+    var myGen = state.gen;
     var url = state.session.ws_url + "?token=" +
       encodeURIComponent(state.session.visitor_token);
     var ws;
@@ -290,12 +294,14 @@
     };
 
     ws.onclose = function () {
+      // Ignore a stale socket closing after the widget was re-scoped.
+      if (myGen !== state.gen) return;
       state.ws = null;
       // Backoff reconnect while the panel is alive.
       if (state.started) {
         var delay = Math.min(1000 * Math.pow(2, state.reconnect++), 15000);
         setStatus("Reconnecting…");
-        setTimeout(connectWs, delay);
+        state.reconnectTimer = setTimeout(connectWs, delay);
       }
     };
     ws.onerror = function () { try { ws.close(); } catch (e) {} };
@@ -423,6 +429,49 @@
     }
   }
   document.addEventListener("keydown", trapFocus);
+
+  // ── external API: open the widget scoped to a ticket/project ────────────
+  // A "Chat about this" button calls dmLiveChat.openWith(endpoint) with a
+  // scoped broker path (e.g. /api/v1/me/chat/session?ticket_id=…). Re-scoping
+  // tears down any current session so the new (contextual) one starts fresh.
+  function openWith(endpoint) {
+    if (endpoint && endpoint !== sessionEndpoint) {
+      sessionEndpoint = endpoint;
+      // Invalidate the old session generation so any in-flight socket / pending
+      // reconnect for the previous context no-ops.
+      state.gen++;
+      if (state.reconnectTimer) {
+        clearTimeout(state.reconnectTimer);
+        state.reconnectTimer = null;
+      }
+      try {
+        if (state.ws) state.ws.close();
+      } catch (e) {
+        /* ignore */
+      }
+      state.ws = null;
+      state.started = false;
+      state.session = null;
+      state.conversationId = null;
+      // Reset per-conversation state so the new context starts clean (else the
+      // dedupe map / pending echoes / backoff leak across contexts).
+      state.seen = {};
+      state.pending = {};
+      state.reconnect = 0;
+      state.unread = 0;
+      if (state.typingTimer) {
+        clearTimeout(state.typingTimer);
+        state.typingTimer = null;
+      }
+      if (els.log) els.log.innerHTML = "";
+    }
+    if (state.open) {
+      start().then(markRead);
+    } else {
+      openPanel();
+    }
+  }
+  window.dmLiveChat = { openWith: openWith };
 
   root.hidden = false;
   updateEmptyState();

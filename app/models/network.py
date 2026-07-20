@@ -1,6 +1,7 @@
 import enum
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from geoalchemy2 import Geometry
 from sqlalchemy import (
@@ -14,6 +15,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -38,6 +40,7 @@ class DeviceType(enum.Enum):
     modem = "modem"
     server = "server"
     cpe = "cpe"
+    wireless_radio = "wireless_radio"
     other = "other"
 
 
@@ -108,6 +111,7 @@ class FiberEndpointType(enum.Enum):
 
 class ODNEndpointType(enum.Enum):
     fdh = "fdh"
+    fiber_access_point = "fiber_access_point"
     splitter = "splitter"
     splitter_port = "splitter_port"
     pon_port = "pon_port"
@@ -258,6 +262,7 @@ class BulkProvisioningRunStatus(enum.Enum):
 class BulkProvisioningItemStatus(enum.Enum):
     pending = "pending"
     running = "running"
+    waiting = "waiting"
     succeeded = "succeeded"
     failed = "failed"
     skipped = "skipped"
@@ -326,14 +331,36 @@ class WanServiceProvisioningStatus(enum.Enum):
 
 class CPEDevice(Base):
     __tablename__ = "cpe_devices"
+    __table_args__ = (
+        # Stable UISP device id — the uisp_sync upsert key. Partial-unique so
+        # rows not sourced from UISP stay NULL.
+        Index(
+            "uq_cpe_devices_uisp_device_id",
+            "uisp_device_id",
+            unique=True,
+            postgresql_where=text("uisp_device_id IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
+    # NOT NULL: matches the enforced production schema (the squashed baseline
+    # declares cpe_devices.subscriber_id NOT NULL; migration 026's relax to
+    # nullable never took effect there — the first authenticated uisp_sync run
+    # failed every INSERT with a NotNullViolation). Writers must resolve the
+    # owning subscriber BEFORE creating a row; keeping the model NOT NULL makes
+    # the test schema enforce the same invariant.
+    subscriber_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("subscribers.id", ondelete="SET NULL"),
+        nullable=False,
+    )
+    subscription_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("subscriptions.id", ondelete="SET NULL"),
         nullable=True,
+        index=True,
     )
     service_address_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("addresses.id")
@@ -347,10 +374,24 @@ class CPEDevice(Base):
     serial_number: Mapped[str | None] = mapped_column(String(120))
     model: Mapped[str | None] = mapped_column(String(120))
     vendor: Mapped[str | None] = mapped_column(String(120))
+    firmware_version: Mapped[str | None] = mapped_column(String(120))
     mac_address: Mapped[str | None] = mapped_column(String(64))
     installed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     notes: Mapped[str | None] = mapped_column(Text)
     tr069_data_model: Mapped[str | None] = mapped_column(String(40))
+
+    # --- UISP topology sync (relationship layer) ---
+    # Stable UISP device id; NULL for rows not sourced from UISP.
+    uisp_device_id: Mapped[str | None] = mapped_column(String(64))
+    # CPE -> AP edge: the network_devices row (basestation AP) this radio is
+    # associated to, per UISP. Lets customer_path walk radio -> AP -> pop_site.
+    parent_network_device_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("network_devices.id", ondelete="SET NULL")
+    )
+    uisp_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Last UISP overview.status: active/disconnected/unauthorized (or
+    # 'vanished' when the device disappeared from UISP).
+    last_uisp_status: Mapped[str | None] = mapped_column(String(20))
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
@@ -362,7 +403,9 @@ class CPEDevice(Base):
     )
 
     subscriber = relationship("Subscriber", back_populates="cpe_devices")
+    subscription = relationship("Subscription")
     service_address = relationship("Address")
+    parent_network_device = relationship("NetworkDevice")
     ports = relationship(
         "Port",
         back_populates="device",
@@ -616,6 +659,12 @@ class SubscriberAdditionalRoute(Base):
         ForeignKey("subscribers.id", ondelete="CASCADE"),
         nullable=False,
     )
+    subscription_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("subscriptions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     # Normalised network/prefix, e.g. "160.119.125.104/29" or "102.0.2.5/32".
     cidr: Mapped[str] = mapped_column(String(64), nullable=False)
     prefix_length: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -636,6 +685,7 @@ class SubscriberAdditionalRoute(Base):
     )
 
     subscriber = relationship("Subscriber")
+    subscription = relationship("Subscription")
 
 
 class IpPool(Base):
@@ -691,6 +741,7 @@ class IpPool(Base):
     ipv4_addresses = relationship("IPv4Address", back_populates="pool")
     ipv6_addresses = relationship("IPv6Address", back_populates="pool")
     delegated_prefixes = relationship("Ipv6DelegatedPrefix", back_populates="pool")
+    nas_device = relationship("NasDevice", foreign_keys=[nas_device_id])
     olt_device = relationship(
         "OLTDevice", back_populates="ip_pools", foreign_keys=[olt_device_id]
     )
@@ -917,6 +968,13 @@ class OLTDevice(Base):
             "capabilities_source IN ('auto', 'manual')",
             name="ck_olt_devices_capabilities_source",
         ),
+        # Stable UISP device id — the uisp_sync upsert key (UF-OLTs).
+        Index(
+            "uq_olt_devices_uisp_device_id",
+            "uisp_device_id",
+            unique=True,
+            postgresql_where=text("uisp_device_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -984,6 +1042,9 @@ class OLTDevice(Base):
     zabbix_last_sync_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
     )
+
+    # UISP topology sync: stable UISP device id (UF-OLTs); NULL otherwise.
+    uisp_device_id: Mapped[str | None] = mapped_column(String(64))
 
     # Autofind sync deduplication (prevents redundant SSH queries during concurrent auths)
     autofind_last_sync_at: Mapped[datetime | None] = mapped_column(
@@ -1785,6 +1846,20 @@ class OntUnit(Base):
                 "olt_device_id IS NOT NULL AND external_id IS NOT NULL"
             ),
         ),
+        # Stable UISP device id — the uisp_sync upsert key (UFiber ONUs).
+        Index(
+            "uq_ont_units_uisp_device_id",
+            "uisp_device_id",
+            unique=True,
+            postgresql_where=text("uisp_device_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_ont_units_active_splitter_port",
+            "splitter_port_id",
+            unique=True,
+            postgresql_where=text("is_active AND splitter_port_id IS NOT NULL"),
+            sqlite_where=text("is_active AND splitter_port_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -1897,6 +1972,10 @@ class OntUnit(Base):
     tr069_acs_server_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tr069_acs_servers.id")
     )
+    desired_tr069_profile_id: Mapped[int | None] = mapped_column(
+        Integer,
+        doc="Per-ONT OLT TR-069 profile override; NULL inherits OltConfigPack.",
+    )
     voip_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
 
     provisioning_status: Mapped[OntProvisioningStatus | None] = mapped_column(
@@ -1917,7 +1996,7 @@ class OntUnit(Base):
         DateTime(timezone=True)
     )
 
-    # Async verification tracking (Phase 2)
+    # Async verification tracking
     last_applied_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         doc="When provisioning commands were last applied to OLT",
@@ -1938,6 +2017,9 @@ class OntUnit(Base):
     # Sync tracking — which external source last modified this ONT, and when
     last_sync_source: Mapped[str | None] = mapped_column(String(40))
     last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # UISP topology sync: stable UISP device id (UFiber ONUs); NULL otherwise.
+    uisp_device_id: Mapped[str | None] = mapped_column(String(64))
 
     # Reconciler bookkeeping (see app/services/network/reconcile/). These columns
     # are set exclusively by reconcile_ont; UI write paths must never mutate them
@@ -2219,6 +2301,15 @@ class OntAssignment(Base):
     subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscribers.id")
     )
+    subscription_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("subscriptions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    work_order_mirror_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("work_order.id", ondelete="SET NULL")
+    )
     service_address_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("addresses.id")
     )
@@ -2305,7 +2396,118 @@ class OntAssignment(Base):
     ont_unit = relationship("OntUnit", back_populates="assignments")
     pon_port = relationship("PonPort", back_populates="ont_assignments")
     subscriber = relationship("Subscriber", back_populates="ont_assignments")
+    subscription = relationship("Subscription")
+    work_order_mirror = relationship("WorkOrder")
     service_address = relationship("Address")
+
+
+class ForwardingObservation(Base):
+    """A MAC-forwarding observation harvested from network hardware.
+
+    General "hop-1" position -> MAC record: one row per (MAC, position) learned
+    on a device's forwarding table. The Huawei OLT harvester
+    (``app/services/topology/olt_mac_harvest.py``) parses ``display mac-address
+    port <F/S/P>`` and emits one row per learned customer/router MAC, mapping it
+    to the exact PON port (F/S/P) and ONT-ID (the VPI column). This is an
+    ephemeral, periodically-refreshed table (rows are aged out) and the reusable
+    foundation for ONT<->subscriber drift detection today and bridge-mode
+    UF-Nano / wireless linking later. It is read-only toward assignments.
+    """
+
+    __tablename__ = "forwarding_observations"
+    __table_args__ = (
+        # Upsert identity: one row per learned MAC at a given (OLT, ONT-ID)
+        # position. Re-harvesting refreshes observed_at/vlan/pon_port in place.
+        UniqueConstraint(
+            "olt_device_id",
+            "mac",
+            "ont_id_on_olt",
+            name="uq_forwarding_observations_olt_mac_ont",
+        ),
+        Index("ix_forwarding_observations_mac", "mac"),
+        Index("ix_forwarding_observations_observed_at", "observed_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    olt_device_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("olt_devices.id", ondelete="CASCADE")
+    )
+    ont_unit_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ont_units.id", ondelete="SET NULL")
+    )
+    pon_port_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pon_ports.id", ondelete="SET NULL")
+    )
+    # The ONT-ID on the OLT for the learned MAC (the VPI column in Huawei's
+    # ``display mac-address port`` output).
+    ont_id_on_olt: Mapped[int | None] = mapped_column(Integer)
+    # Canonical MAC (uppercase colon-separated, matching subscriptions.mac_address).
+    mac: Mapped[str] = mapped_column(Text, nullable=False)
+    vlan: Mapped[int | None] = mapped_column(Integer)
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    source: Mapped[str] = mapped_column(Text, nullable=False, default="huawei_olt_mac")
+
+
+class OntSignalObservation(Base):
+    """Append-only per-ONT status + Rx snapshot — the splice-inference substrate.
+
+    The OLT sees every ONT's ``olt_status`` and ``onu_rx_signal_dbm``, but the
+    passive splitter's internal sub-split branch/splice is unpollable and the
+    manual ``SplitterPortAssignment`` plant records rot (design §4). This table
+    keeps the TIME SERIES those live ``ont_units`` columns lack: one row per ONT
+    per collection sweep. Splice inference (``app/services/topology/
+    splice_inference.py``, design §6) derives the hidden sub-PON topology from it
+    — ONTs that repeatedly go dark together (co-failure) or droop by the same dB
+    (correlated Rx) share a branch.
+
+    Append-only + periodically pruned (never updated in place); a snapshot is a
+    fact at ``observed_at``. TODO(retention): prune rows older than the inference
+    window (~90d) in the collector task once volume warrants it.
+    """
+
+    __tablename__ = "ont_signal_observations"
+    __table_args__ = (
+        Index(
+            "ix_ont_signal_observations_ont_observed",
+            "ont_unit_id",
+            "observed_at",
+        ),
+        Index(
+            "ix_ont_signal_observations_pon_observed",
+            "pon_port_id",
+            "observed_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    ont_unit_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ont_units.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    olt_device_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("olt_devices.id", ondelete="SET NULL")
+    )
+    pon_port_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pon_ports.id", ondelete="SET NULL")
+    )
+    olt_status: Mapped[OnuOnlineStatus] = mapped_column(
+        Enum(OnuOnlineStatus, name="onuonlinestatus", create_constraint=False),
+        nullable=False,
+    )
+    rx_signal_dbm: Mapped[float | None] = mapped_column(Float)
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        index=True,
+    )
 
 
 class NetworkZone(Base):
@@ -2381,7 +2583,21 @@ class FdhCabinet(Base):
 
 class Splitter(Base):
     __tablename__ = "splitters"
-    __table_args__ = (UniqueConstraint("fdh_id", "name", name="uq_splitters_fdh_name"),)
+    __table_args__ = (
+        UniqueConstraint("fdh_id", "name", name="uq_splitters_fdh_name"),
+        CheckConstraint(
+            "insertion_loss_db IS NULL OR "
+            "(insertion_loss_db >= 0 AND insertion_loss_db <= 100)",
+            name="ck_splitters_insertion_loss_db",
+        ),
+        CheckConstraint(
+            "NOT is_active OR (input_ports > 0 AND output_ports > 0 "
+            "AND splitter_ratio IS NOT NULL "
+            "AND splitter_ratio = CAST(input_ports AS VARCHAR) || ':' || "
+            "CAST(output_ports AS VARCHAR))",
+            name="ck_splitters_active_declared_capacity",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -2391,6 +2607,9 @@ class Splitter(Base):
     )
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     splitter_ratio: Mapped[str | None] = mapped_column(String(40))
+    insertion_loss_db: Mapped[Decimal | None] = mapped_column(
+        Numeric(8, 3), nullable=True
+    )
     input_ports: Mapped[int] = mapped_column(Integer, default=1)
     output_ports: Mapped[int] = mapped_column(Integer, default=8)
     zone_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -2494,12 +2713,21 @@ class FiberStrand(Base):
         UniqueConstraint(
             "cable_name", "strand_number", name="uq_fiber_strands_cable_strand"
         ),
+        UniqueConstraint(
+            "segment_id", "strand_number", name="uq_fiber_strands_segment_strand"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     cable_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    segment_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("fiber_segments.id", ondelete="RESTRICT"),
+        nullable=True,
+        comment="Exact cable-segment identity; cable_name is display metadata only",
+    )
     strand_number: Mapped[int] = mapped_column(Integer, nullable=False)
     label: Mapped[str | None] = mapped_column(String(160))
     status: Mapped[FiberStrandStatus] = mapped_column(
@@ -2535,18 +2763,16 @@ class FiberStrand(Base):
         back_populates="to_strand",
         foreign_keys="FiberSplice.to_strand_id",
     )
-    segments = relationship("FiberSegment", back_populates="fiber_strand")
-
-    @property
-    def segment_id(self) -> uuid.UUID | None:
-        """Backwards-compat scalar segment identifier.
-
-        The current schema allows a strand to be linked to one or more segments.
-        Older callers/tests expect a single `segment_id` attribute.
-        """
-        if self.segments:
-            return self.segments[0].id
-        return None
+    segments = relationship(
+        "FiberSegment",
+        foreign_keys="FiberSegment.fiber_strand_id",
+        back_populates="fiber_strand",
+    )
+    segment = relationship(
+        "FiberSegment",
+        foreign_keys=[segment_id],
+        back_populates="strands",
+    )
 
 
 class FiberSpliceClosure(Base):
@@ -2683,6 +2909,16 @@ class FiberSplice(Base):
 
 class FiberTerminationPoint(Base):
     __tablename__ = "fiber_termination_points"
+    __table_args__ = (
+        Index(
+            "uq_fiber_termination_active_endpoint",
+            "endpoint_type",
+            "ref_id",
+            unique=True,
+            postgresql_where=text("is_active AND ref_id IS NOT NULL"),
+            sqlite_where=text("is_active = 1 AND ref_id IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -2731,7 +2967,16 @@ class FiberCableType(enum.Enum):
 
 class FiberSegment(Base):
     __tablename__ = "fiber_segments"
-    __table_args__ = (UniqueConstraint("name", name="uq_fiber_segments_name"),)
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_fiber_segments_name"),
+        CheckConstraint(
+            "NOT is_active OR (from_point_id IS NOT NULL "
+            "AND to_point_id IS NOT NULL AND from_point_id <> to_point_id "
+            "AND route_geom IS NOT NULL AND fiber_count IS NOT NULL "
+            "AND fiber_count > 0)",
+            name="ck_fiber_segments_active_operational_shape",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -2779,13 +3024,27 @@ class FiberSegment(Base):
         foreign_keys=[to_point_id],
         back_populates="segments_to",
     )
-    fiber_strand = relationship("FiberStrand", back_populates="segments")
+    fiber_strand = relationship(
+        "FiberStrand", foreign_keys=[fiber_strand_id], back_populates="segments"
+    )
+    strands = relationship(
+        "FiberStrand",
+        foreign_keys="FiberStrand.segment_id",
+        back_populates="segment",
+    )
 
 
 class PonPortSplitterLink(Base):
     __tablename__ = "pon_port_splitter_links"
     __table_args__ = (
         UniqueConstraint("pon_port_id", name="uq_pon_port_splitter_links_pon_port"),
+        Index(
+            "uq_pon_port_splitter_links_active_input",
+            "splitter_port_id",
+            unique=True,
+            postgresql_where=text("active"),
+            sqlite_where=text("active"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -3513,7 +3772,7 @@ class OntFirmwareImage(Base):
 
 
 class OntConfigSnapshot(Base):
-    """Point-in-time TR-069 running configuration snapshot for an ONT."""
+    """Immutable point-in-time configuration evidence for an ONT."""
 
     __tablename__ = "ont_config_snapshots"
 
@@ -3526,12 +3785,17 @@ class OntConfigSnapshot(Base):
         nullable=False,
         index=True,
     )
-    source: Mapped[str] = mapped_column(String(60), nullable=False, default="tr069")
+    source: Mapped[str] = mapped_column(String(60), nullable=False, default="composite")
     label: Mapped[str | None] = mapped_column(String(255))
     device_info: Mapped[dict | None] = mapped_column(JSON)
     wan: Mapped[dict | None] = mapped_column(JSON)
     optical: Mapped[dict | None] = mapped_column(JSON)
     wifi: Mapped[dict | None] = mapped_column(JSON)
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    effective_config: Mapped[dict | None] = mapped_column(JSON)
+    observed_state: Mapped[dict | None] = mapped_column(JSON)
+    provenance: Mapped[dict | None] = mapped_column(JSON)
+    payload_checksum: Mapped[str | None] = mapped_column(String(64))
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
@@ -3628,7 +3892,7 @@ class SignalThresholdOverride(Base):
 
 
 # =============================================================================
-# Phase 1: Service-Port Allocator Models
+# Service-port allocator models
 # =============================================================================
 
 
@@ -3798,7 +4062,7 @@ class OltServicePort(Base):
 
 
 # =============================================================================
-# Phase 2: Verification Status for Async Drift Detection
+# Verification status for asynchronous drift detection
 # =============================================================================
 
 

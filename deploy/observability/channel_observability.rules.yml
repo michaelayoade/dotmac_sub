@@ -1,0 +1,254 @@
+# Channel & webhook observability alerts (docs/designs/CHANNEL_OBSERVABILITY.md).
+#
+# Deploy-ready Prometheus rule group for the dotmac-observe stack. Channel
+# activation, business windows, natural/synthetic monitoring mode, thresholds,
+# and severity are resolved from the database-authoritative health-contract
+# registry and exported as bounded state. Prometheus evaluates that contract;
+# it does not maintain a second set of per-channel policy values.
+groups:
+  - name: channel_observability
+    rules:
+      # --- Natural-traffic dead-man's-switch. Warning and critical are separate
+      # rules because Alertmanager labels are static while severity is a contract
+      # fact. The observer removes inactive-window time from silence_age_seconds.
+      - alert: ChannelNaturalIngestionSilentCritical
+        expr: >
+          (
+            observability_state{domain="channel_ingestion",signal="silence_age_seconds"}
+              > on(scope)
+            observability_state{domain="channel_ingestion",signal="max_quiet_seconds"}
+          )
+          and on(scope)
+            (observability_state{domain="channel_ingestion",signal="monitoring_active"} == 1)
+          and on(scope)
+            (observability_state{domain="channel_ingestion",signal="natural_required"} == 1)
+          and on(scope)
+            (observability_state{domain="channel_ingestion",signal="severity_critical"} == 1)
+        for: 10m
+        labels:
+          severity: critical
+          area: channel-observability
+          owner: communications-team-inbox
+        annotations:
+          summary: "Critical inbound channel {{ $labels.scope }} has gone silent"
+          description: >
+            The authoritative contract is active and natural inbound traffic on
+            {{ $labels.scope }} has exceeded its maximum quiet period. Check the
+            provider, webhook/MTA path, ingestion owner, and channel runbook.
+          runbook: "docs/designs/CHANNEL_OBSERVABILITY.md"
+
+      - alert: ChannelNaturalIngestionSilentWarning
+        expr: >
+          (
+            observability_state{domain="channel_ingestion",signal="silence_age_seconds"}
+              > on(scope)
+            observability_state{domain="channel_ingestion",signal="max_quiet_seconds"}
+          )
+          and on(scope)
+            (observability_state{domain="channel_ingestion",signal="monitoring_active"} == 1)
+          and on(scope)
+            (observability_state{domain="channel_ingestion",signal="natural_required"} == 1)
+          and on(scope)
+            (observability_state{domain="channel_ingestion",signal="severity_critical"} == 0)
+        for: 10m
+        labels:
+          severity: warning
+          area: channel-observability
+          owner: communications-team-inbox
+        annotations:
+          summary: "Inbound channel {{ $labels.scope }} has gone silent"
+          description: >
+            The authoritative contract is active and natural inbound traffic on
+            {{ $labels.scope }} has exceeded its maximum quiet period. Check the
+            provider, webhook path, ingestion owner, and channel runbook.
+          runbook: "docs/designs/CHANNEL_OBSERVABILITY.md"
+
+      # Low-volume channels use verified synthetic messages. A forged email
+      # header is not sufficient: the team-inbox owner marks only the random
+      # Message-ID generated and subsequently verified by the SMTP runtime.
+      - alert: ChannelSyntheticProbeStaleCritical
+        expr: >
+          (
+            observability_state{domain="channel_ingestion",signal="synthetic_age_seconds"}
+              > on(scope)
+            observability_state{domain="channel_ingestion",signal="synthetic_max_age_seconds"}
+          )
+          and on(scope)
+            (observability_state{domain="channel_ingestion",signal="monitoring_active"} == 1)
+          and on(scope)
+            (observability_state{domain="channel_ingestion",signal="synthetic_required"} == 1)
+          and on(scope)
+            (observability_state{domain="channel_ingestion",signal="severity_critical"} == 1)
+        for: 10m
+        labels:
+          severity: critical
+          area: channel-observability
+          owner: communications-team-inbox
+        annotations:
+          summary: "Critical channel {{ $labels.scope }} synthetic probe is stale"
+          description: >
+            No verified end-to-end probe has completed within the channel's
+            contract. Check the listener, relay/provider, canonical inbox write,
+            and continuous probe runtime.
+          runbook: "docs/designs/CHANNEL_OBSERVABILITY.md"
+
+      - alert: ChannelSyntheticProbeStaleWarning
+        expr: >
+          (
+            observability_state{domain="channel_ingestion",signal="synthetic_age_seconds"}
+              > on(scope)
+            observability_state{domain="channel_ingestion",signal="synthetic_max_age_seconds"}
+          )
+          and on(scope)
+            (observability_state{domain="channel_ingestion",signal="monitoring_active"} == 1)
+          and on(scope)
+            (observability_state{domain="channel_ingestion",signal="synthetic_required"} == 1)
+          and on(scope)
+            (observability_state{domain="channel_ingestion",signal="severity_critical"} == 0)
+        for: 10m
+        labels:
+          severity: warning
+          area: channel-observability
+          owner: communications-team-inbox
+        annotations:
+          summary: "Channel {{ $labels.scope }} synthetic probe is stale"
+          description: >
+            No verified end-to-end probe has completed within the channel's
+            contract. Check the listener, relay/provider, canonical inbox write,
+            and continuous probe runtime.
+          runbook: "docs/designs/CHANNEL_OBSERVABILITY.md"
+
+      - alert: ChannelHealthContractInvalid
+        expr: observability_snapshot_status{domain="channel_ingestion",status="error"} == 1
+        for: 2m
+        labels:
+          severity: critical
+          area: channel-observability
+          owner: observability
+        annotations:
+          summary: "Sensitive channel health contract is invalid"
+          description: >
+            The channel observer rejected the authoritative registry. Silence
+            evaluation is fail-closed until every supported external channel has
+            one valid enabled policy or an explicit disabled reason.
+          runbook: "docs/designs/CHANNEL_OBSERVABILITY.md"
+
+      - alert: ChannelObserverMissing
+        expr: absent(observability_snapshot_age_seconds{domain="channel_ingestion"}) == 1
+        for: 10m
+        labels:
+          severity: critical
+          area: channel-observability
+          owner: observability
+        annotations:
+          summary: "Channel-health observer metrics are absent"
+          description: >
+            No channel_ingestion snapshot is being exported. Check the Sub
+            scrape target, snapshot bridge, beat schedule, and observer worker.
+          runbook: "docs/designs/CHANNEL_OBSERVABILITY.md"
+
+      # If the observer itself stops, silence detection goes blind. Alert when
+      # the freshness snapshot stops refreshing (beat task or worker down).
+      - alert: ChannelObserverStale
+        expr: observability_snapshot_age_seconds{domain="channel_ingestion"} > 300
+        for: 5m
+        labels:
+          severity: critical
+          area: channel-observability
+        annotations:
+          summary: "Channel-health observer is not refreshing"
+          description: >
+            The channel_ingestion snapshot is {{ $value | humanizeDuration }}
+            old. Silence detection is blind until the observer runs again —
+            check the channel_health_observer beat task and the worker.
+
+      # --- Inline webhook latency approaching the provider's timeout: the point
+      # at which the provider starts retrying and eventually dropping.
+      - alert: WebhookProcessingSlow
+        expr: >
+          histogram_quantile(
+            0.95,
+            sum by (le, provider, event) (rate(sub_webhook_processing_seconds_bucket[5m]))
+          ) > 5
+        for: 10m
+        labels:
+          severity: warning
+          area: channel-observability
+        annotations:
+          summary: "Webhook {{ $labels.provider }}/{{ $labels.event }} p95 latency high"
+          description: >
+            p95 inline processing is {{ $value | humanize }}s. Sub processes
+            webhooks inline, so rising latency predicts provider-side timeouts
+            and dropped deliveries.
+
+      - alert: WebhookErrorRateHigh
+        expr: >
+          sum by (provider, event) (rate(sub_webhook_events_total{outcome="error"}[5m]))
+            /
+          clamp_min(sum by (provider, event) (rate(sub_webhook_events_total[5m])), 1e-9)
+            > 0.05
+        for: 10m
+        labels:
+          severity: critical
+          area: channel-observability
+        annotations:
+          summary: "Webhook {{ $labels.provider }}/{{ $labels.event }} error rate high"
+          description: >
+            Over 5% of {{ $labels.provider }} webhooks are failing processing.
+            The provider believes these were delivered; we are losing them.
+
+      # A run of rejected receipts is usually a rotated/misconfigured secret —
+      # every delivery bounces at signature verification.
+      - alert: WebhookRejectedSustained
+        expr: sum by (provider, event) (rate(sub_webhook_events_total{outcome="rejected"}[5m])) > 0
+        for: 15m
+        labels:
+          severity: warning
+          area: channel-observability
+        annotations:
+          summary: "Webhook {{ $labels.provider }}/{{ $labels.event }} deliveries being rejected"
+          description: >
+            {{ $labels.provider }} deliveries are failing verification for 15m —
+            typically a rotated app secret or verify token that was not updated.
+
+      # The Sub-native signature of a provider retry storm (the push-model
+      # analogue of the incident's flood): a spike in suppressed duplicates.
+      - alert: InboundRedeliverySpike
+        expr: sum by (channel) (rate(sub_inbound_dedup_suppressed_total[5m])) > 1
+        for: 10m
+        labels:
+          severity: warning
+          area: channel-observability
+        annotations:
+          summary: "Inbound redelivery storm on {{ $labels.channel }}"
+          description: >
+            {{ $labels.channel }} is suppressing {{ $value | humanize }}
+            duplicate inbound/s — the provider is re-delivering. Dedup is
+            holding, but investigate the upstream retry cause.
+
+      # --- Async worker stall (the incident's WhatsApp cause, in Sub's other
+      # queues): a queue that keeps growing means its consumer is not draining.
+      - alert: CeleryQueueDepthHigh
+        expr: observability_state{domain="celery_queues",signal="queue_depth"} > 1000
+        for: 10m
+        labels:
+          severity: warning
+          area: channel-observability
+        annotations:
+          summary: "Celery queue {{ $labels.scope }} is backing up"
+          description: >
+            Queue {{ $labels.scope }} depth is {{ $value | humanize }} and not
+            draining — a stalled or under-provisioned worker. This is the
+            failure mode that, on restart, dumps a backlog all at once.
+
+      - alert: CeleryQueueObserverDegraded
+        expr: observability_snapshot_status{domain="celery_queues",status="degraded"} == 1
+        for: 10m
+        labels:
+          severity: warning
+          area: channel-observability
+        annotations:
+          summary: "Queue-depth observer cannot read the broker"
+          description: >
+            The queue-depth snapshot is degraded — the observer could not read
+            Redis. Queue backlog is invisible until this recovers.

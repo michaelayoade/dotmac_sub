@@ -3,19 +3,65 @@
 from __future__ import annotations
 
 import logging
-import math
 
 from fastapi import Depends, HTTPException, Request, status
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.auth import MFAMethod
 from app.services import auth_flow as auth_flow_service
-from app.services import crm_portal, customer_portal, reseller_portal
+from app.services import (
+    crm_portal,
+    customer_portal,
+    reseller_crm_views,
+    reseller_portal,
+    work_orders_mirror,
+)
+from app.services.list_query import (
+    ListDefinition,
+    ListFieldDefinition,
+    PageMeta,
+    request_needs_canonicalization,
+)
 from app.web.reseller.branding import get_reseller_templates
 
 logger = logging.getLogger(__name__)
+
+# The reseller accounts list's declared capabilities. Sortable keys mirror the
+# reseller_portal.list_accounts order_by whitelist; per_page keeps the reseller
+# portal's 20 default.
+RESELLER_ACCOUNT_LIST_DEFINITION = ListDefinition(
+    key="reseller_accounts",
+    fields=(
+        ListFieldDefinition("name", "Customer", searchable=True, sortable=True),
+        ListFieldDefinition("status_filter", "Status", filterable=True),
+        ListFieldDefinition("balance", "Balance", sortable=True),
+        ListFieldDefinition("overdue", "Overdue", sortable=True),
+        ListFieldDefinition("created_at", "Joined", sortable=True),
+    ),
+    default_sort="created_at",
+    default_sort_dir="desc",
+    per_page_options=(10, 20, 50, 100),
+    default_per_page=20,
+)
+
+# Per-account invoices sub-list. Sortable keys mirror list_account_invoices'
+# ACCOUNT_INVOICE_SORT_COLUMNS.
+RESELLER_INVOICE_LIST_DEFINITION = ListDefinition(
+    key="reseller_account_invoices",
+    fields=(
+        ListFieldDefinition("status", "Status", sortable=True),
+        ListFieldDefinition("total", "Total", sortable=True),
+        ListFieldDefinition("due_at", "Due", sortable=True),
+        ListFieldDefinition("issued_at", "Issued", sortable=True),
+        ListFieldDefinition("created_at", "Created", sortable=True),
+    ),
+    default_sort="issued_at",
+    default_sort_dir="desc",
+    per_page_options=(10, 25, 50, 100),
+    default_per_page=25,
+)
 
 templates = get_reseller_templates()
 
@@ -36,6 +82,15 @@ def _require_reseller_context(request: Request, db: Session):
         "active": bool(context.get("is_impersonation")),
         "return_to": context.get("return_to") or "/admin/resellers",
     }
+    request.state.reseller_context = context
+    try:
+        from app.services.brand_profiles import resolve_brand
+
+        request.state.reseller_brand = resolve_brand(
+            db, reseller_id=context["reseller"].id
+        ).to_dict()
+    except Exception:
+        logger.debug("Failed to attach reseller branding to request context")
     return context
 
 
@@ -111,9 +166,15 @@ def reseller_dashboard(
         limit=per_page,
         offset=offset,
     )
+    customer_statuses = reseller_portal.list_customer_connection_statuses(
+        db,
+        reseller_id=str(context["reseller"].id),
+        limit=per_page,
+        offset=offset,
+    )
 
-    # Add open tickets count from CRM (fails silently)
-    open_tickets = 0
+    # Add open tickets count from CRM. None means the CRM was unavailable.
+    open_tickets: int | None = None
     try:
         account_ids = [a["id"] for a in summary.get("accounts", [])]
         if account_ids:
@@ -125,6 +186,14 @@ def reseller_dashboard(
             "Could not fetch CRM open tickets for reseller dashboard", exc_info=True
         )
 
+    # Open-ticket count has no reseller-scoped cohort list, so it renders as a
+    # bare StateValue: an unreachable CRM shows "Unavailable", never a false 0.
+    open_tickets_state = (
+        reseller_portal.StateValue.present(open_tickets)
+        if open_tickets is not None
+        else reseller_portal.StateValue.unavailable()
+    )
+
     return templates.TemplateResponse(
         "reseller/dashboard/index.html",
         {
@@ -133,7 +202,10 @@ def reseller_dashboard(
             "current_user": context["current_user"],
             "reseller": context["reseller"],
             "summary": summary,
+            "kpis": reseller_portal.dashboard_kpis(summary),
+            "customer_statuses": customer_statuses,
             "open_tickets": open_tickets,
+            "open_tickets_state": open_tickets_state,
             "page": page,
             "per_page": per_page,
         },
@@ -147,28 +219,65 @@ def reseller_accounts(
     per_page: int,
     search: str | None = None,
     status_filter: str | None = None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
 ):
     context = _require_reseller_context(request, db)
     if not context:
         return RedirectResponse(url="/reseller/auth/login", status_code=303)
 
+    definition = RESELLER_ACCOUNT_LIST_DEFINITION
+    requested_status_filter = status_filter
+    if status_filter not in reseller_portal.ACCOUNT_LIST_STATUS_OPTIONS:
+        status_filter = None
+    safe_sort = (
+        sort_by if sort_by in definition.sortable_keys else definition.default_sort
+    )
+    safe_dir = sort_dir if sort_dir in ("asc", "desc") else None
+    safe_per_page = (
+        per_page
+        if per_page in definition.per_page_options
+        else definition.default_per_page
+    )
+    requested_query = definition.build_query(
+        search=search,
+        filters={"status_filter": status_filter},
+        sort_by=safe_sort,
+        sort_dir=safe_dir,
+        page=max(1, page),
+        per_page=safe_per_page,
+    )
+    reseller_id = str(context["reseller"].id)
     total = reseller_portal.count_accounts(
         db,
-        reseller_id=str(context["reseller"].id),
-        search=search,
+        reseller_id=reseller_id,
+        search=requested_query.search,
         status_filter=status_filter,
     )
-    total_pages = max(1, math.ceil(total / per_page)) if per_page else 1
-    page = min(page, total_pages)
-    offset = (page - 1) * per_page
+    page_meta = PageMeta.from_query(requested_query, total)
+    list_query = requested_query.with_page(page_meta.page)
     accounts = reseller_portal.list_accounts(
         db,
-        reseller_id=str(context["reseller"].id),
-        limit=per_page,
-        offset=offset,
-        search=search,
+        reseller_id=reseller_id,
+        limit=list_query.per_page,
+        offset=(page_meta.page - 1) * list_query.per_page,
+        search=list_query.search,
         status_filter=status_filter,
+        order_by=list_query.sort_by,
+        order_dir=list_query.sort_dir,
     )
+    if request_needs_canonicalization(
+        list_query,
+        search=search,
+        filters={"status_filter": requested_status_filter},
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        page=page,
+        per_page=per_page,
+    ):
+        return RedirectResponse(
+            url=list_query.url("/reseller/accounts"), status_code=307
+        )
     return templates.TemplateResponse(
         "reseller/accounts/index.html",
         {
@@ -177,15 +286,17 @@ def reseller_accounts(
             "current_user": context["current_user"],
             "reseller": context["reseller"],
             "accounts": accounts,
-            "page": page,
-            "per_page": per_page,
-            "search": search or "",
+            "list_query": list_query,
+            "page_meta": page_meta,
+            "page": page_meta.page,
+            "per_page": page_meta.per_page,
+            "search": list_query.search or "",
             "status_filter": status_filter or "",
             "status_options": reseller_portal.ACCOUNT_LIST_STATUS_OPTIONS,
             "total": total,
-            "total_pages": total_pages,
-            "has_prev": page > 1,
-            "has_next": page < total_pages,
+            "total_pages": page_meta.total_pages,
+            "has_prev": page_meta.has_previous,
+            "has_next": page_meta.has_next,
         },
     )
 
@@ -250,6 +361,11 @@ def reseller_account_detail(
             "current_user": context["current_user"],
             "reseller": context["reseller"],
             "account": detail,
+            # Eligibility/reason owned by the backend; the raw preview dict on
+            # `account.status_actions` still supplies each POST's fingerprint.
+            "status_action_contracts": reseller_portal.account_status_action_contracts(
+                detail["status_actions"]
+            ),
             "status_success": request.query_params.get("status_success"),
             "status_error": request.query_params.get("status_error"),
         },
@@ -261,6 +377,7 @@ def reseller_account_status_update(
     db: Session,
     account_id: str,
     action: str,
+    preview_fingerprint: str,
 ):
     from urllib.parse import quote_plus
 
@@ -269,20 +386,81 @@ def reseller_account_status_update(
         return RedirectResponse(url="/reseller/auth/login", status_code=303)
 
     try:
-        result = reseller_portal.update_customer_account_status(
+        proposal = reseller_portal.preview_customer_account_status_confirmation(
+            db,
+            reseller_id=str(context["reseller"].id),
+            account_id=account_id,
+            action=action,
+            expected_preview_fingerprint=preview_fingerprint,
+        )
+    except ValueError as exc:
+        message = str(exc) or "Unsupported status action"
+        return RedirectResponse(
+            url=f"/reseller/accounts/{account_id}?status_error={quote_plus(message)}",
+            status_code=303,
+        )
+    except Exception:
+        logger.warning("reseller_account_status_update_failed", exc_info=True)
+        return RedirectResponse(
+            url=f"/reseller/accounts/{account_id}?status_error={quote_plus('Unable to preview account status change')}",
+            status_code=303,
+        )
+
+    if not proposal:
+        return templates.TemplateResponse(
+            "reseller/errors/404.html",
+            {
+                "request": request,
+                "current_user": context["current_user"],
+                "reseller": context["reseller"],
+            },
+            status_code=404,
+        )
+
+    return templates.TemplateResponse(
+        "reseller/accounts/status_confirm.html",
+        {
+            "request": request,
+            "active_page": "accounts",
+            "current_user": context["current_user"],
+            "reseller": context["reseller"],
+            "proposal": proposal,
+        },
+    )
+
+
+def reseller_account_status_confirm(
+    request: Request,
+    db: Session,
+    account_id: str,
+    action: str,
+    preview_fingerprint: str,
+    idempotency_key: str,
+):
+    from urllib.parse import quote_plus
+
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url="/reseller/auth/login", status_code=303)
+
+    try:
+        result = reseller_portal.confirm_customer_account_status_action(
             db,
             reseller_id=str(context["reseller"].id),
             account_id=account_id,
             action=action,
             actor_id=context["principal_id"],
+            expected_preview_fingerprint=preview_fingerprint,
+            idempotency_key=idempotency_key,
         )
-    except ValueError:
+    except ValueError as exc:
+        message = str(exc) or "Unsupported status action"
         return RedirectResponse(
-            url=f"/reseller/accounts/{account_id}?status_error={quote_plus('Unsupported status action')}",
+            url=f"/reseller/accounts/{account_id}?status_error={quote_plus(message)}",
             status_code=303,
         )
     except Exception:
-        logger.warning("reseller_account_status_update_failed", exc_info=True)
+        logger.warning("reseller_account_status_confirm_failed", exc_info=True)
         return RedirectResponse(
             url=f"/reseller/accounts/{account_id}?status_error={quote_plus('Unable to update account status')}",
             status_code=303,
@@ -302,8 +480,9 @@ def reseller_account_status_update(
     status_label = str(result.get("status") or "updated").replace("_", " ").title()
     if action.strip().lower() == "deactivate":
         status_label = "Deactivated"
+    suffix = " (already processed)" if result.get("replayed") else ""
     return RedirectResponse(
-        url=f"/reseller/accounts/{account_id}?status_success={quote_plus(f'Account status changed to {status_label}')}",
+        url=f"/reseller/accounts/{account_id}?status_success={quote_plus(f'Account status changed to {status_label}{suffix}')}",
         status_code=303,
     )
 
@@ -314,20 +493,18 @@ def reseller_account_invoices(
     account_id: str,
     page: int,
     per_page: int,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
 ):
     context = _require_reseller_context(request, db)
     if not context:
         return RedirectResponse(url="/reseller/auth/login", status_code=303)
 
-    offset = (page - 1) * per_page
-    invoices = reseller_portal.list_account_invoices(
-        db,
-        reseller_id=str(context["reseller"].id),
-        account_id=account_id,
-        limit=per_page,
-        offset=offset,
+    reseller_id = str(context["reseller"].id)
+    total = reseller_portal.count_account_invoices(
+        db, reseller_id=reseller_id, account_id=account_id
     )
-    if invoices is None:
+    if total is None:  # account not owned by this reseller
         return templates.TemplateResponse(
             "reseller/errors/404.html",
             {
@@ -336,6 +513,51 @@ def reseller_account_invoices(
                 "reseller": context["reseller"],
             },
             status_code=404,
+        )
+
+    definition = RESELLER_INVOICE_LIST_DEFINITION
+    safe_sort = (
+        sort_by if sort_by in definition.sortable_keys else definition.default_sort
+    )
+    safe_dir = sort_dir if sort_dir in ("asc", "desc") else None
+    safe_per_page = (
+        per_page
+        if per_page in definition.per_page_options
+        else definition.default_per_page
+    )
+    requested_query = definition.build_query(
+        search=None,
+        filters={},
+        sort_by=safe_sort,
+        sort_dir=safe_dir,
+        page=max(1, page),
+        per_page=safe_per_page,
+    )
+    page_meta = PageMeta.from_query(requested_query, total)
+    list_query = requested_query.with_page(page_meta.page)
+    invoices = (
+        reseller_portal.list_account_invoices(
+            db,
+            reseller_id=reseller_id,
+            account_id=account_id,
+            limit=list_query.per_page,
+            offset=(page_meta.page - 1) * list_query.per_page,
+            order_by=list_query.sort_by,
+            order_dir=list_query.sort_dir,
+        )
+        or []
+    )
+
+    if request_needs_canonicalization(
+        list_query,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        page=page,
+        per_page=per_page,
+    ):
+        return RedirectResponse(
+            url=list_query.url(f"/reseller/accounts/{account_id}/invoices"),
+            status_code=307,
         )
 
     return templates.TemplateResponse(
@@ -347,8 +569,12 @@ def reseller_account_invoices(
             "reseller": context["reseller"],
             "invoices": invoices,
             "account_id": account_id,
-            "page": page,
-            "per_page": per_page,
+            "list_query": list_query,
+            "page_meta": page_meta,
+            "page": page_meta.page,
+            "per_page": page_meta.per_page,
+            "total": total,
+            "total_pages": page_meta.total_pages,
         },
     )
 
@@ -410,6 +636,7 @@ def reseller_revenue_report(request: Request, db: Session):
             "current_user": context["current_user"],
             "reseller": context["reseller"],
             "summary": summary,
+            "kpis": reseller_portal.revenue_kpis(summary),
         },
     )
 
@@ -420,14 +647,41 @@ def reseller_profile(request: Request, db: Session):
         return RedirectResponse(url="/reseller/auth/login", status_code=303)
 
     mfa_methods = _reseller_mfa_methods(db, context)
+    current_session_token = request.cookies.get(reseller_portal.SESSION_COOKIE_NAME)
+    active_sessions = reseller_portal.list_reseller_sessions_for_principal(
+        context["principal_id"],
+        current_session_token=current_session_token,
+    )
     return templates.TemplateResponse(
         "reseller/profile/index.html",
         _profile_context(
             request,
             context,
             mfa_methods=mfa_methods,
+            active_sessions=active_sessions,
+            other_session_count=sum(
+                1 for session in active_sessions if not session["is_current"]
+            ),
+            success="Other portal sessions signed out."
+            if request.query_params.get("sessions") == "signed-out"
+            else None,
             verify_sent=request.query_params.get("verify_sent"),
         ),
+    )
+
+
+def reseller_profile_sign_out_other_sessions(request: Request, db: Session):
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url=RESELLER_LOGIN_URL, status_code=303)
+    current_session_token = request.cookies.get(reseller_portal.SESSION_COOKIE_NAME)
+    reseller_portal.revoke_other_reseller_sessions_for_principal(
+        context["principal_id"],
+        current_session_token,
+        db=db,
+    )
+    return RedirectResponse(
+        url="/reseller/profile?sessions=signed-out", status_code=303
     )
 
 
@@ -519,11 +773,11 @@ def reseller_mfa_confirm(request: Request, db: Session, method_id: str, code: st
 
     try:
         if context["principal_type"] == "reseller_user":
-            auth_flow_service.auth_flow.reseller_mfa_confirm(
+            method = auth_flow_service.auth_flow.reseller_mfa_confirm(
                 db, method_id, code.strip(), context["principal_id"]
             )
         else:
-            auth_flow_service.auth_flow.mfa_confirm(
+            method = auth_flow_service.auth_flow.mfa_confirm(
                 db, method_id, code.strip(), context["principal_id"]
             )
     except Exception:
@@ -540,6 +794,27 @@ def reseller_mfa_confirm(request: Request, db: Session, method_id: str, code: st
                 "error": "Invalid verification code. Please try again.",
             },
             status_code=401,
+        )
+
+    recovery_codes = (
+        auth_flow_service.generate_mfa_recovery_codes(db, method)
+        if getattr(method, "id", None)
+        else []
+    )
+    if recovery_codes:
+        return templates.TemplateResponse(
+            "reseller/profile/mfa_setup.html",
+            {
+                "request": request,
+                "active_page": "profile",
+                "current_user": context["current_user"],
+                "reseller": context["reseller"],
+                "method_id": method_id,
+                "secret_key": "",
+                "otpauth_uri": "",
+                "recovery_codes": recovery_codes,
+                "continue_url": "/reseller/profile",
+            },
         )
 
     mfa_methods = _reseller_mfa_methods(db, context)
@@ -716,136 +991,69 @@ def reseller_service_request_create(
     )
 
 
-def reseller_vas_page(request: Request, db: Session):
-    """Reseller VAS: float wallet, sell-for-customer, commissions."""
-    from app.services import vas_purchases, vas_wallet
+# ─── Field-service work orders (technician map + rating, per managed account) ──
 
+
+def reseller_work_orders_page(request: Request, db: Session):
     context = _require_reseller_context(request, db)
     if not context:
-        return RedirectResponse(url=RESELLER_LOGIN_URL, status_code=303)
-    if not vas_wallet.is_enabled(db):
-        raise HTTPException(status_code=404, detail="Not found")
-    reseller = context["reseller"]
-    wallet = vas_wallet.get_or_create_reseller_wallet(db, str(reseller.id))
-
-    from decimal import Decimal
-
-    from sqlalchemy import func as _func
-
-    from app.models.vas import VasEntryCategory, VasEntryType, VasWalletEntry
-
-    commission_total = db.query(
-        _func.coalesce(_func.sum(VasWalletEntry.amount), Decimal("0.00"))
-    ).filter(
-        VasWalletEntry.wallet_id == wallet.id,
-        VasWalletEntry.entry_type == VasEntryType.credit,
-        VasWalletEntry.category == VasEntryCategory.commission,
-    ).scalar() or Decimal("0.00")
-
-    from app.web.customer.bills import _jsonable_catalog
-
+        return RedirectResponse(url="/reseller/auth/login", status_code=303)
+    tracker = reseller_crm_views.work_orders_for_reseller(
+        db, str(context["reseller"].id)
+    )
     return templates.TemplateResponse(
-        "reseller/vas/index.html",
+        "reseller/work_orders/index.html",
         {
             "request": request,
-            "active_page": "vas",
-            "reseller": reseller,
-            "balance": vas_wallet.wallet_balance(db, wallet.id),
-            "commission_total": Decimal(str(commission_total)),
-            "catalog": _jsonable_catalog(vas_purchases.customer_catalog(db)),
-            "transactions": vas_purchases.list_reseller_transactions(
-                db, str(reseller.id), limit=15
-            ),
-            "min_topup": 100,
-            "form_error": request.query_params.get("error"),
-            "funded": request.query_params.get("funded"),
+            "active_page": "work-orders",
+            "current_user": context["current_user"],
+            "reseller": context["reseller"],
+            "tracker": tracker,
         },
     )
 
 
-def reseller_vas_topup_intent(request: Request, db: Session, amount):
-    from decimal import Decimal, InvalidOperation
-
-    from fastapi.responses import JSONResponse
-
-    from app.services import vas_wallet
-
+def reseller_technician_location(
+    request: Request, db: Session, account_id: str, work_order_id: str
+):
+    """Live tech position for a managed account's work order (polled). Same-origin,
+    reseller-session-authed; gated to accounts the reseller owns."""
     context = _require_reseller_context(request, db)
     if not context:
         return JSONResponse({"detail": "Not authenticated"}, status_code=401)
-    try:
-        value = Decimal(str(amount))
-    except (InvalidOperation, ValueError):
-        return JSONResponse({"detail": "Invalid amount"}, status_code=400)
-    try:
-        result = vas_wallet.initiate_reseller_topup(
-            db, str(context["reseller"].id), value
-        )
-    except HTTPException as exc:
-        return JSONResponse({"detail": str(exc.detail)}, status_code=exc.status_code)
-    return JSONResponse(
-        {
-            "provider_type": result["provider_type"],
-            "provider_public_key": result["provider_public_key"],
-            "reference": result["reference"],
-            "currency": result["currency"],
-        }
-    )
+    account = reseller_portal.owned_account(db, str(context["reseller"].id), account_id)
+    if account is None:
+        return JSONResponse({"available": False, "reason": "not_found"})
+    data = work_orders_mirror.technician_location(db, str(account.id), work_order_id)
+    return JSONResponse(data)
 
 
-def reseller_vas_topup_verify(request: Request, db: Session, reference: str):
-    from app.services import vas_wallet
-
-    context = _require_reseller_context(request, db)
-    if not context:
-        return RedirectResponse(url=RESELLER_LOGIN_URL, status_code=303)
-    try:
-        result = vas_wallet.verify_reseller_topup(
-            db, str(context["reseller"].id), reference
-        )
-    except (HTTPException, ValueError) as exc:
-        detail = getattr(exc, "detail", None) or str(exc)
-        return RedirectResponse(url=f"/reseller/vas?error={detail}", status_code=303)
-    return RedirectResponse(
-        url=f"/reseller/vas?funded={result['amount']}", status_code=303
-    )
-
-
-def reseller_vas_sell(
+def reseller_rate_technician(
     request: Request,
     db: Session,
-    *,
-    service_id: str,
-    identifier: str,
-    variation_code: str,
-    amount: str,
+    account_id: str,
+    work_order_id: str,
+    rating: int,
+    comment: str,
 ):
-    from decimal import Decimal, InvalidOperation
-
-    from app.services import vas_purchases
-
     context = _require_reseller_context(request, db)
     if not context:
-        return RedirectResponse(url=RESELLER_LOGIN_URL, status_code=303)
-    value = None
-    if amount.strip():
+        return RedirectResponse(url="/reseller/auth/login", status_code=303)
+    account = reseller_portal.owned_account(db, str(context["reseller"].id), account_id)
+    status_flag = "ok"
+    if account is None:
+        status_flag = "error"
+    else:
         try:
-            value = Decimal(amount.strip())
-        except (InvalidOperation, ValueError):
-            return RedirectResponse(
-                url="/reseller/vas?error=Invalid amount", status_code=303
+            work_orders_mirror.rate_technician(
+                db,
+                str(account.id),
+                work_order_id,
+                rating=max(1, min(5, rating)),
+                comment=(comment or "")[:2000] or None,
             )
-    try:
-        vas_purchases.reseller_purchase(
-            db,
-            reseller_id=str(context["reseller"].id),
-            service_id=service_id,
-            identifier=identifier,
-            variation_code=variation_code.strip() or None,
-            amount=value,
-        )
-    except HTTPException as exc:
-        return RedirectResponse(
-            url=f"/reseller/vas?error={exc.detail}", status_code=303
-        )
-    return RedirectResponse(url="/reseller/vas?funded=sold", status_code=303)
+        except (LookupError, ValueError):
+            status_flag = "error"
+    return RedirectResponse(
+        url=f"/reseller/work-orders?rated={status_flag}", status_code=303
+    )

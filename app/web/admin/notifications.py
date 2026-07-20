@@ -49,7 +49,7 @@ def notifications_menu(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/setup",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:read"))],
+    dependencies=[Depends(require_permission("notification:read"))],
 )
 def notification_bulk_setup(
     request: Request,
@@ -74,11 +74,13 @@ def notification_bulk_setup(
 @router.get(
     "/templates",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:read"))],
+    dependencies=[Depends(require_permission("notification:read"))],
 )
 def notification_templates_list(
     request: Request,
     channel: str | None = None,
+    status: str | None = None,
+    search: str | None = None,
     page: int = Query(1, ge=1),
     per_page: int = Query(25, ge=10, le=100),
     db: Session = Depends(get_db),
@@ -86,16 +88,18 @@ def notification_templates_list(
     """List notification templates."""
     from app.web.admin import get_current_user, get_sidebar_stats
 
+    try:
+        list_query = web_notifications_service.build_templates_list_query(
+            channel=channel, status=status, search=search, page=page, per_page=per_page
+        )
+    except ValueError:
+        list_query = web_notifications_service.build_templates_list_query(page=page)
+
     return templates.TemplateResponse(
         "admin/notifications/templates_list.html",
         {
             "request": request,
-            **web_notifications_service.templates_list_context(
-                db,
-                channel=channel,
-                page=page,
-                per_page=per_page,
-            ),
+            **web_notifications_service.templates_list_context(db, list_query),
             "active_page": "notification-templates",
             "active_menu": "system",
             "current_user": get_current_user(request),
@@ -104,10 +108,30 @@ def notification_templates_list(
     )
 
 
+@router.post(
+    "/templates/{template_id}/toggle",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("notification:write"))],
+)
+def notification_template_toggle(
+    request: Request,
+    template_id: UUID,
+    db: Session = Depends(get_db),
+):
+    """Toggle a notification template active/inactive from the list."""
+    template = web_notifications_service.toggle_template(db, template_id=template_id)
+    if request.headers.get("HX-Request"):
+        return Response(status_code=204, headers={"HX-Refresh": "true"})
+    return RedirectResponse(
+        url=f"/admin/notifications/templates?status={'active' if template.is_active else 'inactive'}",
+        status_code=303,
+    )
+
+
 @router.get(
     "/templates/new",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:write"))],
+    dependencies=[Depends(require_permission("notification:write"))],
 )
 def notification_template_new(request: Request, db: Session = Depends(get_db)):
     """Create new notification template form."""
@@ -130,7 +154,7 @@ def notification_template_new(request: Request, db: Session = Depends(get_db)):
 @router.post(
     "/templates",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:write"))],
+    dependencies=[Depends(require_permission("notification:write"))],
 )
 def notification_template_create(
     request: Request,
@@ -139,6 +163,7 @@ def notification_template_create(
     channel: str = Form(...),
     subject: str | None = Form(None),
     body: str = Form(...),
+    conditions_json: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
     """Create a notification template."""
@@ -150,6 +175,7 @@ def notification_template_create(
             channel=channel,
             subject=subject,
             body=body,
+            conditions_json=conditions_json,
         )
         return RedirectResponse(
             url=f"/admin/notifications/templates/{template.id}", status_code=303
@@ -178,7 +204,7 @@ def notification_template_create(
 @router.get(
     "/templates/{template_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:read"))],
+    dependencies=[Depends(require_permission("notification:read"))],
 )
 def notification_template_detail(
     request: Request,
@@ -212,7 +238,7 @@ def notification_template_detail(
 @router.post(
     "/templates/{template_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:write"))],
+    dependencies=[Depends(require_permission("notification:write"))],
 )
 def notification_template_update(
     request: Request,
@@ -222,7 +248,8 @@ def notification_template_update(
     channel: str = Form(...),
     subject: str | None = Form(None),
     body: str = Form(...),
-    is_active: bool = Form(True),
+    conditions_json: str | None = Form(None),
+    is_active: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
     """Update a notification template."""
@@ -235,7 +262,8 @@ def notification_template_update(
             channel=channel,
             subject=subject,
             body=body,
-            is_active=is_active,
+            is_active=is_active is not None,
+            conditions_json=conditions_json,
         )
         return RedirectResponse(
             url=f"/admin/notifications/templates/{template_id}", status_code=303
@@ -266,7 +294,7 @@ def notification_template_update(
 @router.post(
     "/templates/{template_id}/test",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:write"))],
+    dependencies=[Depends(require_permission("notification:write"))],
 )
 def notification_template_test(
     request: Request,
@@ -306,9 +334,37 @@ def notification_template_test(
 
 
 @router.post(
+    "/templates/preview",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("notification:write"))],
+)
+def notification_template_unsaved_preview(
+    request: Request,
+    channel: str = Form(...),
+    subject: str | None = Form(None),
+    body: str = Form(...),
+    test_variables_json: str | None = Form(None),
+):
+    """Render template preview before the first save."""
+    return templates.TemplateResponse(
+        request,
+        "admin/notifications/_template_preview.html",
+        {
+            "request": request,
+            **web_notifications_service.render_template_preview_from_fields(
+                channel=channel,
+                subject=subject,
+                body=body,
+                test_variables_json=test_variables_json,
+            ),
+        },
+    )
+
+
+@router.post(
     "/templates/{template_id}/preview",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:write"))],
+    dependencies=[Depends(require_permission("notification:write"))],
 )
 def notification_template_preview(
     request: Request,
@@ -334,12 +390,12 @@ def notification_template_preview(
 @router.delete(
     "/templates/{template_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:write"))],
+    dependencies=[Depends(require_permission("notification:write"))],
 )
 @router.post(
     "/templates/{template_id}/delete",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:write"))],
+    dependencies=[Depends(require_permission("notification:write"))],
 )
 def notification_template_delete(
     request: Request,
@@ -366,7 +422,7 @@ def notification_template_delete(
 @router.get(
     "/queue",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:read"))],
+    dependencies=[Depends(require_permission("notification:read"))],
 )
 def notification_queue(
     request: Request,
@@ -379,17 +435,18 @@ def notification_queue(
     """View pending and queued notifications."""
     from app.web.admin import get_current_user, get_sidebar_stats
 
+    try:
+        list_query = web_notifications_service.build_queue_list_query(
+            status=status, channel=channel, page=page, per_page=per_page
+        )
+    except ValueError:
+        list_query = web_notifications_service.build_queue_list_query(page=page)
+
     return templates.TemplateResponse(
         "admin/notifications/queue.html",
         {
             "request": request,
-            **web_notifications_service.queue_context(
-                db,
-                status=status,
-                channel=channel,
-                page=page,
-                per_page=per_page,
-            ),
+            **web_notifications_service.queue_context(db, list_query),
             "active_page": "notification-queue",
             "active_menu": "system",
             "current_user": get_current_user(request),
@@ -401,7 +458,7 @@ def notification_queue(
 @router.get(
     "/history",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:read"))],
+    dependencies=[Depends(require_permission("notification:read"))],
 )
 def notification_history(
     request: Request,
@@ -413,16 +470,18 @@ def notification_history(
     """View notification delivery history."""
     from app.web.admin import get_current_user, get_sidebar_stats
 
+    try:
+        list_query = web_notifications_service.build_history_list_query(
+            status=status, page=page, per_page=per_page
+        )
+    except ValueError:
+        list_query = web_notifications_service.build_history_list_query(page=page)
+
     return templates.TemplateResponse(
         "admin/notifications/history.html",
         {
             "request": request,
-            **web_notifications_service.history_context(
-                db,
-                status=status,
-                page=page,
-                per_page=per_page,
-            ),
+            **web_notifications_service.history_context(db, list_query),
             "active_page": "notification-history",
             "active_menu": "system",
             "current_user": get_current_user(request),
@@ -439,17 +498,27 @@ def notification_history(
 @router.get(
     "/alert-policies",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:read"))],
+    dependencies=[Depends(require_permission("notification:read"))],
 )
 def alert_policies_list(
     request: Request,
+    channel: str | None = None,
+    status: str | None = None,
+    severity_min: str | None = None,
+    active: str | None = None,
     page: int = Query(1, ge=1),
     per_page: int = Query(25, ge=10, le=100),
     db: Session = Depends(get_db),
 ):
     """List alert notification policies."""
     state = web_alert_policies_service.alert_policies_list_data(
-        db, page=page, per_page=per_page
+        db,
+        page=page,
+        per_page=per_page,
+        channel=channel,
+        status=status,
+        severity_min=severity_min,
+        active=active,
     )
     from app.web.admin import get_current_user, get_sidebar_stats
 
@@ -469,7 +538,7 @@ def alert_policies_list(
 @router.get(
     "/alert-policies/new",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:write"))],
+    dependencies=[Depends(require_permission("notification:write"))],
 )
 def alert_policy_new(request: Request, db: Session = Depends(get_db)):
     """Create new alert policy form."""
@@ -495,7 +564,7 @@ def alert_policy_new(request: Request, db: Session = Depends(get_db)):
 @router.post(
     "/alert-policies",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:write"))],
+    dependencies=[Depends(require_permission("notification:write"))],
 )
 def alert_policy_create(
     request: Request,
@@ -550,7 +619,7 @@ def alert_policy_create(
 @router.get(
     "/alert-policies/{policy_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:read"))],
+    dependencies=[Depends(require_permission("notification:read"))],
 )
 def alert_policy_detail(
     request: Request,
@@ -588,7 +657,7 @@ def alert_policy_detail(
 @router.post(
     "/alert-policies/{policy_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:write"))],
+    dependencies=[Depends(require_permission("notification:write"))],
 )
 def alert_policy_update(
     request: Request,
@@ -647,7 +716,7 @@ def alert_policy_update(
 @router.post(
     "/alert-policies/{policy_id}/delete",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:write"))],
+    dependencies=[Depends(require_permission("notification:write"))],
 )
 def alert_policy_delete(policy_id: UUID, db: Session = Depends(get_db)):
     """Delete an alert notification policy."""
@@ -658,7 +727,7 @@ def alert_policy_delete(policy_id: UUID, db: Session = Depends(get_db)):
 @router.post(
     "/alert-policies/{policy_id}/steps",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:write"))],
+    dependencies=[Depends(require_permission("notification:write"))],
 )
 def alert_policy_step_create(
     request: Request,
@@ -689,7 +758,7 @@ def alert_policy_step_create(
 @router.post(
     "/alert-policies/{policy_id}/steps/{step_id}/delete",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:write"))],
+    dependencies=[Depends(require_permission("notification:write"))],
 )
 def alert_policy_step_delete(
     policy_id: UUID,
@@ -712,7 +781,7 @@ def alert_policy_step_delete(
 @router.get(
     "/oncall-rotations",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:read"))],
+    dependencies=[Depends(require_permission("notification:read"))],
 )
 def oncall_rotations_list(
     request: Request,
@@ -742,7 +811,7 @@ def oncall_rotations_list(
 @router.post(
     "/oncall-rotations",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:write"))],
+    dependencies=[Depends(require_permission("notification:write"))],
 )
 def oncall_rotation_create(
     request: Request,
@@ -788,7 +857,7 @@ def oncall_rotation_create(
 @router.get(
     "/oncall-rotations/{rotation_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:read"))],
+    dependencies=[Depends(require_permission("notification:read"))],
 )
 def oncall_rotation_detail(
     request: Request,
@@ -823,7 +892,7 @@ def oncall_rotation_detail(
 @router.post(
     "/oncall-rotations/{rotation_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:write"))],
+    dependencies=[Depends(require_permission("notification:write"))],
 )
 def oncall_rotation_update(
     request: Request,
@@ -873,7 +942,7 @@ def oncall_rotation_update(
 @router.post(
     "/oncall-rotations/{rotation_id}/delete",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:write"))],
+    dependencies=[Depends(require_permission("notification:write"))],
 )
 def oncall_rotation_delete(rotation_id: UUID, db: Session = Depends(get_db)):
     """Delete an on-call rotation."""
@@ -886,7 +955,7 @@ def oncall_rotation_delete(rotation_id: UUID, db: Session = Depends(get_db)):
 @router.post(
     "/oncall-rotations/{rotation_id}/members",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:write"))],
+    dependencies=[Depends(require_permission("notification:write"))],
 )
 def oncall_rotation_member_create(
     request: Request,
@@ -913,7 +982,7 @@ def oncall_rotation_member_create(
 @router.post(
     "/oncall-rotations/{rotation_id}/members/{member_id}/delete",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:write"))],
+    dependencies=[Depends(require_permission("notification:write"))],
 )
 def oncall_rotation_member_delete(
     rotation_id: UUID,

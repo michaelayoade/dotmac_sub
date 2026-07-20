@@ -403,3 +403,60 @@ def test_handle_clone_uses_allocator_indices(db_session, monkeypatch) -> None:
     ]
     assert allocation.is_active is True
     assert allocation.provisioned_at is not None
+
+
+def test_handle_clone_reports_partial_success(db_session, monkeypatch) -> None:
+    olt, ont = _create_olt_ont(db_session)
+    ref_ont = OntUnit(
+        serial_number="SP-ONT-REF-PARTIAL",
+        olt_device_id=olt.id,
+        board="0/2",
+        port="1",
+        external_id="7",
+    )
+    db_session.add(ref_ont)
+    db_session.flush()
+    for idx, vlan in enumerate((203, 204), start=900):
+        db_session.add(
+            OltServicePort(
+                olt_device_id=olt.id,
+                ont_unit_id=ref_ont.id,
+                port_index=idx,
+                fsp="0/2/1",
+                ont_id_on_olt=7,
+                vlan_id=vlan,
+                gem_index=1,
+                flow_type="vlan",
+                flow_para=str(vlan),
+                state="up",
+                tag_transform="translate",
+                source="running_config",
+            )
+        )
+    db_session.commit()
+    db_session.refresh(ref_ont)
+
+    from app.services import web_network_service_ports as service
+
+    def _context(db, ont_id):
+        if str(ont_id) == str(ref_ont.id):
+            return ref_ont, olt, "0/2/1", 7
+        return ont, olt, "0/2/1", 5
+
+    calls: list[int] = []
+
+    def _create_stub(*args, **kwargs):
+        calls.append(kwargs["vlan_id"])
+        if kwargs["vlan_id"] == 204:
+            return False, "OLT rejected VLAN"
+        return True, "created"
+
+    monkeypatch.setattr(service, "_resolve_ont_olt_context", _context)
+    monkeypatch.setattr(service, "_create_allocated_service_port", _create_stub)
+
+    ok, message = service.handle_clone(db_session, str(ont.id), str(ref_ont.id))
+
+    assert ok is False
+    assert calls == [203, 204]
+    assert "Created 1 of 2 service-port" in message
+    assert "VLAN 204: OLT rejected VLAN" in message

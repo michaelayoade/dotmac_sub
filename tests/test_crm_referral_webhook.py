@@ -1,9 +1,4 @@
-"""Inbound CRM referral webhook endpoint (RFC #73): HMAC gate + delegation.
-
-The handler is a thin wrapper — the mirror/credit logic is unit-tested in
-test_referrals_mirror.py. Here we cover the signature gate, event filtering, and
-that a valid event reaches the service (a mirror row appears).
-"""
+"""Retired CRM referral webhook tombstone: authenticated 200/no-op only."""
 
 from __future__ import annotations
 
@@ -12,7 +7,6 @@ import hashlib
 import hmac
 import json
 import threading
-import uuid
 from contextlib import contextmanager
 
 from fastapi import HTTPException
@@ -20,7 +14,6 @@ from fastapi import HTTPException
 from app.api.crm_webhooks import receive_crm_referral_event
 from app.config import settings
 from app.models.referral import ReferralMirror
-from app.models.subscriber import Subscriber
 
 SECRET = "test-webhook-secret"
 
@@ -68,7 +61,7 @@ def _run(coro):
     return box["result"]
 
 
-def _post(db_session, body: dict, event: str = "referral.captured", signature=...):
+def _post(db_session, body: object, event: str, signature=...):
     raw = json.dumps(body).encode()
     headers = {"X-Webhook-Event": event, "Content-Type": "application/json"}
     sig = _sign(raw) if signature is ... else signature
@@ -83,57 +76,38 @@ def _post(db_session, body: dict, event: str = "referral.captured", signature=..
     return 200, payload
 
 
-def _linked_subscriber(db_session, crm_id: uuid.UUID) -> Subscriber:
-    sub = Subscriber(
-        first_name="Ref",
-        last_name="Errer",
-        email=f"r-{uuid.uuid4().hex[:8]}@example.com",
-        crm_subscriber_id=crm_id,
-    )
-    db_session.add(sub)
-    db_session.commit()
-    db_session.refresh(sub)
-    return sub
+def test_valid_legacy_delivery_is_authenticated_and_ignored(db_session):
+    with _with_secret(SECRET):
+        code, response = _post(
+            db_session,
+            {"referral_id": "legacy-r-1"},
+            event="referral.rewarded",
+        )
 
-
-def test_valid_captured_event_reaches_service(db_session):
-    crm_id = uuid.uuid4()
-    _linked_subscriber(db_session, crm_id)
-    body = {
-        "crm_subscriber_id": str(crm_id),
-        "referral_id": "r-1",
-        "referred_name": "Ada",
+    assert code == 200
+    assert response == {
+        "status": "ignored",
+        "reason": "crm_referral_path_retired",
+        "event": "referral.rewarded",
     }
-    with _with_secret(SECRET):
-        code, resp = _post(db_session, body)
-    assert code == 200, resp
-    assert resp["status"] == "ok"
-    assert (
-        db_session.query(ReferralMirror).filter_by(crm_referral_id="r-1").count() == 1
-    )
+    assert db_session.query(ReferralMirror).count() == 0
 
 
-def test_event_envelope_form_is_accepted(db_session):
-    crm_id = uuid.uuid4()
-    _linked_subscriber(db_session, crm_id)
-    body = {"payload": {"crm_subscriber_id": str(crm_id), "referral_id": "r-2"}}
+def test_unknown_delivery_is_also_a_noop(db_session):
     with _with_secret(SECRET):
-        code, resp = _post(db_session, body, event="referral.qualified")
+        code, response = _post(db_session, ["not", "an", "object"], "anything")
+
     assert code == 200
-    row = db_session.query(ReferralMirror).filter_by(crm_referral_id="r-2").one()
-    assert row.status == "qualified"
+    assert response["reason"] == "crm_referral_path_retired"
+    assert db_session.query(ReferralMirror).count() == 0
 
 
-def test_bad_signature_rejected(db_session):
-    body = {"crm_subscriber_id": str(uuid.uuid4()), "referral_id": "x"}
+def test_bad_signature_is_still_rejected(db_session):
     with _with_secret(SECRET):
-        code, _ = _post(db_session, body, signature="sha256=deadbeef")
+        code, _ = _post(
+            db_session,
+            {"referral_id": "legacy-r-1"},
+            event="referral.captured",
+            signature="sha256=deadbeef",
+        )
     assert code == 401
-
-
-def test_unknown_event_ignored(db_session):
-    body = {"crm_subscriber_id": str(uuid.uuid4()), "referral_id": "x"}
-    with _with_secret(SECRET):
-        code, resp = _post(db_session, body, event="referral.expired")
-    assert code == 200
-    assert resp["status"] == "ignored"

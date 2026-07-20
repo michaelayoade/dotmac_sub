@@ -36,17 +36,22 @@ from app.models.billing import (
 from app.models.catalog import (
     BillingMode,
     Subscription,
-    SubscriptionStatus,
 )
 from app.models.domain_settings import SettingDomain
 from app.models.scheduler import ScheduledTask
 from app.models.subscriber import Subscriber
-from app.services import settings_spec
+from app.services import control_registry, settings_spec
+from app.services.access_resolution import (
+    postpaid_billing_filters,
+    prepaid_enforcement_filters,
+)
+from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
 from app.services.billing_statuses import (
     BILLABLE_SUBSCRIBER_STATUS_VALUES,
     BILLABLE_SUBSCRIBER_STATUSES,
 )
-from app.services.job_heartbeat import get_last_success
+from app.services.customer_financial_position import prepaid_available_balances
+from app.services.job_heartbeat import get_last_result, get_last_success
 
 # Alert thresholds. Conservative defaults; tune via ops experience.
 SCAN_MIN_RATIO = 0.5  # alert if a run scanned < 50% of active subs
@@ -65,6 +70,11 @@ _CRITICAL_RUNNERS = (
     "app.tasks.billing.check_billing_switch",
 )
 
+BILLING_HEALTH_OBSERVABILITY_DOMAIN = "billing_health"
+BILLING_HEALTH_SNAPSHOT_TASK = "app.tasks.billing.refresh_billing_health_snapshot"
+# Stable Postgres advisory-lock key for the single-flight snapshot producer.
+BILLING_HEALTH_SNAPSHOT_LOCK_KEY = 0x62686C74  # "bhlt"
+
 
 @dataclass(frozen=True)
 class RunnerHeartbeat:
@@ -74,6 +84,55 @@ class RunnerHeartbeat:
     last_success: datetime | None
     age_seconds: float | None
     stale: bool
+    # Last-run result blob {status, at, detail} from job_heartbeat.get_last_result,
+    # or None when unknown (never recorded / Redis down). Optional so older
+    # positional call sites and tests stay valid.
+    last_result: dict | None = None
+
+    @property
+    def last_result_status(self) -> str | None:
+        """ "ok" / "error" / None (unknown)."""
+        if not isinstance(self.last_result, dict):
+            return None
+        status = self.last_result.get("status")
+        return status if isinstance(status, str) else None
+
+    @property
+    def last_result_at(self) -> datetime | None:
+        """Timestamp of the last recorded result, or None. Never raises."""
+        if not isinstance(self.last_result, dict):
+            return None
+        raw = self.last_result.get("at")
+        if not isinstance(raw, str):
+            return None
+        try:
+            parsed = datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+        return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed
+
+    @property
+    def last_result_detail(self) -> dict | None:
+        """Returned counts (success) or {"error": msg} (failure), or None."""
+        if not isinstance(self.last_result, dict):
+            return None
+        detail = self.last_result.get("detail")
+        return detail if isinstance(detail, dict) else None
+
+    @property
+    def last_result_summary(self) -> str:
+        """Compact one-line rendering of the last-run result for display."""
+        status = self.last_result_status
+        if status is None:
+            return "No result yet"
+        detail = self.last_result_detail or {}
+        if status == "error":
+            msg = detail.get("error")
+            return f"errored: {msg}" if msg else "errored"
+        if not detail:
+            return "ok"
+        counts = ", ".join(f"{k}={v}" for k, v in detail.items())
+        return f"ok — {counts}" if counts else "ok"
 
 
 @dataclass(frozen=True)
@@ -94,6 +153,13 @@ class BillingHealthSnapshot:
     # §6.1 billing-path coverage.
     unbilled_no_path: int = 0
     active_subs_on_terminal_account: int = 0
+    negative_prepaid_balance_count: int = 0
+    negative_prepaid_balance_total: Decimal = Decimal("0.00")
+    prepaid_balance_sweep_enabled: bool = False
+    negative_prepaid_with_sweep_disabled_count: int = 0
+    billing_profile_mismatch_count: int = 0
+    billing_profile_mixed_count: int = 0
+    account_credit_invariant_count: int = 0
     scan_min_ratio: float = SCAN_MIN_RATIO
     payment_volume_min_ratio: float = PAYMENT_VOLUME_MIN_RATIO
     payment_baseline_min_daily: float = PAYMENT_BASELINE_MIN_DAILY
@@ -117,7 +183,129 @@ class BillingHealthSnapshot:
             out.append("enforcement_covered_but_locked")
         if self.unbilled_no_path > 0:
             out.append("active_subs_without_billing_path")
+        if self.negative_prepaid_balance_count > 0:
+            out.append("negative_prepaid_balances")
+        if self.negative_prepaid_with_sweep_disabled_count > 0:
+            out.append("negative_prepaid_sweep_disabled")
+        if self.billing_profile_mismatch_count > 0:
+            out.append("billing_profile_mismatch")
+        if self.billing_profile_mixed_count > 0:
+            out.append("billing_profile_mixed_modes")
+        if self.account_credit_invariant_count > 0:
+            out.append("account_credit_invariant_violations")
         return out
+
+
+def billing_health_observations(snapshot: BillingHealthSnapshot):  # noqa: ANN201
+    """Convert a health result into bounded, scrape-safe observations."""
+    from app.services.observability import StateObservation
+
+    values: list[tuple[str, str, int | float | Decimal]] = [
+        ("paid_invoices_with_balance", "all", snapshot.paid_with_balance_count),
+        ("invoice_last_scanned", "all", snapshot.last_scanned or 0),
+        ("active_subscriptions", "all", snapshot.eligible_active_subs),
+        ("payments_succeeded_24h", "all", snapshot.payments_24h),
+        (
+            "payments_succeeded_7d_daily_avg",
+            "all",
+            snapshot.payments_7d_daily_avg,
+        ),
+        (
+            "payment_volume_collapsed",
+            "all",
+            1.0 if snapshot.payment_volume_collapsed else 0.0,
+        ),
+        (
+            "enforcement_covered_but_locked",
+            "all",
+            snapshot.covered_but_locked,
+        ),
+        (
+            "negative_prepaid_balance_accounts",
+            "all",
+            snapshot.negative_prepaid_balance_count,
+        ),
+        (
+            "negative_prepaid_balance_total",
+            "all",
+            snapshot.negative_prepaid_balance_total,
+        ),
+        (
+            "negative_prepaid_sweep_disabled_accounts",
+            "all",
+            snapshot.negative_prepaid_with_sweep_disabled_count,
+        ),
+        (
+            "prepaid_balance_sweep_enabled",
+            "all",
+            1.0 if snapshot.prepaid_balance_sweep_enabled else 0.0,
+        ),
+        (
+            "billing_profile_mismatch_accounts",
+            "all",
+            snapshot.billing_profile_mismatch_count,
+        ),
+        (
+            "billing_profile_mixed_accounts",
+            "all",
+            snapshot.billing_profile_mixed_count,
+        ),
+        (
+            "account_credit_invariant_violations",
+            "all",
+            snapshot.account_credit_invariant_count,
+        ),
+        (
+            "unbilled_active_subscriptions",
+            "no_billing_path",
+            snapshot.unbilled_no_path,
+        ),
+        (
+            "unbilled_active_subscriptions",
+            "terminal_account",
+            snapshot.active_subs_on_terminal_account,
+        ),
+    ]
+    if snapshot.scan_ratio is not None:
+        values.append(("invoice_scan_ratio", "all", snapshot.scan_ratio))
+    if snapshot.payment_volume_ratio is not None:
+        values.append(("payment_volume_ratio", "all", snapshot.payment_volume_ratio))
+    for runner in snapshot.runners:
+        if not runner.enabled:
+            continue
+        values.append(
+            (
+                "runner_heartbeat_stale",
+                runner.task_name,
+                1.0 if runner.stale else 0.0,
+            )
+        )
+        if runner.age_seconds is not None:
+            values.append(
+                (
+                    "runner_heartbeat_age_seconds",
+                    runner.task_name,
+                    max(runner.age_seconds, 0.0),
+                )
+            )
+    return [
+        StateObservation(signal=signal, scope=scope, value=float(value))
+        for signal, scope, value in values
+    ]
+
+
+def publish_billing_health_snapshot(
+    snapshot: BillingHealthSnapshot, *, now: datetime | None = None
+) -> bool:
+    """Publish the latest bounded health snapshot for metrics collectors."""
+    from app.services.observability import publish_state_snapshot
+
+    return publish_state_snapshot(
+        BILLING_HEALTH_OBSERVABILITY_DOMAIN,
+        billing_health_observations(snapshot),
+        status="degraded" if snapshot.anomalies else "ok",
+        now=now,
+    )
 
 
 def paid_with_balance(db: Session) -> tuple[int, Decimal]:
@@ -190,9 +378,7 @@ def invoice_scan_coverage(db: Session) -> tuple[int | None, int, float | None]:
         db.execute(
             select(func.count(Subscription.id))
             .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
-            .where(Subscription.status == SubscriptionStatus.active)
-            .where(Subscriber.status.in_(BILLABLE_SUBSCRIBER_STATUSES))
-            .where(Subscription.billing_mode != BillingMode.prepaid)
+            .where(*postpaid_billing_filters(Subscription, Subscriber))
         ).scalar()
         or 0
     )
@@ -265,8 +451,13 @@ def runner_heartbeats(
         ).first()
         enabled = bool(row[0]) if row else False
         interval = int(row[1]) if row and row[1] else None
+        last_result = get_last_result(task_name)
         if not enabled:
-            out.append(RunnerHeartbeat(task_name, False, interval, None, None, False))
+            out.append(
+                RunnerHeartbeat(
+                    task_name, False, interval, None, None, False, last_result
+                )
+            )
             continue
         last = get_last_success(task_name)
         if last is not None and last.tzinfo is None:
@@ -278,15 +469,24 @@ def runner_heartbeats(
             )
         else:
             stale = last is None
-        out.append(RunnerHeartbeat(task_name, True, interval, last, age, stale))
+        out.append(
+            RunnerHeartbeat(task_name, True, interval, last, age, stale, last_result)
+        )
     return out
+
+
+def _default_currency(db: Session) -> str:
+    """Billing default currency setting (NGN when unset)."""
+    value = settings_spec.resolve_value(db, SettingDomain.billing, "default_currency")
+    code = str(value or "NGN").strip().upper()
+    return code or "NGN"
 
 
 def covered_but_locked(db: Session) -> int:
     """§6.6 drift: accounts still under a billing lock (overdue/prepaid) whose
     local ledger available balance is >= 0 — i.e. covered yet suspended
-    (wrongful-suspension drift). Mirrors get_available_balance for NGN:
-    unallocated credit - unallocated debit - open invoice balance.
+    (wrongful-suspension drift). Mirrors get_available_balance for the default
+    currency: unallocated credit - unallocated debit - open invoice balance.
     """
     sql = text(
         """
@@ -300,42 +500,37 @@ def covered_but_locked(db: Session) -> int:
             COALESCE((SELECT sum(le.amount) FROM ledger_entries le
                 WHERE le.account_id = acct AND le.invoice_id IS NULL
                   AND le.entry_type = 'credit' AND le.is_active
-                  AND le.currency = 'NGN'), 0)
+                  AND le.currency = :currency), 0)
           - COALESCE((SELECT sum(le.amount) FROM ledger_entries le
                 WHERE le.account_id = acct AND le.invoice_id IS NULL
                   AND le.entry_type = 'debit' AND le.is_active
-                  AND le.currency = 'NGN'), 0)
+                  AND le.currency = :currency), 0)
           - COALESCE((SELECT sum(i.balance_due) FROM invoices i
                 WHERE i.account_id = acct AND i.balance_due > 0
                   AND i.status IN ('issued', 'partially_paid', 'overdue')
-                  AND i.currency = 'NGN'), 0)
+                  AND i.currency = :currency), 0)
         ) >= 0
         """
     )
-    return int(db.execute(sql).scalar() or 0)
+    return int(db.execute(sql, {"currency": _default_currency(db)}).scalar() or 0)
 
 
 def _prepaid_monthly_enabled(db: Session) -> bool:
     """Same resolution as billing_automation's invoice cycle."""
-    value = settings_spec.resolve_value(
-        db, SettingDomain.billing, "prepaid_monthly_invoicing_enabled"
-    )
-    if value is None:
-        return False
-    if isinstance(value, bool):
-        return value
-    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+    return control_registry.is_enabled(db, "billing.prepaid_monthly_invoicing")
 
 
 def billing_path_coverage(db: Session) -> tuple[int, int]:
     """§6.1: (unbilled_no_path, active_subs_on_terminal_account).
 
-    Mirrors run_invoice_cycle's selection. A billable-account active sub is
-    covered iff it is postpaid, or (prepaid_monthly enabled AND its offer is a
-    monthly cycle). ``unbilled_no_path`` is the scalable revenue leak — a prepaid
-    cohort that no enabled path bills (flag off, or a non-monthly prepaid offer).
-    ``active_subs_on_terminal_account`` is an active sub whose account is
-    non-billable, so the cycle never touches it (lifecycle drift, low volume).
+    Mirrors run_invoice_cycle's invoice-row selection. A billable-account active
+    sub is covered iff it is postpaid, or (prepaid_monthly enabled AND its offer
+    is a monthly cycle). Prepaid coverage means draft-until-funded accounting
+    rows, not AR/dunning. ``unbilled_no_path`` is the scalable billing-visibility
+    gap — a prepaid cohort that no enabled path records (flag off, or a
+    non-monthly prepaid offer). ``active_subs_on_terminal_account`` is an active
+    sub whose account is non-billable, so the cycle never touches it (lifecycle
+    drift, low volume).
     """
     # Static SQL — the status set is a fixed constant from billing_statuses,
     # never user input, so this is not an injection surface.
@@ -373,12 +568,82 @@ def billing_path_coverage(db: Session) -> tuple[int, int]:
         """
     no_path = (
         db.execute(
-            text(no_path_sql).bindparams(bindparam("billable_statuses", expanding=True)),
+            text(no_path_sql).bindparams(
+                bindparam("billable_statuses", expanding=True)
+            ),
             {"billable_statuses": BILLABLE_SUBSCRIBER_STATUS_VALUES},
         ).scalar()
         or 0
     )
     return int(no_path), int(terminal)
+
+
+def negative_prepaid_balance_exposure(db: Session) -> tuple[int, Decimal, bool, int]:
+    """Negative prepaid wallet exposure using the same balance as enforcement.
+
+    Returns ``(negative_count, negative_total_abs, sweep_enabled,
+    negative_count_if_sweep_disabled)``. This is a monitoring signal only; the
+    prepaid sweep owns any warning/suspension action after an operator enables
+    it.
+    """
+    from app.services import control_registry
+
+    account_ids = (
+        db.execute(
+            select(Subscriber.id)
+            .join(Subscription, Subscription.subscriber_id == Subscriber.id)
+            .where(*prepaid_enforcement_filters(Subscription, Subscriber))
+            .distinct()
+        )
+        .scalars()
+        .all()
+    )
+    count = 0
+    total = Decimal("0.00")
+    balances = prepaid_available_balances(db, account_ids)
+    for account_id in account_ids:
+        balance = balances[account_id]
+        if balance < Decimal("0.00"):
+            count += 1
+            total += abs(balance)
+    sweep_enabled = control_registry.is_enabled(
+        db, "collections.prepaid_balance_enforcement"
+    )
+    return count, total, sweep_enabled, count if not sweep_enabled else 0
+
+
+def billing_profile_integrity(db: Session) -> tuple[int, int]:
+    """Return (account/subscription mismatch count, mixed subscription count)."""
+    rows = db.execute(
+        select(
+            Subscriber.id,
+            Subscriber.billing_mode,
+            Subscription.billing_mode,
+        )
+        .join(Subscription, Subscription.subscriber_id == Subscriber.id)
+        .where(Subscription.status.in_(COLLECTIBLE_SERVICE_STATUSES))
+        .where(Subscriber.status.in_(BILLABLE_SUBSCRIBER_STATUSES))
+    ).all()
+    account_modes: dict[object, BillingMode | None] = {}
+    subscription_modes: dict[object, set[BillingMode]] = {}
+    for account_id, account_mode, subscription_mode in rows:
+        account_modes[account_id] = account_mode
+        if subscription_mode is not None:
+            subscription_modes.setdefault(account_id, set()).add(subscription_mode)
+
+    mismatch = 0
+    mixed = 0
+    for account_id, modes in subscription_modes.items():
+        if len(modes) > 1:
+            mixed += 1
+            continue
+        only_mode = next(iter(modes))
+        if (
+            account_modes.get(account_id) is not None
+            and account_modes[account_id] != only_mode
+        ):
+            mismatch += 1
+    return mismatch, mixed
 
 
 def billing_health_snapshot(
@@ -391,6 +656,18 @@ def billing_health_snapshot(
     last_scanned, eligible, scan_ratio = invoice_scan_coverage(db)
     c24, avg7, ratio, collapsed = payment_volume(db, now=now)
     no_path, terminal = billing_path_coverage(db)
+    (
+        negative_prepaid_count,
+        negative_prepaid_total,
+        prepaid_sweep_enabled,
+        negative_prepaid_sweep_disabled,
+    ) = negative_prepaid_balance_exposure(db)
+    profile_mismatch_count, profile_mixed_count = billing_profile_integrity(db)
+    from app.services.billing.account_credit import AccountCreditApplications
+
+    account_credit_invariant_count = len(
+        AccountCreditApplications.inspect_invariants(db)
+    )
     return BillingHealthSnapshot(
         paid_with_balance_count=pwb_count,
         paid_with_balance_total=pwb_total,
@@ -405,6 +682,13 @@ def billing_health_snapshot(
         covered_but_locked=covered_but_locked(db),
         unbilled_no_path=no_path,
         active_subs_on_terminal_account=terminal,
+        negative_prepaid_balance_count=negative_prepaid_count,
+        negative_prepaid_balance_total=negative_prepaid_total,
+        prepaid_balance_sweep_enabled=prepaid_sweep_enabled,
+        negative_prepaid_with_sweep_disabled_count=negative_prepaid_sweep_disabled,
+        billing_profile_mismatch_count=profile_mismatch_count,
+        billing_profile_mixed_count=profile_mixed_count,
+        account_credit_invariant_count=account_credit_invariant_count,
         scan_min_ratio=scan_min_ratio,
         payment_volume_min_ratio=payment_volume_min_ratio,
         payment_baseline_min_daily=payment_baseline_min_daily,

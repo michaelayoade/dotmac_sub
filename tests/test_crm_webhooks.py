@@ -15,6 +15,7 @@ from fastapi import FastAPI, HTTPException
 from app.api.crm_webhooks import receive_crm_customer, receive_crm_event, router
 from app.config import settings
 from app.db import get_db
+from app.models.audit import AuditEvent
 from app.models.subscriber import Subscriber
 
 SECRET = "test-webhook-secret"
@@ -78,13 +79,13 @@ def _run(coro):
     return box["result"]
 
 
-def _post(body: dict, event: str, signature: str | None):
+def _post(body: dict, event: str, signature: str | None, db=None):
     raw = json.dumps(body).encode()
     headers = {"X-Webhook-Event": event, "Content-Type": "application/json"}
     if signature is not None:
         headers["X-Webhook-Signature-256"] = signature
     try:
-        payload = _run(receive_crm_event(_FakeRequest(raw, headers)))
+        payload = _run(receive_crm_event(_FakeRequest(raw, headers), db))
     except HTTPException as exc:
         return _RouteResponse(exc.status_code, {"detail": exc.detail})
     return _RouteResponse(200, payload)
@@ -123,18 +124,95 @@ def _http_app(db_session) -> FastAPI:
     return app
 
 
-def test_valid_ticket_created_enqueues_sync():
+def test_valid_ticket_created_enqueues_sync(monkeypatch, db_session):
+    from app.services import control_registry
+
+    monkeypatch.setenv("CRM_TICKET_PULL_ENABLED", "false")
+    control_registry.update_canonical_feature_controls(
+        db_session, payload={"crm.ticket_pull": True}
+    )
     body = {"ticket_id": "abc-123"}
     raw = json.dumps(body).encode()
     with (
         _with_secret(SECRET),
         patch("app.services.queue_adapter.enqueue_task") as enqueue,
     ):
-        resp = _post(body, "ticket.created", _sign(raw))
+        resp = _post(body, "ticket.created", _sign(raw), db_session)
     assert resp.status_code == 200
     assert resp.json()["status"] == "queued"
     enqueue.assert_called_once()
     assert enqueue.call_args.kwargs["args"] == ["abc-123"]
+
+
+def test_ticket_event_noop_when_pull_disabled(monkeypatch, db_session):
+    """Flip kill switch: crm.ticket_pull off -> 200 ack, nothing enqueued."""
+    from app.services import control_registry
+
+    monkeypatch.setenv("CRM_TICKET_PULL_ENABLED", "true")
+    control_registry.update_canonical_feature_controls(
+        db_session, payload={"crm.ticket_pull": False}
+    )
+    body = {"ticket_id": "abc-123"}
+    raw = json.dumps(body).encode()
+    with (
+        _with_secret(SECRET),
+        patch("app.services.queue_adapter.enqueue_task") as enqueue,
+    ):
+        resp = _post(body, "ticket.created", _sign(raw), db_session)
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "ignored",
+        "reason": "ticket_pull_disabled",
+        "event": "ticket.created",
+    }
+    enqueue.assert_not_called()
+
+
+def test_ticket_event_noop_when_pull_setting_missing(monkeypatch, db_session):
+    """No env, no DB row -> the control's on_missing default (off) applies,
+    matching the scheduler beat entries' default."""
+    monkeypatch.delenv("CRM_TICKET_PULL_ENABLED", raising=False)
+    body = {"ticket_id": "abc-123"}
+    raw = json.dumps(body).encode()
+    with (
+        _with_secret(SECRET),
+        patch("app.services.queue_adapter.enqueue_task") as enqueue,
+    ):
+        resp = _post(body, "ticket.created", _sign(raw), db_session)
+    assert resp.status_code == 200
+    assert resp.json()["reason"] == "ticket_pull_disabled"
+    enqueue.assert_not_called()
+
+
+def test_ticket_branch_gated_by_canonical_control(monkeypatch, db_session):
+    from app.services import control_registry
+
+    monkeypatch.delenv("CRM_TICKET_PULL_ENABLED", raising=False)
+    control_registry.update_canonical_feature_controls(
+        db_session, payload={"crm.ticket_pull": True}
+    )
+
+    body = {"ticket_id": "abc-123"}
+    raw = json.dumps(body).encode()
+    with (
+        _with_secret(SECRET),
+        patch("app.services.queue_adapter.enqueue_task") as enqueue,
+    ):
+        resp = _post(body, "ticket.created", _sign(raw), db_session)
+    assert resp.json()["status"] == "queued"
+    enqueue.assert_called_once()
+
+    control_registry.update_canonical_feature_controls(
+        db_session, payload={"crm.ticket_pull": False}
+    )
+    with (
+        _with_secret(SECRET),
+        patch("app.services.queue_adapter.enqueue_task") as enqueue,
+    ):
+        resp = _post(body, "ticket.created", _sign(raw), db_session)
+    assert resp.status_code == 200
+    assert resp.json()["reason"] == "ticket_pull_disabled"
+    enqueue.assert_not_called()
 
 
 def test_bad_signature_rejected():
@@ -175,14 +253,15 @@ def test_unknown_event_acknowledged_without_enqueue():
     enqueue.assert_not_called()
 
 
-def test_missing_ticket_id_ignored():
+def test_missing_ticket_id_ignored(monkeypatch, db_session):
+    monkeypatch.setenv("CRM_TICKET_PULL_ENABLED", "true")
     body = {"title": "no id"}
     raw = json.dumps(body).encode()
     with (
         _with_secret(SECRET),
         patch("app.services.queue_adapter.enqueue_task") as enqueue,
     ):
-        resp = _post(body, "ticket.created", _sign(raw))
+        resp = _post(body, "ticket.created", _sign(raw), db_session)
     assert resp.status_code == 200
     assert resp.json()["status"] == "ignored"
     enqueue.assert_not_called()
@@ -250,6 +329,80 @@ def test_customer_accepted_retry_returns_existing_subscriber(db_session):
     )
 
 
+def test_customer_webhook_audits_identity_overwrite(db_session):
+    body = {
+        "crm_person_id": "4cf4d62b-29a0-493e-8a0d-6409a18e8897",
+        "name": "Original Customer",
+        "email": "original.customer@example.com",
+        "phone": "+09000000003",
+        "status": "new",
+    }
+    changed = {
+        **body,
+        "name": "Changed Customer",
+        "email": "changed.customer@example.com",
+        "phone": "+09000000004",
+        "address": {"city": "Lagos"},
+        "status": "active",
+    }
+
+    with _with_secret(SECRET):
+        first = _post_customer(db_session, body)
+        second = _post_customer(db_session, changed)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json()["id"] == first.json()["id"]
+
+    event = (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.entity_type == "subscriber")
+        .filter(AuditEvent.entity_id == first.json()["id"])
+        .filter(AuditEvent.action == "crm_customer_identity_update")
+        .one()
+    )
+    changes = event.metadata_["changes"]
+    assert changes["display_name"] == {
+        "old": "Original Customer",
+        "new": "Changed Customer",
+    }
+    assert changes["email"] == {
+        "old": "original.customer@example.com",
+        "new": "changed.customer@example.com",
+    }
+    assert changes["phone"] == {"old": "+09000000003", "new": "+09000000004"}
+    assert changes["city"] == {"old": None, "new": "Lagos"}
+    assert event.metadata_["crm_person_id"] == body["crm_person_id"]
+
+
+def test_customer_webhook_matches_existing_customer_by_normalized_phone(db_session):
+    subscriber = Subscriber(
+        first_name="Normalized",
+        last_name="Customer",
+        display_name="Normalized Customer",
+        email="old.normalized@example.com",
+        phone="08012345678",
+    )
+    db_session.add(subscriber)
+    db_session.commit()
+
+    body = {
+        "name": "Normalized Customer",
+        "email": "new.normalized@example.com",
+        "phone": "+2348012345678",
+        "status": "active",
+    }
+
+    with _with_secret(SECRET):
+        response = _post_customer(db_session, body)
+
+    assert response.status_code == 200
+    assert response.json()["id"] == str(subscriber.id)
+    assert db_session.query(Subscriber).count() == 1
+    db_session.refresh(subscriber)
+    assert subscriber.email == "new.normalized@example.com"
+
+
 def test_shared_project_id_does_not_merge_distinct_customers(db_session):
     """A crm_project_id can span multiple customers, so it must NOT be used to
     dedupe — two distinct people on the same project stay distinct subscribers."""
@@ -295,3 +448,26 @@ def test_customer_webhook_rejects_bad_signature(db_session):
             },
         )
     assert resp.status_code == 401
+
+
+# --- S4a: replay dedup on the previously un-deduped routes ---
+
+
+def test_ticket_webhook_replay_is_deduped(monkeypatch, db_session):
+    """A redelivery with the same delivery id must not enqueue a second pull."""
+    from app.services import control_registry
+
+    control_registry.update_canonical_feature_controls(
+        db_session, payload={"crm.ticket_pull": True}
+    )
+    body = {"ticket_id": "t-1"}
+    raw = json.dumps(body).encode()
+    with (
+        _with_secret(SECRET),
+        patch("app.services.queue_adapter.enqueue_task") as enqueue,
+    ):
+        first = _post(body, "ticket.created", _sign(raw), db_session)
+        replay = _post(body, "ticket.created", _sign(raw), db_session)
+    assert first.status_code == 200
+    assert replay.status_code == 200 and replay.json().get("reason") == "duplicate"
+    assert enqueue.call_count == 1

@@ -144,12 +144,16 @@ class UsageSummaryResponse(BaseModel):
     period: str = Field(description="hour | today | week | cycle | all")
     start: datetime
     end: datetime
+    # Zero is a valid measured total, never a missing-data sentinel. Consumers
+    # use source/authority metadata to decide whether a headline is suitable;
+    # they must not replace zero with a locally reconstructed value.
     total_bytes: int
     # Where the headline total came from: "samples" (integrated throughput),
     # "sessions" (RADIUS accounting octets), or "quota" (rated billing usage).
     total_source: str
     # True when the total is billing-grade (quota / session octets) rather than
-    # reconstructed from the throughput series.
+    # reconstructed from the throughput series. Authoritative zero remains an
+    # available, complete headline for the requested window.
     is_authoritative: bool
     # Bucket width of the series: "minute" | "hour" | "day" | None (no chart).
     bucket: str | None = None
@@ -230,11 +234,14 @@ class UsageChargeBase(BaseModel):
     invoice_line_id: UUID | None = None
     period_start: datetime
     period_end: datetime
-    total_gb: Decimal = Field(default=Decimal("0.0000"), ge=0)
-    included_gb: Decimal = Field(default=Decimal("0.0000"), ge=0)
-    billable_gb: Decimal = Field(default=Decimal("0.0000"), ge=0)
-    unit_price: Decimal = Field(default=Decimal("0.0000"), ge=0)
-    amount: Decimal = Field(default=Decimal("0.00"), ge=0)
+    # No *Create subclass exists (usage charges are built service-side), so
+    # these bounds only ever reached *Read. Drop them so the read model
+    # serializes stored signed values (usage credits/adjustments).
+    total_gb: Decimal = Decimal("0.0000")
+    included_gb: Decimal = Decimal("0.0000")
+    billable_gb: Decimal = Decimal("0.0000")
+    unit_price: Decimal = Decimal("0.0000")
+    amount: Decimal = Decimal("0.00")
     currency: str = Field(default="NGN", min_length=3, max_length=3)
     status: UsageChargeStatus = UsageChargeStatus.staged
     notes: str | None = None
@@ -244,6 +251,8 @@ class UsageChargeBase(BaseModel):
 class UsageChargeRead(UsageChargeBase):
     model_config = ConfigDict(from_attributes=True)
 
+    # Money fields inherit unbounded from UsageChargeBase (no create-side bound
+    # exists to drop).
     id: UUID
     created_at: datetime
     updated_at: datetime

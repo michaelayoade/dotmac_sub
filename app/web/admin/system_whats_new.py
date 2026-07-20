@@ -43,12 +43,15 @@ def whats_new_index(
     status: str | None = None,
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
+    status_filter = status if status in admin_whats_new_service.ALL_STATUSES else None
+    status_error = request.query_params.get("status_error") or ""
     context = _base_context(request, db)
     context.update(
         {
-            "items": admin_whats_new_service.list_items(db, status=status),
+            "items": admin_whats_new_service.list_items(db, status=status_filter),
             "stats": admin_whats_new_service.get_stats(db),
-            "status_filter": status or "",
+            "status_filter": status_filter or "",
+            "status_error": status_error,
             "statuses": admin_whats_new_service.ALL_STATUSES,
         }
     )
@@ -232,6 +235,6 @@ def whats_new_update_status(
         admin_whats_new_service.set_status(db, item, status)
     except ValueError:
         return RedirectResponse(
-            "/admin/system/whats-new?status=invalid", status_code=303
+            "/admin/system/whats-new?status_error=invalid", status_code=303
         )
     return RedirectResponse("/admin/system/whats-new", status_code=303)

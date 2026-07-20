@@ -4,6 +4,7 @@ import hashlib
 import logging
 import os
 import secrets
+import string
 import warnings
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
@@ -23,6 +24,7 @@ from app.models.auth import (
     AuthProvider,
     MFAMethod,
     MFAMethodType,
+    MFARecoveryCode,
     SessionStatus,
     UserCredential,
 )
@@ -48,6 +50,7 @@ from app.services.common import coerce_uuid
 from app.services.credential_crypto import decrypt_credential, encrypt_credential
 from app.services.response import ListResponseMixin
 from app.services.secrets import resolve_secret
+from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +88,40 @@ def _as_utc(value: datetime | None) -> datetime | None:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value
+
+
+def lockout_detail(
+    prefix: str,
+    *,
+    locked_until: datetime | None = None,
+    retry_after_seconds: int | None = None,
+) -> str:
+    remaining_seconds = 0
+    normalized_until = _as_utc(locked_until)
+    if normalized_until:
+        remaining_seconds = max(int((normalized_until - _now()).total_seconds()), 0)
+    elif retry_after_seconds is not None:
+        remaining_seconds = max(int(retry_after_seconds), 0)
+
+    if remaining_seconds <= 0:
+        return f"{prefix}. Please try again later."
+    minutes = max(1, (remaining_seconds + 59) // 60)
+    unit = "minute" if minutes == 1 else "minutes"
+    return f"{prefix}. Try again in {minutes} {unit}."
+
+
+def duration_label(seconds: int) -> str:
+    seconds = max(int(seconds), 1)
+    for unit, unit_seconds in (
+        ("day", 86400),
+        ("hour", 3600),
+        ("minute", 60),
+    ):
+        if seconds >= unit_seconds:
+            value = max(1, (seconds + unit_seconds - 1) // unit_seconds)
+            suffix = unit if value == 1 else f"{unit}s"
+            return f"{value} {suffix}"
+    return "1 minute"
 
 
 def _truncate_user_agent(value: str | None, max_len: int = 512) -> str | None:
@@ -169,10 +206,25 @@ def _totp_issuer(db: Session | None) -> str:
 
 
 def _force_admin_mfa(db: Session | None) -> bool:
-    value = _setting_value(db, "force_2fa")
+    value = _env_value("ADMIN_MFA_REQUIRED")
     if value is None:
         value = _setting_value(db, "admin_mfa_required")
+    if value is None:
+        value = _setting_value(db, "force_2fa")
+    if value is None:
+        value = resolve_value(db, SettingDomain.auth, "admin_mfa_required")
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _setting_int(
+    db: Session | None, key: str, default: int, *, minimum: int = 1
+) -> int:
+    value = resolve_value(db, SettingDomain.auth, key)
+    try:
+        parsed = int(str(value))
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed >= minimum else default
 
 
 def _refresh_cookie_name(db: Session | None) -> str:
@@ -746,28 +798,74 @@ LOGIN_MAX_FAILED_ATTEMPTS = 5
 LOGIN_LOCKOUT_MINUTES = 15
 
 
+def _admin_login_max_failed_attempts(db: Session | None) -> int:
+    return _setting_int(
+        db,
+        "admin_login_max_attempts",
+        LOGIN_MAX_FAILED_ATTEMPTS,
+    )
+
+
+def _admin_login_lockout_minutes(db: Session | None) -> int:
+    return _setting_int(
+        db,
+        "admin_lockout_minutes",
+        LOGIN_LOCKOUT_MINUTES,
+    )
+
+
 def _record_login_failure(db: Session, credential: UserCredential, now) -> None:
     credential.failed_login_attempts += 1
-    if credential.failed_login_attempts >= LOGIN_MAX_FAILED_ATTEMPTS:
-        credential.locked_until = now + timedelta(minutes=LOGIN_LOCKOUT_MINUTES)
+    if credential.failed_login_attempts >= _admin_login_max_failed_attempts(db):
+        credential.locked_until = now + timedelta(
+            minutes=_admin_login_lockout_minutes(db)
+        )
     db.commit()
 
 
 MFA_MAX_FAILED_ATTEMPTS = 5
 MFA_LOCKOUT_MINUTES = 15
-MFA_LOCKED_DETAIL = "Too many incorrect codes. Try again later."
+MFA_RECOVERY_CODE_COUNT = 10
+MFA_RECOVERY_CODE_ALPHABET = "23456789" + string.ascii_uppercase.replace(
+    "O", ""
+).replace("I", "")
+
+
+def _mfa_max_failed_attempts(db: Session | None) -> int:
+    return _setting_int(
+        db,
+        "mfa_max_failed_attempts",
+        MFA_MAX_FAILED_ATTEMPTS,
+    )
+
+
+def _mfa_lockout_minutes(db: Session | None) -> int:
+    return _setting_int(
+        db,
+        "mfa_lockout_minutes",
+        MFA_LOCKOUT_MINUTES,
+    )
+
+
+def password_min_length(db: Session | None = None) -> int:
+    return _setting_int(db, "password_min_length", 8)
 
 
 def ensure_mfa_not_locked(method: MFAMethod) -> None:
     locked_until = _as_utc(method.locked_until)
     if locked_until and locked_until > _now():
-        raise HTTPException(status_code=429, detail=MFA_LOCKED_DETAIL)
+        raise HTTPException(
+            status_code=429,
+            detail=lockout_detail(
+                "Too many incorrect codes", locked_until=locked_until
+            ),
+        )
 
 
 def record_mfa_failure(db: Session, method: MFAMethod) -> None:
     method.failed_attempts = (method.failed_attempts or 0) + 1
-    if method.failed_attempts >= MFA_MAX_FAILED_ATTEMPTS:
-        method.locked_until = _now() + timedelta(minutes=MFA_LOCKOUT_MINUTES)
+    if method.failed_attempts >= _mfa_max_failed_attempts(db):
+        method.locked_until = _now() + timedelta(minutes=_mfa_lockout_minutes(db))
         method.failed_attempts = 0
     db.commit()
 
@@ -775,6 +873,80 @@ def record_mfa_failure(db: Session, method: MFAMethod) -> None:
 def record_mfa_success(method: MFAMethod) -> None:
     method.failed_attempts = 0
     method.locked_until = None
+
+
+def _normalize_recovery_code(code: str) -> str:
+    return "".join(ch for ch in code.strip().upper() if ch.isalnum())
+
+
+def _recovery_code_hash(code: str) -> str:
+    normalized = _normalize_recovery_code(code)
+    return _hash_token(f"mfa-recovery:{normalized}")
+
+
+def _new_recovery_code() -> str:
+    raw = "".join(secrets.choice(MFA_RECOVERY_CODE_ALPHABET) for _ in range(10))
+    return f"{raw[:5]}-{raw[5:]}"
+
+
+def generate_mfa_recovery_codes(
+    db: Session,
+    method: MFAMethod | str,
+    count: int = MFA_RECOVERY_CODE_COUNT,
+) -> list[str]:
+    """Replace recovery codes for an MFA method and return plaintext once."""
+    mfa_method = (
+        method
+        if isinstance(method, MFAMethod)
+        else db.get(MFAMethod, coerce_uuid(method))
+    )
+    if not mfa_method:
+        raise HTTPException(status_code=404, detail="MFA method not found")
+
+    db.query(MFARecoveryCode).filter(
+        MFARecoveryCode.mfa_method_id == mfa_method.id,
+        MFARecoveryCode.is_active.is_(True),
+        MFARecoveryCode.used_at.is_(None),
+    ).update({"is_active": False})
+
+    codes: list[str] = []
+    seen_hashes: set[str] = set()
+    for _ in range(count):
+        code = _new_recovery_code()
+        code_hash = _recovery_code_hash(code)
+        while code_hash in seen_hashes:
+            code = _new_recovery_code()
+            code_hash = _recovery_code_hash(code)
+        seen_hashes.add(code_hash)
+        codes.append(code)
+        db.add(
+            MFARecoveryCode(
+                mfa_method_id=mfa_method.id,
+                code_hash=code_hash,
+                is_active=True,
+            )
+        )
+    db.commit()
+    return codes
+
+
+def _consume_mfa_recovery_code(db: Session, method: MFAMethod, code: str) -> bool:
+    normalized = _normalize_recovery_code(code)
+    if len(normalized) < 8:
+        return False
+    recovery_code = (
+        db.query(MFARecoveryCode)
+        .filter(MFARecoveryCode.mfa_method_id == method.id)
+        .filter(MFARecoveryCode.code_hash == _recovery_code_hash(normalized))
+        .filter(MFARecoveryCode.is_active.is_(True))
+        .filter(MFARecoveryCode.used_at.is_(None))
+        .first()
+    )
+    if not recovery_code:
+        return False
+    recovery_code.used_at = _now()
+    recovery_code.is_active = False
+    return True
 
 
 class AuthFlow(ListResponseMixin):
@@ -876,7 +1048,10 @@ class AuthFlow(ListResponseMixin):
         now = _now()
         locked_until = _as_utc(credential.locked_until)
         if locked_until and locked_until > now:
-            raise HTTPException(status_code=403, detail="Account locked")
+            raise HTTPException(
+                status_code=403,
+                detail=lockout_detail("Account locked", locked_until=locked_until),
+            )
         if locked_until:
             # Lock expired: start a fresh window so a single wrong attempt
             # doesn't immediately re-lock for another full period.
@@ -1217,10 +1392,13 @@ class AuthFlow(ListResponseMixin):
         ensure_mfa_not_locked(method)
         secret = _decrypt_secret(db, method.secret or "")
         totp = pyotp.TOTP(secret)
-        if not totp.verify(code, valid_window=0):
+        if totp.verify(code, valid_window=0):
+            record_mfa_success(method)
+        elif _consume_mfa_recovery_code(db, method, code):
+            record_mfa_success(method)
+        else:
             record_mfa_failure(db, method)
             raise HTTPException(status_code=401, detail="Invalid MFA code")
-        record_mfa_success(method)
 
         method.last_used_at = _now()
         db.commit()
@@ -1666,9 +1844,11 @@ def reset_password(db: Session, token: str, new_password: str) -> datetime:
     from app.models.audit import AuditActorType
     from app.services.audit_adapter import record_audit_event
 
-    if len(new_password) < 8:
+    min_length = password_min_length(db)
+    if len(new_password) < min_length:
         raise HTTPException(
-            status_code=400, detail="Password must be at least 8 characters"
+            status_code=400,
+            detail=f"Password must be at least {min_length} characters",
         )
 
     payload = _decode_password_reset_token(db, token)

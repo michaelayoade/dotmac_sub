@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+from app.models.audit import AuditEvent
 from app.models.billing import (
     Invoice,
     InvoiceStatus,
@@ -20,6 +21,8 @@ from app.models.billing import (
     PaymentAllocation,
     PaymentProvider,
     PaymentProviderType,
+    PaymentSettlement,
+    PaymentSettlementOrigin,
     PaymentStatus,
 )
 from app.models.subscriber import Reseller, Subscriber
@@ -84,7 +87,7 @@ def _open_invoice(
 
 def test_credit_fully_settles_open_invoice(db_session):
     sub = _native_subscriber(db_session, suffix="Full")
-    _sitting_credit_payment(db_session, sub, Decimal("19300.00"))
+    payment = _sitting_credit_payment(db_session, sub, Decimal("19300.00"))
     assert get_account_credit_balance(db_session, str(sub.id)) == Decimal("19300.00")
     inv = _open_invoice(db_session, sub, Decimal("19300.00"))
 
@@ -97,6 +100,32 @@ def test_credit_fully_settles_open_invoice(db_session):
     assert inv.balance_due == Decimal("0.00")
     # No double count: the credit pool is fully consumed.
     assert get_account_credit_balance(db_session, str(sub.id)) == Decimal("0.00")
+    allocation = (
+        db_session.query(PaymentAllocation)
+        .filter(PaymentAllocation.payment_id == payment.id)
+        .filter(PaymentAllocation.invoice_id == inv.id)
+        .one()
+    )
+    assert allocation.preview_fingerprint is not None
+    assert allocation.idempotency_key == (f"account-credit-apply-{payment.id}-{inv.id}")
+    assert allocation.ledger_entry_id is not None
+    assert allocation.consumption_ledger_entry_id is not None
+    assert db_session.get(LedgerEntry, allocation.ledger_entry_id) is not None
+    consumption = db_session.get(LedgerEntry, allocation.consumption_ledger_entry_id)
+    assert consumption is not None
+    assert consumption.payment_id == payment.id
+    assert consumption.invoice_id is None
+    assert consumption.entry_type == LedgerEntryType.debit
+    audit = (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.action == "allocate_payment_credit")
+        .filter(AuditEvent.entity_id == str(allocation.id))
+        .one()
+    )
+    assert audit.metadata_["invoice_ledger_entry_id"] == str(allocation.ledger_entry_id)
+    assert audit.metadata_["account_credit_consumption_ledger_entry_id"] == str(
+        allocation.consumption_ledger_entry_id
+    )
 
 
 def test_partial_credit_leaves_invoice_partially_paid(db_session):
@@ -127,6 +156,105 @@ def test_overpayment_settles_invoice_and_keeps_surplus(db_session):
     assert inv.status == InvoiceStatus.paid
     # Surplus stays as available credit.
     assert get_account_credit_balance(db_session, str(sub.id)) == Decimal("10700.00")
+
+
+def test_splynx_imported_payment_credit_is_not_reused_for_settlement(db_session):
+    """Imported legacy payments must not fund later local invoices.
+
+    They are historical evidence for the migrated deposit position. Treating
+    their unallocated ledger credit as payment-backed room lets current
+    settlement paths allocate the same old receipt to later invoices.
+    """
+    sub = _native_subscriber(db_session, suffix="SplynxCredit")
+    payment = Payment(
+        account_id=sub.id,
+        amount=Decimal("20000.00"),
+        currency="NGN",
+        status=PaymentStatus.succeeded,
+        splynx_payment_id=123456,
+        paid_at=datetime(2024, 1, 10, tzinfo=UTC),
+    )
+    db_session.add(payment)
+    db_session.flush()
+    db_session.add(
+        LedgerEntry(
+            account_id=sub.id,
+            payment_id=payment.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.payment,
+            amount=Decimal("20000.00"),
+            currency="NGN",
+            memo="imported Splynx unallocated credit",
+        )
+    )
+    inv = _open_invoice(db_session, sub, Decimal("20000.00"))
+
+    projected = project_settlement(db_session, str(sub.id))
+    result = settle_open_invoices_from_credit(db_session, str(sub.id))
+    db_session.commit()
+
+    assert projected.applied == Decimal("0.00")
+    assert projected.unbacked_credit == Decimal("20000.00")
+    assert result.applied == Decimal("0.00")
+    assert result.unbacked_credit == Decimal("20000.00")
+    assert (
+        db_session.query(PaymentAllocation)
+        .filter(PaymentAllocation.payment_id == payment.id)
+        .count()
+        == 0
+    )
+    db_session.refresh(inv)
+    assert inv.status == InvoiceStatus.issued
+    assert inv.balance_due == Decimal("20000.00")
+    assert get_account_credit_balance(db_session, str(sub.id)) == Decimal("20000.00")
+
+
+def test_settlement_without_exact_unallocated_link_is_not_spendable(db_session):
+    sub = _native_subscriber(db_session, suffix="MissingSettlementLink")
+    payment = Payment(
+        account_id=sub.id,
+        amount=Decimal("100.00"),
+        currency="NGN",
+        status=PaymentStatus.succeeded,
+    )
+    db_session.add(payment)
+    db_session.flush()
+    db_session.add(
+        LedgerEntry(
+            account_id=sub.id,
+            payment_id=payment.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.payment,
+            amount=Decimal("100.00"),
+            currency="NGN",
+            memo="Unlinked credit candidate",
+        )
+    )
+    db_session.add(
+        PaymentSettlement(
+            payment_id=payment.id,
+            amount=Decimal("100.00"),
+            unallocated_amount=Decimal("100.00"),
+            prepaid_amount=Decimal("0.00"),
+            currency="NGN",
+            origin=PaymentSettlementOrigin.system,
+            idempotency_key=f"missing-link-{payment.id}",
+        )
+    )
+    invoice = _open_invoice(db_session, sub, Decimal("100.00"))
+
+    projected = project_settlement(db_session, str(sub.id))
+    result = settle_open_invoices_from_credit(db_session, str(sub.id))
+    db_session.commit()
+
+    assert projected.applied == Decimal("0.00")
+    assert projected.unbacked_credit == Decimal("100.00")
+    assert result.applied == Decimal("0.00")
+    assert result.unbacked_credit == Decimal("100.00")
+    assert db_session.query(PaymentAllocation).count() == 0
+    db_session.refresh(invoice)
+    assert invoice.status == InvoiceStatus.issued
+    assert invoice.balance_due == Decimal("100.00")
 
 
 def test_oldest_invoice_settled_first(db_session):
@@ -175,13 +303,12 @@ def test_settle_is_idempotent(db_session):
     assert get_account_credit_balance(db_session, str(sub.id)) == Decimal("0.00")
 
 
-def test_existing_allocation_recalc_does_not_consume_credit_again(db_session):
-    """A stale open invoice with an existing allocation must not double-spend.
+def test_unreviewed_existing_allocation_is_not_rederived_or_recalculated(db_session):
+    """A stale legacy allocation without settlement evidence fails closed.
 
-    This mirrors migrated rows where allocations existed but invoice summary
-    fields still showed open AR. The settler may recalculate the invoice, but it
-    must not recreate the invoice ledger credit or add an offsetting credit-pool
-    debit for the old allocation.
+    Reconciliation must not treat amount similarity as permission to repair the
+    invoice summary or spend its remaining credit. Explicit historical evidence
+    reconciliation owns that decision.
     """
     sub = _native_subscriber(db_session, suffix="ExistingAllocation")
     payment = Payment(
@@ -222,8 +349,9 @@ def test_existing_allocation_recalc_does_not_consume_credit_again(db_session):
 
     db_session.refresh(inv)
     assert result.applied == Decimal("0.00")
-    assert inv.status == InvoiceStatus.paid
-    assert inv.balance_due == Decimal("0.00")
+    assert result.unbacked_credit == Decimal("25.00")
+    assert inv.status == InvoiceStatus.issued
+    assert inv.balance_due == Decimal("100.00")
     assert get_account_credit_balance(db_session, str(sub.id)) == Decimal("25.00")
 
 
@@ -260,7 +388,7 @@ def test_account_credit_balance_is_currency_scoped(db_session):
     ) == Decimal("110.00")
 
 
-def test_inactive_allocation_does_not_strand_restored_credit(db_session):
+def test_inactive_legacy_allocation_is_not_reactivated_without_evidence(db_session):
     sub = _native_subscriber(db_session, suffix="InactiveAllocation")
     payment = Payment(
         account_id=sub.id,
@@ -325,12 +453,13 @@ def test_inactive_allocation_does_not_strand_restored_credit(db_session):
         .count()
     )
 
-    assert result.applied == Decimal("100.00")
-    assert allocation.is_active is True
-    assert inv.status == InvoiceStatus.paid
-    assert inv.balance_due == Decimal("0.00")
-    assert active_invoice_credits == 1
-    assert get_account_credit_balance(db_session, str(sub.id)) == Decimal("0.00")
+    assert result.applied == Decimal("0.00")
+    assert result.unbacked_credit == Decimal("100.00")
+    assert allocation.is_active is False
+    assert inv.status == InvoiceStatus.issued
+    assert inv.balance_due == Decimal("100.00")
+    assert active_invoice_credits == 0
+    assert get_account_credit_balance(db_session, str(sub.id)) == Decimal("100.00")
 
 
 def test_no_credit_is_noop(db_session):

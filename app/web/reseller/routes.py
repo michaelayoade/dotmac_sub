@@ -1,6 +1,6 @@
 """Reseller portal routes."""
 
-from fastapi import APIRouter, Body, Depends, File, Form, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
@@ -39,45 +39,34 @@ def reseller_dashboard(
     return web_reseller_routes_service.reseller_dashboard(request, db, page, per_page)
 
 
-@router.get("/vas", response_class=HTMLResponse)
-def reseller_vas(request: Request, db: Session = Depends(get_db)):
-    return web_reseller_routes_service.reseller_vas_page(request, db)
+@router.get("/work-orders", response_class=HTMLResponse)
+def reseller_work_orders(request: Request, db: Session = Depends(get_db)):
+    return web_reseller_routes_service.reseller_work_orders_page(request, db)
 
 
-@router.post("/vas/topup/intent")
-def reseller_vas_topup_intent(
+@router.get("/work-orders/{account_id}/{work_order_id}/technician-location")
+def reseller_work_order_technician_location(
+    account_id: str,
+    work_order_id: str,
     request: Request,
-    payload: dict = Body(...),
     db: Session = Depends(get_db),
 ):
-    return web_reseller_routes_service.reseller_vas_topup_intent(
-        request, db, payload.get("amount")
+    return web_reseller_routes_service.reseller_technician_location(
+        request, db, account_id, work_order_id
     )
 
 
-@router.get("/vas/topup/verify", response_class=HTMLResponse)
-def reseller_vas_topup_verify(
-    request: Request, reference: str, db: Session = Depends(get_db)
-):
-    return web_reseller_routes_service.reseller_vas_topup_verify(request, db, reference)
-
-
-@router.post("/vas/sell")
-def reseller_vas_sell(
+@router.post("/work-orders/{account_id}/{work_order_id}/rate-technician")
+def reseller_rate_technician_route(
+    account_id: str,
+    work_order_id: str,
     request: Request,
-    service_id: str = Form(...),
-    identifier: str = Form(...),
-    variation_code: str = Form(""),
-    amount: str = Form(""),
+    rating: int = Form(...),
+    comment: str = Form(""),
     db: Session = Depends(get_db),
 ):
-    return web_reseller_routes_service.reseller_vas_sell(
-        request,
-        db,
-        service_id=service_id,
-        identifier=identifier,
-        variation_code=variation_code,
-        amount=amount,
+    return web_reseller_routes_service.reseller_rate_technician(
+        request, db, account_id, work_order_id, rating, comment
     )
 
 
@@ -119,10 +108,12 @@ def reseller_service_request_create(
 @router.get("/accounts", response_class=HTMLResponse)
 def reseller_accounts(
     request: Request,
-    page: int = Query(1, ge=1),
-    per_page: int = Query(20, ge=5, le=100),
+    page: int = Query(1),
+    per_page: int = Query(20),
     search: str = Query(""),
     status_filter: str = Query(""),
+    sort_by: str | None = Query(None, alias="sort"),
+    sort_dir: str | None = Query(None, alias="dir"),
     db: Session = Depends(get_db),
 ):
     return web_reseller_routes_service.reseller_accounts(
@@ -132,6 +123,8 @@ def reseller_accounts(
         per_page,
         search=search or None,
         status_filter=status_filter or None,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
     )
 
 
@@ -148,12 +141,14 @@ def reseller_account_detail(
 def reseller_account_invoices(
     request: Request,
     account_id: str,
-    page: int = Query(1, ge=1),
-    per_page: int = Query(25, ge=5, le=100),
+    page: int = Query(1),
+    per_page: int = Query(25),
+    sort_by: str | None = Query(None, alias="sort"),
+    sort_dir: str | None = Query(None, alias="dir"),
     db: Session = Depends(get_db),
 ):
     return web_reseller_routes_service.reseller_account_invoices(
-        request, db, account_id, page, per_page
+        request, db, account_id, page, per_page, sort_by=sort_by, sort_dir=sort_dir
     )
 
 
@@ -162,10 +157,30 @@ def reseller_account_status_update(
     request: Request,
     account_id: str,
     action: str = Form(...),
+    preview_fingerprint: str = Form(...),
     db: Session = Depends(get_db),
 ):
     return web_reseller_routes_service.reseller_account_status_update(
-        request, db, account_id, action
+        request, db, account_id, action, preview_fingerprint
+    )
+
+
+@router.post("/accounts/{account_id}/status/confirm", response_class=HTMLResponse)
+def reseller_account_status_confirm(
+    request: Request,
+    account_id: str,
+    action: str = Form(...),
+    preview_fingerprint: str = Form(...),
+    idempotency_key: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    return web_reseller_routes_service.reseller_account_status_confirm(
+        request,
+        db,
+        account_id,
+        action,
+        preview_fingerprint,
+        idempotency_key,
     )
 
 
@@ -198,6 +213,15 @@ def reseller_revenue_report(request: Request, db: Session = Depends(get_db)):
 @router.get("/profile", response_class=HTMLResponse)
 def reseller_profile(request: Request, db: Session = Depends(get_db)):
     return web_reseller_routes_service.reseller_profile(request, db)
+
+
+@router.post("/profile/sessions/sign-out-others")
+def reseller_profile_sign_out_other_sessions(
+    request: Request, db: Session = Depends(get_db)
+):
+    return web_reseller_routes_service.reseller_profile_sign_out_other_sessions(
+        request, db
+    )
 
 
 @router.post("/profile", response_class=HTMLResponse)
@@ -276,15 +300,39 @@ def reseller_billing(
 
 
 @router.post(
-    "/billing/subscribers/{subscriber_id}/allocate", response_class=HTMLResponse
+    "/billing/subscribers/{subscriber_id}/allocate/preview",
+    response_class=HTMLResponse,
 )
-def reseller_billing_allocate_subscriber(
+def reseller_billing_allocate_subscriber_preview(
     request: Request,
     subscriber_id: str,
+    amount: str = Form(...),
     db: Session = Depends(get_db),
 ):
-    return web_reseller_billing_service.allocate_subscriber_funds(
-        request, db, subscriber_id
+    return web_reseller_billing_service.preview_subscriber_funds_allocation(
+        request, db, subscriber_id, amount
+    )
+
+
+@router.post(
+    "/billing/subscribers/{subscriber_id}/allocate/confirm",
+    response_class=HTMLResponse,
+)
+def reseller_billing_allocate_subscriber_confirm(
+    request: Request,
+    subscriber_id: str,
+    amount: str = Form(...),
+    preview_fingerprint: str = Form(...),
+    idempotency_key: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    return web_reseller_billing_service.confirm_subscriber_funds_allocation(
+        request,
+        db,
+        subscriber_id,
+        amount,
+        preview_fingerprint,
+        idempotency_key,
     )
 
 

@@ -26,6 +26,7 @@ class EventType(enum.Enum):
     subscriber_suspended = "subscriber.suspended"
     subscriber_reactivated = "subscriber.reactivated"
     subscriber_throttled = "subscriber.throttled"
+    subscriber_unthrottled = "subscriber.unthrottled"
 
     # Subscription events (8)
     subscription_created = "subscription.created"
@@ -46,10 +47,12 @@ class EventType(enum.Enum):
     invoice_paid = "invoice.paid"
     invoice_overdue = "invoice.overdue"
 
-    # Billing - Payment events (3)
+    # Billing - Payment events (4)
     payment_received = "payment.received"
     payment_failed = "payment.failed"
     payment_refunded = "payment.refunded"
+    payment_reversed = "payment.reversed"
+    account_credit_deposited = "account_credit.deposited"
 
     # Billing - Consolidated billing account payment (1)
     billing_account_payment_received = "billing_account.payment_received"
@@ -77,9 +80,20 @@ class EventType(enum.Enum):
     service_order_assigned = "service_order.assigned"
     service_order_completed = "service_order.completed"
 
+    # Operations - vendor installation project lifecycle
+    vendor_project_started = "vendor_project.started"
+    vendor_project_completed = "vendor_project.completed"
+
     # Operations - Appointment events (2)
     appointment_scheduled = "appointment.scheduled"
     appointment_missed = "appointment.missed"
+
+    # Native sales vertical events. Future agent/inbox
+    # lead/quote lifecycle was webhook-silent in the CRM's event system;
+    # automation consumes these.
+    lead_created = "lead.created"
+    quote_accepted = "quote.accepted"
+    sales_order_paid = "sales_order.paid"
 
     # Network events (4)
     device_offline = "device.offline"
@@ -162,6 +176,12 @@ class EventType(enum.Enum):
     tr069_job_failed = "tr069_job.failed"
     tr069_device_discovered = "tr069_device.discovered"
     tr069_device_stale = "tr069_device.stale"
+
+    # Outage classifier customer notifications (design docs/designs/OUTAGE_CLASSIFIER.md
+    # §P4). Emitted by the outage notifier so the notification system owns channel
+    # selection + per-subscriber preferences; the notifier only supplies content.
+    outage_area = "outage.area"
+    outage_last_mile = "outage.last_mile"
 
     # Custom event type for extensibility
     custom = "custom"

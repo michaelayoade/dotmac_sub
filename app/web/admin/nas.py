@@ -75,7 +75,33 @@ def _extract_enhanced_fields(tags: list | None) -> dict[str, str | list[str] | N
     return nas_service.extract_enhanced_fields(tags)
 
 
-def _generate_radius_shared_secret(length: int = 6) -> str:
+_DEFAULT_RADIUS_SECRET_LENGTH = 32
+
+
+def _radius_secret_length() -> int:
+    """Configured RADIUS shared-secret length (radius/generated_secret_length),
+    default 32. Best-effort — never let a settings/DB hiccup block NAS creation."""
+    length = _DEFAULT_RADIUS_SECRET_LENGTH
+    try:
+        from app.db import SessionLocal
+        from app.models.domain_settings import SettingDomain
+        from app.services import settings_spec
+
+        with SessionLocal() as session:
+            value = settings_spec.resolve_value(
+                session, SettingDomain.radius, "generated_secret_length"
+            )
+        if value is not None:
+            length = int(value)
+    except Exception:
+        pass
+    return max(16, length)
+
+
+def _generate_radius_shared_secret(length: int | None = None) -> str:
+    # Default was a weak 6 chars; now a strong, configurable length (default 32).
+    if length is None:
+        length = _radius_secret_length()
     alphabet = string.ascii_letters + string.digits
     while True:
         secret = "".join(secrets.choice(alphabet) for _ in range(length))
@@ -130,22 +156,42 @@ def nas_index(
     partner_org_id: str | None = None,
     olt_status: str | None = None,
     search: str | None = None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
     refresh: str | None = None,
     page: int = Query(1, ge=1),
 ):
     """NAS device management dashboard."""
+    try:
+        list_query = nas_service.build_nas_list_query(
+            vendor=vendor,
+            nas_type=nas_type,
+            status=status,
+            pop_site_id=pop_site_id,
+            partner_org_id=partner_org_id,
+            olt_status=olt_status,
+            search=search,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            page=page,
+        )
+    except ValueError:
+        # Out-of-contract sort/page params fall back to defaults.
+        list_query = nas_service.build_nas_list_query(page=page)
+
     page_data = nas_service.build_nas_dashboard_data(
         db,
-        vendor=vendor,
-        nas_type=nas_type,
-        status=status,
-        pop_site_id=pop_site_id,
-        partner_org_id=partner_org_id,
-        olt_status=olt_status,
-        search=search,
+        vendor=list_query.filter_value("vendor"),
+        nas_type=list_query.filter_value("nas_type"),
+        status=list_query.filter_value("status"),
+        pop_site_id=list_query.filter_value("pop_site_id"),
+        partner_org_id=list_query.filter_value("partner_org_id"),
+        olt_status=list_query.filter_value("olt_status"),
+        search=list_query.search,
         refresh=refresh,
-        page=page,
-        limit=25,
+        page=list_query.page,
+        limit=list_query.per_page,
+        sort_dir=list_query.sort_dir,
     )
 
     return templates.TemplateResponse(

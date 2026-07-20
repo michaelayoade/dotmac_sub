@@ -1,11 +1,13 @@
-.PHONY: help test lint type-check format security check lint-file type-check-file check-file migrate dev docker-up docker-down docker-logs worker beat coverage clean prod-build prod-pin prod-deploy prod-up prod-down prod-logs prod-restart prod-migrate prod-check bump-version
+.PHONY: help test lint type-check format security check lint-file type-check-file check-file migrate dev docker-up docker-down docker-logs worker beat coverage clean prod-build prod-pin prod-deploy prod-up prod-down prod-logs prod-restart prod-smtp-inbound-up prod-smtp-inbound-probe prod-migrate prod-check bump-version prod-ghcr-pin prod-ghcr-deploy deploy
 
 # Production runs IMMUTABLE images: the base docker-compose.yml has no source
 # bind-mounts and pulls code only from the baked image (built by `prod-build`).
-# `-f docker-compose.yml` deliberately EXCLUDES docker-compose.override.yml (the
-# dev-only overlay that re-adds build:/bind-mounts), so prod never runs from this
-# working tree. Plain `docker compose` (dev) auto-loads the override.
+# The dev overlay (docker-compose.dev.yml) that re-adds build:/bind-mounts is
+# NEVER auto-loaded — it must be named explicitly. So both prod (PROD_COMPOSE)
+# and any bare `docker compose` on a prod host run the immutable image only;
+# only the dev targets below (DEV_COMPOSE) opt into the working-tree mounts.
 PROD_COMPOSE = docker compose -f docker-compose.yml
+DEV_COMPOSE = docker compose -f docker-compose.yml -f docker-compose.dev.yml
 # Image tag baked/run by the prod stack. Override per-deploy, e.g.
 #   make prod-build APP_IMAGE=dotmac_sub:$(git rev-parse --short HEAD)
 APP_IMAGE ?= dotmac_sub:latest
@@ -96,23 +98,23 @@ beat: ## Run Celery beat scheduler
 
 # ─── Docker ───────────────────────────────────────────────
 
-docker-up: ## Start all Docker containers
-	docker compose up -d
+docker-up: ## Start all Docker containers (dev overlay: working-tree bind-mounts)
+	$(DEV_COMPOSE) up -d
 
 docker-down: ## Stop all Docker containers
-	docker compose down
+	$(DEV_COMPOSE) down
 
 docker-logs: ## Tail Docker container logs
-	docker compose logs -f --tail=100
+	$(DEV_COMPOSE) logs -f --tail=100
 
-docker-rebuild: ## Rebuild and restart app container
-	docker compose build app && docker compose up -d app
+docker-rebuild: ## Rebuild and restart app container (dev)
+	$(DEV_COMPOSE) build app && $(DEV_COMPOSE) up -d app
 
 docker-shell: ## Open shell in app container
 	docker exec -it dotmac_sub_app bash
 
 docker-migrate: ## Run migrations inside Docker
-	docker exec dotmac_sub_app alembic upgrade head
+	docker exec dotmac_sub_app alembic upgrade heads
 
 prod-build: ## Build + tag the immutable prod image from a CLEAN checkout of HEAD (working-tree edits are NOT baked)
 	@set -eu; \
@@ -131,12 +133,13 @@ prod-deploy: ## Full deploy: build image, pin it in .env, migrate, recreate app+
 	$(MAKE) prod-pin
 	$(MAKE) prod-migrate
 	$(MAKE) prod-restart
+	IMAGE_REPO=dotmac_sub RETAIN_IMAGES=5 TAG_REGEX='^[0-9a-f]+$$' bash scripts/docker_image_retention.sh || true
 
 prod-pin: ## Point .env APP_IMAGE at the freshly-built HEAD image (compose's source of truth)
 	@sha=$$(git rev-parse --short HEAD); \
 	img="dotmac_sub:$$sha"; \
 	if grep -q '^APP_IMAGE=' .env 2>/dev/null; then \
-		sed -i.bak "s#^APP_IMAGE=.*#APP_IMAGE=$$img#" .env; \
+		sed -i.bak "s#^APP_IMAGE=.*#APP_IMAGE=$$img#" .env && rm -f .env.bak; \
 	else \
 		printf 'APP_IMAGE=%s\n' "$$img" >> .env; \
 	fi; \
@@ -152,21 +155,95 @@ prod-logs: ## Tail production Docker logs
 	$(PROD_COMPOSE) logs -f --tail=100
 
 prod-restart: ## Recreate prod app + worker services from the current image (APP_IMAGE)
-	$(PROD_COMPOSE) up -d app celery-worker celery-worker-bandwidth celery-worker-billing celery-worker-tr069 celery-beat bandwidth-poller syslog-listener
+	$(PROD_COMPOSE) up -d app celery-worker celery-worker-bandwidth celery-worker-ingestion celery-worker-billing celery-worker-tr069 celery-beat bandwidth-poller syslog-listener
 
-prod-migrate: ## Apply DB migrations in the prod stack (alembic baked into the image)
-	$(PROD_COMPOSE) run --rm app alembic upgrade head
+prod-smtp-inbound-up: ## Start/recreate the opt-in, single-instance SMTP intake
+	$(PROD_COMPOSE) --profile smtp-inbound up -d --no-scale team-inbox-smtp
+
+prod-smtp-inbound-probe: ## Prove SMTP intake creates a marked team-inbox message
+	$(PROD_COMPOSE) --profile smtp-inbound exec -T team-inbox-smtp python -m app.team_inbox_smtp e2e-probe
+
+prod-migrate: ## Apply DB migrations in the prod stack (alembic baked in; retries on lock_timeout)
+	@n=0; until [ $$n -ge 4 ]; do \
+	  out=$$($(PROD_COMPOSE) run --rm app alembic upgrade heads 2>&1); rc=$$?; \
+	  echo "$$out"; \
+	  [ $$rc -eq 0 ] && break; \
+	  if echo "$$out" | grep -qiE "lock timeout|canceling statement due to lock"; then \
+	    n=$$((n+1)); echo ">> prod-migrate hit lock_timeout (attempt $$n/4) — a schema-locking migration could not grab its ACCESS EXCLUSIVE lock; retrying in 10s"; sleep 10; \
+	  else \
+	    echo ">> prod-migrate failed (not a lock_timeout) — aborting; app is untouched (migrate runs before recreate)"; exit $$rc; \
+	  fi; \
+	done; \
+	[ $$n -lt 4 ] || { echo ">> prod-migrate still lock-blocked after retries — quiesce the app (stop app+workers), run migrate, then recreate. See seabone-staging-deploy-quirks."; exit 1; }
+
+# ─── GHCR deploy (RECOMMENDED) ─────────────────────────────────────────────
+# Pull the exact CI-built, CI-tested image instead of building on the host —
+# decoupled from the box's git tree (which drifts). `make prod-deploy` above is
+# a host-build fallback for air-gapped / registry-down situations only.
+#
+# `make deploy TAG=sha-<shortsha>` runs the hardened scripts/deploy.sh:
+#   verify image on GHCR -> DB backup -> pin APP_IMAGE -> pull ->
+#   alembic upgrade heads -> recreate app+workers -> health gate -> auto-rollback.
+# CI (.github/workflows/ghcr.yml) pushes ghcr.io/<owner>/dotmac_sub per main push;
+# the host must `docker login ghcr.io` (PAT with read:packages) once.
+deploy: ## Hardened GHCR deploy. Usage: make deploy TAG=sha-abc1234
+	@test -n "$(TAG)" || { echo "usage: make deploy TAG=sha-<shortsha> (see: scripts/deploy.sh --status)"; exit 1; }
+	bash scripts/deploy.sh "$(TAG)"
+
+GHCR_IMAGE ?= ghcr.io/michaelayoade/dotmac_sub
+GHCR_TAG ?= latest
+
+prod-ghcr-pin: ## Point .env APP_IMAGE at the GHCR image (GHCR_IMAGE:GHCR_TAG)
+	@img="$(GHCR_IMAGE):$(GHCR_TAG)"; \
+	if grep -q '^APP_IMAGE=' .env 2>/dev/null; then \
+		sed -i.bak "s#^APP_IMAGE=.*#APP_IMAGE=$$img#" .env && rm -f .env.bak; \
+	else \
+		printf 'APP_IMAGE=%s\n' "$$img" >> .env; \
+	fi; \
+	echo "Pinned APP_IMAGE=$$img in .env (compose now runs the CI-built image)"
+
+prod-ghcr-deploy: ## Deploy from the CI-built GHCR image (pull + migrate + restart; no host build)
+	$(MAKE) prod-ghcr-pin
+	$(PROD_COMPOSE) pull app
+	$(MAKE) prod-migrate
+	$(MAKE) prod-restart
+	IMAGE_REPO=$(GHCR_IMAGE) RETAIN_IMAGES=5 bash scripts/docker_image_retention.sh || true
 
 prod-check: ## Run deployment reconciliation checks in the production stack
 	$(PROD_COMPOSE) run --rm app python scripts/setup/deploy_reconcile.py
 
 # ─── Credentials ──────────────────────────────────────────
 
-encrypt-credentials: ## Encrypt existing NAS credentials (dry run)
-	poetry run python scripts/encrypt_nas_credentials.py --dry-run
+encrypt-credentials: ## Audit all credential-at-rest values (dry run)
+	poetry run python -m scripts.one_off.remediate_credential_encryption --dry-run
 
-encrypt-credentials-execute: ## Encrypt existing NAS credentials (execute)
-	poetry run python scripts/encrypt_nas_credentials.py --execute
+encrypt-credentials-execute: ## Encrypt plaintext values in all credential stores
+	poetry run python -m scripts.one_off.remediate_credential_encryption --execute
+
+cleanup-unrecoverable-credentials: ## Plan lifecycle-safe lost-key cleanup
+	poetry run python -m scripts.one_off.cleanup_unrecoverable_credentials
+
+cleanup-unrecoverable-credentials-execute: ## Execute the exact reviewed cleanup plan
+	@test -n "$(PLAN_DIGEST)" || (echo "PLAN_DIGEST is required" && exit 2)
+	poetry run python -m scripts.one_off.cleanup_unrecoverable_credentials \
+		--execute --confirm-plan-digest "$(PLAN_DIGEST)"
+
+reconcile-nas-lifecycle: ## Plan NAS lifecycle and subscription access-path repairs
+	poetry run python -m scripts.one_off.reconcile_nas_lifecycle
+
+reconcile-nas-lifecycle-details: ## Show bounded per-NAS review evidence
+	poetry run python -m scripts.one_off.reconcile_nas_lifecycle --details
+
+report-nas-access-path-evidence: ## Summarize recent history for blocked NAS rows
+	poetry run python -m scripts.one_off.report_nas_access_path_evidence
+
+report-nas-access-path-evidence-details: ## Show redacted per-NAS history evidence
+	poetry run python -m scripts.one_off.report_nas_access_path_evidence --details
+
+reconcile-nas-lifecycle-execute: ## Execute the exact reviewed NAS lifecycle plan
+	@test -n "$(PLAN_DIGEST)" || (echo "PLAN_DIGEST is required" && exit 2)
+	poetry run python -m scripts.one_off.reconcile_nas_lifecycle \
+		--execute --confirm-plan-digest "$(PLAN_DIGEST)"
 
 generate-encryption-key: ## Generate a new credential encryption key
 	@python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from app.services.network.ont_action_common import ActionResult
@@ -80,18 +81,103 @@ class TestToggleVoip:
         assert result.success is False
 
 
+class TestWifiConfig:
+    def test_routes_all_fields_through_one_reconcile_change(self):
+        ont = SimpleNamespace(
+            vendor="Huawei",
+            model="EG8145V5",
+            firmware_version=None,
+            last_sync_source=None,
+            last_sync_at=None,
+        )
+        db = MagicMock()
+        captured = {}
+
+        def _reconcile(db, ont_id, *, proposed_change, mode):
+            captured.update(proposed_change)
+            captured["mode"] = mode
+            return SimpleNamespace(success=True, sync_status="synced", failure=None)
+
+        with (
+            patch(
+                "app.services.network.ont_features.get_ont_or_error",
+                return_value=(ont, None),
+            ),
+            patch(
+                "app.services.network.ont_features._check_capability",
+                return_value=None,
+            ),
+            patch(
+                "app.services.network.reconcile.reconcile_ont",
+                side_effect=_reconcile,
+            ),
+            patch("app.services.network.ont_features._emit_feature_event"),
+        ):
+            result = OntFeatureService.set_wifi_config(
+                db,
+                "ont-1",
+                enabled=False,
+                ssid="DOTMAC",
+                password="Secret123",
+                channel=6,
+                security_mode="WPA2-Personal",
+            )
+
+        assert result.success is True
+        assert captured == {
+            "wifi_enabled": False,
+            "wifi_ssid": "DOTMAC",
+            "wifi_password_ref": "Secret123",
+            "wifi_channel": 6,
+            "wifi_security_mode": "WPA2-Personal",
+            "mode": "bootstrap",
+        }
+
+
 class TestToggleWanRemoteAccess:
     """WAN remote access toggle tests."""
 
-    @patch("app.services.network.ont_features._emit_feature_event")
-    @patch("app.services.network.ont_features.get_ont_or_error")
-    def test_enables_remote_access(self, mock_get, mock_emit):
-        ont = MagicMock()
-        mock_get.return_value = (ont, None)
+    @patch.dict("os.environ", {"ONT_REMOTE_ACCESS_UPSTREAM_ACL_CIDRS": "10.0.0.0/24"})
+    def test_enables_remote_access_through_one_reconciled_change(self):
+        ont = SimpleNamespace(last_sync_source=None, last_sync_at=None)
         db = MagicMock()
-        result = OntFeatureService.toggle_wan_remote_access(db, "ont-1", enabled=True)
+        captured = {}
+
+        def _reconcile(db, ont_id, *, proposed_change, mode):
+            captured.update(proposed_change)
+            captured["mode"] = mode
+            return SimpleNamespace(success=True, sync_status="synced", failure=None)
+
+        with (
+            patch(
+                "app.services.network.ont_features.get_ont_or_error",
+                return_value=(ont, None),
+            ),
+            patch(
+                "app.services.network.reconcile.reconcile_ont",
+                side_effect=_reconcile,
+            ),
+            patch("app.services.network.ont_features._emit_feature_event"),
+        ):
+            result = OntFeatureService.toggle_wan_remote_access(
+                db, "ont-1", enabled=True
+            )
+
         assert result.success is True
-        assert ont.desired_config["access"]["wan_remote"] is True
+        assert captured["wan_remote_access_enabled"] is True
+        assert captured["wan_remote_access_expires_at"] is not None
+        assert captured["wan_remote_access_source_cidrs"] == ("10.0.0.0/24",)
+        assert captured["mode"] == "sync"
+
+    @patch("app.services.network.ont_features.get_ont_or_error")
+    def test_enable_is_refused_without_upstream_acl(self, mock_get):
+        mock_get.return_value = (SimpleNamespace(desired_config={}), None)
+        with patch.dict("os.environ", {}, clear=True):
+            result = OntFeatureService.toggle_wan_remote_access(
+                MagicMock(), "ont-1", enabled=True
+            )
+        assert result.success is False
+        assert "upstream-enforced" in result.message
 
 
 class TestOntNotFound:

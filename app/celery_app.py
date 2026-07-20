@@ -82,32 +82,55 @@ celery_app.conf.task_routes = {
     "app.tasks.bandwidth.aggregate_to_metrics": {"queue": "bandwidth"},
     "app.tasks.bandwidth.flush_bandwidth_buffer": {"queue": "bandwidth"},
     # High-volume ingestion tasks - dedicated queue
-    "app.tasks.zabbix_ingestion.ingest_portal_usage_chunk": {"queue": "ingestion"},
-    "app.tasks.zabbix_ingestion.ingest_portal_usage_batch": {"queue": "ingestion"},
-    "app.tasks.topology_sync.run_topology_reconcile": {"queue": "ingestion"},
     "app.tasks.topology_sync.warm_topology_status": {"queue": "ingestion"},
+    "app.tasks.infrastructure_polling.run_infrastructure_poll": {"queue": "ingestion"},
+    "app.tasks.radius_health.run_radius_health_check": {"queue": "ingestion"},
+    "app.tasks.customer_impact_metrics.export_customer_impact_metrics": {
+        "queue": "ingestion"
+    },
     "app.tasks.monitoring_coverage.refresh_monitoring_coverage": {"queue": "ingestion"},
     "app.tasks.topology_lldp.run_lldp_topology_poll": {"queue": "ingestion"},
+    "app.tasks.forwarding_control_observations.run_forwarding_control_observation_poll": {
+        "queue": "ingestion"
+    },
+    "app.tasks.topology_outage.reconcile_detected_outages": {"queue": "ingestion"},
+    "app.tasks.topology_uisp.run_uisp_topology_sync": {"queue": "ingestion"},
+    "app.tasks.uisp_ip_backfill.run_uisp_mgmt_ip_backfill": {"queue": "ingestion"},
+    # Operator-triggered writes must not wait behind long inventory and
+    # topology jobs. Unrouted apply tasks use the default worker queue.
+    "app.tasks.uisp_control.reconcile_uisp_config_readback": {"queue": "ingestion"},
+    "router_sync.reconcile_config_push_readback": {"queue": "ingestion"},
+    "router_sync.audit_sot_drift": {"queue": "ingestion"},
+    "router_sync.reconcile_nas_vlan_readback": {"queue": "ingestion"},
+    "app.tasks.topology_ufiber_link.run_ufiber_onu_link": {"queue": "ingestion"},
+    "app.tasks.topology_metrics.export_topology_metrics": {"queue": "ingestion"},
+    "app.tasks.olt_mac_harvest.run_olt_mac_harvest": {"queue": "ingestion"},
+    "app.tasks.ont_signal_observations.record_ont_observations": {"queue": "ingestion"},
+    "app.tasks.ont_runtime_status.dispatch_huawei_ont_status": {"queue": "ingestion"},
+    "app.tasks.ont_runtime_status.refresh_huawei_olt_status": {"queue": "ingestion"},
+    "app.tasks.ont_runtime_status.refresh_single_ont_status": {"queue": "ingestion"},
     "app.tasks.usage.import_radius_accounting": {"queue": "ingestion"},
     "app.tasks.usage.reap_stale_radius_sessions": {"queue": "ingestion"},
     "app.tasks.radius.reap_radacct_ghosts": {"queue": "ingestion"},
+    "app.tasks.radius.reconcile_active_sessions": {"queue": "ingestion"},
     "app.tasks.usage.meter_usage_into_quota": {"queue": "ingestion"},
     # Safety-net FUP reset runs off the billing queue on purpose, so expired
     # throttle/block enforcement is still lifted when the billing queue stalls.
     "app.tasks.usage.lift_expired_fup_enforcement": {"queue": "ingestion"},
     # Operator-triggered identity checks should not wait behind bulk jobs.
     "app.tasks.nin_tasks.verify_nin_task": {"queue": "nin"},
-    # Monitoring cache warmer queries Zabbix; keep it off the default queue so
-    # it isn't starved by slow/long default-queue jobs.
-    "app.tasks.monitoring_warm.warm_monitoring_caches": {"queue": "ingestion"},
     # CRM ticket pull paginates an external API; the default queue's backlog
     # would push it far past its 5-minute schedule.
     "app.tasks.crm_ticket_pull.pull_crm_tickets": {"queue": "crm"},
     "app.tasks.crm_ticket_pull.sync_crm_ticket": {"queue": "crm"},
-    "app.tasks.crm_ticket_push.push_ticket_to_crm": {"queue": "crm"},
-    "app.tasks.crm_ticket_push.push_comment_to_crm": {"queue": "crm"},
-    "app.tasks.crm_billing_push.push_crm_billing_snapshots": {"queue": "crm"},
-    "app.tasks.crm_sync.push_subscriber_change": {"queue": "crm"},
+    # ERP outbox delivery paces against an external API (erp.dotmac.io) like the
+    # CRM push tasks; share the externally-paced integration queue so a slow ERP
+    # never blocks the default queue.
+    "app.tasks.dotmac_erp_outbox.deliver_erp_sync_events": {"queue": "crm"},
+    "app.tasks.dotmac_erp_outbox.refresh_expense_claim_statuses": {"queue": "crm"},
+    "app.tasks.dotmac_erp_outbox.refresh_material_request_statuses": {"queue": "crm"},
+    "app.tasks.dotmac_erp_outbox.repair_purchase_invoice_sync": {"queue": "crm"},
+    "app.tasks.dotmac_erp_outbox.sync_erp_operational_domains": {"queue": "crm"},
     # Daily business runners must not sit behind the default queue's backlog —
     # a buried invoice cycle is a missed billing day (the 2026-06-10 00:55
     # dispatch sat unexecuted behind ~6.6k queued default-queue tasks).
@@ -117,8 +140,9 @@ celery_app.conf.task_routes = {
     "app.tasks.arrangements.check_overdue_arrangements": {"queue": "billing"},
     "app.tasks.payment_reconciliation.reconcile_topups": {"queue": "billing"},
     "app.tasks.collections.run_billing_enforcement": {"queue": "billing"},
-    "app.tasks.collections.run_dunning": {"queue": "billing"},
+    "app.tasks.collections.run_bundle_reconcile": {"queue": "billing"},
     "app.tasks.billing.check_billing_switch": {"queue": "billing"},
+    "app.tasks.billing.refresh_billing_health_snapshot": {"queue": "billing"},
     "app.tasks.catalog.expire_subscriptions": {"queue": "billing"},
     "app.tasks.enforcement.cleanup_subscription_block_sessions": {"queue": "billing"},
     "app.tasks.usage.run_usage_rating": {"queue": "billing"},
@@ -138,7 +162,7 @@ celery_app.conf.task_queues = (
     Queue("tr069"),  # Dedicated OLT/TR-069 operations queue
     Queue("acs"),  # Dedicated GenieACS/TR-069 queue
     Queue("bandwidth"),  # High-volume bandwidth processing
-    Queue("ingestion"),  # High-volume data ingestion (Zabbix, usage)
+    Queue("ingestion"),  # High-volume data ingestion (usage, topology)
     Queue("crm"),  # CRM ticket/comment pull (external API paced)
     Queue("billing"),  # Daily business runners (billing/dunning/expiry/FUP)
 )
@@ -204,6 +228,49 @@ def _warn_on_scheduler_registry_drift(component: str) -> None:
     )
 
 
+def _warn_on_task_reliability_contract_drift(component: str) -> None:
+    try:
+        from app.services.task_reliability import (
+            find_missing_task_reliability_contracts,
+            find_stale_task_reliability_contracts,
+        )
+
+        missing = find_missing_task_reliability_contracts(celery_app.tasks.keys())
+        stale = find_stale_task_reliability_contracts(celery_app.tasks.keys())
+    except Exception:
+        logger.warning(
+            "task_reliability_contract_drift_check_failed",
+            exc_info=True,
+            extra={
+                "event": "task_reliability_contract_drift_check_failed",
+                "component": component,
+            },
+        )
+        return
+
+    if not missing and not stale:
+        logger.info(
+            "task_reliability_contract_drift_check_clean",
+            extra={
+                "event": "task_reliability_contract_drift_check_clean",
+                "component": component,
+            },
+        )
+        return
+
+    logger.warning(
+        "task_reliability_contract_drift_detected",
+        extra={
+            "event": "task_reliability_contract_drift_detected",
+            "component": component,
+            "missing_contract_count": len(missing),
+            "missing_contract_tasks": missing,
+            "stale_contract_count": len(stale),
+            "stale_contract_tasks": stale,
+        },
+    )
+
+
 @worker_process_init.connect
 def _dispose_inherited_db_connections(**_kwargs):
     """Celery prefork workers must not reuse parent-created DB connections."""
@@ -216,12 +283,14 @@ def _dispose_inherited_db_connections(**_kwargs):
 def _log_worker_boot(**_kwargs):
     _log_release_metadata("celery-worker")
     _warn_on_scheduler_registry_drift("celery-worker")
+    _warn_on_task_reliability_contract_drift("celery-worker")
 
 
 @beat_init.connect
 def _log_beat_boot(**_kwargs):
     _log_release_metadata("celery-beat")
     _warn_on_scheduler_registry_drift("celery-beat")
+    _warn_on_task_reliability_contract_drift("celery-beat")
 
 
 def _task_extra(task, task_id: str | None, **extra):
@@ -353,11 +422,11 @@ def _log_task_postrun(task_id=None, task=None, state=None, retval=None, **_kwarg
     # stalled/dead runner (ScheduledTask.last_run_at is not maintained by beat).
     if state == "SUCCESS" and task is not None and getattr(task, "name", None):
         try:
-            from app.services.job_heartbeat import record_success
+            from app.services.observability import record_celery_task_success
 
-            record_success(task.name)
+            record_celery_task_success(task.name, result=retval)
         except Exception:
-            logger.debug("heartbeat record failed", exc_info=True)
+            logger.debug("celery success observability failed", exc_info=True)
 
 
 @task_failure.connect
@@ -373,6 +442,15 @@ def _log_task_failure(task_id=None, exception=None, sender=None, einfo=None, **_
         ),
         exc_info=einfo.exc_info if einfo is not None else None,
     )
+    # Record the failure as the last-run result for money jobs (never raise).
+    if task is not None and getattr(task, "name", None):
+        try:
+            from app.services.observability import record_celery_task_failure
+
+            msg = str(exception) if exception is not None else "unknown error"
+            record_celery_task_failure(task.name, error=msg)
+        except Exception:
+            logger.debug("celery failure observability failed", exc_info=True)
 
 
 @task_retry.connect

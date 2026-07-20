@@ -1,10 +1,10 @@
-"""Availability → uptime-alert bridge (Infrastructure SLA, Phase 0/R1).
+"""Availability → uptime-alert bridge for infrastructure SLA reporting.
 
 The SLA/uptime report (`network_monitoring.uptime_report`) derives downtime
 intervals solely from `Alert` rows with `metric_type=uptime`. In production
-nothing creates those — Zabbix availability triggers are written as
-`metric_type=custom` (see INFRASTRUCTURE_SLA_PERFORMANCE.md Phase 0). Without a
-bridge every uptime % reads 100%.
+nothing else creates those; see the availability-log contract in
+``INFRASTRUCTURE_SLA_PERFORMANCE.md``.
+Without a bridge every uptime % reads 100%.
 
 This module is that bridge. The live-status warmer already detects device
 state transitions; on each transition we open an uptime `Alert` when a device
