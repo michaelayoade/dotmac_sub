@@ -38,10 +38,7 @@ from app.services.events.handlers.notification import (
     NotificationHandler,
 )
 from app.services.events.handlers.provisioning import ProvisioningHandler
-from app.services.events.handlers.webhook import (
-    EVENT_TYPE_TO_WEBHOOK,
-    WebhookHandler,
-)
+from app.services.events.handlers.webhook import WebhookHandler
 from app.services.events.types import (
     SUBSCRIPTION_LIFECYCLE_MAP,
     Event,
@@ -1878,15 +1875,10 @@ class TestInvoiceOverdueObservationBoundary:
 
 
 class TestWebhookHandler:
-    def test_event_type_to_webhook_mapping_completeness(self):
-        # Most event types should have a webhook mapping
-        assert EventType.subscriber_created in EVENT_TYPE_TO_WEBHOOK
-        assert EventType.subscription_activated in EVENT_TYPE_TO_WEBHOOK
-        assert EventType.invoice_paid in EVENT_TYPE_TO_WEBHOOK
-        assert EventType.payment_received in EVENT_TYPE_TO_WEBHOOK
-        assert EventType.payment_reversed in EVENT_TYPE_TO_WEBHOOK
-        assert EventType.provisioning_completed in EVENT_TYPE_TO_WEBHOOK
-        assert EventType.custom in EVENT_TYPE_TO_WEBHOOK
+    def test_webhook_delivery_scope_is_subscription_driven(self):
+        from app.services.control_relationships import handler_event_types
+
+        assert handler_event_types("WebhookHandler") is None
 
     def test_webhook_handler_ignores_unmapped_events(self, db_session):
         handler = WebhookHandler()

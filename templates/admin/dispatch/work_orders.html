@@ -67,6 +67,15 @@
             </select>
         </div>
         <div class="lg:col-span-3">
+            <label class="mb-1 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">Project (optional)</label>
+            <select name="project_id" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                <option value="">No project</option>
+                {% for option in project_options %}
+                <option value="{{ option.id }}">{{ option.label }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="lg:col-span-3">
             <label class="mb-1 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">Title</label>
             <input name="title" required maxlength="200" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white" placeholder="Fibre install">
         </div>
@@ -121,6 +130,13 @@
         <div class="lg:col-span-4">
             <label class="mb-1 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">Public ID</label>
             <input name="public_id" maxlength="64" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white" placeholder="auto">
+        </div>
+        <div class="lg:col-span-4 flex items-end">
+            <input type="hidden" name="requires_as_built_evidence" value="0">
+            <label class="flex min-h-10 items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 dark:border-slate-600 dark:text-slate-200">
+                <input type="checkbox" name="requires_as_built_evidence" value="1" checked class="rounded border-slate-300 text-cyan-600 focus:ring-cyan-500">
+                Require accepted as-built evidence
+            </label>
         </div>
         <div class="lg:col-span-12">
             <label class="mb-1 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">Access notes</label>
@@ -203,6 +219,22 @@
                             <input type="datetime-local" name="scheduled_start" value="{{ dt_value(wo.scheduled_start) }}" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">
                             <input type="datetime-local" name="scheduled_end" value="{{ dt_value(wo.scheduled_end) }}" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">
                             <input name="address" value="{{ wo.address or '' }}" maxlength="255" class="col-span-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white" placeholder="Site">
+                            {% if wo.project_id %}
+                            <input type="hidden" name="project_id" value="{{ wo.project_id }}">
+                            <div class="col-span-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">Project: {{ item.project_label or wo.project_id }}</div>
+                            {% else %}
+                            <select name="project_id" class="col-span-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+                                <option value="">No project</option>
+                                {% for option in project_options %}<option value="{{ option.id }}">{{ option.label }}</option>{% endfor %}
+                            </select>
+                            {% endif %}
+                            <div class="col-span-2">
+                                <input type="hidden" name="requires_as_built_evidence" value="0">
+                                <label class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
+                                    <input type="checkbox" name="requires_as_built_evidence" value="1" {% if wo.requires_as_built_evidence %}checked{% endif %} class="rounded border-slate-300 text-cyan-600 focus:ring-cyan-500">
+                                    Require accepted as-built evidence
+                                </label>
+                            </div>
                             <input type="hidden" name="work_type" value="{{ wo.work_type or 'install' }}">
                             <button class="col-span-2 rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-700 dark:bg-cyan-600 dark:hover:bg-cyan-700">Save</button>
                         </form>

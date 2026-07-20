@@ -9,6 +9,11 @@ ROOT = Path(__file__).resolve().parents[2]
 PURE_SERVICE_MODULES = (
     ROOT / "app/services/dotmac_erp/purchase_invoice_sync.py",
     ROOT / "app/services/vendor_payment_status.py",
+    ROOT / "app/services/vendor_portal_operations.py",
+    ROOT / "app/services/vendor_as_built_review_proposals.py",
+    ROOT / "app/services/vendor_project_review_proposals.py",
+    ROOT / "app/services/vendor_submission_proposals.py",
+    ROOT / "app/services/work_order_errors.py",
 )
 
 
@@ -28,7 +33,7 @@ def _imports(path: Path) -> set[str]:
     return imports
 
 
-def test_vendor_payment_owner_and_reconciler_have_no_http_dependency() -> None:
+def test_selected_domain_and_application_services_have_no_http_dependency() -> None:
     for path in PURE_SERVICE_MODULES:
         imports = _imports(path)
         coupled = sorted(

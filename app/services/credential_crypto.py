@@ -49,7 +49,6 @@ ENCRYPTED_MODEL_FIELDS: dict[str, tuple[str, ...]] = {
     "OntUnit": ("pppoe_password",),
     "OntProfileWanService": ("pppoe_static_password",),
     "Tr069AcsServer": ("cwmp_password", "connection_request_password"),
-    "WebhookEndpoint": ("secret",),
     "PaymentMethod": ("token",),
     "BankAccount": ("token",),
     "SystemUser": ("device_login_secret",),

@@ -84,6 +84,10 @@ class EventType(enum.Enum):
     # Operations - vendor installation project lifecycle
     vendor_project_started = "vendor_project.started"
     vendor_project_completed = "vendor_project.completed"
+    vendor_project_verified = "vendor_project.verified"
+    vendor_project_rework_requested = "vendor_project.rework_requested"
+    vendor_as_built_accepted = "vendor_as_built.accepted"
+    vendor_as_built_rejected = "vendor_as_built.rejected"
 
     # Operations - Appointment events (2)
     appointment_scheduled = "appointment.scheduled"

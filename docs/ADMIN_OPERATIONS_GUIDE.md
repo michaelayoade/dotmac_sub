@@ -1158,9 +1158,10 @@ Permission format: `resource:action`
 
 ### Reference Format
 
-Use in database settings: `bao://secret/<path>#<field>`
+Use in integration installation secret bindings: `bao://secret/<path>#<field>`
 
-Example: Setting `paystack_secret_key` = `bao://secret/paystack#secret_key`
+Example: Paystack installation binding `gateway_credentials` =
+`bao://secret/paystack#secret_key`.
 
 ### Rotating Secrets
 

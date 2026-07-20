@@ -224,6 +224,7 @@ class Project(Base):
     project_template = relationship("ProjectTemplate")
     tasks = relationship("ProjectTask", back_populates="project")
     comments = relationship("ProjectComment", back_populates="project")
+    work_orders = relationship("WorkOrder", back_populates="project")
 
 
 class ProjectTask(Base):

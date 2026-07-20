@@ -22,7 +22,10 @@ from uuid import UUID
 
 from app.db import SessionLocal
 from app.models.subscriber import Subscriber
-from app.services.crm_client import CRMClient, get_crm_client
+from app.services.integrations.connectors.dotmac_crm import (
+    CrmTicketObservationSource,
+)
+from app.services.integrations.crm_capability import capability_client
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +33,7 @@ _PAGE_SIZE = 100
 _MAX_PAGES = 500
 
 
-def _iter_crm_subscribers(client: CRMClient, external_system: str):
+def _iter_crm_subscribers(client: CrmTicketObservationSource, external_system: str):
     for page in range(1, _MAX_PAGES + 1):
         items = client.list_subscribers(
             external_system=external_system,
@@ -52,7 +55,12 @@ def _coerce_crm_uuid(value: object) -> UUID | None:
         return None
 
 
-def backfill(db, client: CRMClient, *, dry_run: bool = False) -> dict[str, int]:
+def backfill(
+    db,
+    client: CrmTicketObservationSource,
+    *,
+    dry_run: bool = False,
+) -> dict[str, int]:
     stats = {
         "splynx_linked": 0,
         "erpnext_linked": 0,
@@ -172,10 +180,9 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="report only")
     args = parser.parse_args()
 
-    client = get_crm_client()
     db = SessionLocal()
     try:
-        stats = backfill(db, client, dry_run=args.dry_run)
+        stats = backfill(db, capability_client(db), dry_run=args.dry_run)
     finally:
         db.close()
     prefix = "[dry-run] " if args.dry_run else ""

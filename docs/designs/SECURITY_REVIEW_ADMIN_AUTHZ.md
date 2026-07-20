@@ -31,7 +31,7 @@ documents the remaining items.
 |---|---------|----------|--------|
 | 1 | **Secret-management routes unguarded** — read/save/create/delete OpenBao secrets | `system.py` secrets routes had no `require_permission` (siblings did) | **FIXED** — added admin-only `system:secrets:read`/`:write` (new perms, seeded; not granted to any non-admin role) |
 | 2 | **Connector secrets plaintext at rest** | `app/models/connector.py:58` `auth_config` plain JSON; write path applies no `encrypt_credential` | **FIXED** — #534 `EncryptedJSON` encrypts on write / tolerant read; the 2 pre-migration plaintext prod rows re-encrypted + round-trip verified 2026-07-03 |
-| 3 | **`/hooks/{id}/test` (+ hook create/edit/toggle) unguarded → `subprocess.run`** | route `integrations.py:1037`; exec `integration_hooks.py:443` | **FIXED** — guarded with `system:settings:write` (whole hooks group) |
+| 3 | **Historical `/hooks/{id}/test` path could invoke `subprocess.run`** | retired hook route and service | **RETIRED** — integration hook routes, models, and arbitrary CLI execution were removed by the integration-platform cutover |
 | 4 | **Payment-provider create unguarded** | `integrations.py:1168` `POST /providers` | **FIXED** — `billing:provider:write` (perm already on `finance_manager`) |
 | 5 | **API-key mint + revoke unguarded; revoke had no ownership check** | `system.py` api-keys routes | **FIXED** — `system:settings:write` + revoke now scoped to the caller's own keys |
 

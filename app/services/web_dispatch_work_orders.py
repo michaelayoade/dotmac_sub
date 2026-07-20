@@ -16,6 +16,7 @@ from app.models.dispatch import (
     TechnicianProfile,
     WorkOrderAssignmentQueue,
 )
+from app.models.project import Project
 from app.models.subscriber import Subscriber
 from app.models.work_order import WorkOrder
 from app.schemas.dispatch import (
@@ -104,6 +105,12 @@ def _split_csv(value: str | None) -> list[str]:
 def _clean(value: str | None) -> str | None:
     text = (value or "").strip()
     return text or None
+
+
+def _form_bool(value: object, *, default: bool) -> bool:
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _work_order_counts(db: Session) -> dict[str, int]:
@@ -231,6 +238,23 @@ def _technician_options(db: Session) -> list[dict[str, str]]:
     return [{"id": str(row.id), "label": _technician_label(row)} for row in rows]
 
 
+def _project_options(db: Session, *, limit: int = 200) -> list[dict[str, str]]:
+    rows = (
+        db.query(Project)
+        .filter(Project.is_active.is_(True))
+        .order_by(Project.updated_at.desc(), Project.id.asc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "id": str(row.id),
+            "label": row.name or row.code or row.number or str(row.id),
+        }
+        for row in rows
+    ]
+
+
 WORK_ORDER_LIST_DEFINITION = ListDefinition(
     key="work_orders",
     fields=(
@@ -300,11 +324,14 @@ def list_page(
         sort_dir=list_query.sort_dir,
     )
     queue_status = _queue_status_by_work_order(db, [row for row, _ in rows])
+    project_options = _project_options(db)
+    project_labels = {item["id"]: item["label"] for item in project_options}
     items = [
         {
             "work_order": row,
             "subscriber": subscriber,
             "subscriber_label": _subscriber_label(subscriber),
+            "project_label": project_labels.get(str(row.project_id)),
             "queue_status": queue_status.get(str(row.id)),
             "actions": {"queue": _queue_action(row)},
         }
@@ -327,6 +354,7 @@ def list_page(
         "work_types": WORK_TYPE_OPTIONS,
         "queue_statuses": QUEUE_STATUS_OPTIONS,
         "subscriber_options": _subscriber_options(db),
+        "project_options": project_options,
         "technician_options": _technician_options(db),
     }
 
@@ -341,6 +369,14 @@ def create_from_form(
     payload = WorkOrderHeaderCreate(
         public_id=_clean(form.get("public_id")),
         subscriber_id=coerce_uuid(str(form.get("subscriber_id"))),
+        project_id=(
+            coerce_uuid(str(form["project_id"]))
+            if str(form.get("project_id") or "").strip()
+            else None
+        ),
+        requires_as_built_evidence=(
+            _form_bool(form.get("requires_as_built_evidence"), default=True)
+        ),
         title=str(form.get("title") or "").strip(),
         status=str(form.get("status") or "scheduled"),
         priority=_clean(form.get("priority")) or "normal",
@@ -374,7 +410,15 @@ def update_from_form(
     auth: dict[str, Any] | None = None,
     request_id: str | None = None,
 ) -> WorkOrder:
+    values: dict[str, Any] = {}
+    if "requires_as_built_evidence" in form:
+        values["requires_as_built_evidence"] = _form_bool(
+            form.get("requires_as_built_evidence"), default=True
+        )
+    if str(form.get("project_id") or "").strip():
+        values["project_id"] = coerce_uuid(str(form["project_id"]))
     payload = WorkOrderHeaderUpdate(
+        **values,
         title=_clean(form.get("title")),
         priority=_clean(form.get("priority")),
         work_type=_clean(form.get("work_type")),

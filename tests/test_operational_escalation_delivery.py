@@ -125,12 +125,12 @@ def test_dispatch_subscriber_whatsapp_uses_migrated_connector(
     )
     calls = []
 
-    def fake_send_text_message(db, *, recipient, body, dry_run):
+    def fake_send_text_message(db, *, recipient, body, dry_run, correlation_id):
         calls.append({"recipient": recipient, "body": body, "dry_run": dry_run})
         return {"ok": True, "provider": "meta_cloud_api", "sent": True}
 
     monkeypatch.setattr(
-        "app.services.integrations.connectors.whatsapp.send_text_message",
+        "app.services.integrations.whatsapp_capability.send_text_message",
         fake_send_text_message,
     )
 
@@ -364,12 +364,12 @@ def test_dispatch_reseller_whatsapp_fans_out_to_linked_reseller_user_phone(
     )
     calls = []
 
-    def fake_send_text_message(db, *, recipient, body, dry_run):
+    def fake_send_text_message(db, *, recipient, body, dry_run, correlation_id):
         calls.append({"recipient": recipient, "body": body, "dry_run": dry_run})
         return {"ok": True, "provider": "meta_cloud_api", "sent": True}
 
     monkeypatch.setattr(
-        "app.services.integrations.connectors.whatsapp.send_text_message",
+        "app.services.integrations.whatsapp_capability.send_text_message",
         fake_send_text_message,
     )
 

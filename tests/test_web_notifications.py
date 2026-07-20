@@ -56,11 +56,10 @@ def test_bulk_notification_setup_context_reports_channel_readiness(monkeypatch):
         lambda _db, key, *_args: settings.get(key),
     )
     monkeypatch.setattr(
-        web_notifications_service.whatsapp_connector,
-        "load_whatsapp_config",
+        web_notifications_service.whatsapp_capability,
+        "active_config",
         lambda _db: {
-            "provider": "twilio",
-            "api_key": "wa-key",
+            "provider": "meta_cloud_api",
             "phone_number": "08012345678",
         },
     )
@@ -74,7 +73,7 @@ def test_bulk_notification_setup_context_reports_channel_readiness(monkeypatch):
     assert channels["sms"]["message"] == "Twilio credentials configured"
     assert channels["sms"]["template_count"] == 1
     assert channels["whatsapp"]["ready"] is True
-    assert channels["whatsapp"]["message"] == "Twilio is configured"
+    assert channels["whatsapp"]["message"] == "Meta Cloud API is configured"
 
     templates_state = {
         item["id"]: item for item in context["bulk_notification_templates"]
@@ -105,9 +104,9 @@ def test_bulk_notification_setup_context_reports_missing_channel_config(monkeypa
         lambda _db, key, *_args: "false" if key == "sms_enabled" else None,
     )
     monkeypatch.setattr(
-        web_notifications_service.whatsapp_connector,
-        "load_whatsapp_config",
-        lambda _db: {"provider": "twilio", "api_key": "", "phone_number": ""},
+        web_notifications_service.whatsapp_capability,
+        "active_config",
+        lambda _db: (_ for _ in ()).throw(ValueError("not configured")),
     )
 
     context = web_notifications_service.bulk_notification_setup_context(object())
@@ -118,4 +117,4 @@ def test_bulk_notification_setup_context_reports_missing_channel_config(monkeypa
     assert channels["sms"]["ready"] is False
     assert channels["sms"]["message"] == "SMS is disabled"
     assert channels["whatsapp"]["ready"] is False
-    assert channels["whatsapp"]["message"] == "WhatsApp API key is missing"
+    assert channels["whatsapp"]["message"] == "No enabled WhatsApp capability binding"

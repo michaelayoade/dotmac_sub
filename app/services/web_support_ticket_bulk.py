@@ -86,8 +86,6 @@ class SupportTicketBulkPreview:
 def support_ticket_bulk_static_ineligibility(ticket: Ticket) -> str | None:
     """Return row eligibility that is independent of the proposed changes."""
 
-    if support_service.crm_ticket_user_writes_locked(ticket):
-        return "Ticket writes are still owned by CRM"
     if (
         ticket.merged_into_ticket_id is not None
         or support_ticket_settings.status_is_merged(ticket.status)

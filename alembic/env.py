@@ -44,7 +44,6 @@ from app.models import (  # noqa: F401
     table_column_default_config,
     tr069,
     usage,
-    webhook,
     wireguard,
 )
 

@@ -470,12 +470,13 @@ detailed security and delivery boundary is
     suspension/restoration permission.
 18. Scheduled billing, collections, and payment-reconciliation services own DB
    sessions, transaction outcomes, and operational logging for Celery runners.
-19. `financial.payment_webhooks` owns signature-verified provider-payload
-   projection and inbound dead-letter lifecycle. Replay rebuilds the same
-   settlement command as live delivery; `financial.payment_provider_events`
-   owns idempotent event processing, delegates the monetary write to the
-   payment owner, and must resume an incomplete event rather than treating
-   receipt identity as proof that money was posted.
+19. `integration.inbox` owns signature-verified payment receipt identity,
+   failure state, and replay authorization. `financial.payment_webhooks`
+   projects a claimed receipt into the billing consequence;
+   `financial.payment_provider_events` owns idempotent event processing,
+   delegates the monetary write to the payment owner, and must resume an
+   incomplete event rather than treating receipt identity as proof that money
+   was posted.
 20. Referral rewards are account credits owned by `financial.credit_notes`;
    neither CRM nor referral services post a parallel wallet balance. Automated
    referral issuance uses the same owner-generated preview, locked confirmation,
@@ -2293,14 +2294,20 @@ Dependency order:
 3. `operations.work_order_status`: declares persisted work-order values and the
    canonical open, assignable, and terminal sets.
 4. `operations.work_order_commands`: owns native work-order creation and header
-   commands, assignment decisions/projection, and assignment-queue transitions.
+   commands, the native `work_order.project_id` binding, the default-enabled
+   `requires_as_built_evidence` policy, assignment decisions/projection, and
+   assignment-queue transitions.
    Dispatch API/web and field-manager handlers are authorization/transport
    adapters around this owner. Assignment preview is read-only; execution locks
    the work order, atomically updates the queue and assignee projection, records
    exact previous/result actor audit evidence, and treats an equivalent retry as
    a replay. Direct header assignment fields and direct field-execution status
    changes are rejected. CRM ingest remains a provenance importer and does not
-   become native command authority.
+   become native command authority; it may resolve an exact retained CRM
+   project UUID into an otherwise-empty native link, but never replaces a
+   native binding. Native project-binding and evidence-policy
+   rejections use transport-neutral `WorkOrderCommandError`; only
+   `app.errors` maps them to HTTP responses.
 5. `operations.work_orders`: exposes work-order read models and customer links.
    The `work_order` table is Sub's authoritative work-order storage
    (WORK_ORDER_IDENTITY_SOT): identity is the Sub-generated `public_id`;
@@ -2326,19 +2333,24 @@ Dependency order:
 8. `operations.project_lifecycle`: owns native project field/status mutations,
    project SLA synchronization, and lifecycle event/notification requests.
 9. `operations.vendor_project_lifecycle` (`app.services.vendor_portal_operations`)
-   is the only writer for vendor start/complete transitions on
-   `installation_projects`: `approved -> in_progress -> completed`. It locks
+   is the only writer for vendor and staff work transitions on
+   `installation_projects`: vendor `approved -> in_progress -> completed`, staff
+   `completed -> verified`, and staff rework `completed -> in_progress`. It locks
    the project, rechecks the assigned vendor and current state, and atomically
    appends `installation_project_lifecycle_events` evidence carrying the
    authenticated actor type/id, transition time, previous/result state, vendor,
-   and durable event id. The same transaction stages the typed outbox events
-   `vendor_project.started` or `vendor_project.completed`. Cross-team consumers
+   optional review/rework reason, and durable event id. The same transaction
+   stages typed outbox events `vendor_project.started`, `vendor_project.completed`,
+   `vendor_project.verified`, or `vendor_project.rework_requested`. Cross-team consumers
    may read that timeline or consume those events; they do not infer actor/time
    from `updated_at` and do not write project status directly. Vendor routes,
    confirmation handlers, templates, and future delivery integrations are thin
-   adapters around this owner. The owner raises transport-neutral
-   `VendorProjectLifecycleError` rejections; the confirmation/delivery adapter
-   alone maps them to HTTP responses. The same named owner also owns the
+   adapters around this owner. Project verification is an operational decision:
+   invoice approval and ERP payment observations do not gate it and are not
+   modified by it. The owner raises transport-neutral
+   `VendorPortalOperationError` rejections; the application HTTP error handler
+   alone maps them to responses. An architecture test prevents this owner from
+   importing FastAPI or Starlette. The same named owner also owns the
    installation-project quote and as-built evidence lifecycles, including the
    read-only impact snapshot used before submit; one implementation module is
    therefore declared under one owner name. The vendor project-detail map reads
@@ -2346,7 +2358,23 @@ Dependency order:
    `app.services.vendor_routes_api.build_project_route_geojson`; its capture
    controls render only from the owner's `as_built_action` projection and
    serialize the existing `VendorAsBuiltCreate.geojson` contract rather than
-   writing route evidence from the template.
+   writing route evidence from the template. The same owner controls as-built
+   submission versions and staff review transitions from `submitted` or
+   `under_review` to `accepted` or `rejected`. Each decision updates the current
+   review projection and atomically appends `as_built_route_review_events`
+   evidence plus `vendor_as_built.accepted` or `vendor_as_built.rejected`.
+   Rejection requires a reason. An evidence decision never implicitly verifies
+   or reworks the project, approves an invoice, or infers ERP payment.
+   For `completed -> verified`, this owner consumes—but never writes—the active
+   linked work orders' `requires_as_built_evidence` policy. The policy defaults
+   to enabled, including when no active work order is linked; any active linked
+   work order requiring evidence means the latest project as-built submission
+   must be `accepted`. A newer pending or rejected submission supersedes an
+   older accepted submission for this decision. Verification stores the exact
+   work-order policy rows and accepted-evidence identity in the append-only
+   lifecycle event `decision_context` and typed outbox payload. The optional
+   vendor-supplied `work_order_ref` remains observational and is never used to
+   decide verification eligibility.
 10. `operations.vendor_purchase_invoices` owns vendor purchase-invoice state,
    financial totals, submit eligibility, and the financial impact snapshot.
    ERP owns accounts-payable settlement. Its dedicated
@@ -2369,6 +2397,20 @@ Dependency order:
    The proposal carries no decision authority: each domain owner locks and
    rechecks its current facts, and the mutation plus idempotency result commit
    once. Vendor web routes only request preview or confirmation.
+12. `operations.vendor_project_review_confirmation` (implemented by
+   `app.services.vendor_project_review_proposals`) owns signed staff review
+   proposals, stale-preview comparison, and exact-replay idempotency for verify
+   and rework commands. It carries no project decision policy: it asks
+   `operations.vendor_project_lifecycle` for both preview and lock-time
+   revalidation, then records the confirmation result in the same transaction.
+   Admin routes and templates are thin adapters and require `inventory:write`.
+13. `operations.vendor_as_built_review_confirmation` (implemented by
+   `app.services.vendor_as_built_review_proposals`) owns the signed, stale-safe,
+   exactly idempotent confirmation around an as-built accept/reject decision.
+   The proposal is not decision authority: lock-time eligibility and the
+   transition remain with `operations.vendor_project_lifecycle`. Staff actions
+   require `inventory:write`; vendors receive the resulting status and review
+   reason through the project projection.
 
 Rule: provisioning callers should resolve customer/network context once through
 the operations context service before running workflow steps. Step executors may
@@ -2641,20 +2683,66 @@ project configured intent without a parallel catalog-to-network adapter.
 
 Integrations:
 
-1. `integration.registry`: owns connectors and capabilities.
-2. `integration.jobs`: owns targets, jobs, and runs.
-3. `integration.sync`: owns sync orchestration.
-4. `integration.hooks`: owns hook dispatch and subscriptions.
-5. `integration.erp_material_support`: maps an approved Sub material need to the
-   neutral ERP contract, assigns the stable idempotency key, and observes/reconciles
-   ERP outcomes. It is a transport and observation owner, not an inventory or
-   service-workflow decision owner.
+The implemented contract is `docs/designs/INTEGRATION_PLATFORM_SOT.md`. The
+live owners are:
 
-Rule: integration routes/webhooks validate and enqueue. Connector behavior,
-sync lifecycle, and hook delivery stay inside integration services.
-The effective-state projection derives connector/webhook health from runs and
-deliveries and reads OpenBao metadata without reading secret values. It does
-not own connector, subscription, delivery, or credential decisions.
+1. `integration.registry`: owns deterministic deployed manifests, manifest
+   validation, and current connector capability metadata.
+2. `integration.installations`: solely owns version-pinned installation
+   lifecycle, immutable config revisions, secret references, and capability
+   bindings for platform-managed connectors.
+3. `integration.runtime`: solely owns runner selection, version-pinned
+   operation envelopes, deadlines, and bounded secret materialization. Runners
+   have no Sub database session and cannot decide a domain consequence.
+4. `integration.delivery`: solely owns outbound HTTP event subscription,
+   delivery identity, retry, dead-letter, and replay evidence.
+5. `integration.inbox`: solely owns verified CRM, WhatsApp, and payment provider
+   receipt identity, deduplication, and consequence-attempt evidence. Provider
+   routes verify before receipt; domain owners decide every consequence.
+6. `integration.jobs`: owns targets, capability-bound jobs, pinned runs, and
+   their operator lifecycle. Active jobs cannot use string adapter/action
+   transport selection.
+7. `integration.sync`: owns sync orchestration and checkpoints. CRM observation
+   jobs execute only through their enabled `dotmac.crm` capability binding.
+8. `integration.erp_material_support`: maps an approved Sub material need to
+   the neutral ERP contract, assigns the stable idempotency key, and observes or
+   reconciles ERP outcomes through `dotmac.erp`. It remains a transport and
+   observation owner; `operations.material_dependencies` alone projects the
+   outcome into Sub service-workflow state.
+9. `events.store` remains the domain-event fact owner,
+   `scheduler.registry` remains cadence owner, and `secrets.reference_store`
+   remains secret resolution owner.
+
+The control plane separates deployed connector definitions, configured
+installations, capability grants, runtime execution, inbox, delivery, and
+sync/checkpoint responsibilities. Connector definitions are deployed and
+approved artifacts; the admin UI does not install arbitrary executable code.
+
+Authority cutover is complete for the platform-managed first-party paths:
+
+| Concern | Retired owner/path | Live owner/path | Cutover state |
+| --- | --- | --- | --- |
+| Connector catalogue | File discovery and static catalogue projections | Manifest-based `integration.registry` | Complete; runtime registration requires a valid manifest |
+| Installation configuration | Provider environment settings and provider-specific credential columns | `integration.installations` with immutable config revisions and secret references | Complete for CRM, ERP, WhatsApp, payments, and outbound HTTP webhooks |
+| Sync dispatch | String adapter/action selection | Capability-bound `integration.sync` through `integration.runtime` | Complete; active jobs require a binding |
+| CRM | Direct client construction and CRM-specific webhook delivery rows | `dotmac.crm` typed capabilities and `integration.inbox` | Complete; Sub remains authoritative for operational and support consequences |
+| Outbound webhooks and hooks | `events.webhook_deliveries`, endpoint tables, and `integration.hooks` | `integration.delivery` consuming `events.store` | Complete; duplicate models, routes, tasks, and CLI hooks are removed |
+| WhatsApp messaging | Settings-backed provider transport | Direct Meta typed messaging capabilities plus `integration.inbox` | Complete; no Twilio or fallback transport |
+| ERP | Direct ERP transport clients | `dotmac.erp` typed capabilities | Complete; ERP remains observation/transport only |
+| Payments | Direct Paystack/Flutterwave services and payment-specific webhook dead letters | Typed payment capabilities plus `integration.inbox` | Complete; billing owners alone decide financial state |
+
+Migration `380_integration_platform_cutover` removes the retired tables,
+columns, settings, and enums and has no downgrade path. Disabling or correcting
+the current binding is the recovery mechanism; retired transports are not a
+fallback.
+
+Rule: integration routes and webhooks validate and enqueue. Connectors translate
+bounded, typed contracts; they never write Sub domain tables or decide payment,
+subscriber, access, ticket, work-order, network-intent, communications, or
+official-timeline state. Domain owners produce outbound projections and decide
+inbound consequences. The effective-state projection derives health from run,
+delivery, backlog, authentication, and circuit facts and reads OpenBao metadata
+without reading secret values; installed or enabled never implies healthy.
 
 ## VPN / Remote Access
 

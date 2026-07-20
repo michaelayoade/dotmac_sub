@@ -16,7 +16,6 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID as _UUID
 
-import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -40,6 +39,7 @@ from app.services.collections import restore_account_services
 from app.services.common import round_money, to_decimal
 from app.services.customer_portal_flow_payments import _provider_uuid
 from app.services.db_session_adapter import db_session_adapter
+from app.services.integrations.payment_capability import PaymentCapabilityError
 from app.services.payment_gateway_adapter import payment_gateway_adapter
 from app.services.provider_payment_settlements import (
     settle_verified_invoice_payment,
@@ -319,29 +319,23 @@ def reconcile_pending_topups(
                 provider_type=intent.provider_type,
                 reference=intent.reference,
             )
+        except PaymentCapabilityError as exc:
+            if exc.status_code in _NOT_FOUND_STATUSES:
+                if _park_if_expired(db, intent, now):
+                    expired += 1
+                continue
+            logger.warning(
+                "Top-up reconciliation: gateway capability failed for intent %s (%s)",
+                intent.id,
+                exc.error_code,
+            )
+            errors += 1
+            continue
         except ValueError:
             # Gateway says not successful (abandoned, declined, or unknown
             # reference). Once well past expiry, stop re-checking it.
             if _park_if_expired(db, intent, now):
                 expired += 1
-            continue
-        except httpx.HTTPStatusError as exc:
-            # 400/404 == the gateway has no such (or no charged) transaction:
-            # the customer never completed checkout. Treat exactly like the
-            # not-successful ValueError path so it expires instead of erroring
-            # forever. Auth (401/403) and 5xx stay errors — they're config or
-            # transient problems we want surfaced and retried.
-            if exc.response.status_code in _NOT_FOUND_STATUSES:
-                if _park_if_expired(db, intent, now):
-                    expired += 1
-                continue
-            logger.warning(
-                "Top-up reconciliation: gateway verify failed for intent %s (http %s)",
-                intent.id,
-                exc.response.status_code,
-                exc_info=True,
-            )
-            errors += 1
             continue
         except Exception:
             logger.warning(
