@@ -210,9 +210,9 @@ def start_consolidated_payment(
 
     charged = False
     if selected_payment_token is not None:
-        from app.services import paystack
+        from app.services.integrations import payment_capability
 
-        paystack.charge_authorization(
+        payment_capability.charge_authorization(
             db,
             authorization_code=selected_payment_token,
             email=(
@@ -220,7 +220,7 @@ def start_consolidated_payment(
                 if login_subscriber_id
                 else _reseller_charge_email(db, reseller_id)
             ),
-            amount_kobo=paystack.amount_to_kobo(requested_amount),
+            amount_kobo=payment_capability.amount_to_kobo(requested_amount),
             reference=gateway_context.reference,
             metadata=checkout_metadata,
         )

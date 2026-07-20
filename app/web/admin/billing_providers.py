@@ -56,7 +56,6 @@ def payment_providers_create(
     request: Request,
     name: str = Form(...),
     provider_type: str = Form("paystack"),
-    webhook_secret_ref: str | None = Form(None),
     notes: str | None = Form(None),
     is_active: str | None = Form(None),
     db: Session = Depends(get_db),
@@ -66,7 +65,6 @@ def payment_providers_create(
             db,
             name=name,
             provider_type=provider_type,
-            webhook_secret_ref=webhook_secret_ref,
             notes=notes,
             is_active=is_active,
         )
@@ -121,7 +119,6 @@ def payment_providers_update(
     provider_id: UUID,
     name: str = Form(...),
     provider_type: str = Form("paystack"),
-    webhook_secret_ref: str | None = Form(None),
     notes: str | None = Form(None),
     is_active: str | None = Form(None),
     db: Session = Depends(get_db),
@@ -132,7 +129,6 @@ def payment_providers_update(
             provider_id=provider_id,
             name=name,
             provider_type=provider_type,
-            webhook_secret_ref=webhook_secret_ref,
             notes=notes,
             is_active=is_active,
         )
