@@ -73,6 +73,7 @@ class EventType(enum.Enum):
     usage_topped_up = "usage.topped_up"
     addon_expiring = "usage.addon_expiring"
     fup_runtime_state_changed = "fup.runtime_state_changed"
+    fup_policy_changed = "fup_policy.changed"
 
     # Operations - Provisioning events (3)
     provisioning_started = "provisioning.started"

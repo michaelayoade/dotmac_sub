@@ -75,7 +75,6 @@ app/services/field/vendor_auth.py
 app/services/field/worklogs.py
 app/services/file_storage.py
 app/services/financial_import_batch_reversals.py
-app/services/fup.py
 app/services/geocoding.py
 app/services/gis.py
 app/services/gis_sync.py

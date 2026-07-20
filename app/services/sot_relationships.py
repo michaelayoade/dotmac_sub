@@ -6216,10 +6216,178 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "FUP policy and rule definitions (CRUD)",
                     "FUP rule evaluation and simulation",
                 ),
-                depends_on=("access.fup_usage_windows",),
+                depends_on=(
+                    "access.fup_usage_windows",
+                    "auth.permission_gate",
+                    "events.dispatcher",
+                    "service_intent.catalog_policy",
+                ),
                 notes=(
-                    "Pure decision engine shared by the enforcement sweep and "
-                    "the what-if simulator; it writes no enforcement state."
+                    "Canonical policy/rule definitions and a side-effect-free "
+                    "decision engine shared by enforcement and simulation. It "
+                    "never writes per-subscription enforcement state."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="FUP policy and rule definitions (CRUD)",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "authenticated FUP policy command context",
+                                "canonical catalog offer",
+                                "FUP policy mutation protocol",
+                            ),
+                            canonical_writer="access.fup_rule_engine",
+                        ),
+                        ConcernContract(
+                            name="FUP rule evaluation and simulation",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical FUP policy and rule definitions",
+                                "period-scoped FUP usage observations",
+                                "FUP rule evaluation protocol",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="authenticated FUP policy command context",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "authenticated actor, offer scope, reason, command, and "
+                                "correlation identifiers"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical catalog offer",
+                            owner="service_intent.catalog_policy",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="locked CatalogOffer identity and lifecycle row",
+                        ),
+                        AuthorityInput(
+                            name="canonical FUP policy and rule definitions",
+                            owner="access.fup_rule_engine",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "FupPolicy and ordered FupRule rows including windows, "
+                                "thresholds, chaining, cooldown, action, and active state"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="period-scoped FUP usage observations",
+                            owner="access.fup_usage_windows",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "daily, weekly, and monthly usage windows with source and "
+                                "authority evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="FUP policy mutation protocol",
+                            owner="access.fup_rule_engine",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed policy/rule commands, positive thresholds, enum, "
+                                "day, cooldown, reduction, ordering, and chain invariants"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="FUP rule evaluation protocol",
+                            owner="access.fup_rule_engine",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "ordered rule activation, prerequisite, time/day window, "
+                                "period usage, threshold, severity, and simulation rules"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "Each typed FUP policy mutation enters one verified owner "
+                            "transaction; evaluation and simulation are read-only."
+                        ),
+                        locking=(
+                            "Policy creation locks CatalogOffer; rule commands lock the "
+                            "policy, target rule, and prerequisite rules before mutation."
+                        ),
+                        idempotency=(
+                            "Ensure-policy replays to the offer's existing policy; other "
+                            "mutations require explicit source identifiers and command "
+                            "evidence."
+                        ),
+                        retries=(
+                            "Validation failures are terminal. Concurrency failures retry "
+                            "the complete typed command with the original context."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "access.fup_rule_engine.offer_not_found",
+                            "access.fup_rule_engine.policy_not_found",
+                            "access.fup_rule_engine.source_policy_not_found",
+                            "access.fup_rule_engine.rule_not_found",
+                            "access.fup_rule_engine.invalid_rule",
+                            "access.fup_rule_engine.invalid_rule_chain",
+                            "access.fup_rule_engine.invalid_command_context",
+                            "access.fup_rule_engine.command_contract_violation",
+                            "access.fup_rule_engine.nested_owner_command",
+                            "access.fup_rule_engine.active_caller_transaction",
+                            "access.fup_rule_engine.nested_transaction_completion",
+                        ),
+                        mapping_owner="app.web.admin.catalog",
+                        fail_closed_on=(
+                            "missing offer, policy, rule, or prerequisite",
+                            "invalid enum, threshold, reduction, day, cooldown, or chain",
+                            "active caller transaction or manifest mismatch",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("fup_policy.changed",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 is additive and carries action, policy, offer, "
+                            "optional rule, command, and correlation identifiers."
+                        ),
+                        replay=(
+                            "Canonical FupPolicy and ordered FupRule rows rebuild current "
+                            "policy; events retain mutation evidence."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "FupPolicies helpers with transport exceptions, generic "
+                            "attribute mutation, helper commits, and GET-time policy writes"
+                        ),
+                        new_owner="access.fup_rule_engine",
+                        verification=(
+                            "Typed command, clean adapter, lock, event, rollback, no-GET-"
+                            "write, evaluation, simulation, and architecture tests."
+                        ),
+                        cutover_gate=(
+                            "Admin mutations construct typed commands on clean sessions and "
+                            "all enforcement/simulation callers share evaluate_rules."
+                        ),
+                        fallback_retirement=(
+                            "Service HTTP exceptions, generic setattr, helper commits, "
+                            "untyped kwargs writers, and get_or_create reads are removed."
+                        ),
+                    ),
+                    steward="network access",
+                    design_refs=(
+                        "docs/designs/FUP_CONSUMPTION_WINDOWS.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/adr/0002-owner-command-transaction-boundary.md",
+                    ),
+                    test_refs=(
+                        "tests/test_fup_ui_gaps.py",
+                        "tests/test_fup_period_aware_evaluation.py",
+                        "tests/test_fup_submonthly_safeguards.py",
+                        "tests/architecture/test_fup_rule_engine_boundary.py",
+                    ),
                 ),
             ),
             SOTService(

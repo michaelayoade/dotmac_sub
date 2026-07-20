@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-import logging
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, time
-from typing import Any
+from typing import TypeVar
 
-from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
+from app.models.catalog import CatalogOffer
 from app.models.fup import (
     FupAction,
     FupConsumptionPeriod,
@@ -18,13 +19,267 @@ from app.models.fup import (
     FupPolicy,
     FupRule,
 )
-from app.services.common import coerce_uuid, validate_enum
+from app.services.common import coerce_uuid
+from app.services.domain_errors import DomainError
+from app.services.events import EventType, emit_event
+from app.services.owner_commands import (
+    CommandContext,
+    OwnerCommandDefinition,
+    execute_owner_command,
+)
 
-logger = logging.getLogger(__name__)
+ResultT = TypeVar("ResultT")
+
+
+class FupRuleEngineError(DomainError):
+    """Stable failures from the FUP policy and rule owner."""
+
+
+def _error(suffix: str, message: str) -> FupRuleEngineError:
+    return FupRuleEngineError(
+        code=f"access.fup_rule_engine.{suffix}",
+        message=message,
+    )
+
+
+def _definition(name: str) -> OwnerCommandDefinition:
+    return OwnerCommandDefinition(
+        owner="access.fup_rule_engine",
+        concern="FUP policy and rule definitions (CRUD)",
+        name=name,
+    )
+
+
+def _execute(
+    db: Session,
+    *,
+    context: CommandContext,
+    name: str,
+    operation: Callable[[], ResultT],
+) -> ResultT:
+    return execute_owner_command(
+        db,
+        definition=_definition(name),
+        context=context,
+        operation=operation,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class FupPolicySettings:
+    traffic_accounting_start: time | None = None
+    traffic_accounting_end: time | None = None
+    traffic_inverse_interval: bool = False
+    online_accounting_start: time | None = None
+    online_accounting_end: time | None = None
+    online_inverse_interval: bool = False
+    traffic_days_of_week: list[int] | None = None
+    online_days_of_week: list[int] | None = None
+    is_active: bool = True
+    notes: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class FupRuleSpec:
+    name: str
+    consumption_period: str
+    direction: str
+    threshold_amount: float
+    threshold_unit: str
+    action: str
+    speed_reduction_percent: float | None = None
+    sort_order: int | None = None
+    time_start: time | None = None
+    time_end: time | None = None
+    enabled_by_rule_id: str | None = None
+    cooldown_minutes: int = 0
+    days_of_week: list[int] | None = None
+    is_active: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class FupRulePatch:
+    updated_fields: frozenset[str]
+    name: str | None = None
+    consumption_period: str | None = None
+    direction: str | None = None
+    threshold_amount: float | None = None
+    threshold_unit: str | None = None
+    action: str | None = None
+    speed_reduction_percent: float | None = None
+    sort_order: int | None = None
+    time_start: time | None = None
+    time_end: time | None = None
+    enabled_by_rule_id: str | None = None
+    cooldown_minutes: int | None = None
+    days_of_week: list[int] | None = None
+    is_active: bool | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class EnsureFupPolicyCommand:
+    context: CommandContext
+    offer_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateFupPolicyCommand:
+    context: CommandContext
+    offer_id: str
+    settings: FupPolicySettings
+
+
+@dataclass(frozen=True, slots=True)
+class AddFupRuleCommand:
+    context: CommandContext
+    offer_id: str
+    spec: FupRuleSpec
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateFupRuleCommand:
+    context: CommandContext
+    rule_id: str
+    patch: FupRulePatch
+
+
+@dataclass(frozen=True, slots=True)
+class DeleteFupRuleCommand:
+    context: CommandContext
+    rule_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class CloneFupRulesCommand:
+    context: CommandContext
+    source_offer_id: str
+    target_offer_id: str
+
+
+def _enum(value: str, enum_type, label: str):
+    try:
+        return enum_type(value)
+    except ValueError as exc:
+        raise _error("invalid_rule", f"Invalid {label}.") from exc
+
+
+def _validate_days(days: list[int] | None) -> list[int] | None:
+    if days is None:
+        return None
+    if any(day < 0 or day > 6 for day in days):
+        raise _error("invalid_rule", "FUP days must be between 0 and 6.")
+    return sorted(set(days))
+
+
+def _validate_spec(spec: FupRuleSpec) -> None:
+    if not spec.name.strip():
+        raise _error("invalid_rule", "FUP rule name is required.")
+    if spec.threshold_amount <= 0:
+        raise _error("invalid_rule", "FUP threshold must be positive.")
+    if spec.sort_order is not None and spec.sort_order < 0:
+        raise _error("invalid_rule", "FUP sort order cannot be negative.")
+    if spec.cooldown_minutes < 0:
+        raise _error("invalid_rule", "FUP cooldown cannot be negative.")
+    if (
+        spec.speed_reduction_percent is not None
+        and not 0 < spec.speed_reduction_percent < 100
+    ):
+        raise _error(
+            "invalid_rule",
+            "FUP speed reduction must be between 1 and 99 percent.",
+        )
+    _validate_days(spec.days_of_week)
+
+
+def _offer(db: Session, offer_id: str, *, for_update: bool = False) -> CatalogOffer:
+    query = db.query(CatalogOffer).filter(CatalogOffer.id == coerce_uuid(offer_id))
+    if for_update:
+        query = query.with_for_update(of=CatalogOffer)
+    offer = query.one_or_none()
+    if offer is None:
+        raise _error("offer_not_found", "Catalog offer not found.")
+    return offer
+
+
+def _policy_by_offer(
+    db: Session, offer_id: str, *, for_update: bool = False
+) -> FupPolicy | None:
+    query = (
+        db.query(FupPolicy)
+        .options(joinedload(FupPolicy.rules))
+        .filter(FupPolicy.offer_id == coerce_uuid(offer_id))
+    )
+    if for_update:
+        query = query.with_for_update(of=FupPolicy)
+    return query.one_or_none()
+
+
+def _ensure_policy(db: Session, offer_id: str) -> tuple[FupPolicy, bool]:
+    offer = _offer(db, offer_id, for_update=True)
+    policy = _policy_by_offer(db, str(offer.id), for_update=True)
+    if policy is not None:
+        return policy, False
+    policy = FupPolicy(offer_id=offer.id, is_active=True)
+    db.add(policy)
+    db.flush()
+    return policy, True
+
+
+def _rule(db: Session, rule_id: str, *, for_update: bool = False) -> FupRule:
+    query = db.query(FupRule).filter(FupRule.id == coerce_uuid(rule_id))
+    if for_update:
+        query = query.with_for_update(of=FupRule)
+    rule = query.one_or_none()
+    if rule is None:
+        raise _error("rule_not_found", "FUP rule not found.")
+    return rule
+
+
+def _resolve_prerequisite(
+    db: Session,
+    *,
+    policy_id: object,
+    rule_id: str | None,
+    excluding_rule_id: object | None = None,
+):
+    if not rule_id:
+        return None
+    prerequisite = _rule(db, rule_id, for_update=True)
+    if prerequisite.policy_id != policy_id or prerequisite.id == excluding_rule_id:
+        raise _error(
+            "invalid_rule_chain",
+            "FUP prerequisite must be another rule in the same policy.",
+        )
+    return prerequisite.id
+
+
+def _emit_change(
+    db: Session,
+    context: CommandContext,
+    *,
+    action: str,
+    policy_id: object,
+    offer_id: object,
+    rule_id: object | None = None,
+) -> None:
+    emit_event(
+        db,
+        EventType.fup_policy_changed,
+        {
+            "schema_version": 1,
+            "action": action,
+            "policy_id": str(policy_id),
+            "offer_id": str(offer_id),
+            "rule_id": str(rule_id) if rule_id is not None else None,
+            "command_id": str(context.command_id),
+            "correlation_id": str(context.correlation_id),
+        },
+        actor=context.actor,
+    )
 
 
 class FupPolicies:
-    """Manager for Fair Usage Policy configuration and rules."""
+    """Canonical owner for FUP policy/rule state and rule evaluation inputs."""
 
     @staticmethod
     def get_by_offer(db: Session, offer_id: str) -> FupPolicy | None:
@@ -45,220 +300,241 @@ class FupPolicies:
         return db.scalars(stmt).unique().first()
 
     @staticmethod
-    def get_or_create(db: Session, offer_id: str) -> FupPolicy:
-        """Get existing FUP policy for an offer, or create an empty one.
-
-        Args:
-            db: Database session.
-            offer_id: The catalog offer UUID.
-
-        Returns:
-            The existing or newly created FupPolicy.
-        """
-        uid = coerce_uuid(offer_id)
-        stmt = (
-            select(FupPolicy)
-            .options(joinedload(FupPolicy.rules))
-            .where(FupPolicy.offer_id == uid)
-        )
-        policy = db.scalars(stmt).unique().first()
-        if policy:
+    def ensure(db: Session, command: EnsureFupPolicyCommand) -> FupPolicy:
+        def operation() -> FupPolicy:
+            policy, created = _ensure_policy(db, command.offer_id)
+            if created:
+                _emit_change(
+                    db,
+                    command.context,
+                    action="policy_created",
+                    policy_id=policy.id,
+                    offer_id=policy.offer_id,
+                )
             return policy
 
-        policy = FupPolicy(offer_id=uid)
-        db.add(policy)
-        db.commit()
-        db.refresh(policy)
-        logger.info("Created FUP policy %s for offer %s", policy.id, offer_id)
-        return policy
-
-    @staticmethod
-    def _get_policy(db: Session, policy_id: str) -> FupPolicy:
-        """Fetch a policy by ID or raise 404."""
-        policy = db.get(FupPolicy, coerce_uuid(policy_id))
-        if not policy:
-            raise HTTPException(status_code=404, detail="FUP policy not found")
-        return policy
-
-    @staticmethod
-    def update_policy(db: Session, policy_id: str, **kwargs: Any) -> FupPolicy:
-        """Update policy-level settings.
-
-        Args:
-            db: Database session.
-            policy_id: The FUP policy UUID.
-            **kwargs: Fields to update on the policy.
-
-        Returns:
-            The updated FupPolicy.
-        """
-        policy = FupPolicies._get_policy(db, policy_id)
-        allowed_fields = {
-            "traffic_accounting_start",
-            "traffic_accounting_end",
-            "traffic_inverse_interval",
-            "online_accounting_start",
-            "online_accounting_end",
-            "online_inverse_interval",
-            "traffic_days_of_week",
-            "online_days_of_week",
-            "is_active",
-            "notes",
-        }
-        for key, value in kwargs.items():
-            if key in allowed_fields:
-                setattr(policy, key, value)
-        policy.updated_at = datetime.now(UTC)
-        db.commit()
-        db.refresh(policy)
-        logger.info("Updated FUP policy %s", policy_id)
-        return policy
-
-    @staticmethod
-    def add_rule(
-        db: Session,
-        policy_id: str,
-        *,
-        name: str,
-        consumption_period: str,
-        direction: str,
-        threshold_amount: float,
-        threshold_unit: str,
-        action: str,
-        speed_reduction_percent: float | None = None,
-        sort_order: int | None = None,
-        time_start: time | None = None,
-        time_end: time | None = None,
-        enabled_by_rule_id: str | None = None,
-        days_of_week: list[int] | None = None,
-        is_active: bool = True,
-    ) -> FupRule:
-        """Add a rule to an FUP policy.
-
-        Args:
-            db: Database session.
-            policy_id: The FUP policy UUID.
-            name: Human-readable rule name.
-            consumption_period: One of monthly/daily/weekly.
-            direction: One of up/down/up_down.
-            threshold_amount: Data consumption threshold value.
-            threshold_unit: One of mb/gb/tb.
-            action: One of reduce_speed/block/notify.
-            speed_reduction_percent: Percentage to reduce speed to
-                (for reduce_speed action).
-
-        Returns:
-            The newly created FupRule.
-        """
-        policy = FupPolicies._get_policy(db, policy_id)
-
-        # Determine next sort_order
-        max_order_stmt = (
-            select(FupRule.sort_order)
-            .where(FupRule.policy_id == policy.id)
-            .order_by(FupRule.sort_order.desc())
-            .limit(1)
+        return _execute(
+            db,
+            context=command.context,
+            name="ensure_fup_policy",
+            operation=operation,
         )
-        max_order = db.scalars(max_order_stmt).first()
-        next_order = (max_order or 0) + 1
 
-        rule = FupRule(
-            policy_id=policy.id,
-            name=name.strip(),
-            sort_order=sort_order if sort_order is not None else next_order,
-            consumption_period=validate_enum(
-                consumption_period, FupConsumptionPeriod, "consumption_period"
-            ),
-            direction=validate_enum(direction, FupDirection, "direction"),
-            threshold_amount=threshold_amount,
-            threshold_unit=validate_enum(threshold_unit, FupDataUnit, "threshold_unit"),
-            action=validate_enum(action, FupAction, "action"),
-            speed_reduction_percent=speed_reduction_percent,
-            time_start=time_start,
-            time_end=time_end,
-            enabled_by_rule_id=coerce_uuid(enabled_by_rule_id)
-            if enabled_by_rule_id
-            else None,
-            days_of_week=days_of_week,
-            is_active=is_active,
+    @staticmethod
+    def update_policy(db: Session, command: UpdateFupPolicyCommand) -> FupPolicy:
+        def operation() -> FupPolicy:
+            policy, _created = _ensure_policy(db, command.offer_id)
+            settings = command.settings
+            policy.traffic_accounting_start = settings.traffic_accounting_start
+            policy.traffic_accounting_end = settings.traffic_accounting_end
+            policy.traffic_inverse_interval = settings.traffic_inverse_interval
+            policy.online_accounting_start = settings.online_accounting_start
+            policy.online_accounting_end = settings.online_accounting_end
+            policy.online_inverse_interval = settings.online_inverse_interval
+            policy.traffic_days_of_week = _validate_days(settings.traffic_days_of_week)
+            policy.online_days_of_week = _validate_days(settings.online_days_of_week)
+            policy.is_active = settings.is_active
+            policy.notes = (settings.notes or "").strip() or None
+            policy.updated_at = datetime.now(UTC)
+            db.flush()
+            _emit_change(
+                db,
+                command.context,
+                action="policy_updated",
+                policy_id=policy.id,
+                offer_id=policy.offer_id,
+            )
+            return policy
+
+        return _execute(
+            db,
+            context=command.context,
+            name="update_fup_policy",
+            operation=operation,
         )
-        db.add(rule)
-        db.commit()
-        db.refresh(rule)
-        logger.info("Added FUP rule %s to policy %s", rule.id, policy_id)
-        return rule
 
     @staticmethod
-    def _get_rule(db: Session, rule_id: str) -> FupRule:
-        """Fetch a rule by ID or raise 404."""
-        rule = db.get(FupRule, coerce_uuid(rule_id))
-        if not rule:
-            raise HTTPException(status_code=404, detail="FUP rule not found")
-        return rule
+    def add_rule(db: Session, command: AddFupRuleCommand) -> FupRule:
+        def operation() -> FupRule:
+            _validate_spec(command.spec)
+            policy, _created = _ensure_policy(db, command.offer_id)
+            max_order_stmt = (
+                select(FupRule.sort_order)
+                .where(FupRule.policy_id == policy.id)
+                .order_by(FupRule.sort_order.desc())
+                .limit(1)
+            )
+            max_order = db.scalars(max_order_stmt).first()
+            spec = command.spec
+            rule = FupRule(
+                policy_id=policy.id,
+                name=spec.name.strip(),
+                sort_order=(
+                    spec.sort_order
+                    if spec.sort_order is not None
+                    else (max_order or 0) + 1
+                ),
+                consumption_period=_enum(
+                    spec.consumption_period,
+                    FupConsumptionPeriod,
+                    "consumption period",
+                ),
+                direction=_enum(spec.direction, FupDirection, "direction"),
+                threshold_amount=spec.threshold_amount,
+                threshold_unit=_enum(
+                    spec.threshold_unit, FupDataUnit, "threshold unit"
+                ),
+                action=_enum(spec.action, FupAction, "action"),
+                speed_reduction_percent=spec.speed_reduction_percent,
+                time_start=spec.time_start,
+                time_end=spec.time_end,
+                enabled_by_rule_id=_resolve_prerequisite(
+                    db,
+                    policy_id=policy.id,
+                    rule_id=spec.enabled_by_rule_id,
+                ),
+                cooldown_minutes=spec.cooldown_minutes,
+                days_of_week=_validate_days(spec.days_of_week),
+                is_active=spec.is_active,
+            )
+            db.add(rule)
+            db.flush()
+            _emit_change(
+                db,
+                command.context,
+                action="rule_added",
+                policy_id=policy.id,
+                offer_id=policy.offer_id,
+                rule_id=rule.id,
+            )
+            return rule
+
+        return _execute(
+            db,
+            context=command.context,
+            name="add_fup_rule",
+            operation=operation,
+        )
 
     @staticmethod
-    def update_rule(db: Session, rule_id: str, **kwargs: Any) -> FupRule:
-        """Update fields on an existing FUP rule.
+    def update_rule(db: Session, command: UpdateFupRuleCommand) -> FupRule:
+        def operation() -> FupRule:
+            rule = _rule(db, command.rule_id, for_update=True)
+            patch = command.patch
+            fields = patch.updated_fields
+            allowed_fields = set(FupRulePatch.__dataclass_fields__) - {"updated_fields"}
+            if not fields or not fields <= allowed_fields:
+                raise _error("invalid_rule", "FUP rule update fields are invalid.")
+            if "name" in fields:
+                if not patch.name or not patch.name.strip():
+                    raise _error("invalid_rule", "FUP rule name is required.")
+                rule.name = patch.name.strip()
+            if "sort_order" in fields:
+                if patch.sort_order is None or patch.sort_order < 0:
+                    raise _error("invalid_rule", "FUP sort order cannot be negative.")
+                rule.sort_order = patch.sort_order
+            if "consumption_period" in fields:
+                if patch.consumption_period is None:
+                    raise _error("invalid_rule", "FUP consumption period is required.")
+                rule.consumption_period = _enum(
+                    patch.consumption_period,
+                    FupConsumptionPeriod,
+                    "consumption period",
+                )
+            if "direction" in fields:
+                if patch.direction is None:
+                    raise _error("invalid_rule", "FUP direction is required.")
+                rule.direction = _enum(patch.direction, FupDirection, "direction")
+            if "threshold_amount" in fields:
+                if patch.threshold_amount is None or patch.threshold_amount <= 0:
+                    raise _error("invalid_rule", "FUP threshold must be positive.")
+                rule.threshold_amount = patch.threshold_amount
+            if "threshold_unit" in fields:
+                if patch.threshold_unit is None:
+                    raise _error("invalid_rule", "FUP threshold unit is required.")
+                rule.threshold_unit = _enum(
+                    patch.threshold_unit, FupDataUnit, "threshold unit"
+                )
+            if "action" in fields:
+                if patch.action is None:
+                    raise _error("invalid_rule", "FUP action is required.")
+                rule.action = _enum(patch.action, FupAction, "action")
+            if "speed_reduction_percent" in fields:
+                if patch.speed_reduction_percent is not None and not (
+                    0 < patch.speed_reduction_percent < 100
+                ):
+                    raise _error(
+                        "invalid_rule",
+                        "FUP speed reduction must be between 1 and 99 percent.",
+                    )
+                rule.speed_reduction_percent = patch.speed_reduction_percent
+            if "time_start" in fields:
+                rule.time_start = patch.time_start
+            if "time_end" in fields:
+                rule.time_end = patch.time_end
+            if "enabled_by_rule_id" in fields:
+                rule.enabled_by_rule_id = _resolve_prerequisite(
+                    db,
+                    policy_id=rule.policy_id,
+                    rule_id=patch.enabled_by_rule_id,
+                    excluding_rule_id=rule.id,
+                )
+            if "cooldown_minutes" in fields:
+                if patch.cooldown_minutes is None or patch.cooldown_minutes < 0:
+                    raise _error("invalid_rule", "FUP cooldown cannot be negative.")
+                rule.cooldown_minutes = patch.cooldown_minutes
+            if "days_of_week" in fields:
+                rule.days_of_week = _validate_days(patch.days_of_week)
+            if "is_active" in fields:
+                if patch.is_active is None:
+                    raise _error("invalid_rule", "FUP active state is required.")
+                rule.is_active = patch.is_active
+            rule.updated_at = datetime.now(UTC)
+            db.flush()
+            policy = _policy_by_offer(db, str(rule.policy.offer_id))
+            if policy is None:
+                raise _error("policy_not_found", "FUP policy not found.")
+            _emit_change(
+                db,
+                command.context,
+                action="rule_updated",
+                policy_id=rule.policy_id,
+                offer_id=policy.offer_id,
+                rule_id=rule.id,
+            )
+            return rule
 
-        Args:
-            db: Database session.
-            rule_id: The FUP rule UUID.
-            **kwargs: Fields to update.
-
-        Returns:
-            The updated FupRule.
-        """
-        rule = FupPolicies._get_rule(db, rule_id)
-        enum_fields = {
-            "consumption_period": FupConsumptionPeriod,
-            "direction": FupDirection,
-            "threshold_unit": FupDataUnit,
-            "action": FupAction,
-        }
-        allowed_fields = {
-            "name",
-            "sort_order",
-            "consumption_period",
-            "direction",
-            "threshold_amount",
-            "threshold_unit",
-            "action",
-            "speed_reduction_percent",
-            "time_start",
-            "time_end",
-            "enabled_by_rule_id",
-            "days_of_week",
-            "is_active",
-        }
-        for key, value in kwargs.items():
-            if key not in allowed_fields:
-                continue
-            if key in enum_fields and value is not None:
-                value = validate_enum(value, enum_fields[key], key)
-            if key == "name" and isinstance(value, str):
-                value = value.strip()
-            if key == "enabled_by_rule_id":
-                value = coerce_uuid(value) if value else None
-            setattr(rule, key, value)
-        rule.updated_at = datetime.now(UTC)
-        db.commit()
-        db.refresh(rule)
-        logger.info("Updated FUP rule %s", rule_id)
-        return rule
+        return _execute(
+            db,
+            context=command.context,
+            name="update_fup_rule",
+            operation=operation,
+        )
 
     @staticmethod
-    def delete_rule(db: Session, rule_id: str) -> None:
-        """Permanently delete an FUP rule.
+    def delete_rule(db: Session, command: DeleteFupRuleCommand) -> None:
+        def operation() -> None:
+            rule = _rule(db, command.rule_id, for_update=True)
+            policy_id = rule.policy_id
+            offer_id = rule.policy.offer_id
+            rule_id = rule.id
+            db.delete(rule)
+            db.flush()
+            _emit_change(
+                db,
+                command.context,
+                action="rule_deleted",
+                policy_id=policy_id,
+                offer_id=offer_id,
+                rule_id=rule_id,
+            )
 
-        Args:
-            db: Database session.
-            rule_id: The FUP rule UUID.
-        """
-        rule = FupPolicies._get_rule(db, rule_id)
-        policy_id = rule.policy_id
-        db.delete(rule)
-        db.commit()
-        logger.info("Deleted FUP rule %s from policy %s", rule_id, policy_id)
+        return _execute(
+            db,
+            context=command.context,
+            name="delete_fup_rule",
+            operation=operation,
+        )
 
     @staticmethod
     def list_rules(db: Session, policy_id: str) -> list[FupRule]:
@@ -279,70 +555,70 @@ class FupPolicies:
         return list(db.scalars(stmt).all())
 
     @staticmethod
-    def clone_rules_from(
-        db: Session,
-        source_offer_id: str,
-        target_policy_id: str,
-    ) -> list[FupRule]:
-        """Copy all FUP rules from another offer's policy into the target policy.
-
-        Args:
-            db: Database session.
-            source_offer_id: The offer UUID whose FUP rules to copy.
-            target_policy_id: The target FUP policy UUID to copy rules into.
-
-        Returns:
-            List of newly created FupRule copies.
-        """
-        source_policy = FupPolicies.get_by_offer(db, source_offer_id)
-        if not source_policy:
-            raise HTTPException(
-                status_code=404,
-                detail="Source offer has no FUP policy",
+    def clone_rules(db: Session, command: CloneFupRulesCommand) -> list[FupRule]:
+        def operation() -> list[FupRule]:
+            _offer(db, command.source_offer_id, for_update=True)
+            source_policy = _policy_by_offer(
+                db, command.source_offer_id, for_update=True
             )
-        target_policy = FupPolicies._get_policy(db, target_policy_id)
-
-        cloned: list[FupRule] = []
-        rule_map: dict[str, FupRule] = {}
-        for source_rule in source_policy.rules:
-            rule = FupRule(
+            if source_policy is None:
+                raise _error(
+                    "source_policy_not_found",
+                    "Source offer has no FUP policy.",
+                )
+            target_policy, _created = _ensure_policy(db, command.target_offer_id)
+            cloned: list[FupRule] = []
+            rule_map: dict[str, FupRule] = {}
+            for source_rule in source_policy.rules:
+                rule = FupRule(
+                    policy_id=target_policy.id,
+                    name=source_rule.name,
+                    sort_order=source_rule.sort_order,
+                    consumption_period=source_rule.consumption_period,
+                    direction=source_rule.direction,
+                    threshold_amount=source_rule.threshold_amount,
+                    threshold_unit=source_rule.threshold_unit,
+                    action=source_rule.action,
+                    speed_reduction_percent=source_rule.speed_reduction_percent,
+                    cooldown_minutes=source_rule.cooldown_minutes,
+                    time_start=source_rule.time_start,
+                    time_end=source_rule.time_end,
+                    days_of_week=(
+                        list(source_rule.days_of_week)
+                        if source_rule.days_of_week
+                        else None
+                    ),
+                    is_active=source_rule.is_active,
+                )
+                db.add(rule)
+                cloned.append(rule)
+                rule_map[str(source_rule.id)] = rule
+            db.flush()
+            for source_rule in source_policy.rules:
+                cloned_rule = rule_map[str(source_rule.id)]
+                if source_rule.enabled_by_rule_id:
+                    prerequisite = rule_map.get(str(source_rule.enabled_by_rule_id))
+                    if prerequisite is None:
+                        raise _error(
+                            "invalid_rule_chain",
+                            "Source FUP rule chain is inconsistent.",
+                        )
+                    cloned_rule.enabled_by_rule_id = prerequisite.id
+            _emit_change(
+                db,
+                command.context,
+                action="rules_cloned",
                 policy_id=target_policy.id,
-                name=source_rule.name,
-                sort_order=source_rule.sort_order,
-                consumption_period=source_rule.consumption_period,
-                direction=source_rule.direction,
-                threshold_amount=source_rule.threshold_amount,
-                threshold_unit=source_rule.threshold_unit,
-                action=source_rule.action,
-                speed_reduction_percent=source_rule.speed_reduction_percent,
-                cooldown_minutes=source_rule.cooldown_minutes,
-                time_start=source_rule.time_start,
-                time_end=source_rule.time_end,
-                days_of_week=list(source_rule.days_of_week)
-                if source_rule.days_of_week
-                else None,
-                is_active=source_rule.is_active,
+                offer_id=target_policy.offer_id,
             )
-            db.add(rule)
-            cloned.append(rule)
-            rule_map[str(source_rule.id)] = rule
-        db.flush()
-        for source_rule in source_policy.rules:
-            cloned_rule = rule_map[str(source_rule.id)]
-            if source_rule.enabled_by_rule_id:
-                cloned_rule.enabled_by_rule_id = rule_map[
-                    str(source_rule.enabled_by_rule_id)
-                ].id
-        db.commit()
-        for rule in cloned:
-            db.refresh(rule)
-        logger.info(
-            "Cloned %d FUP rules from offer %s to policy %s",
-            len(cloned),
-            source_offer_id,
-            target_policy_id,
+            return cloned
+
+        return _execute(
+            db,
+            context=command.context,
+            name="clone_fup_rules",
+            operation=operation,
         )
-        return cloned
 
 
 fup_policies = FupPolicies()
