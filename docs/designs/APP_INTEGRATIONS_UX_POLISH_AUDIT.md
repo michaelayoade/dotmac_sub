@@ -34,18 +34,12 @@ correctness bugs and a cluster of security gaps that warrant a dedicated review.
 
 ### POLISH
 
-**P-A. Scaffolded features presented as working (the signature).**
-- Generic integration jobs are non-functional: `run_sync_job` only handles
-  `crm:pull_tickets`; other jobs no-op to **success** or raise "No sync adapter",
-  yet the form collects `job_type/direction/trigger_mode/conflict_policy/entity_type/
-  mapping_config/filter_config` — all ignored (`app/services/integration_sync.py:253-260`)
-- register→configure saves `custom_fields/webhook_endpoint/auth_method/data_mapping`
-  into `metadata.registration_config` — **no consumer anywhere**; operator
-  "configures" an integration and nothing connects (`app/services/web_integrations.py:163-169`)
-- "Relay Portal" per-connector toggle persists `relay_to_portal` — nothing consumes
-  it (`templates/admin/integrations/installed.html:64-68`)
-- Marketplace "Check for updates" is a no-op redirect; "Install" links to a **blank**
-  `/connectors/new` (no pre-fill from the registry entry) (`app/web/admin/integrations.py:231-235`)
+**P-A. Scaffolded features presented as working (resolved by platform cutover).**
+- Jobs now require an enabled typed capability binding; arbitrary adapter/action
+  dispatch is rejected.
+- The inert register→configure flow and relay-to-portal toggle are retired.
+- Marketplace and installed projections now read deployed manifests and
+  version-pinned installations, with provider-specific configuration links.
 
 **P-B. Correctness bugs.**
 - ⚠️ **Admin-issued API keys are dead on arrival**: the web flow stores a **bcrypt**
@@ -118,8 +112,10 @@ sha256 mismatch is the load-bearing bug, not plaintext.)
 ### Connector lifecycle (marketplace/register/configure/install/targets/jobs/providers)
 - [POLISH] (High) `app/services/integration_sync.py:253-260` + `jobs/new.html` — generic jobs non-functional (only crm:pull_tickets runs); other jobs no-op success or raise; form fields ignored → hide/disable unsupported types or relabel "CRM only" [recommend]
 - [CONTROL] (High) `app/models/connector.py:58` — `auth_config` (keys/passwords/tokens) plain JSON, unencrypted at rest → encrypt (envelope/OpenBao ref) [recommend]
-- [POLISH] (High) `app/services/web_integrations.py:163-169` + `register_configure.html` — registration_config saved but no consumer; auth_method free-text never mapped to connector.auth_type → wire to runtime or relabel "metadata only" [recommend]
-- [POLISH] (Med) `installed.html:64-68` + `web_integrations.py:581-595` — "Relay Portal" toggle persists `relay_to_portal`, nothing consumes it → remove or implement [recommend]
+- [RESOLVED] The inert arbitrary registration/configuration flow was retired;
+  platform installations now use deployed manifests, typed capabilities, and
+  immutable configuration revisions.
+- [RESOLVED] The inert "Relay Portal" toggle and its writer were removed.
 - [POLISH] (Med) `web_integrations.py:451-484` — health from WebhookDelivery ratio only; connector w/o webhooks always green → compute from probe/last-run or "n/a" [recommend]
 - [POLISH] (Med) `web_integrations.py:546-552` + `installed.html:126,130` — latency always "-" (never written); connector column shows raw UUID → drop/populate latency, resolve UUID→name [recommend]
 - [POLISH] (Med) `app/web/admin/integrations.py:231-235` + `marketplace.html:17-19,63` — "Check for updates" no-op; "Install" links to blank `/connectors/new` → real re-scan + pre-seed form from registry [recommend]
@@ -168,9 +164,8 @@ sha256 mismatch is the load-bearing bug, not plaintext.)
   or failed only at run time) replaced with a select of the actually-supported
   combos (`crm:pull_tickets`, or none/record-keeping); the create route
   validates and 400s anything else.
-- **Register-configure relabeled "metadata only"** — the saved
-  registration_config/auth_method has no runtime consumer; the form now says
-  so instead of implying live configuration.
+- **Register-configure retired** — untyped metadata cannot claim executable
+  integration authority; configuration is an immutable installation revision.
 
 ### Still open
 

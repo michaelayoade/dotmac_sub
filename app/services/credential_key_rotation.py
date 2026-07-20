@@ -14,16 +14,11 @@ from sqlalchemy.orm import Session, load_only
 from app.models.billing import BankAccount, PaymentMethod
 from app.models.catalog import AccessCredential, NasDevice
 from app.models.domain_settings import DomainSetting
-from app.models.integration_hook import (
-    SECRET_AUTH_CONFIG_KEYS as _INTEGRATION_HOOK_SECRET_KEYS,
-)
-from app.models.integration_hook import IntegrationHook
 from app.models.network import OLTDevice, OntProfileWanService, OntUnit
 from app.models.network_monitoring import NetworkDevice
 from app.models.router_management import JumpHost, Router
 from app.models.system_user import SystemUser
 from app.models.tr069 import Tr069AcsServer
-from app.models.webhook import WebhookEndpoint
 from app.services.access_credential_secret import (
     is_one_way_access_credential_secret,
 )
@@ -117,7 +112,6 @@ _MODEL_BY_NAME: dict[str, type[Any]] = {
     "OntUnit": OntUnit,
     "OntProfileWanService": OntProfileWanService,
     "Tr069AcsServer": Tr069AcsServer,
-    "WebhookEndpoint": WebhookEndpoint,
     "PaymentMethod": PaymentMethod,
     "BankAccount": BankAccount,
     "SystemUser": SystemUser,
@@ -257,20 +251,6 @@ def scan_credential_encryption_integrity(
     ).all()
     for settings_row in settings_rows:
         observe(settings_scope, settings_row.value_text)
-
-    hook_scopes = {
-        key: f"IntegrationHook.auth_config.{key}"
-        for key in sorted(_INTEGRATION_HOOK_SECRET_KEYS)
-    }
-    for scope in hook_scopes.values():
-        register(scope)
-    for hook in db.scalars(select(IntegrationHook)).all():
-        auth_config = hook.auth_config
-        if not isinstance(auth_config, dict):
-            continue
-        for key, scope in hook_scopes.items():
-            if key in auth_config and auth_config[key] is not None:
-                observe(scope, auth_config[key])
 
     connector_scope = "ConnectorConfig.auth_config"
     register(connector_scope)
@@ -561,39 +541,6 @@ def _rotate_domain_settings(
     return updated_records, updated_values
 
 
-def _rotate_integration_hooks(
-    db: Session, *, old_key: str, new_key: str
-) -> tuple[int, int]:
-    updated_records = 0
-    updated_values = 0
-    for hook in db.scalars(select(IntegrationHook)).all():
-        auth_config = hook.auth_config or {}
-        if not isinstance(auth_config, dict):
-            continue
-        changed = False
-        rotated = dict(auth_config)
-        for key, value in auth_config.items():
-            if key not in _INTEGRATION_HOOK_SECRET_KEYS or value is None:
-                continue
-            try:
-                rotated_value, value_changed = _rotate_value(
-                    str(value), old_key=old_key, new_key=new_key
-                )
-            except ValueError as exc:
-                raise ValueError(
-                    f"Failed to rotate IntegrationHook auth_config.{key}"
-                ) from exc
-            if not value_changed:
-                continue
-            rotated[key] = rotated_value
-            updated_values += 1
-            changed = True
-        if changed:
-            hook.auth_config = rotated
-            updated_records += 1
-    return updated_records, updated_values
-
-
 def _rotate_connector_auth_config(
     db: Session, *, old_key: str, new_key: str
 ) -> tuple[int, int]:
@@ -683,10 +630,6 @@ def rotate_credential_encryption_material(
     updated_values += values
 
     records, values = _rotate_domain_settings(db, old_key=old_key, new_key=new_key)
-    updated_records += records
-    updated_values += values
-
-    records, values = _rotate_integration_hooks(db, old_key=old_key, new_key=new_key)
     updated_records += records
     updated_values += values
 
