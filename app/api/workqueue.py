@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
+from sse_starlette.sse import EventSourceResponse
 
 from app.db import get_db
 from app.schemas.common import ListResponse
@@ -15,10 +17,18 @@ from app.schemas.workqueue import (
 )
 from app.services import workqueue
 from app.services.auth_dependencies import require_permission, require_user_auth
+from app.services.realtime_platform import (
+    iter_topic_events,
+    ready_event,
+    reset_event,
+    sse_message,
+)
 from app.services.response import list_response
 from app.services.workqueue import WorkqueuePermissionError, WorkqueuePrincipal
+from app.services.workqueue.events import channels_for_scope
 
 router = APIRouter(prefix="/workqueue", tags=["workqueue"])
+logger = logging.getLogger(__name__)
 
 AUDIENCE_QUERY = Query(
     default=None,
@@ -92,6 +102,57 @@ def workqueue_view(
     except WorkqueuePermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     return WorkqueueViewRead.model_validate(view)
+
+
+@router.get(
+    "/events",
+    dependencies=[Depends(require_permission("support:ticket:read"))],
+)
+def workqueue_events(
+    request: Request,
+    audience: str | None = AUDIENCE_QUERY,
+    last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+    auth=Depends(require_user_auth),
+    db: Session = Depends(get_db),
+):
+    """SSE transport for the same server-scoped workqueue invalidations as WS."""
+    try:
+        scope = workqueue.get_workqueue_scope(
+            db,
+            _principal(db, auth),
+            requested_audience=audience,
+        )
+        topics = channels_for_scope(scope)
+    except WorkqueuePermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+    # Streaming responses keep dependencies alive until disconnect. Release
+    # this lookup session before returning; the event stream needs no database.
+    db.rollback()
+    db.close()
+
+    async def event_generator():
+        yield sse_message(ready_event(topics, transport="sse"))
+        if last_event_id:
+            yield sse_message(reset_event(topics, reason="redis_pubsub_has_no_replay"))
+        try:
+            async for event in iter_topic_events(
+                topics,
+                stop_requested=request.is_disconnected,
+            ):
+                yield sse_message(event)
+        except Exception as exc:
+            logger.warning("workqueue_sse_stream_failed error=%s", exc)
+            yield sse_message(reset_event(topics, reason="broker_unavailable"))
+
+    return EventSourceResponse(
+        event_generator(),
+        ping=15,
+        headers={
+            "Cache-Control": "no-cache, no-store",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post(

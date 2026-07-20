@@ -12,6 +12,7 @@ from starlette.datastructures import MutableHeaders, UploadFile
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from app.services.ticket_work_order_handoff import TicketWorkOrderHandoffError
 from app.services.unit_of_work import ConcurrencyConflict
 from app.services.vendor_portal_errors import VendorPortalOperationError
 from app.services.work_order_errors import WorkOrderCommandError
@@ -293,6 +294,28 @@ def register_error_handlers(app) -> None:
         request: Request, exc: WorkOrderCommandError
     ):
         """Map work-order domain rejections only at the HTTP boundary."""
+
+        status_code = {
+            "invalid": 422,
+            "forbidden": 403,
+            "not_found": 404,
+            "conflict": 409,
+        }[exc.kind]
+        if _is_html_request(request) and status_code == 422:
+            status_code = 400
+        return await _handle_http_exception(
+            request,
+            status_code,
+            exc.message
+            if _is_html_request(request)
+            else {"code": exc.code, "message": exc.message},
+        )
+
+    @app.exception_handler(TicketWorkOrderHandoffError)
+    async def ticket_work_order_handoff_error_handler(
+        request: Request, exc: TicketWorkOrderHandoffError
+    ):
+        """Map ticket handoff rejections only at the HTTP boundary."""
 
         status_code = {
             "invalid": 422,

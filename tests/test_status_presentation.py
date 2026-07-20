@@ -32,13 +32,13 @@ from app.services.status_presentation import (
     connection_health_status_presentation,
     credit_note_status_presentation,
     device_operational_status_presentation,
-    erp_supplier_invoice_status_presentation,
     field_expense_status_presentation,
     field_material_request_status_presentation,
     invoice_status_presentation,
     outage_status_presentation,
     payment_status_presentation,
     subscription_status_presentation,
+    supplier_invoice_status_presentation,
     system_job_status_presentation,
     ticket_status_presentation,
     vendor_purchase_invoice_status_presentation,
@@ -103,7 +103,7 @@ def test_vendor_purchase_invoice_presentation_covers_authoritative_enum(
 def test_erp_supplier_invoice_presentation_covers_authoritative_statuses(
     status: str,
 ) -> None:
-    presentation = erp_supplier_invoice_status_presentation(status)
+    presentation = supplier_invoice_status_presentation(status)
 
     assert presentation.value == status
     assert presentation.label

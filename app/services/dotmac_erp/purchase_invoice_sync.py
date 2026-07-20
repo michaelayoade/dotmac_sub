@@ -27,13 +27,14 @@ from app.services.integrations.erp_capability import capability_client
 logger = logging.getLogger(__name__)
 
 ENTITY_TYPE = "vendor_purchase_invoice"
+PROVIDER = "dotmac_erp"
 _AMOUNT_TOLERANCE = Decimal("0.02")
 
 
 @dataclass(frozen=True, slots=True)
 class _PaymentObservationContext:
     id: object
-    erp_purchase_invoice_id: str
+    payables_document_reference: str
     currency: str
 
 
@@ -93,7 +94,7 @@ def _validated_payment_observation(
     if source_invoice_id != str(invoice.id):
         raise ValueError("ERP payment observation source invoice does not match")
     erp_invoice_id = str(response.get("purchase_invoice_id") or "")
-    if erp_invoice_id != str(invoice.erp_purchase_invoice_id or ""):
+    if erp_invoice_id != str(invoice.payables_document_reference or ""):
         raise ValueError("ERP payment observation purchase invoice does not match")
     currency = str(response.get("currency") or "").strip().upper()
     if currency != invoice.currency.upper():
@@ -125,16 +126,22 @@ def purchase_invoice_idempotency_key(invoice: VendorPurchaseInvoice) -> str:
 def purchase_invoice_eligibility_error(invoice: VendorPurchaseInvoice) -> str | None:
     if invoice.status != VendorPurchaseInvoiceStatus.approved.value:
         return "Purchase invoice is not approved"
-    if invoice.erp_purchase_invoice_id:
+    if invoice.payables_document_reference:
         return "Purchase invoice is already linked to ERP"
     if invoice.project is None or invoice.project.project is None:
         return "Purchase invoice project context is missing"
     if invoice.vendor is None:
         return "Purchase invoice vendor context is missing"
-    if not (invoice.vendor.erp_id or "").strip():
+    if invoice.vendor.supplier_system not in {None, PROVIDER}:
+        return "Vendor is linked to another payables system"
+    if not (invoice.vendor.supplier_reference or "").strip():
         return "Vendor is not linked to an ERP supplier"
+    if invoice.project.procurement_system not in {None, PROVIDER}:
+        return "Project purchase order belongs to another procurement system"
     erp_po_id = (
-        invoice.erp_purchase_order_id or invoice.project.erp_purchase_order_id or ""
+        invoice.procurement_order_reference
+        or invoice.project.procurement_order_reference
+        or ""
     ).strip()
     if not erp_po_id:
         return "Waiting for the installation project's ERP purchase order"
@@ -152,7 +159,7 @@ def build_purchase_invoice_payload(invoice: VendorPurchaseInvoice) -> dict:
     base_project = project.project
     vendor = invoice.vendor
     erp_po_id = (
-        invoice.erp_purchase_order_id or project.erp_purchase_order_id or ""
+        invoice.procurement_order_reference or project.procurement_order_reference or ""
     ).strip()
     items = []
     for item in invoice.line_items:
@@ -183,7 +190,7 @@ def build_purchase_invoice_payload(invoice: VendorPurchaseInvoice) -> dict:
         ),
         "erp_purchase_order_id": erp_po_id,
         "vendor_name": vendor.name,
-        "vendor_erp_id": vendor.erp_id,
+        "vendor_erp_id": vendor.supplier_reference,
         "vendor_code": (vendor.code or vendor.name)[:160],
         "currency": invoice.currency,
         "tax_rate_percent": str(invoice.tax_rate_percent or 0),
@@ -211,10 +218,11 @@ def enqueue_purchase_invoice(
         return None
     reason = purchase_invoice_eligibility_error(invoice)
     if reason:
-        invoice.erp_sync_error = reason[:500]
+        invoice.payables_submission_error = reason[:500]
         return None
-    invoice.erp_purchase_order_id = invoice.project.erp_purchase_order_id
-    invoice.erp_sync_error = None
+    invoice.procurement_order_reference = invoice.project.procurement_order_reference
+    invoice.payables_system = PROVIDER
+    invoice.payables_submission_error = None
     return outbox.enqueue(
         db,
         flow=FieldErpSyncFlow.purchase_invoice,
@@ -230,14 +238,17 @@ def event_ready(db: Session, event: FieldErpSyncEvent) -> bool:
     invoice = db.get(VendorPurchaseInvoice, event.entity_id)
     if invoice is None:
         return True  # Let normal delivery dead-letter the invalid source.
-    erp_po_id = invoice.erp_purchase_order_id or invoice.project.erp_purchase_order_id
+    erp_po_id = (
+        invoice.procurement_order_reference
+        or invoice.project.procurement_order_reference
+    )
     if not erp_po_id:
-        invoice.erp_sync_error = (
+        invoice.payables_submission_error = (
             "Waiting for the installation project's ERP purchase order"
         )
         return False
     if event.payload.get("erp_purchase_order_id") != erp_po_id:
-        invoice.erp_purchase_order_id = erp_po_id
+        invoice.procurement_order_reference = erp_po_id
         event.payload = build_purchase_invoice_payload(invoice)
     return True
 
@@ -260,20 +271,26 @@ def apply_erp_response(db: Session, event: FieldErpSyncEvent) -> None:
         return
     erp_id = _extract_erp_invoice_id(event.erp_response)
     if not erp_id:
-        invoice.erp_sync_error = "ERP response did not include a purchase invoice ID"
+        invoice.payables_submission_error = (
+            "ERP response did not include a purchase invoice ID"
+        )
         return
-    invoice.erp_purchase_invoice_id = erp_id[:100]
-    invoice.erp_purchase_invoice_creation_status = str(
+    invoice.payables_document_reference = erp_id[:100]
+    invoice.payables_system = PROVIDER
+    invoice.payables_document_status = str(
         (event.erp_response or {}).get("status") or "created"
     )[:40]
-    invoice.erp_sync_error = None
-    invoice.erp_synced_at = datetime.now(UTC)
+    invoice.payables_submission_error = None
+    invoice.payables_submitted_at = datetime.now(UTC)
 
 
 def upload_attachment(db: Session, invoice: VendorPurchaseInvoice) -> bool:
     if invoice.attachment is None or invoice.attachment.is_deleted:
         return False
-    if not invoice.erp_purchase_invoice_id or invoice.erp_attachment_synced_at:
+    if (
+        not invoice.payables_document_reference
+        or invoice.payables_attachment_submitted_at
+    ):
         return False
     stream = file_uploads.stream_file(invoice.attachment)
     data = b"".join(stream.chunks)
@@ -284,12 +301,12 @@ def upload_attachment(db: Session, invoice: VendorPurchaseInvoice) -> bool:
     }
     with capability_client(db) as client:
         client.upload_purchase_invoice_attachment(
-            invoice.erp_purchase_invoice_id,
+            invoice.payables_document_reference,
             payload,
             idempotency_key=f"pinv-attach-{invoice.id}",
         )
-    invoice.erp_attachment_synced_at = datetime.now(UTC)
-    invoice.erp_sync_error = None
+    invoice.payables_attachment_submitted_at = datetime.now(UTC)
+    invoice.payables_submission_error = None
     return True
 
 
@@ -312,7 +329,7 @@ def repair_purchase_invoice_sync(db: Session, *, limit: int = 100) -> dict:
     for invoice in rows:
         processed += 1
         try:
-            if not invoice.erp_purchase_invoice_id:
+            if not invoice.payables_document_reference:
                 if enqueue_purchase_invoice(db, invoice) is not None:
                     enqueued += 1
             elif upload_attachment(db, invoice):
@@ -322,7 +339,7 @@ def repair_purchase_invoice_sync(db: Session, *, limit: int = 100) -> dict:
             db.rollback()
             current = db.get(VendorPurchaseInvoice, invoice.id)
             if current is not None:
-                current.erp_sync_error = str(exc)[:500]
+                current.payables_submission_error = str(exc)[:500]
                 db.commit()
             errors.append(f"{invoice.id}: {exc}")
     return {
@@ -349,9 +366,9 @@ def _record_status_error(
     )
     if (
         current is not None
-        and current.erp_purchase_invoice_id == expected_erp_invoice_id
+        and current.payables_document_reference == expected_erp_invoice_id
     ):
-        current.erp_purchase_invoice_status_error = message[:500]
+        current.payment_observation_error = message[:500]
         db.commit()
     else:
         db.commit()
@@ -375,13 +392,14 @@ def refresh_purchase_invoice_statuses(
     candidates = (
         db.query(
             VendorPurchaseInvoice.id,
-            VendorPurchaseInvoice.erp_purchase_invoice_id,
+            VendorPurchaseInvoice.payables_document_reference,
             VendorPurchaseInvoice.currency,
         )
         .filter(VendorPurchaseInvoice.is_active.is_(True))
-        .filter(VendorPurchaseInvoice.erp_purchase_invoice_id.isnot(None))
+        .filter(VendorPurchaseInvoice.payables_system == PROVIDER)
+        .filter(VendorPurchaseInvoice.payables_document_reference.isnot(None))
         .order_by(
-            VendorPurchaseInvoice.erp_purchase_invoice_status_observed_at.asc().nullsfirst(),
+            VendorPurchaseInvoice.payment_observed_at.asc().nullsfirst(),
             VendorPurchaseInvoice.id.asc(),
         )
         .limit(limit)
@@ -421,7 +439,7 @@ def refresh_purchase_invoice_statuses(
                 observation = _validated_payment_observation(
                     _PaymentObservationContext(
                         id=invoice_id,
-                        erp_purchase_invoice_id=expected_erp_id,
+                        payables_document_reference=expected_erp_id,
                         currency=str(currency),
                     ),
                     response,
@@ -436,39 +454,31 @@ def refresh_purchase_invoice_statuses(
                 )
                 if (
                     current is None
-                    or current.erp_purchase_invoice_id != expected_erp_id
+                    or current.payables_document_reference != expected_erp_id
                     or current.currency != currency
                 ):
                     db.commit()
                     continue
                 before = (
-                    current.erp_purchase_invoice_status,
-                    current.erp_purchase_invoice_total_amount,
-                    current.erp_purchase_invoice_amount_paid,
-                    current.erp_purchase_invoice_balance_due,
-                    _canonical_datetime(
-                        current.erp_purchase_invoice_status_source_updated_at
-                    ),
+                    current.payment_status,
+                    current.payment_total_amount,
+                    current.payment_amount_paid,
+                    current.payment_balance_due,
+                    _canonical_datetime(current.payment_source_updated_at),
                 )
-                current.erp_purchase_invoice_status = observation["status"]
-                current.erp_purchase_invoice_total_amount = observation["total_amount"]
-                current.erp_purchase_invoice_amount_paid = observation["amount_paid"]
-                current.erp_purchase_invoice_balance_due = observation["balance_due"]
-                current.erp_purchase_invoice_status_source_updated_at = observation[
-                    "source_updated_at"
-                ]
-                current.erp_purchase_invoice_status_observed_at = (
-                    observed_at or datetime.now(UTC)
-                )
-                current.erp_purchase_invoice_status_error = None
+                current.payment_status = observation["status"]
+                current.payment_total_amount = observation["total_amount"]
+                current.payment_amount_paid = observation["amount_paid"]
+                current.payment_balance_due = observation["balance_due"]
+                current.payment_source_updated_at = observation["source_updated_at"]
+                current.payment_observed_at = observed_at or datetime.now(UTC)
+                current.payment_observation_error = None
                 after = (
-                    current.erp_purchase_invoice_status,
-                    current.erp_purchase_invoice_total_amount,
-                    current.erp_purchase_invoice_amount_paid,
-                    current.erp_purchase_invoice_balance_due,
-                    _canonical_datetime(
-                        current.erp_purchase_invoice_status_source_updated_at
-                    ),
+                    current.payment_status,
+                    current.payment_total_amount,
+                    current.payment_amount_paid,
+                    current.payment_balance_due,
+                    _canonical_datetime(current.payment_source_updated_at),
                 )
                 observed += 1
                 if before != after:

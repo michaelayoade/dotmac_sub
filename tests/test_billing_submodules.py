@@ -998,10 +998,21 @@ class TestCollectionAccountCRUD:
                 name=f"Primary-{uuid.uuid4().hex[:6]}",
                 account_type=CollectionAccountType.bank,
                 currency="USD",
+                bank_name="Example Bank",
+                account_name="Dotmac Technologies Ltd",
+                account_number="0123 456 789",
+                sort_code="12-34-56",
+                accounting_code="BANK-USD-01",
+                presentment_priority=200,
             ),
         )
         assert account.id is not None
         assert account.currency == "USD"
+        assert account.bank_name == "EXAMPLE BANK"
+        assert account.account_number == "0123456789"
+        assert account.account_last4 == "6789"
+        assert account.accounting_code == "BANK-USD-01"
+        assert account.presentment_priority == 200
 
     def test_get_collection_account(self, db_session):
         account = billing_service.collection_accounts.create(
@@ -1052,6 +1063,94 @@ class TestCollectionAccountCRUD:
         )
         assert updated.notes == "Updated"
 
+    def test_update_account_number_rederives_last4(self, db_session):
+        account = billing_service.collection_accounts.create(
+            db_session,
+            CollectionAccountCreate(
+                name=f"Derive-{uuid.uuid4().hex[:6]}",
+                bank_name="Example Bank",
+                account_name="Dotmac Technologies Ltd",
+                account_number="1111111111",
+            ),
+        )
+
+        updated = billing_service.collection_accounts.update(
+            db_session,
+            str(account.id),
+            CollectionAccountUpdate(
+                account_number="2222 222 345",
+                account_last4="9999",
+            ),
+        )
+
+        assert updated.account_number == "2222222345"
+        assert updated.account_last4 == "2345"
+
+    def test_duplicate_bank_destination_is_rejected_case_insensitively(
+        self, db_session
+    ):
+        number = f"77{uuid.uuid4().int % 100000000:08d}"
+        billing_service.collection_accounts.create(
+            db_session,
+            CollectionAccountCreate(
+                name=f"Unique-A-{uuid.uuid4().hex[:6]}",
+                bank_name="Example Bank",
+                account_name="Dotmac Technologies Ltd",
+                account_number=number,
+                currency="NGN",
+            ),
+        )
+
+        with pytest.raises(HTTPException) as exc:
+            billing_service.collection_accounts.create(
+                db_session,
+                CollectionAccountCreate(
+                    name=f"Unique-B-{uuid.uuid4().hex[:6]}",
+                    bank_name="example bank",
+                    account_name="Dotmac Technologies Ltd",
+                    account_number=number,
+                    currency="NGN",
+                ),
+            )
+
+        assert exc.value.status_code == 409
+
+    def test_presentment_is_complete_currency_bound_and_explicitly_ordered(
+        self, db_session
+    ):
+        suffix = uuid.uuid4().hex[:6]
+        for name, priority, complete, currency in (
+            (f"First-{suffix}", 200, True, "NGN"),
+            (f"Second-{suffix}", 100, True, "NGN"),
+            (f"Incomplete-{suffix}", 500, False, "NGN"),
+            (f"USD-{suffix}", 900, True, "USD"),
+        ):
+            billing_service.collection_accounts.create(
+                db_session,
+                CollectionAccountCreate(
+                    name=name,
+                    bank_name="Example Bank",
+                    account_name="Dotmac Technologies Ltd" if complete else None,
+                    account_number=(
+                        f"{priority:010d}{suffix[:2]}" if complete else None
+                    ),
+                    presentment_priority=priority,
+                    currency=currency,
+                ),
+            )
+
+        accounts = billing_service.collection_accounts.presentment_accounts(
+            db_session, currency="NGN"
+        )
+        names_by_number = [account["account_number"] for account in accounts]
+
+        assert f"{200:010d}{suffix[:2]}" in names_by_number
+        assert f"{100:010d}{suffix[:2]}" in names_by_number
+        first_index = names_by_number.index(f"{200:010d}{suffix[:2]}")
+        second_index = names_by_number.index(f"{100:010d}{suffix[:2]}")
+        assert first_index < second_index
+        assert f"{900:010d}{suffix[:2]}" not in names_by_number
+
     def test_delete_collection_account_soft(self, db_session):
         account = billing_service.collection_accounts.create(
             db_session,
@@ -1077,10 +1176,12 @@ class TestPaymentChannelCRUD:
             PaymentChannelCreate(
                 name=f"Card-{uuid.uuid4().hex[:6]}",
                 channel_type=PaymentChannelType.card,
+                accounting_code="  CARD-CLEARING  ",
             ),
         )
         assert channel.id is not None
         assert channel.channel_type == PaymentChannelType.card
+        assert channel.accounting_code == "CARD-CLEARING"
 
     def test_get_payment_channel(self, db_session):
         channel = billing_service.payment_channels.create(

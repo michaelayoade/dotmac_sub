@@ -598,7 +598,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "network.outage_lifecycle",
         "support.ticket_lifecycle",
         "operations.work_order_status",
-        "integration.vendor_purchase_invoice_erp_projection",
+        "integration.dotmac_erp_payables_adapter",
     )
     assert sot_relationships.dependencies_for("operations.material_dependencies") == (
         "control.settings_spec",
@@ -679,6 +679,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "operations.work_orders",
         "operations.work_order_status",
         "control.domain_settings",
+        "support.ticket_work_order_handoff",
     )
     assert sot_relationships.dependencies_for("network.nas_lifecycle") == (
         "network.identity",

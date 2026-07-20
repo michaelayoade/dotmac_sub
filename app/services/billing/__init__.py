@@ -27,6 +27,7 @@ from app.services.billing._common import (
     _validate_payment_provider,
 )
 from app.services.billing.billing_accounts import BillingAccounts
+from app.services.billing.collection_accounts import CollectionAccounts
 from app.services.billing.consolidated_payments import (
     ConsolidatedCreditAllocations,
     ConsolidatedPaymentRefunds,
@@ -43,7 +44,6 @@ from app.services.billing.invoices import InvoiceLines, Invoices
 from app.services.billing.ledger import LedgerEntries
 from app.services.billing.payments import (
     BankAccounts,
-    CollectionAccounts,
     PaymentAllocationReconciliationExceptions,
     PaymentAllocations,
     PaymentChannelAccounts,

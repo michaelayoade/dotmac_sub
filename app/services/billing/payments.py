@@ -18,7 +18,6 @@ from app.models.audit import AuditActorType
 from app.models.billing import (
     BankAccount,
     BankAccountType,
-    CollectionAccount,
     Invoice,
     InvoiceLine,
     InvoiceStatus,
@@ -59,8 +58,6 @@ from app.schemas.audit import AuditEventCreate
 from app.schemas.billing import (
     BankAccountCreate,
     BankAccountUpdate,
-    CollectionAccountCreate,
-    CollectionAccountUpdate,
     LedgerEntryCreate,
     PaymentAllocationApply,
     PaymentAllocationConfirm,
@@ -5249,72 +5246,12 @@ class PaymentAllocations(ListResponseMixin):
         db.commit()
 
 
-class CollectionAccounts(ListResponseMixin):
-    @staticmethod
-    def create(db: Session, payload: CollectionAccountCreate):
-        account = CollectionAccount(**payload.model_dump())
-        db.add(account)
-        db.commit()
-        db.refresh(account)
-        return account
-
-    @staticmethod
-    def get(db: Session, account_id: str):
-        account = get_by_id(db, CollectionAccount, account_id)
-        if not account:
-            raise HTTPException(status_code=404, detail="Collection account not found")
-        return account
-
-    @staticmethod
-    def list(
-        db: Session,
-        is_active: bool | None,
-        order_by: str,
-        order_dir: str,
-        limit: int,
-        offset: int,
-    ):
-        query = db.query(CollectionAccount)
-        if is_active is None:
-            query = query.filter(CollectionAccount.is_active.is_(True))
-        else:
-            query = query.filter(CollectionAccount.is_active == is_active)
-        query = apply_ordering(
-            query,
-            order_by,
-            order_dir,
-            {
-                "created_at": CollectionAccount.created_at,
-                "name": CollectionAccount.name,
-            },
-        )
-        return apply_pagination(query, limit, offset).all()
-
-    @staticmethod
-    def update(db: Session, account_id: str, payload: CollectionAccountUpdate):
-        account = get_by_id(db, CollectionAccount, account_id)
-        if not account:
-            raise HTTPException(status_code=404, detail="Collection account not found")
-        data = payload.model_dump(exclude_unset=True)
-        for key, value in data.items():
-            setattr(account, key, value)
-        db.commit()
-        db.refresh(account)
-        return account
-
-    @staticmethod
-    def delete(db: Session, account_id: str):
-        account = get_by_id(db, CollectionAccount, account_id)
-        if not account:
-            raise HTTPException(status_code=404, detail="Collection account not found")
-        account.is_active = False
-        db.commit()
-
-
 class PaymentChannels(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: PaymentChannelCreate):
         data = payload.model_dump()
+        if "accounting_code" in data:
+            data["accounting_code"] = str(data["accounting_code"] or "").strip() or None
         if data.get("default_collection_account_id"):
             _validate_collection_account(
                 db, str(data["default_collection_account_id"]), None
@@ -5390,6 +5327,8 @@ class PaymentChannels(ListResponseMixin):
         if not channel:
             raise HTTPException(status_code=404, detail="Payment channel not found")
         data = payload.model_dump(exclude_unset=True)
+        if "accounting_code" in data:
+            data["accounting_code"] = str(data["accounting_code"] or "").strip() or None
         if data.get("default_collection_account_id"):
             _validate_collection_account(
                 db, str(data["default_collection_account_id"]), None

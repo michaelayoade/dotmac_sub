@@ -1,0 +1,87 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, status_badge, action_button, icon_plus %}
+
+{% block title %}Operational SLA Policies - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("amber", "orange") }}
+<div class="relative space-y-6">
+    {% call(content) page_header(
+        "Operational SLA Policies",
+        subtitle="Configure when operational events escalate and which channels receive them",
+        color="amber",
+        breadcrumbs=[
+            {"label": "Notifications", "href": "/admin/notifications/templates"},
+            {"label": "SLA Policies"}
+        ]
+    ) %}
+        {{ action_button("New SLA Policy", href="/admin/notifications/sla-policies/new", icon=icon_plus("h-4 w-4"), variant="primary", color="amber") }}
+    {% endcall %}
+
+    <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200">
+        <p class="font-semibold">This is the operational SLA source of truth.</p>
+        <p class="mt-1">Domain services emit facts such as <code>ticket.unowned</code> or <code>payment_proof.review_requested</code>. Active policies decide the delay, escalation level and delivery channels. No policy means no invented SLA deadline.</p>
+    </div>
+
+    <form method="get" action="/admin/notifications/sla-policies" class="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800 sm:grid-cols-3">
+        <input name="trigger" value="{{ trigger }}" placeholder="Filter by event key"
+               class="rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+        <select name="active" class="rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+            <option value="" {{ 'selected' if not active else '' }}>All states</option>
+            <option value="active" {{ 'selected' if active == 'active' else '' }}>Active</option>
+            <option value="inactive" {{ 'selected' if active == 'inactive' else '' }}>Inactive</option>
+        </select>
+        <button type="submit" class="rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-700">Apply</button>
+    </form>
+
+    <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-900/40">
+                    <tr>
+                        <th class="px-5 py-3 text-left font-semibold text-slate-600 dark:text-slate-300">Policy</th>
+                        <th class="px-5 py-3 text-left font-semibold text-slate-600 dark:text-slate-300">Operational event</th>
+                        <th class="px-5 py-3 text-left font-semibold text-slate-600 dark:text-slate-300">Level / delay</th>
+                        <th class="px-5 py-3 text-left font-semibold text-slate-600 dark:text-slate-300">Channels</th>
+                        <th class="px-5 py-3 text-left font-semibold text-slate-600 dark:text-slate-300">State</th>
+                        <th class="px-5 py-3 text-right font-semibold text-slate-600 dark:text-slate-300">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+                    {% for policy in policies %}
+                    <tr>
+                        <td class="px-5 py-4 font-semibold text-slate-900 dark:text-white">{{ policy.name }}</td>
+                        <td class="px-5 py-4 text-slate-600 dark:text-slate-300">
+                            <p class="font-mono text-xs">{{ policy.trigger or 'legacy wildcard' }}</p>
+                            <p class="mt-1 text-xs">{{ policy.entity_type or 'all operational entities' }}</p>
+                        </td>
+                        <td class="px-5 py-4 text-slate-600 dark:text-slate-300">
+                            <p>Level {{ policy.level }}</p>
+                            <p class="text-xs">{{ ((policy.unresolved_after_seconds or 0) / 60) | int }} minutes</p>
+                        </td>
+                        <td class="px-5 py-4 text-slate-600 dark:text-slate-300">{{ (policy.channels or []) | join(', ') or 'None' }}</td>
+                        <td class="px-5 py-4">
+                            {{ status_badge("Active" if policy.is_active else "Inactive", variant="active" if policy.is_active else "neutral") }}
+                        </td>
+                        <td class="px-5 py-4 text-right">
+                            <a href="/admin/notifications/sla-policies/{{ policy.id }}" class="font-medium text-amber-700 hover:text-amber-900 dark:text-amber-300">Edit</a>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="6" class="px-5 py-12 text-center text-slate-500 dark:text-slate-400">No SLA policies configured.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% if total_pages > 1 %}
+        <div class="flex items-center justify-between border-t border-slate-200 px-5 py-3 text-sm dark:border-slate-700">
+            <span class="text-slate-500">{{ total }} policies</span>
+            <div class="flex gap-3">
+                {% if page > 1 %}<a href="?page={{ page - 1 }}&per_page={{ per_page }}&trigger={{ trigger }}&active={{ active }}" class="text-amber-700">Previous</a>{% endif %}
+                {% if page < total_pages %}<a href="?page={{ page + 1 }}&per_page={{ per_page }}&trigger={{ trigger }}&active={{ active }}" class="text-amber-700">Next</a>{% endif %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

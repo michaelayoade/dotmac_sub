@@ -976,6 +976,35 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="financial.collection_accounts",
+                module="app.services.billing.collection_accounts",
+                owns=(
+                    "collection-account identity and lifecycle",
+                    "Dotmac receiving-account payment details",
+                    "derived receiving-account last-four projection",
+                    "customer bank-destination presentment order",
+                    "external collection-account accounting mapping",
+                ),
+                notes=(
+                    "Portal, reseller, API, invoice, settings, proof, and "
+                    "attribution adapters carry this identity and never maintain "
+                    "parallel bank-detail copies. Legacy settings are only a "
+                    "frozen rollback snapshot during A1 verification."
+                ),
+            ),
+            SOTService(
+                name="financial.payment_routing",
+                module="app.services.payment_routing",
+                owns=(
+                    "health-aware customer gateway eligibility",
+                    "ordered customer gateway presentment policy",
+                ),
+                notes=(
+                    "Payment channels classify recorded settlement and never "
+                    "replace this provider-health-aware presentment owner."
+                ),
+            ),
+            SOTService(
                 name="financial.payments",
                 module="app.services.billing.payments",
                 owns=(
@@ -1081,9 +1110,13 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "payment-proof review lifecycle",
                     "proof-backed payment request",
+                    "payment-proof reviewer notification request lifecycle",
                     "withholding-tax receivable source records",
                 ),
-                depends_on=("financial.payments",),
+                depends_on=(
+                    "financial.payments",
+                    "communications.staff_notifications",
+                ),
             ),
             SOTService(
                 name="financial.tax_accounting",
@@ -4161,10 +4194,32 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="operations.sla_escalation",
+                module="app.services.operational_escalation",
+                owns=(
+                    "operational SLA event policy lifecycle",
+                    "event-scoped escalation timing and channel policy",
+                    "operational escalation event and delivery planning",
+                    "operational escalation acknowledgement and cancellation",
+                ),
+                notes=(
+                    "Operational domains emit named facts. Operators configure "
+                    "entity type, event key, levels, delays and delivery channels "
+                    "in the admin UI; domain services do not embed SLA timings."
+                ),
+            ),
+            SOTService(
                 name="communications.staff_notifications",
                 module="app.services.staff_notifications",
-                owns=("admin/staff notification creation",),
-                depends_on=("communications.notification_service",),
+                owns=(
+                    "admin/staff notification creation",
+                    "permission-targeted staff notification audience resolution",
+                    "staff review inbox materialization",
+                ),
+                depends_on=(
+                    "communications.notification_service",
+                    "operations.sla_escalation",
+                ),
             ),
             SOTService(
                 name="communications.campaigns",
@@ -4267,6 +4322,26 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         domain="runtime_infrastructure",
         services=(
             SOTService(
+                name="runtime.realtime_projection",
+                module="app.services.realtime_platform",
+                owns=(
+                    "versioned real-time event envelope",
+                    "Redis topic naming and best-effort publication",
+                    "shared WebSocket and SSE delivery semantics",
+                    "reconnect and no-replay refresh contract",
+                ),
+                depends_on=("auth.permission_gate",),
+                notes=(
+                    "Real-time events are non-durable projections after an "
+                    "owning domain commits state. Redis pub/sub is at-most-once; "
+                    "clients refetch canonical read models after reconnect or "
+                    "reset. Client-selected topics are authorized by "
+                    "app.services.realtime_subscriptions; workqueue topics are "
+                    "derived by its scope owner. WebSocket and SSE modules are "
+                    "transport adapters only."
+                ),
+            ),
+            SOTService(
                 name="runtime.db_sessions",
                 module="app.services.db_session_adapter",
                 owns=(
@@ -4310,13 +4385,16 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         entrypoints=(
             "app.tasks.*",
             "app.main",
+            "app.websocket.*",
+            "app.api.workqueue",
             "app.services.scheduler_config",
             "app.web.admin.system",
         ),
         rule=(
-            "Infrastructure tasks use shared DB/session/lock and heartbeat "
-            "helpers; polling writes observations while network/device resolvers "
-            "interpret state."
+            "Real-time delivery projects already-committed state and never "
+            "becomes a decision owner or durable event log. Infrastructure "
+            "tasks use shared DB/session/lock and heartbeat helpers; polling "
+            "writes observations while network/device resolvers interpret state."
         ),
     ),
     DomainSOT(
@@ -4397,12 +4475,49 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "operator-visible ticket status subset",
                     "ticket priority and type options",
-                    "ticket routing and SLA policy",
+                    "ticket routing and priority/type SLA target policy",
                 ),
                 depends_on=("support.ticket_lifecycle",),
                 notes=(
                     "Configured status choices are constrained to the lifecycle "
-                    "vocabulary and do not own semantic colors or tones."
+                    "vocabulary and do not own semantic colors or tones. Every "
+                    "ticket SLA target is operator-managed in the ticket settings UI."
+                ),
+            ),
+            SOTService(
+                name="support.ticket_sla_clock",
+                module="app.services.sla_assignment",
+                owns=(
+                    "ticket SLA policy assignment",
+                    "ticket SLA clock lifecycle",
+                    "ticket SLA breach records",
+                    "ticket SLA breach event emission",
+                ),
+                depends_on=(
+                    "support.ticket_lifecycle",
+                    "support.ticket_configuration",
+                    "operations.sla_escalation",
+                ),
+            ),
+            SOTService(
+                name="support.ticket_work_order_handoff",
+                module="app.services.ticket_work_order_handoff",
+                owns=(
+                    "ticket-to-work-order issuance eligibility",
+                    "native ticket-to-work-order provenance",
+                    "field-outcome projection onto the ticket timeline",
+                ),
+                depends_on=(
+                    "support.ticket_lifecycle",
+                    "operations.work_order_commands",
+                    "observability.audit_log",
+                ),
+                notes=(
+                    "An active member of the ticket's assigned team explicitly "
+                    "issues each field scope. A ticket may issue many work orders "
+                    "through WorkOrder.origin_ticket_id. Tags and ticket metadata "
+                    "carry no issuance authority. Field completion records an "
+                    "internal timeline fact and never closes the ticket."
                 ),
             ),
             SOTService(
@@ -4423,7 +4538,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 notes=(
                     "Execution delegates each eligible mutation to "
                     "app.services.support.Tickets.update through Tickets.bulk_update "
-                    "so SLA, automation, assignment, work-order, notification, "
+                    "so SLA, automation, assignment, notification, "
                     "event, audit, and workqueue consequences have one owner."
                 ),
             ),
@@ -4567,6 +4682,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "operations.work_orders",
                     "operations.work_order_status",
                     "control.domain_settings",
+                    "support.ticket_work_order_handoff",
                 ),
                 notes=(
                     "Authenticated field job detail projects the same completion "
@@ -4579,8 +4695,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.field.material_requests",
                 owns=(
                     "service-work-order material need and operational approval",
-                    "ERP material-outcome projection into the service workflow",
-                    "work-order material allocation after ERP-confirmed issue",
+                    "backoffice material-outcome projection into the service workflow",
+                    "work-order material allocation after confirmed external issue",
                 ),
                 depends_on=(
                     "control.settings_spec",
@@ -4589,9 +4705,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "operations.work_order_status",
                 ),
                 notes=(
-                    "ERP owns warehouse, stock, serial, and issue decisions. "
-                    "This owner records the service dependency and applies an "
-                    "idempotent ERP outcome; it never posts inventory. Local "
+                    "The configured backoffice system owns warehouse, stock, "
+                    "serial, and issue decisions. This owner records the service "
+                    "dependency and applies an idempotent observed outcome; it "
+                    "never posts inventory. Backoffice unavailability never "
+                    "reverses a valid Sub approval. Local "
                     "issue/fulfil transitions are compatibility-only and fail "
                     "closed after the material flow is cut over to Sub."
                 ),
@@ -5436,7 +5554,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "vendor purchase-invoice read and action projections",
                     "vendor purchase-invoice mutation coordination",
                     "purchase-invoice submission eligibility and financial preview",
-                    "vendor-facing ERP payment observation projection",
+                    "vendor-facing payables-status observation projection",
                 ),
                 depends_on=(
                     "auth.permission_gate",
@@ -9993,22 +10111,20 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
-                name="integration.vendor_purchase_invoice_erp_projection",
-                module="app.services.dotmac_erp.purchase_invoice_sync",
+                name="integration.backoffice_adapter",
+                module="app.services.backoffice",
                 owns=(
-                    "vendor purchase-invoice ERP origination projection",
-                    "vendor purchase-invoice ERP attachment projection",
-                    "timestamped ERP accounts-payable status observation",
+                    "Sub-local backoffice integration port",
+                    "provider-neutral capability requests",
+                    "provider-neutral delivery requests from Sub owners",
                 ),
-                depends_on=(
-                    "control.settings_spec",
-                    "events.dispatcher",
-                    "operations.vendor_purchase_invoice_records",
-                ),
+                depends_on=("integration.installations", "integration.runtime"),
                 notes=(
-                    "ERP owns AP settlement. This reconciler is the only writer "
-                    "of Sub's refreshed ERP status and amount observation fields; "
-                    "the creation response remains origination evidence only."
+                    "This is an anti-corruption boundary inside Sub, not an "
+                    "enterprise-wide capability or identifier registry. The default "
+                    "enabled binding selects a replaceable connector, which has no "
+                    "authority over Sub customer, subscriber, service, workflow, or "
+                    "operational state."
                 ),
                 contract=ServiceContract(
                     concerns=(
@@ -10257,21 +10373,39 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
-                name="integration.erp_material_support",
-                module="app.services.dotmac_erp.material_sync",
+                name="integration.dotmac_erp_payables_adapter",
+                module="app.services.dotmac_erp.purchase_invoice_sync",
                 owns=(
-                    "Sub-to-ERP material-support payload mapping",
-                    "stable material-support idempotency key",
-                    "ERP material-outcome observation and reconciliation",
+                    "Dotmac ERP purchase-invoice payload mapping",
+                    "Dotmac ERP attachment delivery",
+                    "timestamped Dotmac ERP payables-status observation",
                 ),
                 depends_on=(
-                    "control.settings_spec",
+                    "integration.backoffice_adapter",
+                    "operations.vendor_purchase_invoices",
+                ),
+                notes=(
+                    "Provider-specific transport and observation only. The configured "
+                    "payables system owns settlement; this adapter has no Sub domain "
+                    "authority and can be retired when another provider replaces it."
+                ),
+            ),
+            SOTService(
+                name="integration.dotmac_erp_material_support_adapter",
+                module="app.services.dotmac_erp.material_sync",
+                owns=(
+                    "Sub-to-Dotmac-ERP material-support payload mapping",
+                    "provider-specific stable idempotency key",
+                    "Dotmac ERP material-outcome observation and reconciliation",
+                ),
+                depends_on=(
+                    "integration.backoffice_adapter",
                     "operations.material_dependencies",
                 ),
                 notes=(
-                    "Transport and observation only. ERP decides the backoffice "
-                    "outcome; operations.material_dependencies alone projects "
-                    "that outcome into Sub service-workflow state."
+                    "Provider-specific transport and observation only. Dotmac ERP "
+                    "decides its backoffice outcome; operations.material_dependencies "
+                    "alone projects the observation into Sub service-workflow state."
                 ),
                 contract=ServiceContract(
                     concerns=(
@@ -10431,7 +10565,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         ),
         rule=(
             "Integration routes and webhooks validate and enqueue through typed "
-            "capabilities; connectors never become business-state writers."
+            "capabilities; connectors never become business-state writers. Sub "
+            "domain owners depend only on the Sub-local backoffice port and typed "
+            "capability contracts, never on a provider database or foreign key."
         ),
     ),
     DomainSOT(
@@ -11137,7 +11273,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "RADIUS access-session observation labels, semantic tones, and icon keys",
                     "support-ticket status labels, semantic tones, and icon keys",
                     "field work-order status labels, semantic tones, and icon keys",
-                    "ERP supplier-invoice status labels, semantic tones, and icon keys",
+                    "supplier-invoice status labels, semantic tones, and icon keys",
                     "status presentation fallback semantics",
                 ),
                 depends_on=(
@@ -11148,7 +11284,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "network.outage_lifecycle",
                     "support.ticket_lifecycle",
                     "operations.work_order_status",
-                    "integration.vendor_purchase_invoice_erp_projection",
+                    "integration.dotmac_erp_payables_adapter",
                 ),
                 notes=(
                     "Domain services own lifecycle or derived operational state. "

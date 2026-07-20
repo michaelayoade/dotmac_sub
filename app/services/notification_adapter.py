@@ -37,7 +37,6 @@ Usage:
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 from dataclasses import dataclass, field
@@ -516,9 +515,9 @@ class WebSocketProvider:
 
     def is_available(self) -> bool:
         try:
-            from app.services.session_store import get_session_redis
+            from app.services.redis_client import get_redis
 
-            client = get_session_redis()
+            client = get_redis()
             if client is None:
                 return False
             client.ping()
@@ -528,16 +527,16 @@ class WebSocketProvider:
 
     def send(self, request: NotificationRequest) -> NotificationResult:
         try:
-            from app.services.session_store import get_session_redis
-
-            client = get_session_redis()
-            if client is None:
-                raise RuntimeError("Redis is not configured")
+            from app.services.realtime_platform import (
+                STAFF_AUDIENCE_TOPIC,
+                principal_topic,
+                publish_topic_event,
+            )
 
             # Build WebSocket event payload
             payload = {
                 "type": "notification",
-                "event": request.category.value,
+                "category": request.category.value,
                 "title": request.title or "Notification",
                 "message": request.message,
                 "priority": request.priority.value,
@@ -547,14 +546,16 @@ class WebSocketProvider:
 
             # Determine channel - user-specific or broadcast
             if request.recipient == "*" or request.recipient == "broadcast":
-                # Broadcast to all connected clients
-                ws_channel = "inbox_ws:broadcast"
+                topic = STAFF_AUDIENCE_TOPIC
             else:
-                # Send to specific user
-                ws_channel = f"inbox_ws:{request.recipient}"
+                topic = principal_topic(request.recipient)
 
-            # Publish to Redis
-            client.publish(ws_channel, json.dumps(payload))
+            if not publish_topic_event(
+                topic,
+                event_type="notification.received",
+                payload=payload,
+            ):
+                raise RuntimeError("Real-time broker is unavailable")
 
             return NotificationResult(
                 success=True,

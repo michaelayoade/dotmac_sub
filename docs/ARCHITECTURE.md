@@ -31,6 +31,7 @@ This document provides a comprehensive overview of the DotMac Sub system archite
 | Templates | Jinja2 |
 | Frontend | HTMX + Alpine.js + Tailwind CSS v4 |
 | Task Queue | Celery + Redis |
+| Real-time projection | Redis pub/sub + WebSocket/SSE (`docs/REALTIME_PLATFORM.md`) |
 | Migrations | Alembic (119 migration files) |
 | Testing | pytest, Playwright (E2E) |
 

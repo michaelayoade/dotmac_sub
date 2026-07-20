@@ -470,8 +470,11 @@ detailed security and delivery boundary is
 3. `financial.tax_configuration` owns configurable tax-rate records and their
    active lifecycle. Inclusive, exclusive, or exempt treatment belongs to the
    invoice/credit-note line, not to a second tax-rate vocabulary.
-4. `financial.payment_proofs` owns proof review and creation of the source WHT
-   receivable when a reseller pays net cash against a gross obligation.
+4. `financial.payment_proofs` owns proof review, creation of the source WHT
+   receivable when a reseller pays net cash against a gross obligation, and the
+   decision that a submitted proof requires confirmation. It requests one
+   reviewer work item from `communications.staff_notifications`; it does not
+   select staff recipients or construct inbox/delivery rows.
 5. `financial.tax_accounting` owns tax-report meaning, periods, currency
    separation, issued-output-tax and credit-note adjustment projection, net
    output-tax liability, WHT-receivable projection and lifecycle, its immutable
@@ -654,6 +657,19 @@ detailed security and delivery boundary is
    records idempotency and actor audit evidence, and structurally links the
    command result to its exact ledger transaction(s). Financial settlement may
    request access reconciliation, but it never promises restoration itself.
+23. `financial.collection_accounts`
+   (`app.services.billing.collection_accounts`) owns Dotmac receiving-account
+   identity, full customer-presented bank details, derived last-four digits,
+   active lifecycle, external accounting mapping, and explicit presentment
+   order. Portal, reseller, API, invoice, settings UI, payment-proof, and
+   attribution adapters carry its identity; they do not maintain bank-detail
+   copies. `financial.payment_routing` separately owns health-aware gateway
+   ordering. `payment_channels` and `payment_channel_accounts` classify where
+   recorded money arrived and never become the gateway-presentment policy.
+   Legacy direct-transfer and company-info bank settings are a temporary frozen
+   rollback snapshot during A1 verification, not a runtime fallback, and are
+   deleted at the contract gate. `accounting_code` fields are external mappings,
+   not a Sub chart of accounts or ledger.
 
 Account adjustments and add-on purchase debits use one evidenced contract:
 
@@ -1857,8 +1873,29 @@ in forms, or rotate key material directly.
    lifetime, and consequences. The worker must not persist or log rendered
    bearer content or exception text that may contain it.
 6. Notification service owns notification rows and delivery lifecycle.
-7. Staff notification service owns internal/admin notification creation.
-8. `communications.customer_read_state` owns customer notification read/unread
+7. `operations.sla_escalation` owns operational SLA policy lifecycle,
+   event-scoped escalation planning, and escalation acknowledgement/cancellation.
+   Every operational domain emits named facts into this owner. Operators configure
+   entity type, event key, escalation level, unresolved delay, channels, active
+   state, and applicable severity/impact conditions at
+   `/admin/notifications/sla-policies`. Policies cover tickets, work orders,
+   outages, projects and project tasks, inbox conversations, provisioning failures, network
+   devices/sites, subscribers, payment incidents, and payment proofs. A domain
+   service may not embed a fallback SLA duration or channel list. When no active
+   policy matches, the owner invents neither a deadline nor an escalation.
+8. Staff notification service owns internal/admin notification creation,
+   permission-targeted staff audience resolution, and materialization of review
+   requests into the assigned admin notification inbox. For payment proofs it
+   resolves active system users who effectively hold `billing:proof:verify`
+   (including active admin and wildcard grants) and creates one clickable unread
+   inbox item per reviewer. It projects those reviewers as the event audience for
+   `operations.sla_escalation`; only the active UI policy decides whether and when
+   email, WhatsApp, SMS, push, web, Nextcloud Talk, or webhook escalation occurs.
+   The financial owner closes the shared request and cancels pending escalation
+   when it verifies or rejects the proof. Opening an inbox item is scoped to its
+   assigned system user; the target action performs its own domain permission
+   check again.
+9. `communications.customer_read_state` owns customer notification read/unread
    state and unread counts across the web portal and mobile app. Subscriber
    metadata is its bounded persistence mechanism; `/me/notifications` projects
    that state, and `/me/notifications/read` is the self-scoped mutation
@@ -2443,21 +2480,33 @@ session writer.
 
 Dependency order:
 
-1. `runtime.db_sessions`: owns background DB session lifecycle and advisory lock
+1. `runtime.realtime_projection` (`app.services.realtime_platform`) owns the
+   versioned real-time envelope, Redis topic naming, best-effort publication,
+   and the shared WebSocket/SSE reconnect contract. It projects only
+   already-committed domain state. Redis pub/sub is at-most-once and has no
+   replay; clients refetch canonical read models on connect, reconnect, or a
+   `realtime.reset` event. `app.services.realtime_subscriptions` authorizes
+   client-selected conversation and operation topics, while the workqueue
+   scope owner derives workqueue topics server-side. WebSocket and SSE handlers
+   are transport adapters, never domain decision owners. The complete contract
+   is `docs/REALTIME_PLATFORM.md`.
+2. `runtime.db_sessions`: owns background DB session lifecycle and advisory lock
    safety.
-2. `runtime.task_idempotency`: owns duplicate suppression and stale task
+3. `runtime.task_idempotency`: owns duplicate suppression and stale task
    execution rows.
-3. `runtime.task_heartbeat`: owns task success/skip heartbeat signals.
-4. `runtime.infrastructure_polling`: owns shared native reachability observations
+4. `runtime.task_heartbeat`: owns task success/skip heartbeat signals.
+5. `runtime.infrastructure_polling`: owns shared native reachability observations
    and the generic network-device pollability predicate. Domain-specific
    collectors such as Huawei ONT runtime status depend on these polling
    mechanics while owning their own observation and eligibility contracts.
-5. `runtime.infrastructure_health`: owns dependency health checks for
+6. `runtime.infrastructure_health`: owns dependency health checks for
    Postgres, Redis, VictoriaMetrics, Celery, and related infrastructure.
 
-Rule: tasks should use shared DB-session, lock, idempotency, and heartbeat
-helpers. Infrastructure pollers write observations only; network/device SOT
-services interpret state for customer impact, alerts, and SLA.
+Rule: real-time transports project state only; durable cross-team consumption
+uses the event store/outbox. Tasks should use shared DB-session, lock,
+idempotency, and heartbeat helpers. Infrastructure pollers write observations
+only; network/device SOT services interpret state for customer impact, alerts,
+and SLA.
 
 ## Provisioning Operations
 
@@ -2470,7 +2519,8 @@ Dependency order:
 3. `operations.work_order_status`: declares persisted work-order values and the
    canonical open, assignable, and terminal sets.
 4. `operations.work_order_commands`: owns native work-order creation and header
-   commands, the native `work_order.project_id` binding, the default-enabled
+   commands, the native `work_order.project_id` and internal-only
+   `work_order.origin_ticket_id` bindings, the default-enabled
    `requires_as_built_evidence` policy, assignment decisions/projection, and
    assignment-queue transitions.
    Dispatch API/web and field-manager handlers are authorization/transport
@@ -2499,13 +2549,17 @@ Dependency order:
    cross-domain worklists may show job context but cannot write work-order or
    assignment state themselves.
 6. `operations.field_completion`: owns field-job completion eligibility, evidence
-   requirements, and completion transitions.
+   requirements, and completion transitions. For work issued from a support
+   ticket it requests an atomic outcome projection from
+   `support.ticket_work_order_handoff`; that projection records evidence but
+   never resolves or closes the ticket.
 7. `operations.material_dependencies`: owns the material need and approval that
-   can block a Sub service work order, then idempotently projects ERP's
-   authoritative issue/refusal outcome back into that workflow. It never posts
-   stock or selects ERP inventory. After the per-flow cutover, the old local
-   issue/fulfil actions fail closed. The cross-repository contract is
-   `dotmac_erp/docs/dotmac_sub_material_support_contract.md`.
+   can block a Sub service work order, then idempotently projects the configured
+   backoffice system's authoritative issue/refusal outcome back into that
+   workflow. It never posts stock or selects backoffice inventory. Backoffice
+   unavailability never reverses a valid Sub approval. After the per-flow
+   cutover, the old local issue/fulfil actions fail closed. The integration
+   boundary is `docs/BACKOFFICE_INTEGRATION_BOUNDARY.md`.
 8. `operations.project_lifecycle`: owns native project field/status mutations,
    project SLA synchronization, and lifecycle event/notification requests.
 9. `operations.vendor_project_lifecycle` (`app.services.vendor_portal_operations`)
@@ -2553,16 +2607,18 @@ Dependency order:
    decide verification eligibility.
 10. `operations.vendor_purchase_invoices` owns vendor purchase-invoice state,
    financial totals, submit eligibility, and the financial impact snapshot.
-   ERP owns accounts-payable settlement. Its dedicated
+   The configured payables system owns accounts-payable settlement. The current
+   Dotmac ERP adapter's dedicated
    `GET /api/v1/sync/sub/purchase-invoices/{source_invoice_id}` contract returns
    the organization-scoped supplier-invoice status and reconciled amounts.
-   `integration.vendor_purchase_invoice_erp_projection` is the only writer for
-   Sub's timestamped local observation. It validates source identity, ERP
-   identity, currency, and amount reconciliation, rechecks the link under lock,
-   and retains the last good observation on failure. The vendor read owner
+   `integration.dotmac_erp_payables_adapter` is the only current writer for
+   Sub's timestamped local observation for that provider. It validates source
+   identity, provider identity, currency, and amount reconciliation, rechecks
+   the link under lock, and retains the last good observation on failure. The
+   vendor read owner
    renders payment only from that observed state through `StateValue`; the ERP
-   creation response is preserved separately in
-   `erp_purchase_invoice_creation_status`, never proves paid or unpaid state,
+   creation response is preserved separately as the payables-document creation
+   status, never proves paid or unpaid state,
    and cannot overwrite the refreshed status during replay. Stale or unavailable
    observations remain visibly distinct.
 11. `operations.vendor_submission_confirmation` (implemented by
@@ -2606,13 +2662,42 @@ reinterpret its presentation.
 
 ## Support Control Plane
 
-1. `support.tickets` owns ticket lifecycle, assignment, comments, SLA events,
-   and satisfaction state.
+1. `support.tickets` owns ticket lifecycle, assignment, comments, and
+   satisfaction state.
+2. `support.ticket_configuration` owns the operator-managed priority and ticket-
+   type SLA targets shown at `/admin/system/ticket-settings`. Ticket types have
+   no fixed code default: zero or no override falls through to the configured
+   priority target.
+3. `support.ticket_sla_clock` owns ticket SLA clocks and breach facts. A breach
+   emits `ticket.sla_breached` to `operations.sla_escalation`; only its active UI
+   policy selects the escalation delay, level, audience channels, and conditions.
+4. `support.ticket_work_order_handoff` owns the explicit boundary from a
+   triaged incident to field execution. A ticket must have a subscriber and an
+   active assigned service team; only an active member of that team, holding
+   both ticket-update and dispatch-write permission at the adapter, may issue a
+   work order. Each idempotency key identifies one issuance, and a ticket may
+   issue zero or many work orders. `work_order.origin_ticket_id` is the only
+   native link; `Ticket.metadata.work_order_id` and native uses of
+   `WorkOrder.crm_ticket_id` are retired. `field_visit` remains a descriptive
+   tag and has no decision authority.
+
+   Work-order creation and execution remain owned by
+   `operations.work_order_commands` and `operations.field_completion`. A
+   completed or unable-to-complete field event atomically adds an internal
+   system fact to the originating ticket timeline. Support must verify that
+   evidence and decide the incident lifecycle; work-order completion never
+   silently resolves or closes the ticket.
 
 Rule: support routes and jobs translate requests and delegate ticket decisions
 to `app.services.support`. Events and notifications are consequences requested
-by that owner, not alternate ticket writers.
+by that owner, not alternate ticket writers. Ticket/work-order adapters delegate
+handoff decisions to `app.services.ticket_work_order_handoff`; tags, templates,
+automation rules, and integration transports cannot issue work orders.
 
+Rule: support routes and jobs translate requests and delegate ticket decisions
+to `app.services.support`. Events and notifications are consequences requested
+by that owner, not alternate ticket writers. SLA durations and escalation
+channels must not be embedded in support code.
 ## Customer Data Completeness
 
 1. `customer.data_completeness` (`app.services.subscriber_data_completeness`)
@@ -2928,12 +3013,16 @@ live owners are:
    transport selection.
 7. `integration.sync`: owns sync orchestration and checkpoints. CRM observation
    jobs execute only through their enabled `dotmac.crm` capability binding.
-8. `integration.erp_material_support`: maps an approved Sub material need to
-   the neutral ERP contract, assigns the stable idempotency key, and observes or
-   reconciles ERP outcomes through `dotmac.erp`. It remains a transport and
-   observation owner; `operations.material_dependencies` alone projects the
-   outcome into Sub service-workflow state.
-9. `events.store` remains the domain-event fact owner,
+8. `integration.backoffice_adapter`: is Sub's local anti-corruption port for
+   inventory, workforce, expense, procurement, and payables collaboration. It
+   resolves the default enabled versioned capability binding; domain owners do
+   not select or import `dotmac.erp`, Zoho, or another provider connector.
+9. `integration.erp_material_support`: maps an approved Sub material need to
+   the versioned backoffice contract, assigns the stable idempotency key, and
+   observes or reconciles provider outcomes. The current connector is
+   `dotmac.erp`; replacing it changes the binding and connector, not Sub's
+   service-workflow owner or provider-neutral fields.
+10. `events.store` remains the domain-event fact owner,
    `scheduler.registry` remains cadence owner, and `secrets.reference_store`
    remains secret resolution owner.
 
@@ -2952,7 +3041,7 @@ Authority cutover is complete for the platform-managed first-party paths:
 | CRM | Direct client construction and CRM-specific webhook delivery rows | `dotmac.crm` typed capabilities and `integration.inbox` | Complete; Sub remains authoritative for operational and support consequences |
 | Outbound webhooks and hooks | `events.webhook_deliveries`, endpoint tables, and `integration.hooks` | `integration.delivery` consuming `events.store` | Complete; duplicate models, routes, tasks, and CLI hooks are removed |
 | WhatsApp messaging | Settings-backed provider transport | Direct Meta typed messaging capabilities plus `integration.inbox` | Complete; no Twilio or fallback transport |
-| ERP | Direct ERP transport clients | `dotmac.erp` typed capabilities | Complete; ERP remains observation/transport only |
+| Backoffice/ERP | Direct provider transport clients | Default enabled typed backoffice capability binding (currently `dotmac.erp`) | Complete; the connector remains observation/transport only and is replaceable without changing Sub domain owners |
 | Payments | Direct Paystack/Flutterwave services and payment-specific webhook dead letters | Typed payment capabilities plus `integration.inbox` | Complete; billing owners alone decide financial state |
 
 Migration `380_integration_platform_cutover` removes the retired tables,
@@ -2967,6 +3056,14 @@ official-timeline state. Domain owners produce outbound projections and decide
 inbound consequences. The effective-state projection derives health from run,
 delivery, backlog, authentication, and circuit facts and reads OpenBao metadata
 without reading secret values; installed or enabled never implies healthy.
+
+Sub remains complete when a backoffice provider is unavailable. A valid Sub
+decision commits independently and records failed collaboration for retry or
+reconciliation. Sub never queries a provider database or stores a cross-system
+foreign key. Each system owns its local identifiers, including tax identifiers;
+contracts carry source-scoped correlation references only where collaboration
+requires them. The integration platform is local to Sub, not an enterprise-wide
+control plane or shared identifier registry.
 
 ## VPN / Remote Access
 

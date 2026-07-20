@@ -34,7 +34,7 @@ def test_live_chat_js_handles_reconnect_subscription_and_pending_identity() -> N
     assert "loadHistory(false).then(subscribeConversation)" in js
     assert "data-live-chat-ready" in js
     assert 'type: "subscribe"' in js
-    assert "conversation_id: state.conversationId" in js
+    assert "topic: `conversation:${state.conversationId}`" in js
     assert "updateConversationId(m.conversation_id)" in js
     assert "client_message_id: clientId" in js
     assert "sending: false" in js

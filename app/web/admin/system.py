@@ -4519,6 +4519,9 @@ def ticket_settings_page(request: Request, db: Session = Depends(get_db)):
             db
         ),
         "sla_policy": support_ticket_settings_service.sla_policy(db),
+        "ticket_type_sla_policy": support_ticket_settings_service.ticket_type_sla_policy(
+            db
+        ),
         "staff_options": staff_options,
         "assignment_rules": support_ticket_settings_service.list_assignment_rules(db),
         "assignment_strategies": ["round_robin", "least_loaded"],
@@ -4570,6 +4573,8 @@ def ticket_settings_update(
     sla_response_hours = form.getlist("sla_response_hours")
     sla_resolution_hours = form.getlist("sla_resolution_hours")
     sla_aging_hours = form.getlist("sla_aging_hours")
+    sla_ticket_types = form.getlist("sla_ticket_types")
+    sla_ticket_type_resolution_hours = form.getlist("sla_ticket_type_resolution_hours")
     errors: list[str] = []
     try:
         support_ticket_settings_service.update_options(
@@ -4594,6 +4599,8 @@ def ticket_settings_update(
             sla_response_hours=sla_response_hours,
             sla_resolution_hours=sla_resolution_hours,
             sla_aging_hours=sla_aging_hours,
+            sla_ticket_types=sla_ticket_types,
+            sla_ticket_type_resolution_hours=sla_ticket_type_resolution_hours,
         )
         return RedirectResponse(
             url="/admin/system/ticket-settings?saved=1", status_code=303
@@ -4636,6 +4643,9 @@ def ticket_settings_update(
                     db
                 ),
                 "sla_policy": support_ticket_settings_service.sla_policy(db),
+                "ticket_type_sla_policy": support_ticket_settings_service.ticket_type_sla_policy(
+                    db
+                ),
                 "staff_options": support_service.list_assignment_people(db),
                 "assignment_rules": support_ticket_settings_service.list_assignment_rules(
                     db
@@ -4986,15 +4996,13 @@ def config_direct_bank_transfer_save(request: Request, db: Session = Depends(get
     before_context = web_system_config_service.get_direct_bank_transfer_context(db)
     before = {
         **dict(before_context["direct_bank_transfer"]),
-        "direct_bank_transfer_accounts": before_context[
-            "direct_bank_transfer_accounts"
-        ],
+        "collection_accounts": before_context["collection_accounts"],
     }
     web_system_config_service.save_direct_bank_transfer_config(db, form)
     after_context = web_system_config_service.get_direct_bank_transfer_context(db)
     after = {
         **dict(after_context["direct_bank_transfer"]),
-        "direct_bank_transfer_accounts": after_context["direct_bank_transfer_accounts"],
+        "collection_accounts": after_context["collection_accounts"],
     }
     changes = _diff_audit_snapshots(before, after)
     if changes:

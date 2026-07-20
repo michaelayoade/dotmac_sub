@@ -14,7 +14,10 @@ from app.services import web_notifications as web_notifications_service
 from app.services import (
     web_notifications_alert_policies as web_alert_policies_service,
 )
-from app.services.auth_dependencies import require_permission
+from app.services import (
+    web_notifications_sla_policies as web_sla_policies_service,
+)
+from app.services.auth_dependencies import require_permission, require_user_auth
 from app.timezone import APP_TIMEZONE_NAME
 
 templates = Jinja2Templates(directory="templates")
@@ -44,6 +47,30 @@ def _htmx_error_response(
 def notifications_menu(request: Request, db: Session = Depends(get_db)):
     """Notifications dropdown menu."""
     return web_admin_notifications_service.notifications_menu(request, db)
+
+
+@router.get("/inbox/{notification_id}/open")
+def notification_inbox_open(
+    notification_id: UUID,
+    db: Session = Depends(get_db),
+    auth: dict = Depends(require_user_auth),
+):
+    """Mark one assigned staff inbox item read and follow its target."""
+    system_user_id = (
+        str(auth.get("principal_id"))
+        if auth.get("principal_type") == "system_user"
+        else ""
+    )
+    from app.services import admin_alerts as admin_alerts_service
+
+    notification = admin_alerts_service.mark_notification_read(
+        db,
+        str(notification_id),
+        system_user_id=system_user_id,
+    )
+    if notification is None:
+        return RedirectResponse(url="/admin", status_code=303)
+    return RedirectResponse(url=notification.target_url, status_code=303)
 
 
 @router.get(
@@ -771,6 +798,236 @@ def alert_policy_step_delete(
         url=f"/admin/notifications/alert-policies/{policy_id}",
         status_code=303,
     )
+
+
+# ---------------------------------------------------------------------------
+# Operational SLA Policies
+# ---------------------------------------------------------------------------
+
+
+def _sla_policy_page_context(
+    request: Request,
+    db: Session,
+    state: dict[str, object],
+    **extra,
+) -> dict[str, object]:
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    return {
+        "request": request,
+        **state,
+        **extra,
+        "active_page": "sla-policies",
+        "active_menu": "system",
+        "current_user": get_current_user(request),
+        "sidebar_stats": get_sidebar_stats(db),
+    }
+
+
+@router.get(
+    "/sla-policies",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("notification:read"))],
+)
+def sla_policies_list(
+    request: Request,
+    trigger: str | None = None,
+    active: str | None = None,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(25, ge=10, le=100),
+    db: Session = Depends(get_db),
+):
+    """List UI-owned SLA event escalation policies."""
+    state = web_sla_policies_service.list_data(
+        db,
+        trigger=trigger,
+        active=active,
+        page=page,
+        per_page=per_page,
+    )
+    return templates.TemplateResponse(
+        "admin/notifications/sla_policies.html",
+        _sla_policy_page_context(request, db, state),
+    )
+
+
+@router.get(
+    "/sla-policies/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("notification:write"))],
+)
+def sla_policy_new(request: Request, db: Session = Depends(get_db)):
+    state = web_sla_policies_service.form_data(db)
+    assert state is not None
+    return templates.TemplateResponse(
+        "admin/notifications/sla_policy_form.html",
+        _sla_policy_page_context(
+            request,
+            db,
+            state,
+            action_url="/admin/notifications/sla-policies",
+            form_title="New SLA Policy",
+            submit_label="Create Policy",
+        ),
+    )
+
+
+@router.post(
+    "/sla-policies",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("notification:write"))],
+)
+def sla_policy_create(
+    request: Request,
+    name: str = Form(...),
+    entity_type: str = Form(...),
+    trigger: str = Form(...),
+    level: int = Form(...),
+    delay_minutes: int = Form(...),
+    channels: list[str] = Form(default=[]),
+    min_severity: str | None = Form(None),
+    min_affected_customers: int | None = Form(None),
+    notes: str | None = Form(None),
+    is_active: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    try:
+        policy = web_sla_policies_service.create_policy(
+            db,
+            name=name,
+            entity_type=entity_type,
+            trigger=trigger,
+            level=level,
+            delay_minutes=delay_minutes,
+            channels=channels,
+            min_severity=min_severity,
+            min_affected_customers=min_affected_customers,
+            notes=notes,
+            is_active=is_active is not None,
+        )
+        return RedirectResponse(
+            url=f"/admin/notifications/sla-policies/{policy.id}",
+            status_code=303,
+        )
+    except ValueError as exc:
+        db.rollback()
+        state = web_sla_policies_service.form_data(db)
+        assert state is not None
+        return templates.TemplateResponse(
+            "admin/notifications/sla_policy_form.html",
+            _sla_policy_page_context(
+                request,
+                db,
+                state,
+                action_url="/admin/notifications/sla-policies",
+                form_title="New SLA Policy",
+                submit_label="Create Policy",
+                error=str(exc),
+            ),
+            status_code=400,
+        )
+
+
+@router.get(
+    "/sla-policies/{policy_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("notification:read"))],
+)
+def sla_policy_detail(
+    request: Request,
+    policy_id: UUID,
+    db: Session = Depends(get_db),
+):
+    state = web_sla_policies_service.form_data(db, policy_id=policy_id)
+    if state is None:
+        return templates.TemplateResponse(
+            "admin/errors/404.html",
+            {"request": request, "message": "SLA policy not found"},
+            status_code=404,
+        )
+    return templates.TemplateResponse(
+        "admin/notifications/sla_policy_form.html",
+        _sla_policy_page_context(
+            request,
+            db,
+            state,
+            action_url=f"/admin/notifications/sla-policies/{policy_id}",
+            form_title="Edit SLA Policy",
+            submit_label="Update Policy",
+        ),
+    )
+
+
+@router.post(
+    "/sla-policies/{policy_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("notification:write"))],
+)
+def sla_policy_update(
+    request: Request,
+    policy_id: UUID,
+    name: str = Form(...),
+    entity_type: str = Form(...),
+    trigger: str = Form(...),
+    level: int = Form(...),
+    delay_minutes: int = Form(...),
+    channels: list[str] = Form(default=[]),
+    min_severity: str | None = Form(None),
+    min_affected_customers: int | None = Form(None),
+    notes: str | None = Form(None),
+    is_active: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    try:
+        web_sla_policies_service.update_policy(
+            db,
+            policy_id=policy_id,
+            name=name,
+            entity_type=entity_type,
+            trigger=trigger,
+            level=level,
+            delay_minutes=delay_minutes,
+            channels=channels,
+            min_severity=min_severity,
+            min_affected_customers=min_affected_customers,
+            notes=notes,
+            is_active=is_active is not None,
+        )
+        return RedirectResponse(
+            url=f"/admin/notifications/sla-policies/{policy_id}",
+            status_code=303,
+        )
+    except ValueError as exc:
+        db.rollback()
+        state = web_sla_policies_service.form_data(db, policy_id=policy_id)
+        if state is None:
+            return templates.TemplateResponse(
+                "admin/errors/404.html",
+                {"request": request, "message": "SLA policy not found"},
+                status_code=404,
+            )
+        return templates.TemplateResponse(
+            "admin/notifications/sla_policy_form.html",
+            _sla_policy_page_context(
+                request,
+                db,
+                state,
+                action_url=f"/admin/notifications/sla-policies/{policy_id}",
+                form_title="Edit SLA Policy",
+                submit_label="Update Policy",
+                error=str(exc),
+            ),
+            status_code=400,
+        )
+
+
+@router.post(
+    "/sla-policies/{policy_id}/delete",
+    dependencies=[Depends(require_permission("notification:write"))],
+)
+def sla_policy_delete(policy_id: UUID, db: Session = Depends(get_db)):
+    web_sla_policies_service.deactivate_policy(db, policy_id=policy_id)
+    return RedirectResponse(url="/admin/notifications/sla-policies", status_code=303)
 
 
 # ---------------------------------------------------------------------------

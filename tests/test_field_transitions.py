@@ -18,6 +18,7 @@ from app.models.field_worklog import FieldWorkLog
 from app.models.stored_file import StoredFile
 from app.models.subscriber import Subscriber, UserType
 from app.models.subscription_engine import SettingValueType
+from app.models.support import Ticket, TicketComment
 from app.models.system_user import SystemUser
 from app.models.work_order import WorkOrder
 from app.services.auth_dependencies import require_user_auth
@@ -212,11 +213,21 @@ def test_completion_requires_photo_and_signature_fallback(db_session, fake_uploa
     user = _user(db_session)
     _profile(db_session, user)
     subscriber = _subscriber(db_session)
+    ticket = Ticket(
+        title="Loss of signal incident",
+        subscriber_id=subscriber.id,
+        customer_account_id=subscriber.id,
+        status="open",
+        priority="high",
+    )
+    db_session.add(ticket)
+    db_session.flush()
     _work_order(
         db_session,
         subscriber,
         crm_work_order_id="wo-transition-complete",
         status="in_progress",
+        origin_ticket_id=ticket.id,
     )
     db_session.commit()
 
@@ -240,12 +251,13 @@ def test_completion_requires_photo_and_signature_fallback(db_session, fake_uploa
 
     _attach_photo(db_session, user, "wo-transition-complete")
     completed_at = datetime.now(UTC)
+    completion_event_id = uuid4()
     completed = field_transitions.apply(
         db_session,
         _auth(user),
         "wo-transition-complete",
         event="complete",
-        client_event_id=uuid4(),
+        client_event_id=completion_event_id,
         occurred_at=completed_at,
         payload={"signature_unavailable_reason": "Customer unavailable"},
     )
@@ -258,6 +270,27 @@ def test_completion_requires_photo_and_signature_fallback(db_session, fake_uploa
         == "complete"
     )
     assert completed["event"]["new_status"] == "completed"
+    projection = db_session.query(TicketComment).filter_by(ticket_id=ticket.id).one()
+    assert projection.is_internal is True
+    assert projection.metadata_["source"] == "work_order_field_outcome"
+    assert projection.metadata_["work_order_id"] == "wo-transition-complete"
+    assert projection.metadata_["field_event_id"] == str(completed["event"]["id"])
+    assert projection.metadata_["outcome"] == "complete"
+    assert "Support verification is required" in projection.body
+    db_session.refresh(ticket)
+    assert ticket.status == "open"
+
+    replayed = field_transitions.apply(
+        db_session,
+        _auth(user),
+        "wo-transition-complete",
+        event="complete",
+        client_event_id=completion_event_id,
+        occurred_at=completed_at,
+        payload={"signature_unavailable_reason": "Customer unavailable"},
+    )
+    assert replayed["replayed"] is True
+    assert db_session.query(TicketComment).filter_by(ticket_id=ticket.id).count() == 1
 
 
 def test_disabled_completion_evidence_policy_allows_completion_without_evidence(

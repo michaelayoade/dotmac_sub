@@ -16,7 +16,6 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.models.domain_settings import SettingDomain
 from app.models.notification import NotificationChannel, NotificationStatus
-from app.models.provisioning import ServiceOrder
 from app.models.sales import Lead
 from app.models.subscriber import Subscriber, SubscriberContact
 from app.models.support import (
@@ -500,6 +499,52 @@ class TicketComments:
         return comment
 
     @staticmethod
+    def stage_system_projection(
+        db: Session,
+        *,
+        ticket: Ticket,
+        body: str,
+        source: str,
+        metadata: dict,
+        actor_id: str | None = None,
+    ) -> TicketComment:
+        """Stage an authoritative external fact on the official ticket timeline.
+
+        Unlike an operator-authored comment, a completion fact remains valid if
+        the ticket was closed or merged while field work was underway. The caller
+        owns the surrounding transaction, so the field event and projection
+        commit or roll back together.
+        """
+
+        comment = TicketComment(
+            ticket_id=ticket.id,
+            author_type=TicketCommentAuthorType.system.value,
+            body=body.strip(),
+            is_internal=True,
+            attachments=[],
+            metadata_={"source": source, **metadata},
+        )
+        db.add(comment)
+        db.flush()
+        from app.models.audit import AuditActorType
+        from app.services.audit_adapter import stage_audit_event
+
+        stage_audit_event(
+            db,
+            action="system_projection_add",
+            entity_type="support_ticket",
+            entity_id=str(ticket.id),
+            actor_type=AuditActorType.user if actor_id else AuditActorType.system,
+            actor_id=actor_id,
+            metadata={
+                "comment_id": str(comment.id),
+                "source": source,
+                **metadata,
+            },
+        )
+        return comment
+
+    @staticmethod
     def update(
         db: Session,
         *,
@@ -889,83 +934,6 @@ class Tickets:
         return Tickets._apply_region_auto_assignment(ticket, db)
 
     @staticmethod
-    def _ensure_field_visit_work_order(db: Session, ticket: Ticket) -> None:
-        """Create the native dispatch work order backing a ``field_visit`` ticket.
-
-        A field-visit ticket creates a real work-order header through
-        ``dispatch_service.work_order_headers.create`` so the job is visible
-        to dispatch, the assignment queue, and field technicians.
-        Historically this created a bare provisioning ``ServiceOrder`` stub
-        that no field surface could see; pre-existing tickets that already
-        carry a ServiceOrder-backed ``metadata.work_order_id`` are honored for
-        dedupe and left as-is.
-        """
-        tags = {
-            str(tag).strip().lower() for tag in (ticket.tags or []) if str(tag).strip()
-        }
-        if "field_visit" not in tags:
-            return
-        if not ticket.subscriber_id:
-            return
-
-        from app.models.work_order import WorkOrder
-
-        metadata = dict(ticket.metadata_ or {})
-        existing_order_id = str(metadata.get("work_order_id") or "").strip()
-        if existing_order_id:
-            existing = (
-                db.query(WorkOrder)
-                .filter(WorkOrder.public_id == existing_order_id)
-                .first()
-            )
-            if existing is not None:
-                return
-            legacy_uuid = _coerce_uuid(existing_order_id)
-            if legacy_uuid is not None and db.get(ServiceOrder, legacy_uuid):
-                # Retained ServiceOrder-stub linkage from the retired workflow;
-                # do not create a duplicate native work order.
-                return
-
-        # Belt-and-braces dedupe on the ticket linkage itself (e.g. the ticket
-        # metadata was edited away but the work order exists).
-        linked = (
-            db.query(WorkOrder)
-            .filter(WorkOrder.crm_ticket_id == str(ticket.id))
-            .first()
-        )
-        if linked is not None:
-            metadata["work_order_id"] = linked.public_id
-            ticket.metadata_ = metadata
-            return
-
-        from app.schemas.dispatch import WorkOrderHeaderCreate
-        from app.services import dispatch as dispatch_service
-
-        ticket_title = (ticket.title or "").strip()
-        title = f"Field visit — {ticket_title}"[:200] if ticket_title else "Field visit"
-        order = dispatch_service.work_order_headers.create(
-            db,
-            WorkOrderHeaderCreate(
-                title=title,
-                subscriber_id=ticket.subscriber_id,
-                description=(
-                    f"Auto-created from support ticket {ticket.number or ticket.id}"
-                ),
-                work_type="repair",
-                priority=(ticket.priority or "normal"),
-                crm_ticket_id=str(ticket.id),
-                tags=["field_visit"],
-                metadata_={
-                    "created_from": "support_ticket",
-                    "ticket_id": str(ticket.id),
-                    "ticket_number": ticket.number,
-                },
-            ),
-        )
-        metadata["work_order_id"] = order.public_id
-        ticket.metadata_ = metadata
-
-    @staticmethod
     def _queue_notifications_for_assignments(
         db: Session, ticket: Ticket, actor_id: str | None
     ) -> None:
@@ -1211,11 +1179,6 @@ class Tickets:
         from app.services import support_automation
 
         support_automation.apply_rules(db, ticket, AutomationTrigger.ticket_created)
-
-        # After automation: an add_tag rule stamping "field_visit" births the
-        # native work order too. There is no separate work-order creation
-        # automation action; the tag is the declared trigger.
-        Tickets._ensure_field_visit_work_order(db, ticket)
 
         Tickets._queue_notifications_for_assignments(db, ticket, actor_id)
 
@@ -1802,7 +1765,6 @@ class Tickets:
             sla_assignment.update_sla_clocks_for_status_change(
                 db, ticket, before["status"], ticket.status
             )
-        Tickets._ensure_field_visit_work_order(db, ticket)
         Tickets._queue_notifications_for_assignments(db, ticket, actor_id)
 
         after = {

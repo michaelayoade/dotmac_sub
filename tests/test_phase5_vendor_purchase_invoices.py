@@ -54,7 +54,9 @@ def _context(*, actor: str, scope: str, reason: str) -> CommandContext:
 def _chain(db):
     project = Project(name="Phase 5 fiber install")
     vendor = Vendor(
-        name="Native Fiber Vendor", code=f"NFV-{uuid4().hex[:6]}", erp_id=str(uuid4())
+        name="Native Fiber Vendor",
+        code=f"NFV-{uuid4().hex[:6]}",
+        supplier_reference=str(uuid4()),
     )
     reviewer = SystemUser(
         first_name="Finance",
@@ -67,7 +69,7 @@ def _chain(db):
     install = InstallationProject(
         project_id=project.id,
         assigned_vendor_id=vendor.id,
-        erp_purchase_order_id="PO-2026-0042",
+        procurement_order_reference="PO-2026-0042",
     )
     db.add(install)
     db.flush()
@@ -166,7 +168,7 @@ def test_vendor_invoice_lifecycle_and_neutral_erp_contract(db_session):
         ),
     )
     assert approved["status"] == "approved"
-    assert approved["erp_purchase_order_id"] == "PO-2026-0042"
+    assert approved["procurement_order_reference"] == "PO-2026-0042"
 
     # Flow ownership defaults to CRM until an explicit cutover. Approval is
     # preserved locally and the repair sweep will enqueue it after ownership.

@@ -24,7 +24,7 @@ from app.services.customer_identity_normalization import (
     normalize_channel_address,
 )
 from app.services.integrations.connectors import whatsapp_runtime
-from app.websocket.events import EventType
+from app.services.realtime_platform import EventType
 
 _INACTIVE_SUBSCRIBER_STATUSES = {
     SubscriberStatus.disabled.value,

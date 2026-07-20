@@ -32,7 +32,6 @@ env 1 app/services/network/ont_features.py
 env 1 app/services/network/reconcile/alerts.py
 env 3 app/services/notification.py
 env 1 app/services/notification_adapter.py
-env 1 app/services/operation_notifications.py
 env 2 app/services/poller_health.py
 env 3 app/services/push.py
 env 1 app/services/radius_population.py
@@ -58,7 +57,6 @@ env 1 app/services/workqueue/scoring_config.py
 env 3 app/syslog/listener.py
 env 3 app/tasks/bandwidth.py
 env 2 app/tasks/tr069.py
-env 1 app/websocket/manager.py
 setting 9 app/main.py
 setting 4 app/services/auth.py
 setting 4 app/services/auth_flow.py

@@ -72,21 +72,18 @@ def test_legacy_branch_merge_is_ancestor_of_current_head() -> None:
         "migration_375_work_order_evidence_policy",
     )
     assert work_order_evidence.down_revision == as_built_review.revision
-    integration_cutover = _load_migration(
-        "380_integration_platform_cutover.py",
-        "migration_380_integration_platform_cutover",
-    )
     current = _load_migration(
-        "381_rbac_catalog_normalized_identity.py",
-        "migration_381_rbac_catalog_normalized_identity",
+        "383_replaceable_backoffice_boundary.py",
+        "migration_383_replaceable_backoffice_boundary",
     )
-    assert current.down_revision == integration_cutover.revision
+    assert current.down_revision == "382_ticket_work_order_handoff"
 
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
-    # Keep the graph single-headed while allowing later migrations to extend
-    # beyond the current RBAC cutover without rewriting this bridge test.
+    # Single-headed with 375 in the head's ancestry; later revisions (e.g. the
+    # integration platform chain) may extend past it — asserting the exact
+    # head breaks on every subsequent migration.
     heads = script.get_heads()
     assert len(heads) == 1
     ancestry = {
