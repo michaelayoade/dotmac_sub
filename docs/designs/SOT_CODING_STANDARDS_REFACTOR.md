@@ -1,6 +1,6 @@
 # SOT coding standards refactor
 
-Status: active, not merge-ready
+Status: implemented
 
 Change classification: major
 
