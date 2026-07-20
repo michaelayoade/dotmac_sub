@@ -302,7 +302,7 @@ class _RatingDialogState extends State<_RatingDialog> {
           onPressed: _rating == 0
               ? null
               : () =>
-                    Navigator.of(context).pop((_rating, _comment.text.trim())),
+                  Navigator.of(context).pop((_rating, _comment.text.trim())),
           child: const Text('Submit'),
         ),
       ],

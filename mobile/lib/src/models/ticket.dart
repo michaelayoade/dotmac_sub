@@ -72,7 +72,7 @@ class Ticket {
     this.resolutionActions = const [],
     StatusPresentation? statusPresentation,
   }) : statusPresentation =
-           statusPresentation ?? StatusPresentation.neutralFallback(status);
+            statusPresentation ?? StatusPresentation.neutralFallback(status);
 
   final String id;
   final String title;
@@ -99,45 +99,48 @@ class Ticket {
 
   /// The server decides whether CSAT is currently available.
   bool get canRate => resolutionActions.any(
-    (action) => action.key == 'rate_support' && action.allowed,
-  );
+        (action) => action.key == 'rate_support' && action.allowed,
+      );
 
   bool get canConfirmResolution => resolutionActions.any(
-    (action) => action.key == 'confirm_resolution' && action.allowed,
-  );
+        (action) => action.key == 'confirm_resolution' && action.allowed,
+      );
 
   bool get canDisputeResolution => resolutionActions.any(
-    (action) => action.key == 'dispute_resolution' && action.allowed,
-  );
+        (action) => action.key == 'dispute_resolution' && action.allowed,
+      );
 
   factory Ticket.fromJson(Map<String, dynamic> json) => Ticket(
-    id: json['id'].toString(),
-    title: json['title'] as String? ?? '(no title)',
-    status: json['status'] as String? ?? 'open',
-    statusPresentation: json['status_presentation'] is Map
-        ? StatusPresentation.fromJson(
-            (json['status_presentation'] as Map).cast<String, dynamic>(),
-          )
-        : null,
-    priority: json['priority'] as String? ?? 'normal',
-    number: json['number'] as String?,
-    description: json['description'] as String?,
-    ticketType: json['ticket_type'] as String?,
-    channel: json['channel'] as String?,
-    tags: (json['tags'] as List? ?? const []).map((e) => e.toString()).toList(),
-    attachments: _toAttachments(json['attachments']),
-    createdAt: _toDate(json['created_at']),
-    updatedAt: _toDate(json['updated_at']),
-    resolvedAt: _toDate(json['resolved_at']),
-    closedAt: _toDate(json['closed_at']),
-    csatRating: (json['csat_rating'] as num?)?.toInt(),
-    resolutionActions: ((json['resolution_actions'] as List?) ?? const [])
-        .whereType<Map>()
-        .map(
-          (item) => TicketSelfCareAction.fromJson(item.cast<String, dynamic>()),
-        )
-        .toList(),
-  );
+        id: json['id'].toString(),
+        title: json['title'] as String? ?? '(no title)',
+        status: json['status'] as String? ?? 'open',
+        statusPresentation: json['status_presentation'] is Map
+            ? StatusPresentation.fromJson(
+                (json['status_presentation'] as Map).cast<String, dynamic>(),
+              )
+            : null,
+        priority: json['priority'] as String? ?? 'normal',
+        number: json['number'] as String?,
+        description: json['description'] as String?,
+        ticketType: json['ticket_type'] as String?,
+        channel: json['channel'] as String?,
+        tags: (json['tags'] as List? ?? const [])
+            .map((e) => e.toString())
+            .toList(),
+        attachments: _toAttachments(json['attachments']),
+        createdAt: _toDate(json['created_at']),
+        updatedAt: _toDate(json['updated_at']),
+        resolvedAt: _toDate(json['resolved_at']),
+        closedAt: _toDate(json['closed_at']),
+        csatRating: (json['csat_rating'] as num?)?.toInt(),
+        resolutionActions: ((json['resolution_actions'] as List?) ?? const [])
+            .whereType<Map>()
+            .map(
+              (item) =>
+                  TicketSelfCareAction.fromJson(item.cast<String, dynamic>()),
+            )
+            .toList(),
+      );
 }
 
 class TicketComment {
@@ -158,13 +161,13 @@ class TicketComment {
   final DateTime? createdAt;
 
   factory TicketComment.fromJson(Map<String, dynamic> json) => TicketComment(
-    id: json['id'].toString(),
-    ticketId: json['ticket_id'].toString(),
-    body: json['body'] as String? ?? '',
-    isInternal: json['is_internal'] as bool? ?? false,
-    attachments: _toAttachments(json['attachments']),
-    createdAt: _toDate(json['created_at']),
-  );
+        id: json['id'].toString(),
+        ticketId: json['ticket_id'].toString(),
+        body: json['body'] as String? ?? '',
+        isInternal: json['is_internal'] as bool? ?? false,
+        attachments: _toAttachments(json['attachments']),
+        createdAt: _toDate(json['created_at']),
+      );
 }
 
 DateTime? _toDate(dynamic v) {

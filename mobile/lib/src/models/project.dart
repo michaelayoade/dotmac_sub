@@ -66,23 +66,24 @@ class ProjectStage {
   final List<ProjectWorkOrderLink> workOrders;
 
   factory ProjectStage.fromJson(Map<String, dynamic> json) => ProjectStage(
-    key: json['key'] as String?,
-    taskId: json['task_id']?.toString(),
-    title: (json['title'] ?? '').toString(),
-    status: (json['status'] ?? 'pending').toString(),
-    completedAt: _asDate(json['completed_at']),
-    ticket: json['ticket'] is Map
-        ? ProjectTicketLink.fromJson(
-            (json['ticket'] as Map).cast<String, dynamic>(),
-          )
-        : null,
-    workOrders: ((json['work_orders'] as List?) ?? const [])
-        .whereType<Map>()
-        .map(
-          (item) => ProjectWorkOrderLink.fromJson(item.cast<String, dynamic>()),
-        )
-        .toList(),
-  );
+        key: json['key'] as String?,
+        taskId: json['task_id']?.toString(),
+        title: (json['title'] ?? '').toString(),
+        status: (json['status'] ?? 'pending').toString(),
+        completedAt: _asDate(json['completed_at']),
+        ticket: json['ticket'] is Map
+            ? ProjectTicketLink.fromJson(
+                (json['ticket'] as Map).cast<String, dynamic>(),
+              )
+            : null,
+        workOrders: ((json['work_orders'] as List?) ?? const [])
+            .whereType<Map>()
+            .map(
+              (item) =>
+                  ProjectWorkOrderLink.fromJson(item.cast<String, dynamic>()),
+            )
+            .toList(),
+      );
 }
 
 class ProjectItem {
@@ -100,7 +101,7 @@ class ProjectItem {
     this.createdAt,
     StatusPresentation? statusPresentation,
   }) : statusPresentation =
-           statusPresentation ?? StatusPresentation.neutralFallback(status);
+            statusPresentation ?? StatusPresentation.neutralFallback(status);
 
   final String id;
   final String name;
@@ -116,26 +117,26 @@ class ProjectItem {
   final DateTime? createdAt;
 
   factory ProjectItem.fromJson(Map<String, dynamic> json) => ProjectItem(
-    id: json['id'].toString(),
-    name: (json['name'] ?? '').toString(),
-    status: (json['status'] ?? 'open').toString(),
-    statusPresentation: json['status_presentation'] is Map
-        ? StatusPresentation.fromJson(
-            (json['status_presentation'] as Map).cast<String, dynamic>(),
-          )
-        : null,
-    projectType: json['project_type'] as String?,
-    progressPct: _asInt(json['progress_pct']),
-    experienceState: (json['experience_state'] ?? 'planned').toString(),
-    currentStage: json['current_stage'] as String?,
-    stages: ((json['stages'] as List?) ?? const [])
-        .whereType<Map<String, dynamic>>()
-        .map(ProjectStage.fromJson)
-        .toList(),
-    customerAddress: json['customer_address'] as String?,
-    region: json['region'] as String?,
-    createdAt: _asDate(json['created_at']),
-  );
+        id: json['id'].toString(),
+        name: (json['name'] ?? '').toString(),
+        status: (json['status'] ?? 'open').toString(),
+        statusPresentation: json['status_presentation'] is Map
+            ? StatusPresentation.fromJson(
+                (json['status_presentation'] as Map).cast<String, dynamic>(),
+              )
+            : null,
+        projectType: json['project_type'] as String?,
+        progressPct: _asInt(json['progress_pct']),
+        experienceState: (json['experience_state'] ?? 'planned').toString(),
+        currentStage: json['current_stage'] as String?,
+        stages: ((json['stages'] as List?) ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .map(ProjectStage.fromJson)
+            .toList(),
+        customerAddress: json['customer_address'] as String?,
+        region: json['region'] as String?,
+        createdAt: _asDate(json['created_at']),
+      );
 }
 
 class ProjectsSummary {

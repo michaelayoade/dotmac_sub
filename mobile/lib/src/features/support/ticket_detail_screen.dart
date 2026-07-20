@@ -39,9 +39,7 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen> {
     if (body.isEmpty && _attachments.isEmpty) return;
     setState(() => _sending = true);
     try {
-      await ref
-          .read(supportRepositoryProvider)
-          .addComment(
+      await ref.read(supportRepositoryProvider).addComment(
             widget.ticketId,
             body,
             attachmentPaths: _attachments.isEmpty
@@ -288,9 +286,8 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen> {
                     ),
                     error: (e, _) => Text('Could not load replies: $e'),
                     data: (page) {
-                      final visible = page.items
-                          .where((c) => !c.isInternal)
-                          .toList();
+                      final visible =
+                          page.items.where((c) => !c.isInternal).toList();
                       if (visible.isEmpty) {
                         return const Padding(
                           padding: EdgeInsets.symmetric(vertical: 16),
@@ -609,7 +606,7 @@ class _SupportRatingDialogState extends State<_SupportRatingDialog> {
           onPressed: _rating == 0
               ? null
               : () =>
-                    Navigator.of(context).pop((_rating, _comment.text.trim())),
+                  Navigator.of(context).pop((_rating, _comment.text.trim())),
           child: const Text('Submit'),
         ),
       ],

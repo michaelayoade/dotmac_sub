@@ -40,7 +40,7 @@ class WorkOrderItem {
     this.actions = const [],
     StatusPresentation? statusPresentation,
   }) : statusPresentation =
-           statusPresentation ?? StatusPresentation.neutralFallback(status);
+            statusPresentation ?? StatusPresentation.neutralFallback(status);
 
   final String id;
   final String publicId;
@@ -66,49 +66,50 @@ class WorkOrderItem {
   final List<WorkOrderSelfCareAction> actions;
 
   bool get canTrackTechnician => actions.any(
-    (action) => action.key == 'track_technician' && action.allowed,
-  );
+        (action) => action.key == 'track_technician' && action.allowed,
+      );
 
   bool get canRateTechnician => actions.any(
-    (action) => action.key == 'rate_technician' && action.allowed,
-  );
+        (action) => action.key == 'rate_technician' && action.allowed,
+      );
 
   factory WorkOrderItem.fromJson(Map<String, dynamic> json) => WorkOrderItem(
-    id: json['id'].toString(),
-    publicId: json['public_id'].toString(),
-    title: (json['title'] ?? '').toString(),
-    status: (json['status'] ?? 'scheduled').toString(),
-    statusPresentation: json['status_presentation'] is Map
-        ? StatusPresentation.fromJson(
-            (json['status_presentation'] as Map).cast<String, dynamic>(),
-          )
-        : null,
-    workType: json['work_type'] as String?,
-    priority: json['priority'] as String?,
-    technicianName: json['technician_name'] as String?,
-    technicianPhone: json['technician_phone'] as String?,
-    address: json['address'] as String?,
-    scheduledStart: _asDate(json['scheduled_start']),
-    scheduledEnd: _asDate(json['scheduled_end']),
-    estimatedArrivalAt: _asDate(json['estimated_arrival_at']),
-    estimatedDurationMinutes: _asIntOrNull(json['estimated_duration_minutes']),
-    completedAt: _asDate(json['completed_at']),
-    projectId: json['project_id']?.toString(),
-    projectName: json['project_name'] as String?,
-    projectTaskId: json['project_task_id']?.toString(),
-    projectTaskTitle: json['project_task_title'] as String?,
-    originTicketId: json['origin_ticket_id']?.toString(),
-    originTicketNumber: json['origin_ticket'] is Map
-        ? (json['origin_ticket'] as Map)['number'] as String?
-        : null,
-    actions: ((json['actions'] as List?) ?? const [])
-        .whereType<Map>()
-        .map(
-          (item) =>
-              WorkOrderSelfCareAction.fromJson(item.cast<String, dynamic>()),
-        )
-        .toList(),
-  );
+        id: json['id'].toString(),
+        publicId: json['public_id'].toString(),
+        title: (json['title'] ?? '').toString(),
+        status: (json['status'] ?? 'scheduled').toString(),
+        statusPresentation: json['status_presentation'] is Map
+            ? StatusPresentation.fromJson(
+                (json['status_presentation'] as Map).cast<String, dynamic>(),
+              )
+            : null,
+        workType: json['work_type'] as String?,
+        priority: json['priority'] as String?,
+        technicianName: json['technician_name'] as String?,
+        technicianPhone: json['technician_phone'] as String?,
+        address: json['address'] as String?,
+        scheduledStart: _asDate(json['scheduled_start']),
+        scheduledEnd: _asDate(json['scheduled_end']),
+        estimatedArrivalAt: _asDate(json['estimated_arrival_at']),
+        estimatedDurationMinutes:
+            _asIntOrNull(json['estimated_duration_minutes']),
+        completedAt: _asDate(json['completed_at']),
+        projectId: json['project_id']?.toString(),
+        projectName: json['project_name'] as String?,
+        projectTaskId: json['project_task_id']?.toString(),
+        projectTaskTitle: json['project_task_title'] as String?,
+        originTicketId: json['origin_ticket_id']?.toString(),
+        originTicketNumber: json['origin_ticket'] is Map
+            ? (json['origin_ticket'] as Map)['number'] as String?
+            : null,
+        actions: ((json['actions'] as List?) ?? const [])
+            .whereType<Map>()
+            .map(
+              (item) => WorkOrderSelfCareAction.fromJson(
+                  item.cast<String, dynamic>()),
+            )
+            .toList(),
+      );
 }
 
 class WorkOrdersSummary {

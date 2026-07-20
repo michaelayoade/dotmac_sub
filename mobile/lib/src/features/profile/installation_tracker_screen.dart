@@ -138,10 +138,10 @@ class _StageRow extends StatelessWidget {
     final IconData icon = done
         ? Icons.check_circle
         : (blocked
-              ? Icons.block_outlined
-              : (inProgress
-                    ? Icons.radio_button_checked
-                    : Icons.circle_outlined));
+            ? Icons.block_outlined
+            : (inProgress
+                ? Icons.radio_button_checked
+                : Icons.circle_outlined));
     final Color color = done
         ? Colors.green
         : (blocked ? Colors.orange : (inProgress ? Colors.blue : Colors.grey));
@@ -159,9 +159,8 @@ class _StageRow extends StatelessWidget {
                 Text(
                   stage.title,
                   style: theme.textTheme.bodyMedium?.copyWith(
-                    color: stage.status == 'pending'
-                        ? theme.disabledColor
-                        : null,
+                    color:
+                        stage.status == 'pending' ? theme.disabledColor : null,
                     fontWeight: inProgress || blocked ? FontWeight.w600 : null,
                   ),
                 ),
