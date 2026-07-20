@@ -299,14 +299,212 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "account-bound idempotent status confirmation",
                 ),
                 depends_on=(
+                    "customer.accounts",
                     "customer.identity_scope",
                     "access.subscription_lifecycle",
+                    "events.dispatcher",
                 ),
                 notes=(
                     "The reseller adapter renders a distinct confirmation step "
                     "bound to this preview and an account-scoped idempotency key. "
                     "Subscription and account lifecycle mutation remains owned by "
                     "access.subscription_lifecycle."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="reseller-scoped account-action impact preview",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical reseller account scope",
+                                "canonical account and subscription lifecycle state",
+                                "reseller account-status action protocol",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="lock-aware account-action eligibility",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical account and subscription lifecycle state",
+                                "canonical enforcement lock and login-conflict state",
+                                "reseller account-status action protocol",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="account-action stale-preview fingerprint",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical reseller account scope",
+                                "canonical account and subscription lifecycle state",
+                                "canonical enforcement lock and login-conflict state",
+                                "reseller account-status action protocol",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="account-bound idempotent status confirmation",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "authenticated reseller status command context",
+                                "canonical reseller account scope",
+                                "canonical account and subscription lifecycle state",
+                                "canonical enforcement lock and login-conflict state",
+                                "signed status preview evidence",
+                                "account-bound status idempotency evidence",
+                                "reseller account-status action protocol",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="authenticated reseller status command context",
+                            owner="customer.identity_scope",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "authenticated reseller principal, reseller/account scope, "
+                                "reason, command, correlation, and idempotency identifiers"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical reseller account scope",
+                            owner="customer.identity_scope",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "active non-reseller Subscriber selected only through its "
+                                "canonical reseller_id ownership boundary"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical account and subscription lifecycle state",
+                            owner="access.subscription_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked Subscriber lifecycle override plus all locked "
+                                "Subscription identities and statuses for the account"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical enforcement lock and login-conflict state",
+                            owner="access.subscription_lifecycle",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "active EnforcementLock evidence and duplicate-login "
+                                "reactivation policy for each subscription"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="signed status preview evidence",
+                            owner="customer.reseller_status_actions",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "SHA-256 fingerprint over account, override, subscription, "
+                                "lock, eligibility, and affected-identity evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="account-bound status idempotency evidence",
+                            owner="customer.reseller_status_actions",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked IdempotencyKey scope/key/account binding and exact "
+                                "persisted confirmation result reference"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="reseller account-status action protocol",
+                            owner="customer.reseller_status_actions",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed deactivate, restore, or disable action and the "
+                                "owner-defined eligibility and consequence vocabulary"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        boundary=(
+                            "A typed confirmation starts on a clean adapter session, locks "
+                            "the account, subscriptions, and idempotency evidence, rechecks "
+                            "the preview, stages lifecycle participants and their events, "
+                            "records the replay result, then commits once."
+                        ),
+                        locking=(
+                            "The reseller-owned Subscriber, every account Subscription, and "
+                            "any existing scope/key IdempotencyKey are selected FOR UPDATE "
+                            "before the confirmed consequence is staged."
+                        ),
+                        idempotency=(
+                            "Scope, key, and account identity bind a confirmation to one "
+                            "action; a completed replay returns the exact stored status and "
+                            "changed/skipped counts without reapplying lifecycle changes."
+                        ),
+                        retries=(
+                            "Stable completed confirmations replay. A concurrent unique-key "
+                            "conflict rolls back the complete command and is retryable after "
+                            "the winning confirmation records its result."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "customer.reseller_status_actions.invalid_preview_fingerprint",
+                            "customer.reseller_status_actions.stale_preview",
+                            "customer.reseller_status_actions.action_not_allowed",
+                            "customer.reseller_status_actions.invalid_idempotency_key",
+                            "customer.reseller_status_actions.idempotency_account_mismatch",
+                            "customer.reseller_status_actions.confirmation_in_progress",
+                            "customer.reseller_status_actions.idempotency_conflict",
+                            "customer.reseller_status_actions.command_scope_mismatch",
+                            "customer.reseller_status_actions.invalid_command_context",
+                            "customer.reseller_status_actions.command_contract_violation",
+                            "customer.reseller_status_actions.nested_owner_command",
+                            "customer.reseller_status_actions.active_caller_transaction",
+                            "customer.reseller_status_actions.nested_transaction_completion",
+                        ),
+                        mapping_owner="app.services.web_reseller_routes",
+                        retryable_codes=(
+                            "customer.reseller_status_actions.idempotency_conflict",
+                            "customer.reseller_status_actions.confirmation_in_progress",
+                        ),
+                        fail_closed_on=(
+                            "foreign reseller/account ownership",
+                            "missing, malformed, or stale preview evidence",
+                            "active enforcement locks or duplicate-login conflicts",
+                            "idempotency key reuse across accounts",
+                            "active caller transaction or manifest mismatch",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "reseller portal string actions with optional helper commits, "
+                            "helper rollback/requery, and a public non-idempotent bypass"
+                        ),
+                        new_owner="customer.reseller_status_actions",
+                        verification=(
+                            "Typed preview/confirmation, reseller scope, stale fingerprint, "
+                            "lock eligibility, replay, cross-account key, rollback, clean-"
+                            "adapter, lifecycle consequence, and architecture tests."
+                        ),
+                        cutover_gate=(
+                            "The reseller web adapter constructs typed requests and commands "
+                            "on a clean session; every status mutation enters the one "
+                            "idempotent coordinator boundary."
+                        ),
+                        fallback_retirement=(
+                            "The public direct-update helper, optional commit flag, helper "
+                            "commit/rollback, free-form action mutation, and cross-account "
+                            "idempotency fallback are removed."
+                        ),
+                    ),
+                    steward="customer operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/adr/0002-owner-command-transaction-boundary.md",
+                    ),
+                    test_refs=(
+                        "tests/test_reseller_gaps.py",
+                        "tests/test_reseller_portal_services.py",
+                        "tests/architecture/test_reseller_status_action_boundary.py",
+                    ),
                 ),
             ),
             SOTService(

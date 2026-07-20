@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from uuid import UUID
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -18,12 +19,15 @@ from app.services import (
     reseller_portal,
     work_orders_mirror,
 )
+from app.services.db_session_adapter import db_session_adapter
+from app.services.domain_errors import DomainError
 from app.services.list_query import (
     ListDefinition,
     ListFieldDefinition,
     PageMeta,
     request_needs_canonicalization,
 )
+from app.services.owner_commands import CommandContext
 from app.web.reseller.branding import get_reseller_templates
 
 logger = logging.getLogger(__name__)
@@ -388,13 +392,23 @@ def reseller_account_status_update(
     try:
         proposal = reseller_portal.preview_customer_account_status_confirmation(
             db,
-            reseller_id=str(context["reseller"].id),
-            account_id=account_id,
-            action=action,
-            expected_preview_fingerprint=preview_fingerprint,
+            reseller_portal.PreviewCustomerAccountStatusConfirmationRequest(
+                reseller_id=context["reseller"].id,
+                account_id=UUID(account_id),
+                action=reseller_portal.ResellerAccountStatusAction(
+                    action.strip().lower()
+                ),
+                expected_preview_fingerprint=preview_fingerprint,
+            ),
         )
-    except ValueError as exc:
-        message = str(exc) or "Unsupported status action"
+    except DomainError as exc:
+        message = exc.message
+        return RedirectResponse(
+            url=f"/reseller/accounts/{account_id}?status_error={quote_plus(message)}",
+            status_code=303,
+        )
+    except ValueError:
+        message = "Unsupported status action"
         return RedirectResponse(
             url=f"/reseller/accounts/{account_id}?status_error={quote_plus(message)}",
             status_code=303,
@@ -444,17 +458,37 @@ def reseller_account_status_confirm(
         return RedirectResponse(url="/reseller/auth/login", status_code=303)
 
     try:
+        reseller_id = context["reseller"].id
+        resolved_account_id = UUID(account_id)
+        resolved_action = reseller_portal.ResellerAccountStatusAction(
+            action.strip().lower()
+        )
+        actor = f"reseller:{reseller_id}:principal:{context['principal_id']}"
+        command = reseller_portal.ConfirmCustomerAccountStatusCommand(
+            context=CommandContext.system(
+                actor=actor,
+                scope=str(resolved_account_id),
+                reason=f"confirm_{resolved_action.value}_account",
+                idempotency_key=idempotency_key,
+            ),
+            reseller_id=reseller_id,
+            account_id=resolved_account_id,
+            action=resolved_action,
+            expected_preview_fingerprint=preview_fingerprint,
+        )
+        db_session_adapter.release_read_transaction(db)
         result = reseller_portal.confirm_customer_account_status_action(
             db,
-            reseller_id=str(context["reseller"].id),
-            account_id=account_id,
-            action=action,
-            actor_id=context["principal_id"],
-            expected_preview_fingerprint=preview_fingerprint,
-            idempotency_key=idempotency_key,
+            command,
         )
-    except ValueError as exc:
-        message = str(exc) or "Unsupported status action"
+    except DomainError as exc:
+        message = exc.message
+        return RedirectResponse(
+            url=f"/reseller/accounts/{account_id}?status_error={quote_plus(message)}",
+            status_code=303,
+        )
+    except ValueError:
+        message = "Unsupported status action"
         return RedirectResponse(
             url=f"/reseller/accounts/{account_id}?status_error={quote_plus(message)}",
             status_code=303,
