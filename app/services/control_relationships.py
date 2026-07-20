@@ -134,8 +134,8 @@ CONTROL_RELATIONSHIPS: tuple[ControlRelationship, ...] = (
             "collections.prepaid_balance_enforcement",
         ),
         rule=(
-            "A fresh full-cohort funding reconciliation must be recorded before "
-            "prepaid enforcement is enabled."
+            "A fresh exact-cohort funding reconciliation, including any signed "
+            "quarantine, must be recorded before prepaid enforcement is enabled."
         ),
     ),
     ControlRelationship(
@@ -639,7 +639,7 @@ def audit_feature_control_relationships(
                     code=reason,
                     severity="error",
                     message=(
-                        "Prepaid enforcement requires a current, full-cohort "
+                        "Prepaid enforcement requires current exact-cohort "
                         f"funding readiness record ({reason})."
                     ),
                     members=(

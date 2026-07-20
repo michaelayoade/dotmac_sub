@@ -146,7 +146,11 @@ def test_materializer_owner_requires_a_config_trusted_clean_replay_seal() -> Non
     assert "resolve_prepaid_thresholds" not in exporter
     assert "verify_prepaid_funding_manifest" in owner
     assert "reconstruction_existing_attestation_mismatch" in owner
-    assert 'blocker_manifest.get("blockers") != []' in owner
+    assert "quarantined_account_ids" in owner
+    assert "both materialized and quarantined" in owner
+    assert "row_ids | quarantined" in owner
+    assert "expected_candidate_hash = candidate_cohort_sha256" in owner
+    assert "--allow-quarantined-subset" in exporter
     assert "apply_prepaid_funding_reconstruction" in materializer
     assert "Ed25519PublicKey" in attestation
     assert "is_openbao_ref" in attestation

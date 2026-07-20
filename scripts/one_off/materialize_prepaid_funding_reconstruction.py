@@ -20,7 +20,9 @@ from pathlib import Path
 from typing import Any
 
 from app.db import SessionLocal
-from app.services.prepaid_enforcement_planner import candidate_prepaid_account_ids
+from app.services.prepaid_enforcement_planner import (
+    candidate_prepaid_funding_account_ids,
+)
 from app.services.prepaid_funding_reconstruction import (
     apply_prepaid_funding_reconstruction,
     preview_prepaid_funding_reconstruction,
@@ -65,7 +67,7 @@ def main() -> int:
     payload = _load_manifest(args.manifest)
     db = SessionLocal()
     try:
-        expected_ids = set(candidate_prepaid_account_ids(db))
+        expected_ids = set(candidate_prepaid_funding_account_ids(db))
         preview = preview_prepaid_funding_reconstruction(
             db,
             payload,

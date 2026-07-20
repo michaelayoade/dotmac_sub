@@ -105,6 +105,31 @@ def test_preview_requires_the_exact_nonempty_cohort(db_session, subscriber):
     )
 
 
+def test_apply_rejects_candidate_added_after_manifest_was_sealed(
+    db_session, subscriber
+):
+    position_at = datetime.now(UTC) - timedelta(minutes=5)
+    payload = _payload(position_at, {subscriber.id: "100.00"})
+    digest = parse_reconstruction_manifest(payload["manifest"]).manifest_sha256
+    account_added_during_review = uuid.uuid4()
+
+    with pytest.raises(
+        PrepaidFundingReconstructionError,
+        match="missing_reconstruction_account",
+    ):
+        apply_prepaid_funding_reconstruction(
+            db_session,
+            payload,
+            expected_manifest_sha256=digest,
+            evidence_ref="finance-review:stale-cohort-test",
+            approved_by="billing-operations-test",
+            expected_account_ids={subscriber.id, account_added_during_review},
+            now=position_at + timedelta(minutes=1),
+        )
+
+    assert authority_cutover_batch(db_session) is None
+
+
 def test_apply_is_hash_bound_idempotent_and_marks_one_final_cutover(
     db_session, subscriber
 ):
@@ -210,7 +235,7 @@ def test_reconstruction_rejects_a_signer_outside_configured_trust(
         )
 
 
-def test_signed_manifest_must_embed_an_exact_clean_blocker_manifest(
+def test_signed_manifest_rejects_materialized_and_quarantined_overlap(
     db_session, subscriber
 ):
     position_at = datetime.now(UTC) - timedelta(minutes=5)
@@ -230,13 +255,60 @@ def test_signed_manifest_must_embed_an_exact_clean_blocker_manifest(
         signed_at=position_at + timedelta(seconds=2),
     )
 
-    with pytest.raises(ValueError, match="must attest zero blockers"):
+    with pytest.raises(ValueError, match="both materialized and quarantined"):
         preview_prepaid_funding_reconstruction(
             db_session,
             sealed,
             expected_account_ids={subscriber.id},
             now=position_at + timedelta(minutes=1),
         )
+
+
+def test_signed_manifest_materializes_verified_subset_and_quarantines_the_rest(
+    db_session, subscriber
+):
+    position_at = datetime.now(UTC) - timedelta(minutes=5)
+    quarantined = Subscriber(
+        first_name="Quarantined",
+        last_name="Funding",
+        email="quarantined-prepaid-funding@example.com",
+        billing_mode=BillingMode.prepaid,
+        reseller_id=subscriber.reseller_id,
+        created_at=position_at - timedelta(days=1),
+    )
+    db_session.add(quarantined)
+    db_session.commit()
+    payload = sealed_reconstruction_payload(
+        position_at,
+        {subscriber.id: "100.00"},
+        quarantined={quarantined.id: "plan_decision_not_replayed"},
+    )
+
+    preview = preview_prepaid_funding_reconstruction(
+        db_session,
+        payload,
+        expected_account_ids={subscriber.id, quarantined.id},
+        now=position_at + timedelta(minutes=1),
+    )
+
+    assert preview.ready is True
+    assert preview.create_count == 1
+    assert preview.manifest.quarantined_account_ids == (quarantined.id,)
+    result = apply_prepaid_funding_reconstruction(
+        db_session,
+        payload,
+        expected_manifest_sha256=preview.manifest.manifest_sha256,
+        evidence_ref="finance-review:verified-subset-test",
+        approved_by="billing-operations-test",
+        expected_account_ids={subscriber.id, quarantined.id},
+        now=position_at + timedelta(minutes=1),
+    )
+    db_session.commit()
+
+    assert result.batch.account_count == 1
+    assert prepaid_available_balance(db_session, subscriber.id) == Decimal("100.00")
+    with pytest.raises(PrepaidFundingBaselineMissingError, match="baseline missing"):
+        prepaid_available_balance(db_session, quarantined.id)
 
 
 def test_existing_semantic_manifest_cannot_be_resealed_silently(db_session, subscriber):

@@ -40,6 +40,7 @@ def materialize_test_prepaid_opening_balances(
     balances: dict[object, Decimal | str],
     *,
     position_at: datetime = TEST_PREPAID_POSITION_AT,
+    quarantined: dict[object, str | tuple[str, ...]] | None = None,
 ) -> None:
     """Materialize a complete test cohort in one reviewed batch."""
     db.query(PrepaidFundingReconstructionBatch).filter(
@@ -51,6 +52,7 @@ def materialize_test_prepaid_opening_balances(
     payload = sealed_reconstruction_payload(
         position_at,
         balances,
+        quarantined=quarantined,
         source="pytest-reviewed-opening-balance",
     )
     digest = parse_reconstruction_manifest(payload["manifest"]).manifest_sha256
@@ -65,7 +67,7 @@ def materialize_test_prepaid_opening_balances(
             expected_manifest_sha256=digest,
             evidence_ref="pytest:prepaid-opening-balance",
             approved_by="pytest",
-            expected_account_ids=set(balances),
+            expected_account_ids=set(balances) | set(quarantined or {}),
             now=position_at + timedelta(minutes=1),
         )
     db.commit()

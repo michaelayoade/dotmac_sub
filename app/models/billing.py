@@ -2069,9 +2069,15 @@ class LedgerEntry(Base):
     memo: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     # True only when this row is itself a customer-position event. Some ledger
-    # rows are immutable structural evidence for a document-owned movement
-    # (for example, consuming account credit during a payment allocation). The
-    # explicit flag keeps money semantics independent of free-text memo labels.
+    # rows are immutable structural evidence for a document-owned movement or
+    # a cutover/correction position carried by the reviewed opening baseline.
+    # The explicit flag prevents those rows from being counted twice and keeps
+    # money semantics independent of free-text memo labels.
+    #
+    # This is orthogonal to ``is_active``: that flag follows the lifecycle of
+    # the source artifact (for example, a later-voided payment or invoice).
+    # Never infer either flag from the other or rewrite this flag merely because
+    # an entry became inactive.
     affects_customer_position: Mapped[bool] = mapped_column(
         Boolean, default=True, nullable=False
     )

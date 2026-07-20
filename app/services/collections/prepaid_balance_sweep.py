@@ -43,6 +43,7 @@ from app.services.prepaid_enforcement_planner import (
     PrepaidEnforcementAction,
     PrepaidEnforcementPolicy,
     candidate_prepaid_account_ids,
+    candidate_prepaid_funding_account_ids,
     plan_prepaid_account,
     prepaid_balance_enforcement_enabled,
     prepaid_notice_suppression_reasons,
@@ -369,15 +370,26 @@ def run_prepaid_balance_sweep(
         "activation_blocked": 0,
         "readiness_blocked": 0,
         "billing_profile_invalid": 0,
+        "funding_quarantined": 0,
         "notice_blocked": 0,
         "state_drift": 0,
         "ok": 0,
         "errors": 0,
     }
     account_ids = candidate_prepaid_account_ids(db)
-    notice_reasons = prepaid_notice_suppression_reasons(db, account_ids)
+    from app.services.prepaid_funding_reconstruction import (
+        prepaid_funding_quarantined_account_ids,
+    )
+
+    funding_candidate_ids = candidate_prepaid_funding_account_ids(db)
+    quarantined_ids = prepaid_funding_quarantined_account_ids(
+        db, set(account_ids) & funding_candidate_ids
+    )
+    enforceable_ids = set(account_ids) - quarantined_ids
+    notice_reasons = prepaid_notice_suppression_reasons(db, enforceable_ids)
     stats["accounts_scanned"] = len(account_ids)
-    for account_id in account_ids:
+    stats["funding_quarantined"] = len(quarantined_ids)
+    for account_id in enforceable_ids:
         try:
             account = db.execute(
                 select(Subscriber)
