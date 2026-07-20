@@ -120,7 +120,10 @@ def test_lga_can_be_cleared(db_session):
 # ── addresses carry it too ──────────────────────────────────────────────────
 
 
-def test_address_lga_is_validated_on_create(db_session):
+def test_address_lga_is_validated_on_create(db_session, monkeypatch):
+    monkeypatch.setattr(
+        "app.services.geocoding.geocode_address", lambda _db, data: data
+    )
     subscriber = _create(db_session)
     address = subscriber_service.addresses.create(
         db_session,
@@ -145,7 +148,10 @@ def test_address_lga_is_validated_on_create(db_session):
         )
 
 
-def test_address_update_validates_against_the_stored_region(db_session):
+def test_address_update_validates_against_the_stored_region(db_session, monkeypatch):
+    monkeypatch.setattr(
+        "app.services.geocoding.geocode_address", lambda _db, data: data
+    )
     subscriber = _create(db_session)
     address = subscriber_service.addresses.create(
         db_session,

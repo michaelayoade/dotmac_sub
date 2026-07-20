@@ -204,8 +204,17 @@ def test_unknown_role_rolls_back_identity_bootstrap(db_session) -> None:
 
     assert captured.value.code == "auth.staff_provisioning.unknown_roles"
     assert not db_session.in_transaction()
-    assert db_session.query(SystemUser).count() == 0
-    assert db_session.query(UserCredential).count() == 0
+    assert (
+        db_session.query(SystemUser).filter(SystemUser.email == command.email).count()
+        == 0
+    )
+    assert (
+        db_session.query(UserCredential)
+        .join(SystemUser, SystemUser.id == UserCredential.system_user_id)
+        .filter(SystemUser.email == command.email)
+        .count()
+        == 0
+    )
 
 
 def test_local_admin_create_uses_same_atomic_provisioning_boundary(

@@ -20,7 +20,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from app.models.billing import Invoice, InvoiceStatus
-from app.models.catalog import BillingMode, NasDevice, NasVendor, SubscriptionStatus
+from app.models.catalog import (
+    BillingMode,
+    NasDevice,
+    NasVendor,
+    RadiusProfile,
+    SubscriptionStatus,
+)
 from app.models.enforcement_lock import EnforcementLock
 from app.models.notification import (
     Notification,
@@ -815,9 +821,21 @@ class TestEnforcementHandler:
     @patch("app.services.events.handlers.enforcement.apply_radius_profile_to_account")
     @patch("app.services.enforcement_event_policy.settings_spec")
     def test_usage_exhausted_throttle_action(
-        self, mock_settings, mock_apply_profile, mock_disconnect, db_session
+        self,
+        mock_settings,
+        mock_apply_profile,
+        mock_disconnect,
+        db_session,
+        subscription,
     ):
-        throttle_profile_id = uuid.uuid4()
+        throttle_profile = RadiusProfile(
+            name=f"FUP throttle {uuid.uuid4()}", is_active=True
+        )
+        db_session.add(throttle_profile)
+        db_session.commit()
+        throttle_profile_id = throttle_profile.id
+        subscription_id = subscription.id
+        account_id = subscription.subscriber_id
 
         def settings_side_effect(db, domain, key):
             if key == "fup_action":
@@ -832,29 +850,39 @@ class TestEnforcementHandler:
         mock_apply_profile.return_value = 1
 
         handler = EnforcementHandler()
-        sub_id = uuid.uuid4()
-        acc_id = uuid.uuid4()
         event = self._make_event(
             EventType.usage_exhausted,
-            subscription_id=sub_id,
-            account_id=acc_id,
+            subscription_id=subscription_id,
+            account_id=account_id,
         )
         handler.handle(db_session, event)
 
         mock_apply_profile.assert_called_once_with(
-            db_session, str(acc_id), str(throttle_profile_id)
+            db_session, str(account_id), str(throttle_profile_id)
         )
         mock_disconnect.assert_called_once_with(
-            db_session, str(acc_id), reason="fup_throttle"
+            db_session, str(account_id), reason="fup_throttle"
         )
 
     @patch("app.services.events.handlers.enforcement.disconnect_account_sessions")
     @patch("app.services.events.handlers.enforcement.apply_radius_profile_to_account")
     @patch("app.services.enforcement_event_policy.settings_spec")
     def test_usage_exhausted_payload_reduce_speed_overrides_global_block(
-        self, mock_settings, mock_apply_profile, mock_disconnect, db_session
+        self,
+        mock_settings,
+        mock_apply_profile,
+        mock_disconnect,
+        db_session,
+        subscription,
     ):
-        throttle_profile_id = uuid.uuid4()
+        throttle_profile = RadiusProfile(
+            name=f"FUP throttle {uuid.uuid4()}", is_active=True
+        )
+        db_session.add(throttle_profile)
+        db_session.commit()
+        throttle_profile_id = throttle_profile.id
+        subscription_id = subscription.id
+        account_id = subscription.subscriber_id
 
         def settings_side_effect(db, domain, key):
             if key == "fup_action":
@@ -869,21 +897,19 @@ class TestEnforcementHandler:
         mock_apply_profile.return_value = 1
 
         handler = EnforcementHandler()
-        sub_id = uuid.uuid4()
-        acc_id = uuid.uuid4()
         event = self._make_event(
             EventType.usage_exhausted,
             payload={"action": "reduce_speed"},
-            subscription_id=sub_id,
-            account_id=acc_id,
+            subscription_id=subscription_id,
+            account_id=account_id,
         )
         handler.handle(db_session, event)
 
         mock_apply_profile.assert_called_once_with(
-            db_session, str(acc_id), str(throttle_profile_id)
+            db_session, str(account_id), str(throttle_profile_id)
         )
         mock_disconnect.assert_called_once_with(
-            db_session, str(acc_id), reason="fup_throttle"
+            db_session, str(account_id), reason="fup_throttle"
         )
 
     @patch("app.services.events.handlers.enforcement.apply_radius_profile_to_account")

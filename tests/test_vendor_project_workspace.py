@@ -84,9 +84,9 @@ def test_typed_quote_commands_commit_rows_and_event_evidence(db_session):
 
     quote = vendor_portal_operations.add_quote_line(
         db_session,
-            AddVendorQuoteLineCommand(
-                context=_context(
-                    actor=user_id,
+        AddVendorQuoteLineCommand(
+            context=_context(
+                actor=user_id,
                 scope=vendor_id,
                 reason="test quote line creation",
             ),

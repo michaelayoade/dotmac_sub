@@ -82,10 +82,11 @@ def test_confirmation_locks_then_rechecks_replay_before_staleness() -> None:
     assert operation.index("IdempotencyKey(scope=scope, key=key)") > operation.index(
         "hmac.compare_digest("
     )
-    assert operation.count("commit=False") == 1
-    assert "stage_quote_submission(" in operation
-    assert "stage_as_built_submission(" in operation
-    assert "stage_project_transition(" in operation
+    assert "commit=False" not in operation
+    assert operation.count("stage_quote_submission(") == 1
+    assert operation.count("stage_as_built_submission(") == 1
+    assert operation.count("stage_project_transition(") == 1
+    assert operation.count("vendor_purchase_invoices.stage_submission(") == 1
 
 
 def test_web_route_is_a_typed_error_mapping_adapter() -> None:
