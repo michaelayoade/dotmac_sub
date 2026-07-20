@@ -137,6 +137,11 @@ class ProjectTemplate(Base):
 class Project(Base):
     __tablename__ = "projects"
     __table_args__ = (
+        UniqueConstraint(
+            "external_system",
+            "external_reference",
+            name="uq_projects_external_system_reference",
+        ),
         # Native /me/projects (+ reseller subtree) subscriber scan — partial on
         # is_active (see migration 251). The functional index backs the H1
         # quote→project lookup; its expression matches SQLAlchemy's
@@ -161,7 +166,8 @@ class Project(Base):
     code: Mapped[str | None] = mapped_column(String(80))
     # Retains CRM's non-unique number contract.
     number: Mapped[str | None] = mapped_column(String(40))
-    erpnext_id: Mapped[str | None] = mapped_column(String(100), unique=True, index=True)
+    external_system: Mapped[str | None] = mapped_column(String(40))
+    external_reference: Mapped[str | None] = mapped_column(String(100))
     description: Mapped[str | None] = mapped_column(Text)
     customer_address: Mapped[str | None] = mapped_column(Text)
     project_type: Mapped[str | None] = mapped_column(String(60))
@@ -226,6 +232,13 @@ class Project(Base):
 
 class ProjectTask(Base):
     __tablename__ = "project_tasks"
+    __table_args__ = (
+        UniqueConstraint(
+            "external_system",
+            "external_reference",
+            name="uq_project_tasks_external_system_reference",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -238,7 +251,8 @@ class ProjectTask(Base):
     )
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     number: Mapped[str | None] = mapped_column(String(40))
-    erpnext_id: Mapped[str | None] = mapped_column(String(100), unique=True, index=True)
+    external_system: Mapped[str | None] = mapped_column(String(40))
+    external_reference: Mapped[str | None] = mapped_column(String(100))
     description: Mapped[str | None] = mapped_column(Text)
     template_task_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("project_template_tasks.id")

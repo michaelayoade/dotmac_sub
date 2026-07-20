@@ -246,7 +246,6 @@ app.services.web_system_geocode_tool
 app.services.web_system_import_wizard
 app.services.web_system_profiles
 app.services.web_system_restore_tool
-app.services.web_system_role_forms
 app.services.web_system_user_edit
 app.services.web_system_user_mutations
 app.services.web_vpn_peers

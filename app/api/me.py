@@ -153,6 +153,9 @@ from app.services.bandwidth import (
     with_subscriber_directions,
 )
 from app.services.customer_context import require_customer_account_id
+from app.services.db_session_adapter import db_session_adapter
+from app.services.domain_errors import DomainError
+from app.services.owner_commands import CommandContext
 from app.services.sales import selfserve as selfserve_service
 from app.services.topology import connection_status as connection_status_service
 
@@ -882,7 +885,29 @@ def my_referrals(
 ):
     """The caller's native Sub Refer & Earn summary."""
     subscriber_id = _subscriber_id(principal)
-    return referrals_service.referrals.read_for_subscriber(db, subscriber_id)
+    try:
+        resolved_subscriber_id = UUID(subscriber_id)
+        db_session_adapter.release_read_transaction(db)
+        referrals_service.ensure_referral_code(
+            db,
+            referrals_service.EnsureReferralCodeCommand(
+                context=CommandContext.system(
+                    actor=f"customer_api:{resolved_subscriber_id}",
+                    scope=referrals_service.REFERRAL_PROGRAM_SCOPE,
+                    reason="Customer requested their referral summary",
+                    idempotency_key=f"referral-code:{resolved_subscriber_id}",
+                ),
+                subscriber_id=resolved_subscriber_id,
+            ),
+        )
+        return referrals_service.referrals.read_for_subscriber(db, subscriber_id)
+    except DomainError as exc:
+        status_code = (
+            503
+            if exc.code.endswith(("program_disabled", "invalid_configuration"))
+            else 409
+        )
+        raise HTTPException(status_code=status_code, detail=exc.message) from exc
 
 
 @router.get("/projects", response_model=MyProjectsResponse)
@@ -1083,14 +1108,37 @@ def my_refer_a_friend(
 ):
     """Refer a friend through Sub's Party-first referral owner."""
     subscriber_id = _subscriber_id(principal)
-    return referrals_service.referrals.refer_a_friend(
-        db,
-        subscriber_id,
-        name=payload.name,
-        email=payload.email,
-        phone=payload.phone,
-        note=payload.note,
-    )
+    try:
+        resolved_subscriber_id = UUID(subscriber_id)
+        db_session_adapter.release_read_transaction(db)
+        result = referrals_service.refer_friend(
+            db,
+            referrals_service.ReferFriendCommand(
+                context=CommandContext.system(
+                    actor=f"customer_api:{resolved_subscriber_id}",
+                    scope=referrals_service.REFERRAL_PROGRAM_SCOPE,
+                    reason="Customer submitted a Refer & Earn prospect",
+                ),
+                referrer_subscriber_id=resolved_subscriber_id,
+                name=payload.name,
+                email=payload.email,
+                phone=payload.phone,
+                note=payload.note,
+            ),
+        )
+        return {
+            "id": str(result.referral_id),
+            "status": result.status,
+            "message": "Referral submitted",
+        }
+    except DomainError as exc:
+        status_code = {
+            "referrals.program.contact_required": 422,
+            "referrals.program.program_disabled": 503,
+            "referrals.program.invalid_configuration": 503,
+            "referrals.program.subscriber_not_found": 404,
+        }.get(exc.code, 409)
+        raise HTTPException(status_code=status_code, detail=exc.message) from exc
 
 
 @router.get(

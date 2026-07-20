@@ -12,22 +12,17 @@ from app.models.auth import (
     ApiKey,
     AuthProvider,
     MFAMethod,
-    SessionStatus,
     UserCredential,
 )
 from app.models.auth import Session as AuthSession
 from app.models.domain_settings import SettingDomain
-from app.models.rbac import (
-    SystemUserPermission as SystemUserPermissionModel,
-)
-from app.models.rbac import SystemUserRole as SystemUserRoleModel
-from app.models.subscriber import UserType
 from app.models.system_user import SystemUser
-from app.services import auth_cache
-from app.services import rbac as rbac_service
+from app.services import auth_cache, credential_recovery
+from app.services import system_user_assignments as assignment_service
 from app.services import web_system_users as web_system_users_service
 from app.services.auth_flow import hash_password
 from app.services.common import coerce_uuid
+from app.services.owner_commands import CommandContext
 from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
@@ -44,31 +39,6 @@ def _user_invite_expiry_minutes(db: Session) -> int:
     except (TypeError, ValueError):
         return 1440
     return parsed if parsed > 0 else 1440
-
-
-def set_user_active(db: Session, *, user_id: str, is_active: bool) -> SystemUser:
-    """Activate/deactivate system user and linked credentials."""
-    system_user = db.get(SystemUser, coerce_uuid(user_id))
-    if not system_user:
-        raise ValueError("User not found")
-    system_user.is_active = is_active
-    db.query(UserCredential).filter(
-        UserCredential.system_user_id == system_user.id
-    ).update({"is_active": is_active})
-    if not is_active:
-        # Disabling must end existing sessions: per-request validation only
-        # checks the session row, not the principal's is_active flag.
-        db.query(AuthSession).filter(
-            AuthSession.system_user_id == system_user.id,
-            AuthSession.status == SessionStatus.active,
-            AuthSession.revoked_at.is_(None),
-        ).update(
-            {"status": SessionStatus.revoked, "revoked_at": datetime.now(UTC)},
-            synchronize_session=False,
-        )
-    db.commit()
-    auth_cache.invalidate_principal("system_user", str(system_user.id))
-    return system_user
 
 
 def disable_user_mfa(db: Session, *, user_id: str, actor_id: str | None = None) -> None:
@@ -156,51 +126,6 @@ def reset_user_password(db: Session, *, user_id: str) -> str:
     return temp_password
 
 
-def create_user_with_role_and_password(
-    db: Session,
-    *,
-    first_name: str,
-    last_name: str,
-    email: str,
-    role_id: str,
-    user_type: str | None = None,
-    role_source: str = "local",
-) -> tuple[SystemUser, str]:
-    """Create system user, assign role, and generate temp credential password."""
-    role = rbac_service.roles.get(db, role_id)
-
-    system_user = SystemUser(
-        first_name=first_name,
-        last_name=last_name,
-        display_name=f"{first_name} {last_name}".strip(),
-        email=email,
-        user_type=UserType.system_user,
-    )
-    db.add(system_user)
-    db.flush()
-
-    db.add(
-        SystemUserRoleModel(
-            system_user_id=system_user.id,
-            role_id=role.id,
-            source=role_source,
-        )
-    )
-
-    temp_password = secrets.token_urlsafe(16)
-    db.add(
-        UserCredential(
-            system_user_id=system_user.id,
-            provider=AuthProvider.local,
-            username=email,
-            password_hash=hash_password(temp_password),
-            must_change_password=True,
-        )
-    )
-    db.commit()
-    return system_user, temp_password
-
-
 def bulk_set_user_type(
     db: Session,
     *,
@@ -231,24 +156,23 @@ def send_user_invite(
 
     Returns a status note describing the outcome.
     """
-    from app.services import auth_flow as auth_flow_service
     from app.services import email as email_service
 
-    reset = auth_flow_service.request_password_reset(
-        db=db,
-        email=email,
+    reset = credential_recovery.issue_reset_capability_for_email(
+        db,
+        email,
         ttl_minutes=_user_invite_expiry_minutes(db),
     )
-    if not reset or not reset.get("token"):
+    if reset is None or not reset.token:
         return "User created, but no reset token was generated."
 
     sent = email_service.send_user_invite_email(
         db,
         to_email=email,
-        reset_token=reset["token"],
-        person_name=reset.get("subscriber_name"),
+        reset_token=reset.token,
+        person_name=reset.person_name,
         next_login_path=next_login_path,
-        expires_minutes=reset.get("ttl_minutes"),
+        expires_minutes=reset.ttl_minutes,
     )
     if sent:
         return "Invitation sent. Password reset email delivered."
@@ -263,12 +187,65 @@ def send_user_invite_for_user(db: Session, *, user_id: str) -> str:
     if not system_user.email:
         raise ValueError("User has no email address")
     _ensure_local_credential(db, system_user)
+    principal_id = system_user.id
     next_login_path = _invite_login_route_for_user(system_user)
-    return send_user_invite(
+    db.commit()
+    reset = credential_recovery.issue_exact_reset_capability(
         db,
-        email=system_user.email,
+        principal_type="system_user",
+        principal_id=principal_id,
+        ttl_minutes=_user_invite_expiry_minutes(db),
+    )
+    return _send_user_invite_capability(
+        db,
+        reset=reset,
         next_login_path=next_login_path,
     )
+
+
+def send_subscriber_invite(
+    db: Session,
+    *,
+    subscriber_id: str,
+    next_login_path: str | None = None,
+) -> str:
+    """Send an invitation using one exact subscriber reset capability."""
+
+    reset = credential_recovery.issue_exact_reset_capability(
+        db,
+        principal_type="subscriber",
+        principal_id=coerce_uuid(subscriber_id),
+        ttl_minutes=_user_invite_expiry_minutes(db),
+    )
+    return _send_user_invite_capability(
+        db,
+        reset=reset,
+        next_login_path=next_login_path,
+    )
+
+
+def _send_user_invite_capability(
+    db: Session,
+    *,
+    reset: credential_recovery.PasswordResetCapability | None,
+    next_login_path: str | None,
+) -> str:
+    from app.services import email as email_service
+
+    if reset is None or not reset.token:
+        return "User created, but no reset token was generated."
+    sent = email_service.send_user_invite_email(
+        db,
+        to_email=reset.email,
+        reset_token=reset.token,
+        person_name=reset.person_name,
+        next_login_path=next_login_path,
+        expires_minutes=reset.ttl_minutes,
+        token_in_fragment=True,
+    )
+    if sent:
+        return "Invitation sent. Password reset email delivered."
+    return "User created, but the reset email could not be sent."
 
 
 def bulk_send_user_invites(db: Session, *, user_ids: list[str]) -> tuple[int, int]:
@@ -291,31 +268,31 @@ def bulk_send_user_invites(db: Session, *, user_ids: list[str]) -> tuple[int, in
 
 def send_password_reset_link_for_user(db: Session, *, user_id: str) -> str:
     """Send password reset link email for an existing user."""
-    from app.services import auth_flow as auth_flow_service
-    from app.services import email as email_service
-
     system_user = db.get(SystemUser, coerce_uuid(user_id))
     if not system_user:
         raise ValueError("User not found")
     if not system_user.email:
         raise ValueError("User has no email address")
     _ensure_local_credential(db, system_user)
-
-    reset = auth_flow_service.request_password_reset(db=db, email=system_user.email)
-    if not reset or not reset.get("token"):
-        return "Password reset link could not be generated for this user."
-
-    sent = email_service.send_password_reset_email(
+    principal_id = system_user.id
+    next_login_path = _invite_login_route_for_user(system_user)
+    db.commit()
+    outcome = credential_recovery.request_exact_password_recovery(
         db,
-        to_email=system_user.email,
-        reset_token=reset["token"],
-        person_name=reset.get("subscriber_name"),
-        next_login_path=_invite_login_route_for_user(system_user),
-        expires_minutes=reset.get("ttl_minutes"),
+        credential_recovery.RequestExactPasswordRecoveryCommand(
+            context=CommandContext.system(
+                actor="service:admin-system-users",
+                scope=credential_recovery.CREDENTIAL_RECOVERY_SCOPE,
+                reason="Administrator requested staff password recovery",
+            ),
+            principal_type="system_user",
+            principal_id=principal_id,
+            next_login_path=next_login_path,
+        ),
     )
-    if sent:
-        return "Password reset link sent successfully."
-    return "Password reset link could not be sent."
+    if outcome.delivery_requested:
+        return "Password reset link queued successfully."
+    return "Password reset link could not be queued."
 
 
 def _ensure_local_credential(db: Session, system_user: SystemUser) -> None:
@@ -402,12 +379,7 @@ def delete_user_records(db: Session, *, user_id: str) -> SystemUser:
     db.query(ApiKey).filter(ApiKey.system_user_id == system_user.id).delete(
         synchronize_session=False
     )
-    db.query(SystemUserRoleModel).filter(
-        SystemUserRoleModel.system_user_id == system_user.id
-    ).delete(synchronize_session=False)
-    db.query(SystemUserPermissionModel).filter(
-        SystemUserPermissionModel.system_user_id == system_user.id
-    ).delete(synchronize_session=False)
+    assignment_service.remove_all_for_system_user(db, system_user.id)
     db.delete(system_user)
     db.commit()
     return system_user
@@ -495,12 +467,7 @@ def bulk_delete_user_records(db: Session, *, user_ids: list[str]) -> tuple[int, 
         db.query(ApiKey).filter(ApiKey.system_user_id == system_user.id).delete(
             synchronize_session=False
         )
-        db.query(SystemUserRoleModel).filter(
-            SystemUserRoleModel.system_user_id == system_user.id
-        ).delete(synchronize_session=False)
-        db.query(SystemUserPermissionModel).filter(
-            SystemUserPermissionModel.system_user_id == system_user.id
-        ).delete(synchronize_session=False)
+        assignment_service.remove_all_for_system_user(db, system_user.id)
         db.delete(system_user)
         deleted_count += 1
 

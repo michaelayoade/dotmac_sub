@@ -376,9 +376,12 @@ def populate(
         stats["legacy_targets_verified"] = len(alignment)
 
         from app.models.domain_settings import SettingDomain
-        from app.services import enforcement_event_policy, settings_spec
+        from app.services import settings_spec
+        from app.services.enforcement_event_policy import (
+            resolve_group_routing_policy,
+        )
 
-        group_routing_enabled = enforcement_event_policy.group_routing_enabled(db)
+        group_routing_enabled = resolve_group_routing_policy(db).enabled
         access_groups = {
             "active": str(
                 settings_spec.resolve_value(

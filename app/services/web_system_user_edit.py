@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
-from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.auth import AuthProvider, UserCredential
-from app.models.rbac import Permission, Role, SystemUserPermission, SystemUserRole
+from app.models.rbac import Permission, Role
 from app.models.subscriber import UserType
 from app.models.system_user import SystemUser
 from app.services import auth_cache
@@ -33,12 +32,9 @@ def parse_edit_form(form_data) -> dict[str, object]:
         "email": form_data.get("email", ""),
         "phone": form_data.get("phone"),
         "user_type": form_data.get("user_type"),
-        "is_active": form_data.get("is_active"),
         "new_password": form_data.get("new_password"),
         "confirm_password": form_data.get("confirm_password"),
         "require_password_change": form_data.get("require_password_change"),
-        "role_ids": form_data.getlist("role_ids"),
-        "direct_permission_ids": form_data.getlist("direct_permission_ids"),
     }
 
 
@@ -54,6 +50,7 @@ def build_edit_state(db: Session, *, subscriber: SystemUser) -> dict[str, object
         .scalars()
         .all(),
         "current_role_ids": set(),
+        "managed_role_ids": set(),
         "all_permissions": db.execute(
             select(Permission)
             .where(Permission.is_active.is_(True))
@@ -76,14 +73,10 @@ def apply_user_edit(
     email: str,
     phone: str | None,
     user_type: str | None,
-    is_active: bool,
-    role_ids: list[str],
-    direct_permission_ids: list[str],
     new_password: str | None,
     confirm_password: str | None,
     require_password_change: bool,
     is_admin: bool,
-    actor_id: str | None,
 ) -> None:
     """Apply submitted user edit changes and commit."""
     subscriber.first_name = first_name.strip()
@@ -92,65 +85,12 @@ def apply_user_edit(
     subscriber.email = email.strip()
     subscriber.phone = phone.strip() if phone else None
     subscriber.user_type = UserType.system_user
-    subscriber.is_active = is_active
 
     db.query(UserCredential).filter(
         UserCredential.system_user_id == subscriber.id,
         UserCredential.provider == AuthProvider.local,
         UserCredential.is_active.is_(True),
     ).update({"username": email.strip()})
-
-    desired_role_ids = set(role_ids)
-    existing_roles = (
-        db.query(SystemUserRole)
-        .filter(SystemUserRole.system_user_id == subscriber.id)
-        .all()
-    )
-    existing_role_map = {str(link.role_id): link for link in existing_roles}
-
-    for role_id_str, role_link in existing_role_map.items():
-        if role_id_str not in desired_role_ids:
-            db.delete(role_link)
-
-    for role_id_str in desired_role_ids:
-        if role_id_str not in existing_role_map:
-            db.add(
-                SystemUserRole(
-                    system_user_id=subscriber.id,
-                    role_id=UUID(role_id_str),
-                )
-            )
-
-    db.query(SystemUserPermission).filter(
-        SystemUserPermission.system_user_id == subscriber.id
-    ).delete(synchronize_session=False)
-
-    granted_by = coerce_uuid(actor_id) if actor_id else None
-    desired_permission_ids = {
-        UUID(permission_id) for permission_id in direct_permission_ids
-    }
-    if desired_permission_ids:
-        assignable_permission_ids = {
-            permission_id
-            for permission_id in db.execute(
-                select(Permission.id)
-                .where(Permission.id.in_(desired_permission_ids))
-                .where(Permission.is_active.is_(True))
-                .where(Permission.is_ui_assignable.is_(True))
-            ).scalars()
-        }
-        if assignable_permission_ids != desired_permission_ids:
-            raise ValueError("One or more direct permissions are not assignable.")
-    else:
-        assignable_permission_ids = set()
-    for permission_id in assignable_permission_ids:
-        db.add(
-            SystemUserPermission(
-                system_user_id=subscriber.id,
-                permission_id=permission_id,
-                granted_by_system_user_id=granted_by,
-            )
-        )
 
     if new_password or confirm_password:
         if not is_admin:

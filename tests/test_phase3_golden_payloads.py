@@ -300,8 +300,10 @@ def _mirror_referrals(db, sub):
 
 
 def _native_referral(db, referrer):
-    code = referrals_service.referrals.ensure_code(db, str(referrer.id))
-    referral = referrals_service.referrals.capture(
+    from tests.referral_program_testkit import capture, ensure_code
+
+    code = ensure_code(db, referrer.id)
+    referral = capture(
         db,
         code=code.code,
         name="Jane Friend",

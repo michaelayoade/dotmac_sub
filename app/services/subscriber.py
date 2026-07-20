@@ -267,7 +267,17 @@ def _validate_tax_rate(db: Session, tax_rate_id: str | None):
     return rate
 
 
-def _apply_validated_lga(data: dict, *, current_region=None, current_lga=None) -> dict:
+class SubscriberAccountPreparationError(ValueError):
+    """A transaction-neutral account initializer rejected canonical input."""
+
+
+def _apply_validated_lga(
+    data: dict,
+    *,
+    current_region=None,
+    current_lga=None,
+    transport_errors: bool = True,
+) -> dict:
     """Validate and canonicalise a captured LGA against its state.
 
     LGA is an NCC administrative unit that the quarterly complaints return
@@ -298,19 +308,19 @@ def _apply_validated_lga(data: dict, *, current_region=None, current_lga=None) -
 
     region = data.get("region", current_region)
     if not (str(region or "").strip()):
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                "An LGA cannot be validated without a state: set region alongside lga."
-            ),
+        message = (
+            "An LGA cannot be validated without a state: set region alongside lga."
         )
+        if transport_errors:
+            raise HTTPException(status_code=422, detail=message)
+        raise SubscriberAccountPreparationError(message)
 
     canonical = ncc_location.canonical_lga(region, lga)
     if not canonical:
-        raise HTTPException(
-            status_code=422,
-            detail=f"{lga!r} is not a Local Government Area of {region!r}.",
-        )
+        message = f"{lga!r} is not a Local Government Area of {region!r}."
+        if transport_errors:
+            raise HTTPException(status_code=422, detail=message)
+        raise SubscriberAccountPreparationError(message)
     data["lga"] = canonical
     return data
 
@@ -328,9 +338,17 @@ def _normalize_subscriber_identity_fields(data: dict) -> dict:
 
 class Resellers(ListResponseMixin):
     @staticmethod
-    def create(db: Session, payload: ResellerCreate):
+    def prepare_new(db: Session, payload: ResellerCreate) -> Reseller:
+        """Stage one canonical reseller record without completing a transaction."""
+
         reseller = Reseller(**payload.model_dump())
         db.add(reseller)
+        db.flush()
+        return reseller
+
+    @staticmethod
+    def create(db: Session, payload: ResellerCreate):
+        reseller = Resellers.prepare_new(db, payload)
         db.commit()
         db.refresh(reseller)
         return reseller
@@ -483,9 +501,11 @@ class Subscribers(ListResponseMixin):
         )
 
         if getattr(payload, "person_id", None):
-            raise ValueError("prepare_new_account cannot target an existing Subscriber")
+            raise SubscriberAccountPreparationError(
+                "prepare_new_account cannot target an existing Subscriber"
+            )
         data = _normalize_subscriber_identity_fields(payload.model_dump())
-        data = _apply_validated_lga(data)
+        data = _apply_validated_lga(data, transport_errors=False)
         requested_status = data.pop("status", SubscriberStatus.active)
         data.pop("is_active", None)
         category = data.pop("category", None)
@@ -524,29 +544,45 @@ class Subscribers(ListResponseMixin):
         db.flush()
         from app.services.account_lifecycle import apply_requested_account_status
 
-        apply_requested_account_status(
-            db,
-            str(subscriber.id),
-            requested_status,
-            reason="Initial subscriber account state",
-            source="subscriber_service:create",
-        )
+        try:
+            apply_requested_account_status(
+                db,
+                str(subscriber.id),
+                requested_status,
+                reason="Initial subscriber account state",
+                source="subscriber_service:create",
+            )
+        except ValueError as exc:
+            raise SubscriberAccountPreparationError(str(exc)) from exc
         rebuild_identity_index_for_subscriber(db, subscriber.id)
         return subscriber
 
     @staticmethod
-    def commit_prepared_account(db: Session, subscriber: Subscriber) -> Subscriber:
-        """Stage ``subscriber.created`` and commit a prepared account atomically."""
+    def stage_prepared_account_created_event(
+        db: Session,
+        subscriber: Subscriber,
+        *,
+        actor: str | None = None,
+    ) -> None:
+        """Stage canonical account-created evidence without completing a transaction."""
 
         emit_event(
             db,
             EventType.subscriber_created,
             {
+                "schema_version": 1,
                 "subscriber_id": str(subscriber.id),
                 "subscriber_number": subscriber.subscriber_number,
             },
+            actor=actor,
             subscriber_id=subscriber.id,
         )
+
+    @staticmethod
+    def commit_prepared_account(db: Session, subscriber: Subscriber) -> Subscriber:
+        """Stage ``subscriber.created`` and commit a prepared account atomically."""
+
+        Subscribers.stage_prepared_account_created_event(db, subscriber)
         db.commit()
         db.refresh(subscriber)
         return subscriber
@@ -623,7 +659,10 @@ class Subscribers(ListResponseMixin):
             db.refresh(subscriber)
             return subscriber
 
-        subscriber = Subscribers.prepare_new_account(db, payload)
+        try:
+            subscriber = Subscribers.prepare_new_account(db, payload)
+        except SubscriberAccountPreparationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         return Subscribers.commit_prepared_account(db, subscriber)
 
     @staticmethod

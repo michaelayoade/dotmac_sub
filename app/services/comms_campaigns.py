@@ -960,7 +960,7 @@ def send_campaign_batch(
                 channels=(channel,),
                 include_reseller=False,
                 persist_policy_suppressions=False,
-                subscriber_recipients={channel: recipient.address},
+                recipients={channel: recipient.address},
                 metadata=rendered.metadata,
                 dedupe_key=f"campaign:recipient:{recipient.id}",
             ),

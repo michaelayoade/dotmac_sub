@@ -747,7 +747,7 @@ def vendor_purchase_invoice_status_presentation(
     return _presentation(_status_value(status), _VENDOR_PURCHASE_INVOICE_PRESENTATIONS)
 
 
-_ERP_SUPPLIER_INVOICE_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+_SUPPLIER_INVOICE_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
     "draft": ("Finance draft", StatusTone.neutral, StatusIcon.archive),
     "submitted": ("Submitted to finance", StatusTone.info, StatusIcon.info),
     "pending_approval": (
@@ -766,11 +766,18 @@ _ERP_SUPPLIER_INVOICE_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon
 }
 
 
+def supplier_invoice_status_presentation(
+    status: str | None,
+) -> StatusPresentation:
+    """Project an observed AP state without inferring settlement."""
+    return _presentation(_status_value(status), _SUPPLIER_INVOICE_PRESENTATIONS)
+
+
 def erp_supplier_invoice_status_presentation(
     status: str | None,
 ) -> StatusPresentation:
-    """Project ERP's authoritative AP state without inferring settlement."""
-    return _presentation(_status_value(status), _ERP_SUPPLIER_INVOICE_PRESENTATIONS)
+    """Compatibility alias; use ``supplier_invoice_status_presentation``."""
+    return supplier_invoice_status_presentation(status)
 
 
 _FIELD_EXPENSE_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {

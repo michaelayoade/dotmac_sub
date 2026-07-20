@@ -1,0 +1,35 @@
+# Historical migration files sharing a numeric prefix. Shrink-only:
+# never add a prefix here — renumber the new migration onto the next
+# free number instead (see sub-migration-number-collision playbook).
+026
+027
+028
+035
+038
+044
+109
+138
+139
+150
+153
+172
+173
+174
+186
+187
+192
+193
+212
+220
+236
+239
+240
+241
+242
+243
+244
+280
+281
+282
+290
+357

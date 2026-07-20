@@ -36,20 +36,42 @@ from app.models.catalog import (
 )
 from app.schemas.billing import AccountAdjustmentPreviewRequest
 from app.services.billing._common import lock_account
-from app.services.billing.adjustments import AccountAdjustments
+from app.services.billing.adjustments import (
+    ACCOUNT_ADJUSTMENT_SCOPE,
+    AccountAdjustmentError,
+    AccountAdjustmentOrigin,
+    PreviewAccountAdjustmentQuery,
+    StageSystemAccountAdjustmentCommand,
+    preview_account_adjustment,
+    stage_system_account_adjustment,
+)
 from app.services.common import coerce_uuid, round_money
+from app.services.owner_commands import CommandContext
 from app.services.service_entitlements import (
     ensure_prepaid_entitlement_for_wallet_debit,
     prepaid_entitlement_coverage_end,
 )
 
-_ORIGIN = "prepaid_service_renewal"
+_ORIGIN = AccountAdjustmentOrigin.prepaid_service_renewal
 _ELIGIBLE_STATUSES = {
     SubscriptionStatus.active,
     SubscriptionStatus.blocked,
     SubscriptionStatus.suspended,
 }
 _MAX_AUTOMATIC_LAG = timedelta(days=2)
+
+
+def _adjustment_http_error(exc: AccountAdjustmentError) -> HTTPException:
+    status_code = {
+        "financial.account_adjustments.account_not_found": 404,
+        "financial.account_adjustments.invalid_configuration": 503,
+        "financial.account_adjustments.insufficient_funding": 402,
+        "financial.account_adjustments.stale_preview": 409,
+        "financial.account_adjustments.idempotency_conflict": 409,
+        "financial.account_adjustments.incomplete_evidence": 409,
+        "financial.account_adjustments.write_conflict": 409,
+    }.get(exc.code, 400)
+    return HTTPException(status_code=status_code, detail=exc.message)
 
 
 def _utc(value: datetime) -> datetime:
@@ -242,21 +264,27 @@ def preview_prepaid_service_renewal(
             detail="Prepaid service period already has active funding evidence",
         )
 
-    adjustment_preview = AccountAdjustments.preview(
-        db,
-        AccountAdjustmentPreviewRequest(
-            account_id=subscription.subscriber_id,
-            category=LedgerCategory.internet_service,
-            amount=charge,
-            currency=unit,
-            memo=(
-                f"Prepaid service renewal {period_start.date()} - {period_end.date()}"
+    try:
+        adjustment_preview = preview_account_adjustment(
+            db,
+            PreviewAccountAdjustmentQuery(
+                request=AccountAdjustmentPreviewRequest(
+                    account_id=subscription.subscriber_id,
+                    category=LedgerCategory.internet_service,
+                    amount=charge,
+                    currency=unit,
+                    memo=(
+                        "Prepaid service renewal "
+                        f"{period_start.date()} - {period_end.date()}"
+                    ),
+                    reason="Funded prepaid service period",
+                ),
+                origin=_ORIGIN,
+                origin_ref=origin_ref,
             ),
-            reason="Funded prepaid service period",
-        ),
-        origin=_ORIGIN,
-        origin_ref=origin_ref,
-    )
+        )
+    except AccountAdjustmentError as exc:
+        raise _adjustment_http_error(exc) from exc
     return PrepaidServiceRenewalPreview(
         account_id=subscription.subscriber_id,
         subscription_id=subscription.id,
@@ -349,25 +377,35 @@ def confirm_prepaid_service_renewal(
             detail="Insufficient prepaid funding for service renewal",
         )
 
-    adjustment_result = AccountAdjustments.confirm_system(
-        db,
-        AccountAdjustmentPreviewRequest(
-            account_id=current.account_id,
-            category=LedgerCategory.internet_service,
-            amount=current.amount,
-            currency=current.currency,
-            memo=(
-                "Prepaid service renewal "
-                f"{current.starts_at.date()} - {current.ends_at.date()}"
+    try:
+        adjustment_result = stage_system_account_adjustment(
+            db,
+            StageSystemAccountAdjustmentCommand(
+                context=CommandContext.system(
+                    actor="system:prepaid_service_renewals",
+                    scope=ACCOUNT_ADJUSTMENT_SCOPE,
+                    reason="Stage one funded prepaid service-period debit",
+                    idempotency_key=current.idempotency_key,
+                ),
+                request=AccountAdjustmentPreviewRequest(
+                    account_id=current.account_id,
+                    category=LedgerCategory.internet_service,
+                    amount=current.amount,
+                    currency=current.currency,
+                    memo=(
+                        "Prepaid service renewal "
+                        f"{current.starts_at.date()} - {current.ends_at.date()}"
+                    ),
+                    reason="Funded prepaid service period",
+                ),
+                origin=_ORIGIN,
+                origin_ref=current.origin_ref,
+                idempotency_key=current.idempotency_key,
+                ledger_effective_date=current.starts_at,
             ),
-            reason="Funded prepaid service period",
-        ),
-        origin=_ORIGIN,
-        origin_ref=current.origin_ref,
-        idempotency_key=current.idempotency_key,
-        commit=False,
-        ledger_effective_date=current.starts_at,
-    )
+        )
+    except AccountAdjustmentError as exc:
+        raise _adjustment_http_error(exc) from exc
     entitlement = ensure_prepaid_entitlement_for_wallet_debit(
         db,
         subscription=subscription,

@@ -4,6 +4,7 @@ import logging
 from datetime import datetime
 from typing import Any, cast
 from urllib.parse import quote_plus
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Form, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -28,6 +29,8 @@ from app.services.auth_dependencies import (
     require_any_permission,
     require_permission,
 )
+from app.services.domain_errors import DomainError
+from app.services.owner_commands import CommandContext
 from app.services.subscription_lifecycle import (
     SubscriptionCommandKind,
     SubscriptionEffectiveTiming,
@@ -56,6 +59,38 @@ def _base_context(
 
 def _get_actor_id(request: Request) -> str | None:
     return web_admin_service.get_actor_id(request)
+
+
+def _fup_command_context(
+    request: Request,
+    *,
+    scope: str,
+    reason: str,
+) -> CommandContext:
+    actor = _get_actor_id(request)
+    if not actor:
+        raise HTTPException(status_code=401, detail="Authenticated actor required")
+    command_id = uuid4()
+    return CommandContext(
+        command_id=command_id,
+        correlation_id=command_id,
+        actor=actor,
+        scope=scope,
+        reason=reason,
+    )
+
+
+def _fup_http_error(exc: DomainError) -> HTTPException:
+    suffix = exc.code.rsplit(".", 1)[-1]
+    if suffix.endswith("not_found"):
+        status_code = 404
+    elif suffix in {"invalid_rule", "invalid_rule_chain"}:
+        status_code = 400
+    elif suffix == "active_caller_transaction":
+        status_code = 409
+    else:
+        status_code = 500
+    return HTTPException(status_code=status_code, detail=exc.message)
 
 
 def _assert_lifecycle_command_permission(
@@ -323,7 +358,13 @@ def offer_fup_settings_update(
 ) -> RedirectResponse:
     """Update FUP policy accounting settings."""
     form = parse_form_data_sync(request)
-    web_fup_service.handle_policy_update(db, offer_id, form)
+    context = _fup_command_context(
+        request, scope=offer_id, reason="admin_fup_policy_update"
+    )
+    try:
+        web_fup_service.handle_policy_update(db, offer_id, form, context)
+    except DomainError as exc:
+        raise _fup_http_error(exc) from exc
     return RedirectResponse(
         url=web_fup_service.redirect_to_fup_context(form, offer_id),
         status_code=303,
@@ -340,7 +381,13 @@ def offer_fup_add_rule(
 ) -> RedirectResponse:
     """Add a new FUP rule."""
     form = parse_form_data_sync(request)
-    web_fup_service.handle_add_rule(db, offer_id, form)
+    context = _fup_command_context(
+        request, scope=offer_id, reason="admin_fup_rule_creation"
+    )
+    try:
+        web_fup_service.handle_add_rule(db, offer_id, form, context)
+    except DomainError as exc:
+        raise _fup_http_error(exc) from exc
     return RedirectResponse(
         url=web_fup_service.redirect_to_fup_context(form, offer_id),
         status_code=303,
@@ -357,7 +404,13 @@ def offer_fup_update_rule(
 ) -> RedirectResponse:
     """Update an existing FUP rule."""
     form = parse_form_data_sync(request)
-    web_fup_service.handle_update_rule(db, rule_id, form)
+    context = _fup_command_context(
+        request, scope=offer_id, reason="admin_fup_rule_update"
+    )
+    try:
+        web_fup_service.handle_update_rule(db, rule_id, form, context)
+    except DomainError as exc:
+        raise _fup_http_error(exc) from exc
     return RedirectResponse(
         url=web_fup_service.redirect_to_fup_context(form, offer_id),
         status_code=303,
@@ -374,7 +427,13 @@ def offer_fup_delete_rule(
 ) -> RedirectResponse:
     """Delete an FUP rule."""
     form = parse_form_data_sync(request)
-    web_fup_service.handle_delete_rule(db, rule_id)
+    context = _fup_command_context(
+        request, scope=offer_id, reason="admin_fup_rule_deletion"
+    )
+    try:
+        web_fup_service.handle_delete_rule(db, rule_id, context)
+    except DomainError as exc:
+        raise _fup_http_error(exc) from exc
     return RedirectResponse(
         url=web_fup_service.redirect_to_fup_context(form, offer_id),
         status_code=303,
@@ -392,7 +451,13 @@ def offer_fup_clone_rules(
     """Clone FUP rules from another offer."""
     form = parse_form_data_sync(request)
     source_offer_id = str(form.get("source_offer_id", ""))
-    web_fup_service.handle_clone_rules(db, source_offer_id, offer_id)
+    context = _fup_command_context(
+        request, scope=offer_id, reason="admin_fup_rule_clone"
+    )
+    try:
+        web_fup_service.handle_clone_rules(db, source_offer_id, offer_id, context)
+    except DomainError as exc:
+        raise _fup_http_error(exc) from exc
     return RedirectResponse(
         url=web_fup_service.redirect_to_fup_context(form, offer_id),
         status_code=303,

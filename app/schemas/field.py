@@ -395,6 +395,9 @@ class FieldMaterialRequestRead(BaseModel):
     priority: str
     notes: str | None = None
     source_warehouse_code: str | None = None
+    support_system: str | None = None
+    support_reference: str | None = None
+    support_status: str | None = None
     submitted_at: datetime | None = None
     approved_at: datetime | None = None
     rejected_at: datetime | None = None
@@ -475,9 +478,10 @@ class FieldExpenseRequestRead(BaseModel):
     currency: str
     notes: str | None = None
     rejection_reason: str | None = None
-    erp_expense_claim_id: str | None = None
-    erp_claim_number: str | None = None
-    erp_claim_status: str | None = None
+    expense_system: str | None = None
+    expense_claim_reference: str | None = None
+    expense_claim_number: str | None = None
+    expense_claim_status: str | None = None
     client_ref: UUID | None = None
     total_amount: Decimal
     submitted_at: datetime | None = None

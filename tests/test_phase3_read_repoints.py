@@ -50,6 +50,12 @@ def test_referral_reads_are_permanently_native(monkeypatch):
         "read_for_subscriber",
         lambda db, subscriber_id: {**expected, "subscriber_id": subscriber_id},
     )
+    monkeypatch.setattr(
+        me_api.db_session_adapter, "release_read_transaction", lambda db: None
+    )
+    monkeypatch.setattr(
+        referrals_service, "ensure_referral_code", lambda db, command: None
+    )
 
     result = me_api.my_referrals(db=None, principal=principal)
 

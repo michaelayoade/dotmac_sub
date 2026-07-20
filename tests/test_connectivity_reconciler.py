@@ -315,6 +315,7 @@ class TestDesiredConnectivity:
             SubscriptionStatus.suspended,
             SubscriptionStatus.blocked,
             SubscriptionStatus.stopped,
+            SubscriptionStatus.disabled,
         ):
             d = derive_desired_connectivity(status)
             # Default is suspended; walled-garden (captive) is opt-in per customer (#216).
@@ -334,7 +335,6 @@ class TestDesiredConnectivity:
         for status in (
             SubscriptionStatus.canceled,
             SubscriptionStatus.expired,
-            SubscriptionStatus.disabled,
         ):
             d = derive_desired_connectivity(status)
             assert d.access_state is AccessState.terminated

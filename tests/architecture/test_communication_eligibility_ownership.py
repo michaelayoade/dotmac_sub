@@ -57,7 +57,6 @@ LEDGER_BYPASS_BACKLOG = {
     "app/services/notification_adapter.py",
     "app/services/operational_escalation_delivery.py",
     "app/services/quotes_mirror.py",
-    "app/services/referrals.py",
     "app/services/web_catalog_subscriptions.py",
     "app/services/web_notifications.py",
     "app/services/web_system_export_tool.py",

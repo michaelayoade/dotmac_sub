@@ -11,7 +11,12 @@ from unittest.mock import patch
 
 import pytest
 
+from app.services.domain_errors import DomainError
 from app.services.events.types import EventType
+from tests.reseller_status_helpers import (
+    confirm_status_action,
+    preview_status_confirmation,
+)
 
 # ---------------------------------------------------------------------------
 # 1. Event types
@@ -269,6 +274,7 @@ class TestAccountDetail:
             SubscriptionStatus,
         )
         from app.models.enforcement_lock import EnforcementLock, EnforcementReason
+        from app.models.idempotency import IdempotencyKey
         from app.models.subscriber import Reseller, Subscriber
         from app.services import reseller_portal
 
@@ -309,17 +315,24 @@ class TestAccountDetail:
         )
         db_session.commit()
 
-        with pytest.raises(ValueError, match="changed after preview"):
-            reseller_portal.update_customer_account_status(
+        with pytest.raises(DomainError, match="changed after preview"):
+            confirm_status_action(
                 db_session,
-                str(reseller.id),
-                str(account.id),
-                "deactivate",
-                expected_preview_fingerprint=fingerprint,
+                reseller_id=reseller.id,
+                account_id=account.id,
+                action="deactivate",
+                fingerprint=fingerprint,
+                idempotency_key="stale-preview-confirmation",
             )
 
         db_session.refresh(subscription)
         assert subscription.status == SubscriptionStatus.active
+        assert (
+            db_session.query(IdempotencyKey)
+            .filter(IdempotencyKey.key == "stale-preview-confirmation")
+            .count()
+            == 0
+        )
 
     def test_status_confirmation_is_preview_first_and_idempotent(
         self, db_session
@@ -342,37 +355,35 @@ class TestAccountDetail:
             db_session, str(reseller.id), str(account.id)
         )["status_actions"]["deactivate"]["fingerprint"]
 
-        proposal = reseller_portal.preview_customer_account_status_confirmation(
+        proposal = preview_status_confirmation(
             db_session,
-            str(reseller.id),
-            str(account.id),
-            "deactivate",
-            expected_preview_fingerprint=fingerprint,
+            reseller_id=reseller.id,
+            account_id=account.id,
+            action="deactivate",
+            fingerprint=fingerprint,
         )
         assert proposal is not None
         assert proposal["affected"] == 0
         assert proposal["account_affected"] is True
 
-        first = reseller_portal.confirm_customer_account_status_action(
+        first = confirm_status_action(
             db_session,
-            str(reseller.id),
-            str(account.id),
-            "deactivate",
-            actor_id=None,
-            expected_preview_fingerprint=proposal["preview_fingerprint"],
+            reseller_id=reseller.id,
+            account_id=account.id,
+            action="deactivate",
+            fingerprint=proposal["preview_fingerprint"],
             idempotency_key=proposal["idempotency_key"],
         )
         # A later state change must not alter the original result returned by an
         # idempotent replay.
         account.status = SubscriberStatus.active
         db_session.commit()
-        replay = reseller_portal.confirm_customer_account_status_action(
+        replay = confirm_status_action(
             db_session,
-            str(reseller.id),
-            str(account.id),
-            "deactivate",
-            actor_id=None,
-            expected_preview_fingerprint=proposal["preview_fingerprint"],
+            reseller_id=reseller.id,
+            account_id=account.id,
+            action="deactivate",
+            fingerprint=proposal["preview_fingerprint"],
             idempotency_key=proposal["idempotency_key"],
         )
 
@@ -414,35 +425,33 @@ class TestAccountDetail:
         first_fingerprint = reseller_portal.get_account_detail(
             db_session, str(reseller.id), str(first_account.id)
         )["status_actions"]["deactivate"]["fingerprint"]
-        first_proposal = reseller_portal.preview_customer_account_status_confirmation(
+        first_proposal = preview_status_confirmation(
             db_session,
-            str(reseller.id),
-            str(first_account.id),
-            "deactivate",
-            expected_preview_fingerprint=first_fingerprint,
+            reseller_id=reseller.id,
+            account_id=first_account.id,
+            action="deactivate",
+            fingerprint=first_fingerprint,
         )
         assert first_proposal is not None
-        reseller_portal.confirm_customer_account_status_action(
+        confirm_status_action(
             db_session,
-            str(reseller.id),
-            str(first_account.id),
-            "deactivate",
-            actor_id=None,
-            expected_preview_fingerprint=first_proposal["preview_fingerprint"],
+            reseller_id=reseller.id,
+            account_id=first_account.id,
+            action="deactivate",
+            fingerprint=first_proposal["preview_fingerprint"],
             idempotency_key=first_proposal["idempotency_key"],
         )
         second_fingerprint = reseller_portal.get_account_detail(
             db_session, str(reseller.id), str(second_account.id)
         )["status_actions"]["deactivate"]["fingerprint"]
 
-        with pytest.raises(ValueError, match="another account"):
-            reseller_portal.confirm_customer_account_status_action(
+        with pytest.raises(DomainError, match="another account"):
+            confirm_status_action(
                 db_session,
-                str(reseller.id),
-                str(second_account.id),
-                "deactivate",
-                actor_id=None,
-                expected_preview_fingerprint=second_fingerprint,
+                reseller_id=reseller.id,
+                account_id=second_account.id,
+                action="deactivate",
+                fingerprint=second_fingerprint,
                 idempotency_key=first_proposal["idempotency_key"],
             )
 

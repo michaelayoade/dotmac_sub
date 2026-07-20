@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 class VendorQuoteCreate(BaseModel):
     project_id: UUID
-    currency: str = Field(default="NGN", min_length=3, max_length=3)
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
     vat_rate_percent: Decimal = Field(default=Decimal("0"), ge=0, le=100)
 
 
@@ -52,6 +52,10 @@ class VendorAsBuiltCreate(BaseModel):
     variation_reason: str | None = Field(default=None, max_length=2000)
     work_order_ref: str | None = Field(default=None, max_length=120)
     line_items: list[VendorAsBuiltLineCreate] = Field(default_factory=list)
+
+
+class VendorSubmissionConfirm(BaseModel):
+    confirmation_token: str = Field(min_length=1, max_length=131_072)
 
 
 class VendorReview(BaseModel):

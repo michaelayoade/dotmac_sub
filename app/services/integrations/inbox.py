@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, TypeVar
 from uuid import UUID
 
 from sqlalchemy import select
@@ -19,6 +20,28 @@ from app.services.integrations.installations import quarantine_installation
 
 class InboxError(ValueError):
     """Raised when an inbound receipt violates identity or lifecycle rules."""
+
+
+class ProviderEventIdentityCollision(InboxError):
+    """A provider reused one event identity for different payload bytes."""
+
+
+CommandResultT = TypeVar("CommandResultT")
+
+
+def execute_command(
+    db: Session,
+    command: Callable[[], CommandResultT],
+) -> CommandResultT:
+    """Complete one inbox-owned unit of work."""
+
+    try:
+        result = command()
+        db.commit()
+        return result
+    except Exception:
+        db.rollback()
+        raise
 
 
 def get_receipt(db: Session, *, receipt_id: UUID) -> IntegrationInbox:
@@ -93,7 +116,7 @@ def receive_verified(
                 reason="provider_event_identity_collision",
                 actor="integration.inbox",
             )
-            raise InboxError("provider event identity collision")
+            raise ProviderEventIdentityCollision("provider event identity collision")
         return existing, False
     receipt = IntegrationInbox(
         installation_id=binding.installation_id,
@@ -112,6 +135,39 @@ def receive_verified(
     db.add(receipt)
     db.flush()
     return receipt, True
+
+
+def receive_and_claim_verified(
+    db: Session,
+    *,
+    capability_binding_id: UUID,
+    provider_event_id: str,
+    event_type: str,
+    payload: dict[str, Any],
+    headers: dict[str, str] | None = None,
+) -> tuple[IntegrationInbox, bool]:
+    """Persist a verified fact before any domain consequence runs."""
+
+    try:
+        receipt, _created = receive_verified(
+            db,
+            capability_binding_id=capability_binding_id,
+            provider_event_id=provider_event_id,
+            event_type=event_type,
+            payload=payload,
+            headers=headers,
+        )
+        should_process = claim_for_processing(receipt)
+    except ProviderEventIdentityCollision:
+        # Quarantine is the authoritative security consequence of an identity
+        # collision and must survive the fail-closed rejection.
+        db.commit()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+    db.commit()
+    return receipt, should_process
 
 
 def claim_for_processing(receipt: IntegrationInbox) -> bool:
@@ -150,6 +206,43 @@ def mark_failed(
         "dead_letter" if receipt.attempt_count >= max(1, max_attempts) else "retryable"
     )
     return receipt
+
+
+def complete_consequence(
+    db: Session,
+    *,
+    receipt: IntegrationInbox,
+    consequence: dict[str, Any],
+) -> dict[str, Any]:
+    """Commit one domain consequence with its canonical inbox evidence."""
+
+    return execute_command(
+        db,
+        lambda: mark_processed(receipt, consequence=consequence).consequence_json,
+    )
+
+
+def fail_consequence(
+    db: Session,
+    *,
+    receipt: IntegrationInbox,
+    error_code: str,
+    error_detail: str | None = None,
+) -> None:
+    """Discard partial consequence writes, then record retry evidence."""
+
+    receipt_id = receipt.id
+    db.rollback()
+
+    def operation() -> None:
+        current = get_receipt(db, receipt_id=receipt_id)
+        mark_failed(
+            current,
+            error_code=error_code,
+            error_detail=error_detail,
+        )
+
+    execute_command(db, operation)
 
 
 def replay_receipt(db: Session, *, receipt_id: UUID) -> IntegrationInbox:

@@ -9,16 +9,19 @@ subscriber-backed reseller login is unchanged.
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
 
 from app.config import settings
 from app.models.auth import AuthProvider, MFAMethod, MFAMethodType, UserCredential
-from app.models.subscriber import Reseller
+from app.models.subscriber import Reseller, ResellerUser
 from app.services import auth_flow as auth_flow_service
-from app.services import reseller_portal
+from app.services import reseller_onboarding, reseller_portal
 from app.services.auth_flow import AuthFlow, _primary_totp_method
+from app.services.owner_commands import CommandContext
 
 
 def _request():
@@ -37,8 +40,9 @@ def _request():
 def reseller(db_session):
     r = Reseller(name="ABC Networks", code="ABC")
     db_session.add(r)
+    db_session.flush()
+    db_session.expunge(r)
     db_session.commit()
-    db_session.refresh(r)
     return r
 
 
@@ -53,14 +57,44 @@ def flag_on(monkeypatch):
 
 
 def _make_reseller_login(db, reseller, username="abc-admin", password="secret"):  # noqa: S107
-    return reseller_portal.create_reseller_user_principal(
-        db,
-        reseller_id=str(reseller.id),
-        username=username,
-        password=password,
-        email="owner@abcnetworks.com",
-        full_name="ABC Owner",
+    reseller_id = reseller.id
+    command_id = uuid.uuid4()
+    context = CommandContext(
+        command_id=command_id,
+        correlation_id=command_id,
+        actor="user:reseller-principal-test",
+        scope=reseller_onboarding.RESELLER_WRITE_SCOPE,
+        reason="create first-class reseller test principal",
     )
+    previous = settings.reseller_user_principal_enabled
+    object.__setattr__(settings, "reseller_user_principal_enabled", True)
+    try:
+        outcome = reseller_onboarding.provision_reseller_user(
+            db,
+            reseller_onboarding.ProvisionResellerUserCommand(
+                context=context,
+                reseller_id=reseller_id,
+                portal_user=reseller_onboarding.ResellerPortalUserSpec(
+                    first_name="ABC",
+                    last_name="Owner",
+                    email="owner@abcnetworks.com",
+                    username=username,
+                    password=password,
+                    send_invite=False,
+                ),
+            ),
+        )
+    finally:
+        object.__setattr__(settings, "reseller_user_principal_enabled", previous)
+    reseller_user = db.get(ResellerUser, outcome.reseller_user_id)
+    credential = (
+        db.query(UserCredential)
+        .filter(UserCredential.reseller_user_id == outcome.reseller_user_id)
+        .one()
+    )
+    credential.must_change_password = False
+    db.commit()
+    return reseller_user
 
 
 def test_create_reseller_user_principal_has_no_subscriber(db_session, reseller):

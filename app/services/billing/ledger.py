@@ -6,12 +6,20 @@ be modified. To correct an entry, create a reversing entry using the
 """
 
 import logging
+from datetime import datetime
+from decimal import Decimal
+from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models.billing import LedgerEntry, LedgerEntryType, LedgerSource
+from app.models.billing import (
+    LedgerCategory,
+    LedgerEntry,
+    LedgerEntryType,
+    LedgerSource,
+)
 from app.schemas.billing import LedgerEntryCreate, LedgerEntryUpdate
 from app.services.billing._common import _validate_ledger_linkages
 from app.services.common import (
@@ -35,6 +43,14 @@ _REVERSE_TYPE = {
 _REVERSAL_REFERENCE = "Reversal of ledger entry {entry_id}"
 
 
+class LedgerAccountAdjustmentError(ValueError):
+    """Transport-neutral failure from the account-adjustment ledger boundary."""
+
+    def __init__(self, code: str, message: str) -> None:
+        self.code = code
+        super().__init__(message)
+
+
 def _reversal_target_statement(entry_id: str):
     """Select the entry under a row lock for reversal serialization.
 
@@ -50,6 +66,63 @@ def _reversal_target_statement(entry_id: str):
 
 
 class LedgerEntries(ListResponseMixin):
+    @staticmethod
+    def stage_account_adjustment_debit(
+        db: Session,
+        *,
+        account_id: UUID,
+        category: LedgerCategory,
+        amount: Decimal,
+        currency: str,
+        memo: str,
+        effective_date: datetime | None = None,
+    ) -> LedgerEntry:
+        """Stage one canonical adjustment debit in the caller-owned transaction."""
+
+        try:
+            return LedgerEntries.create(
+                db,
+                LedgerEntryCreate(
+                    account_id=account_id,
+                    entry_type=LedgerEntryType.debit,
+                    source=LedgerSource.adjustment,
+                    category=category,
+                    amount=amount,
+                    currency=currency,
+                    memo=memo,
+                    effective_date=effective_date,
+                ),
+                commit=False,
+            )
+        except HTTPException as exc:
+            raise LedgerAccountAdjustmentError(
+                "invalid_debit",
+                "The adjustment debit could not be staged.",
+            ) from exc
+
+    @staticmethod
+    def stage_account_adjustment_reversal(
+        db: Session,
+        *,
+        ledger_entry_id: UUID,
+        adjustment_id: UUID,
+        reason: str,
+    ) -> LedgerEntry:
+        """Stage the unique structural reversal for one adjustment debit."""
+
+        try:
+            return LedgerEntries.reverse(
+                db,
+                str(ledger_entry_id),
+                memo=f"{reason} [account adjustment {adjustment_id}]",
+                commit=False,
+            )
+        except HTTPException as exc:
+            raise LedgerAccountAdjustmentError(
+                "invalid_reversal",
+                "The adjustment reversal could not be staged.",
+            ) from exc
+
     @staticmethod
     def create(
         db: Session,

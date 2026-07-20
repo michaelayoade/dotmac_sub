@@ -22,9 +22,80 @@ from app.models.vendor_routes import (
     Vendor,
 )
 from app.schemas.vendor_portal import VendorAsBuiltCreate, VendorAsBuiltLineCreate
-from app.services import vendor_as_built_review_proposals
+from app.services import vendor_as_built_review_proposals, vendor_submission_proposals
+from app.services.db_session_adapter import db_session_adapter
+from app.services.owner_commands import CommandContext
+from app.services.vendor_as_built_review_proposals import (
+    ConfirmVendorAsBuiltReviewCommand,
+    VendorAsBuiltReviewConfirmationError,
+)
 from app.services.vendor_portal_errors import VendorPortalOperationError
-from app.services.vendor_portal_operations import vendor_portal_operations
+from app.services.vendor_portal_operations import (
+    VendorProjectWorkspaceError,
+    vendor_portal_operations,
+)
+from app.services.vendor_submission_proposals import ConfirmVendorSubmissionCommand
+
+
+def _confirm(
+    db_session,
+    *,
+    token: str,
+    as_built_id: str,
+    action: str,
+    actor_id: str,
+):
+    db_session_adapter.release_read_transaction(db_session)
+    command_id = uuid4()
+    return vendor_as_built_review_proposals.confirm_review(
+        db_session,
+        ConfirmVendorAsBuiltReviewCommand(
+            context=CommandContext(
+                command_id=command_id,
+                correlation_id=command_id,
+                actor=actor_id,
+                scope=as_built_id,
+                reason="test_vendor_as_built_review_confirmation",
+            ),
+            confirmation_token=token,
+            as_built_id=as_built_id,
+            action=action,
+            actor_id=actor_id,
+        ),
+    )
+
+
+def _submit_as_built(
+    db_session,
+    *,
+    payload: VendorAsBuiltCreate,
+    vendor_id: str,
+    user_id: str,
+):
+    proposal = vendor_submission_proposals.issue_as_built_submission(
+        db_session,
+        payload=payload,
+        vendor_id=vendor_id,
+        user_id=user_id,
+    )
+    db_session_adapter.release_read_transaction(db_session)
+    command_id = uuid4()
+    return vendor_submission_proposals.confirm_submission(
+        db_session,
+        ConfirmVendorSubmissionCommand(
+            context=CommandContext(
+                command_id=command_id,
+                correlation_id=command_id,
+                actor=user_id,
+                scope=vendor_id,
+                reason="test_replacement_as_built_submission",
+            ),
+            confirmation_token=proposal.confirmation_token,
+            vendor_id=vendor_id,
+            user_id=user_id,
+            project_id=str(payload.project_id),
+        ),
+    )
 
 
 def _submitted(db_session):
@@ -136,16 +207,16 @@ def test_signed_review_confirmation_is_stale_safe_and_exact_replay(db_session):
         reason="Evidence accepted",
     )
 
-    first = vendor_as_built_review_proposals.confirm_review(
+    first = _confirm(
         db_session,
-        confirmation_token=proposal.confirmation_token,
+        token=proposal.confirmation_token,
         as_built_id=str(as_built.id),
         action="accept",
         actor_id=str(reviewer.id),
     )
-    replay = vendor_as_built_review_proposals.confirm_review(
+    replay = _confirm(
         db_session,
-        confirmation_token=proposal.confirmation_token,
+        token=proposal.confirmation_token,
         as_built_id=str(as_built.id),
         action="accept",
         actor_id=str(reviewer.id),
@@ -174,33 +245,40 @@ def test_review_confirmation_rejects_changed_evidence(db_session):
     as_built.actual_length_meters = 130.0
     db_session.commit()
 
-    with pytest.raises(VendorPortalOperationError) as exc:
-        vendor_as_built_review_proposals.confirm_review(
+    with pytest.raises(VendorAsBuiltReviewConfirmationError) as exc:
+        _confirm(
             db_session,
-            confirmation_token=proposal.confirmation_token,
+            token=proposal.confirmation_token,
             as_built_id=str(as_built.id),
             action="accept",
             actor_id=str(reviewer.id),
         )
 
-    assert exc.value.code == "stale_confirmation"
+    assert exc.value.code.endswith(".stale_proposal")
     assert db_session.query(AsBuiltRouteReviewEvent).count() == 0
     assert db_session.query(IdempotencyKey).count() == 0
 
 
 def test_rejected_evidence_can_be_replaced_with_next_version(db_session):
     installation, vendor, reviewer, as_built = _submitted(db_session)
-    vendor_portal_operations.transition_as_built_review(
+    rejection = vendor_as_built_review_proposals.issue_review(
         db_session,
-        str(as_built.id),
+        as_built_id=str(as_built.id),
         action="reject",
         actor_id=str(reviewer.id),
         reason="Correct the quantities",
     )
-
-    result = vendor_portal_operations.submit_as_built(
+    _confirm(
         db_session,
-        VendorAsBuiltCreate(
+        token=rejection.confirmation_token,
+        as_built_id=str(as_built.id),
+        action="reject",
+        actor_id=str(reviewer.id),
+    )
+
+    result = _submit_as_built(
+        db_session,
+        payload=VendorAsBuiltCreate(
             project_id=installation.id,
             line_items=[
                 VendorAsBuiltLineCreate(
@@ -210,19 +288,19 @@ def test_rejected_evidence_can_be_replaced_with_next_version(db_session):
                 )
             ],
         ),
-        str(vendor.id),
-        str(reviewer.id),
+        vendor_id=str(vendor.id),
+        user_id=str(reviewer.id),
     )
 
-    assert result["status"] == AsBuiltRouteStatus.submitted.value
+    replacement = db_session.get(AsBuiltRoute, result.result_id)
+    assert replacement.status == AsBuiltRouteStatus.submitted.value
     assert db_session.query(AsBuiltRoute).count() == 2
-    replacement = db_session.get(AsBuiltRoute, result["id"])
     assert replacement.version == 2
 
 
 def test_pending_evidence_blocks_duplicate_submission(db_session):
     installation, vendor, reviewer, _as_built = _submitted(db_session)
-    with pytest.raises(VendorPortalOperationError) as exc:
+    with pytest.raises(VendorProjectWorkspaceError) as exc:
         vendor_portal_operations.preview_as_built_submission(
             db_session,
             VendorAsBuiltCreate(
@@ -237,7 +315,7 @@ def test_pending_evidence_blocks_duplicate_submission(db_session):
             ),
             str(vendor.id),
         )
-    assert exc.value.code == "as_built_submission_not_allowed"
+    assert exc.value.code.endswith(".as_built_submission_not_allowed")
 
 
 def test_review_queue_projects_inventory_gated_actions(db_session):

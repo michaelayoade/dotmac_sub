@@ -594,63 +594,36 @@ FinancialAccessConsequence (confirmed financial access decision)
 
 ### Service Layer Architecture Pattern
 
-All services use a consistent **manager class** pattern:
+Business behavior is exposed through registered typed command and query
+owners. Adapters map transport input/output; they do not own transactions or
+raise transport errors inside the domain:
 
 ```python
-class SomeManager(ListResponseMixin):
-    @staticmethod
-    def create(db: Session, payload: SomeCreate) -> Some:
-        # Validation
-        # Default value resolution from settings
-        # Model instantiation and commit
-        # Event emission
-        return obj
+def get_some(db: Session, query: GetSome) -> SomeView:
+    obj = db.get(Some, query.some_id)
+    if obj is None:
+        raise SomeNotFoundError(query.some_id)
+    return SomeView.from_record(obj)
 
-    @staticmethod
-    def get(db: Session, id: str) -> Some:
-        obj = db.get(Some, id)
-        if not obj:
-            raise HTTPException(status_code=404)
-        return obj
 
-    @staticmethod
-    def list(db: Session, filters..., order_by: str,
-             order_dir: str, limit: int, offset: int) -> list[Some]:
-        query = db.query(Some)
-        # Apply filters
-        query = apply_ordering(query, order_by, order_dir, mappings)
-        return apply_pagination(query, limit, offset).all()
-
-    @staticmethod
-    def update(db: Session, id: str, payload: SomeUpdate) -> Some:
-        obj = db.get(Some, id)
-        if not obj:
-            raise HTTPException(status_code=404)
-        for key, value in payload.model_dump(exclude_unset=True).items():
-            setattr(obj, key, value)
-        db.commit()
-        db.refresh(obj)
-        return obj
-
-    @staticmethod
-    def delete(db: Session, id: str) -> bool:
-        obj = db.get(Some, id)
-        if not obj:
-            raise HTTPException(status_code=404)
-        db.delete(obj)
-        db.commit()
-        return True
-
-# Singleton instance
-some_manager = SomeManager()
+def update_some(db: Session, command: UpdateSome) -> SomeUpdated:
+    with db.begin():
+        obj = db.get(Some, command.some_id, with_for_update=True)
+        if obj is None:
+            raise SomeNotFoundError(command.some_id)
+        obj.display_name = command.display_name
+        db.flush()
+        # Stage audit evidence and a versioned event in this transaction.
+        outcome = SomeUpdated(some_id=obj.id)
+    return outcome
 ```
 
 **Key Features**:
-- `ListResponseMixin` provides `list_response()` with pagination metadata
-- `apply_ordering()`, `apply_pagination()` for consistent query handling
-- `coerce_uuid()` and `validate_enum()` for input validation
-- Event emission via `emit_event()` after state changes
-- Settings resolution from `domain_settings` for multi-tenant config
+- typed commands, queries, outcomes, and domain errors;
+- explicit field assignment instead of free-form mass assignment;
+- transaction, lock, idempotency, audit, and event ownership in the command;
+- authoritative settings resolution through the registered control-plane owner;
+- adapter-only mapping for HTTP, form, task retry, CLI, and provider semantics.
 
 ### Critical Business Logic Flows
 
@@ -1108,14 +1081,16 @@ celery_app = Celery("dotmac_sm")
 def task_name(arg1, arg2):
     db = SessionLocal()
     try:
-        # Do work
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
+        command = OwningCommand(arg1=arg1, arg2=arg2)
+        outcome = owning_service.execute(db, command)
+        return outcome.to_task_result()
     finally:
         db.close()
 ```
+
+The task is a delivery adapter. The registered owner completes or rolls back
+the business transaction before returning. The task maps only retry/reject and
+serialization behavior.
 
 ---
 
@@ -1170,7 +1145,7 @@ def task_name(arg1, arg2):
 
 | Pattern | Description |
 |---------|-------------|
-| Service Layer Manager | Stateless business logic classes with CRUD methods |
+| Command/query owner | Typed intent and results with one named decision and transaction owner |
 | Event-Driven | ~40 event types with handlers for webhooks, notifications, enforcement |
 | Multi-Tenant | Domain-based tenancy with DomainSetting configuration |
 | RBAC | Role/Permission checks via decorators |

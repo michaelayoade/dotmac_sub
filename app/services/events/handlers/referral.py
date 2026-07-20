@@ -9,19 +9,25 @@ referral qualifies and the referrer earns the configured reward.
 emits it before ``compute_account_status`` re-derives the account flag — the
 service's active check looks at subscriptions too, so the ordering is safe).
 The subscriber-status events cover admin-driven flips to ``active``.
-``Referrals.qualify_for_subscriber`` is idempotent and flush-only, so handling
-a broad event set is cheap and can never double-qualify or commit the
-emitting service's open transaction.
+The handler is a thin adapter: it submits a typed, idempotent qualification
+command. The program owner locks and commits its own complete transaction.
 """
 
 from __future__ import annotations
 
 import logging
+from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.models.subscriber import Subscriber
+from app.services.db_session_adapter import db_session_adapter
 from app.services.events.types import Event, EventType
+from app.services.owner_commands import CommandContext
+from app.services.referrals import (
+    REFERRAL_PROGRAM_SCOPE,
+    QualifyReferralForSubscriberCommand,
+    qualify_referral_for_subscriber,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,18 +58,31 @@ class ReferralHandler:
         if not subscriber_id:
             return
 
-        subscriber = db.get(Subscriber, subscriber_id)
-        if subscriber is None:
+        try:
+            resolved_subscriber_id = UUID(str(subscriber_id))
+        except ValueError:
             return
 
-        from app.services.referrals import referrals
-
-        referral = referrals.qualify_for_subscriber(db, subscriber)
-        if referral is not None:
+        db_session_adapter.release_read_transaction(db)
+        result = qualify_referral_for_subscriber(
+            db,
+            QualifyReferralForSubscriberCommand(
+                context=CommandContext.system(
+                    actor="subscriber_lifecycle_event",
+                    scope=REFERRAL_PROGRAM_SCOPE,
+                    reason="Subscriber lifecycle event requested referral qualification",
+                    correlation_id=event.event_id,
+                    causation_id=event.event_id,
+                    idempotency_key=f"referral-qualification:{event.event_id}",
+                ),
+                subscriber_id=resolved_subscriber_id,
+            ),
+        )
+        if result.referral_id is not None and result.outcome != "not_applicable":
             logger.info(
                 "referral_qualification_handled event=%s subscriber=%s referral=%s status=%s",
                 event.event_type.value,
-                subscriber.id,
-                referral.id,
-                referral.status,
+                resolved_subscriber_id,
+                result.referral_id,
+                result.status,
             )

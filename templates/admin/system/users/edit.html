@@ -52,71 +52,13 @@
                            class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                 </div>
             </div>
-            <div class="grid gap-4 sm:grid-cols-2">
+            <div>
                 <div>
                     <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Phone</label>
                     <input type="text" name="phone" value="{{ user.phone or '' }}"
                            class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                 </div>
                 <input type="hidden" name="user_type" value="system_user">
-                <div>
-                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Roles</label>
-                    <div class="rounded-lg border border-slate-300 bg-white p-3 max-h-48 overflow-y-auto dark:border-slate-600 dark:bg-slate-700">
-                        <div class="space-y-2">
-                            {% for role in roles %}
-                            <label class="flex items-center gap-2 cursor-pointer">
-                                <input type="checkbox" name="role_ids" value="{{ role.id }}"
-                                       {% if role.id|string in current_role_ids %}checked{% endif %}
-                                       class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
-                                <span class="text-sm text-slate-700 dark:text-slate-300">{{ role.name }}</span>
-                                {% if role.name == 'admin' %}
-                                <span class="text-xs text-purple-600 dark:text-purple-400">(full access)</span>
-                                {% endif %}
-                            </label>
-                            {% endfor %}
-                        </div>
-                    </div>
-                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Select one or more roles</p>
-                </div>
-            </div>
-            <div class="flex items-center gap-2">
-                <input type="checkbox" name="is_active" id="is_active"
-                       {% if user.is_active %}checked{% endif %}
-                       class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
-                <label for="is_active" class="text-sm text-slate-700 dark:text-slate-300">Active</label>
-            </div>
-
-            <!-- Direct Permissions Section -->
-            <div class="rounded-lg border border-slate-200 p-4 dark:border-slate-700" x-data="{ expanded: false, search: '' }">
-                <div class="flex items-center justify-between">
-                    <div>
-                        <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Direct Permissions</h2>
-                        <p class="text-xs text-slate-400 dark:text-slate-500">Grant specific permissions directly to this user (bypasses role-based access)</p>
-                    </div>
-                    <button type="button" @click="expanded = !expanded"
-                            class="text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400">
-                        <span x-show="!expanded">Show</span>
-                        <span x-show="expanded">Hide</span>
-                    </button>
-                </div>
-                <div x-show="expanded" x-transition class="mt-4">
-                    <input type="text" x-model="search" placeholder="Search permissions..."
-                           class="mb-3 block w-full rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    <div class="max-h-64 overflow-y-auto space-y-1">
-                        {% for permission in all_permissions %}
-                        <label class="flex items-center gap-2 cursor-pointer py-1"
-                               x-show="search === '' || '{{ permission.key }}'.toLowerCase().includes(search.toLowerCase())">
-                            <input type="checkbox" name="direct_permission_ids" value="{{ permission.id }}"
-                                   {% if permission.id|string in direct_permission_ids %}checked{% endif %}
-                                   class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
-                            <span class="text-sm font-mono text-slate-700 dark:text-slate-300">{{ permission.key }}</span>
-                            {% if permission.description %}
-                            <span class="text-xs text-slate-400">- {{ permission.description }}</span>
-                            {% endif %}
-                        </label>
-                        {% endfor %}
-                    </div>
-                </div>
             </div>
 
             {% if can_update_password %}
@@ -148,11 +90,74 @@
                 </a>
                 <button type="submit"
                         class="inline-flex items-center justify-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
-                    Save Changes
+                    Save Profile
                 </button>
             </div>
 	        </form>
 	    </div>
+
+    <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+            <h2 class="font-semibold text-slate-900 dark:text-white">Access assignments</h2>
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Local access changes are committed independently from profile updates. Source-managed roles are read-only here.</p>
+        </div>
+        <form method="post" action="/admin/system/users/{{ user.id }}/assignments" class="space-y-6 p-6">
+            {% include "components/forms/csrf_input.html" %}
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Roles</label>
+                <div class="rounded-lg border border-slate-300 bg-white p-3 max-h-48 overflow-y-auto dark:border-slate-600 dark:bg-slate-700">
+                    <div class="space-y-2">
+                        {% for role in roles %}
+                        {% set managed = role.id|string in managed_role_ids %}
+                        <label class="flex items-center gap-2 {% if managed %}opacity-70{% else %}cursor-pointer{% endif %}">
+                            <input type="checkbox" name="role_ids" value="{{ role.id }}"
+                                   {% if role.id|string in current_role_ids %}checked{% endif %}
+                                   {% if managed %}disabled{% endif %}
+                                   class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                            <span class="text-sm text-slate-700 dark:text-slate-300">{{ role.name }}</span>
+                            {% if role.name|lower == 'admin' %}
+                            <span class="text-xs text-purple-600 dark:text-purple-400">(full access)</span>
+                            {% endif %}
+                            {% if managed %}
+                            <span class="text-xs text-slate-500 dark:text-slate-400">(source-managed)</span>
+                            {% endif %}
+                        </label>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+            <div class="rounded-lg border border-slate-200 p-4 dark:border-slate-700" x-data="{ expanded: false, search: '' }">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Direct Permissions</h3>
+                        <p class="text-xs text-slate-400 dark:text-slate-500">Grant specific UI-assignable permissions directly to this user.</p>
+                    </div>
+                    <button type="button" @click="expanded = !expanded" class="text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400">
+                        <span x-show="!expanded">Show</span>
+                        <span x-show="expanded">Hide</span>
+                    </button>
+                </div>
+                <div x-show="expanded" x-transition class="mt-4">
+                    <input type="text" x-model="search" placeholder="Search permissions..."
+                           class="mb-3 block w-full rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <div class="max-h-64 overflow-y-auto space-y-1">
+                        {% for permission in all_permissions %}
+                        <label class="flex items-center gap-2 cursor-pointer py-1" x-show="search === '' || '{{ permission.key }}'.toLowerCase().includes(search.toLowerCase())">
+                            <input type="checkbox" name="direct_permission_ids" value="{{ permission.id }}"
+                                   {% if permission.id|string in direct_permission_ids %}checked{% endif %}
+                                   class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                            <span class="text-sm font-mono text-slate-700 dark:text-slate-300">{{ permission.key }}</span>
+                            {% if permission.description %}<span class="text-xs text-slate-400">- {{ permission.description }}</span>{% endif %}
+                        </label>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+            <div class="flex justify-end">
+                <button type="submit" class="inline-flex items-center justify-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">Save Access</button>
+            </div>
+        </form>
+    </div>
 
     {% if device_login_tier is defined %}
     <!-- Device Login Panel (router:admin) -->

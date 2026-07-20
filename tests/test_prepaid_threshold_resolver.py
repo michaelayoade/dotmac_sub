@@ -39,7 +39,9 @@ from app.models.catalog import (
 from app.models.subscriber import Subscriber
 from app.services.prepaid_threshold import (
     PrepaidCurrencyMismatchError,
+    PrepaidThresholdError,
     resolve_prepaid_threshold,
+    resolve_prepaid_threshold_decision,
     resolve_prepaid_thresholds,
 )
 from app.services.service_status import _prepaid_threshold
@@ -232,6 +234,34 @@ def test_unfunded_single_subscription_requires_its_price(db_session):
 
     scalar, batch = _both(db_session, account)
     assert scalar == batch == Decimal("17500.00")
+
+
+def test_threshold_decision_exposes_minimum_and_renewal_provenance(db_session):
+    account = _account(db_session, min_balance="1000.00")
+    offer = _offer(db_session, "17500.00")
+    _subscription(db_session, account, offer)
+
+    decision = resolve_prepaid_threshold_decision(db_session, account, now=NOW)
+
+    assert decision.account_id == str(account.id)
+    assert decision.configured_minimum == Decimal("1000.00")
+    assert decision.unfunded_renewal_requirement == Decimal("17500.00")
+    assert decision.threshold == Decimal("17500.00")
+    assert decision.currency == "NGN"
+
+
+def test_missing_unfunded_subscription_price_fails_closed(db_session):
+    account = _account(db_session, min_balance="0.00")
+    offer = _offer(db_session, None)
+    subscription = _subscription(db_session, account, offer)
+
+    with pytest.raises(PrepaidThresholdError) as captured:
+        resolve_prepaid_threshold(db_session, account, now=NOW)
+
+    assert captured.value.code == (
+        "financial.prepaid_threshold.missing_subscription_price"
+    )
+    assert captured.value.details == {"subscription_id": str(subscription.id)}
 
 
 def test_price_currency_must_match_configured_enforcement_currency(db_session):

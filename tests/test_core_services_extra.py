@@ -1,12 +1,14 @@
+from uuid import uuid4
+
 from starlette.requests import Request
 from starlette.responses import Response
 
-from app.schemas.rbac import PermissionCreate, RoleCreate, SubscriberRoleCreate
 from app.schemas.subscriber import SubscriberCreate
 from app.services import audit as audit_service
-from app.services import rbac as rbac_service
+from app.services import rbac_catalog, subscriber_assignments
 from app.services import scheduler as scheduler_service
 from app.services import subscriber as subscriber_service
+from app.services.owner_commands import CommandContext
 
 
 def test_subscriber_create_list(db_session, person):
@@ -31,14 +33,53 @@ def test_subscriber_create_list(db_session, person):
 
 
 def test_rbac_role_permission_link(db_session, person):
-    role = rbac_service.roles.create(db_session, RoleCreate(name="admin"))
-    permission = rbac_service.permissions.create(
-        db_session, PermissionCreate(key="tickets:read", name="Tickets Read")
+    person_id = person.id
+    db_session.commit()
+    role_command_id = uuid4()
+    role = rbac_catalog.create_role(
+        db_session,
+        rbac_catalog.CreateRoleCommand(
+            context=CommandContext(
+                command_id=role_command_id,
+                correlation_id=role_command_id,
+                actor="user:core-service-test",
+                scope=rbac_catalog.ROLE_WRITE_SCOPE,
+                reason="Core service role fixture",
+            ),
+            name="admin",
+        ),
     )
-    link = rbac_service.subscriber_roles.create(
-        db_session, SubscriberRoleCreate(subscriber_id=person.id, role_id=role.id)
+    permission_command_id = uuid4()
+    permission = rbac_catalog.create_permission(
+        db_session,
+        rbac_catalog.CreatePermissionCommand(
+            context=CommandContext(
+                command_id=permission_command_id,
+                correlation_id=permission_command_id,
+                actor="user:core-service-test",
+                scope=rbac_catalog.PERMISSION_WRITE_SCOPE,
+                reason="Core service permission fixture",
+            ),
+            key="tickets:read",
+            description="Tickets Read",
+        ),
     )
-    assert link.subscriber_id == person.id
+    assignment_command_id = uuid4()
+    link = subscriber_assignments.grant_subscriber_role(
+        db_session,
+        subscriber_assignments.GrantSubscriberRoleCommand(
+            context=CommandContext(
+                command_id=assignment_command_id,
+                correlation_id=assignment_command_id,
+                actor="user:core-service-test",
+                scope=subscriber_assignments.ASSIGNMENT_SCOPE,
+                reason="Core service subscriber role fixture",
+            ),
+            subscriber_id=person_id,
+            role_id=role.id,
+        ),
+    )
+    assert link.subscriber_id == person_id
     assert permission.key == "tickets:read"
 
 
