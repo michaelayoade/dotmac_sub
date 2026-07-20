@@ -22,7 +22,11 @@ from app.models.field_erp_sync import (
     SyncFlowOwner,
     SyncFlowOwnership,
 )
-from app.models.field_material import FieldInventoryItem, FieldMaterialRequest
+from app.models.field_material import (
+    FieldInventoryItem,
+    FieldMaterialRequest,
+    FieldWorkOrderMaterial,
+)
 from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
 from app.models.work_order import WorkOrder
@@ -268,6 +272,7 @@ def test_approve_does_not_enqueue_when_flag_off(db_session):
 
 
 def test_approve_enqueues_when_flag_on(db_session, monkeypatch):
+    _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.material_request.value})
     request = _make_approved_request(db_session, enqueue=True, monkeypatch=monkeypatch)
 
     rows = _outbox_rows(db_session, request)
@@ -278,6 +283,52 @@ def test_approve_enqueues_when_flag_on(db_session, monkeypatch):
     assert row.status == FieldErpSyncStatus.pending.value
     assert row.payload["omni_id"] == str(request.id)
     assert row.payload["request_type"] == "ISSUE"
+
+
+def test_approval_and_outbox_enqueue_are_atomic(db_session, monkeypatch):
+    request = _make_approved_request(db_session)
+    request.status = "submitted"
+    request.approved_at = None
+    _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.material_request.value})
+    db_session.commit()
+    monkeypatch.setattr(material_requests_module, "_erp_sync_enabled", lambda db: True)
+
+    def fail_enqueue(*args, **kwargs):
+        raise RuntimeError("outbox unavailable")
+
+    monkeypatch.setattr(material_sync, "enqueue_material_request", fail_enqueue)
+
+    import pytest
+
+    savepoint = db_session.begin_nested()
+    with pytest.raises(RuntimeError, match="outbox unavailable"):
+        field_material_requests.approve(db_session, str(request.id))
+
+    savepoint.rollback()
+    db_session.expire_all()
+    persisted = db_session.get(FieldMaterialRequest, request.id)
+    assert persisted.status == "submitted"
+    assert persisted.approved_at is None
+    assert _outbox_rows(db_session, persisted) == []
+
+
+def test_approval_fails_closed_when_cutover_owner_has_sync_disabled(db_session):
+    request = _make_approved_request(db_session)
+    request.status = "submitted"
+    request.approved_at = None
+    _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.material_request.value})
+    db_session.commit()
+
+    import pytest
+    from fastapi import HTTPException
+
+    savepoint = db_session.begin_nested()
+    with pytest.raises(HTTPException) as exc_info:
+        field_material_requests.approve(db_session, str(request.id))
+
+    assert exc_info.value.status_code == 503
+    assert "approval cannot be recorded" in str(exc_info.value.detail)
+    savepoint.rollback()
 
 
 def test_reenqueue_reuses_the_same_outbox_row(db_session):
@@ -313,8 +364,10 @@ def test_delivery_accepted_writes_erp_fields_back(db_session, monkeypatch):
     assert result.accepted == 1
     assert request.erp_material_request_id == "ERP-MR-1"
     assert request.erp_material_status == "issued"
-    # Non-terminal ERP status leaves the sub row in approved.
-    assert request.status == "approved"
+    assert request.status == "fulfilled"
+    assert request.fulfilled_at is not None
+    allocation = db_session.query(FieldWorkOrderMaterial).one()
+    assert allocation.allocated_quantity == 5
     assert client.posts[0]["path"] == "/api/v1/sync/sub/material-requests"
 
 
@@ -345,8 +398,7 @@ def test_delivery_rejected_records_erp_status(db_session, monkeypatch):
     assert result.rejected == 1
     assert row.status == FieldErpSyncStatus.rejected.value
     assert request.erp_material_status == "rejected"
-    # Material has no rejected write-back mapping → source status unchanged.
-    assert request.status == "approved"
+    assert request.status == "canceled"
 
 
 # ---------------------------------------------------------------------------
@@ -358,6 +410,8 @@ def test_delivery_refused_when_flow_owned_by_crm(db_session, monkeypatch):
     # material_request left at the seeded default (crm) — must NOT be sent.
     _seed_ownership(db_session)
     request = _make_approved_request(db_session, enqueue=True, monkeypatch=monkeypatch)
+    material_sync.enqueue_material_request(db_session, request)
+    db_session.commit()
     client = _FakeERPClient(post_outcomes=[{"request_id": "SHOULD-NOT-HAPPEN"}])
 
     result = outbox.deliver_pending(db_session, client=client)
@@ -369,6 +423,21 @@ def test_delivery_refused_when_flow_owned_by_crm(db_session, monkeypatch):
     row = _outbox_rows(db_session, request)[0]
     assert row.status == FieldErpSyncStatus.pending.value
     assert row.attempts == 0
+
+
+def test_local_issue_is_blocked_after_material_flow_cutover(db_session):
+    request = _make_approved_request(db_session)
+    _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.material_request.value})
+    db_session.commit()
+
+    import pytest
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc_info:
+        field_material_requests.issue(db_session, str(request.id))
+
+    assert exc_info.value.status_code == 409
+    assert "ERP owns material issue" in str(exc_info.value.detail)
 
 
 # ---------------------------------------------------------------------------

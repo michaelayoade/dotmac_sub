@@ -50,7 +50,6 @@ app.services.cutover_balance_audit
 app.services.dispatch
 app.services.dotmac_erp.domain_sync
 app.services.dotmac_erp.expense_sync
-app.services.dotmac_erp.material_sync
 app.services.dotmac_erp.outbox
 app.services.dotmac_erp.purchase_order_sync
 app.services.email
@@ -67,7 +66,6 @@ app.services.field.fiber
 app.services.field.jobs
 app.services.field.location_tracking
 app.services.field.map_assets
-app.services.field.material_requests
 app.services.field.materials
 app.services.field.movements
 app.services.field.notes

@@ -2771,6 +2771,26 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="operations.material_dependencies",
+                module="app.services.field.material_requests",
+                owns=(
+                    "service-work-order material need and operational approval",
+                    "ERP material-outcome projection into the service workflow",
+                    "work-order material allocation after ERP-confirmed issue",
+                ),
+                depends_on=(
+                    "operations.work_orders",
+                    "operations.work_order_status",
+                ),
+                notes=(
+                    "ERP owns warehouse, stock, serial, and issue decisions. "
+                    "This owner records the service dependency and applies an "
+                    "idempotent ERP outcome; it never posts inventory. Local "
+                    "issue/fulfil transitions are compatibility-only and fail "
+                    "closed after the material flow is cut over to Sub."
+                ),
+            ),
+            SOTService(
                 name="operations.project_lifecycle",
                 module="app.services.projects",
                 owns=(
@@ -3401,6 +3421,21 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "ERP owns AP settlement. This reconciler is the only writer "
                     "of Sub's refreshed ERP status and amount observation fields; "
                     "the creation response remains origination evidence only."
+                ),
+            ),
+            SOTService(
+                name="integration.erp_material_support",
+                module="app.services.dotmac_erp.material_sync",
+                owns=(
+                    "Sub-to-ERP material-support payload mapping",
+                    "stable material-support idempotency key",
+                    "ERP material-outcome observation and reconciliation",
+                ),
+                depends_on=("operations.material_dependencies",),
+                notes=(
+                    "Transport and observation only. ERP decides the backoffice "
+                    "outcome; operations.material_dependencies alone projects "
+                    "that outcome into Sub service-workflow state."
                 ),
             ),
         ),

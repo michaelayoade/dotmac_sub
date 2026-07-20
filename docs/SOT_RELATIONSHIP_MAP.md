@@ -2317,9 +2317,15 @@ Dependency order:
    assignment state themselves.
 6. `operations.field_completion`: owns field-job completion eligibility, evidence
    requirements, and completion transitions.
-7. `operations.project_lifecycle`: owns native project field/status mutations,
+7. `operations.material_dependencies`: owns the material need and approval that
+   can block a Sub service work order, then idempotently projects ERP's
+   authoritative issue/refusal outcome back into that workflow. It never posts
+   stock or selects ERP inventory. After the per-flow cutover, the old local
+   issue/fulfil actions fail closed. The cross-repository contract is
+   `dotmac_erp/docs/dotmac_sub_material_support_contract.md`.
+8. `operations.project_lifecycle`: owns native project field/status mutations,
    project SLA synchronization, and lifecycle event/notification requests.
-8. `operations.vendor_project_lifecycle` (`app.services.vendor_portal_operations`)
+9. `operations.vendor_project_lifecycle` (`app.services.vendor_portal_operations`)
    is the only writer for vendor start/complete transitions on
    `installation_projects`: `approved -> in_progress -> completed`. It locks
    the project, rechecks the assigned vendor and current state, and atomically
@@ -2341,7 +2347,7 @@ Dependency order:
    controls render only from the owner's `as_built_action` projection and
    serialize the existing `VendorAsBuiltCreate.geojson` contract rather than
    writing route evidence from the template.
-9. `operations.vendor_purchase_invoices` owns vendor purchase-invoice state,
+10. `operations.vendor_purchase_invoices` owns vendor purchase-invoice state,
    financial totals, submit eligibility, and the financial impact snapshot.
    ERP owns accounts-payable settlement. Its dedicated
    `GET /api/v1/sync/sub/purchase-invoices/{source_invoice_id}` contract returns
@@ -2355,7 +2361,7 @@ Dependency order:
    `erp_purchase_invoice_creation_status`, never proves paid or unpaid state,
    and cannot overwrite the refreshed status during replay. Stale or unavailable
    observations remain visibly distinct.
-10. `operations.vendor_submission_confirmation` (implemented by
+11. `operations.vendor_submission_confirmation` (implemented by
    `app.services.vendor_submission_proposals`) owns the short-lived signed
    confirmation proposal, stale-preview comparison, idempotency reservation,
    and replay result for lifecycle actions, quote, as-built, and
@@ -2631,6 +2637,10 @@ Integrations:
 2. `integration.jobs`: owns targets, jobs, and runs.
 3. `integration.sync`: owns sync orchestration.
 4. `integration.hooks`: owns hook dispatch and subscriptions.
+5. `integration.erp_material_support`: maps an approved Sub material need to the
+   neutral ERP contract, assigns the stable idempotency key, and observes/reconciles
+   ERP outcomes. It is a transport and observation owner, not an inventory or
+   service-workflow decision owner.
 
 Rule: integration routes/webhooks validate and enqueue. Connector behavior,
 sync lifecycle, and hook delivery stay inside integration services.
