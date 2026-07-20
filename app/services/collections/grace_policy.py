@@ -19,7 +19,10 @@ from app.models.catalog import BillingMode, PolicySet, Subscription, Subscriptio
 from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Reseller, Subscriber
 from app.services import settings_spec
-from app.services.billing_profile import resolve_billing_profile
+from app.services.billing_profile import (
+    require_effective_billing_mode,
+    resolve_billing_profile,
+)
 from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
 
 
@@ -65,7 +68,7 @@ def effective_billing_mode(db: Session, account: Subscriber) -> BillingMode:
     """Resolve the same billing mode used by collections automation."""
 
     profile = resolve_billing_profile(db, account)
-    return profile.effective_mode or account.billing_mode or BillingMode.prepaid
+    return require_effective_billing_mode(profile)
 
 
 def resolve_policy_set_for_account(db: Session, account: Subscriber) -> UUID | None:

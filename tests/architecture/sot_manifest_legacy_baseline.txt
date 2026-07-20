@@ -52,7 +52,6 @@ financial.account_credit_deposits
 financial.addon_purchases
 financial.billing_accounts
 financial.billing_health
-financial.billing_profile
 financial.billing_reporting
 financial.billing_scheduled
 financial.collections_scheduled

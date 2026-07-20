@@ -1121,6 +1121,145 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "prepaid/postpaid profile resolution",
                     "billing-mode transition policy",
                 ),
+                depends_on=(
+                    "access.subscription_lifecycle",
+                    "customer.accounts",
+                    "service_intent.catalog_policy",
+                ),
+                notes=(
+                    "Resolves account and collectible-subscription evidence into one "
+                    "typed billing profile. Missing, mixed, or contradictory evidence "
+                    "is explicit; callers do not guess from local defaults."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="prepaid/postpaid profile resolution",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical account billing mode",
+                                "canonical collectible subscription billing modes",
+                                "billing profile protocol",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="billing-mode transition policy",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical account billing mode",
+                                "canonical collectible subscription billing modes",
+                                "canonical offer billing mode",
+                                "billing profile protocol",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical account billing mode",
+                            owner="customer.accounts",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Subscriber billing_mode captured on the account",
+                        ),
+                        AuthorityInput(
+                            name="canonical collectible subscription billing modes",
+                            owner="access.subscription_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "Subscription billing_mode values in the canonical "
+                                "collectible lifecycle-status set"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical offer billing mode",
+                            owner="service_intent.catalog_policy",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="CatalogOffer billing_mode for the requested service",
+                        ),
+                        AuthorityInput(
+                            name="billing profile protocol",
+                            owner="financial.billing_profile",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed source and reason vocabulary, collectible status "
+                                "semantics, and deterministic mismatch precedence"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary=(
+                            "Caller creates and closes the session; resolution and policy "
+                            "read canonical billing evidence without writes or transaction "
+                            "completion."
+                        ),
+                        locking=(
+                            "No row lock for read projections. A command or remediation "
+                            "caller re-resolves against its locked/current source records "
+                            "before applying a billing-mode transition."
+                        ),
+                        idempotency=(
+                            "The same visible account, collectible subscription, offer, "
+                            "and requested-mode evidence produces the same typed outcome."
+                        ),
+                        retries=(
+                            "Transient reads may be retried. Missing, mixed, or conflicting "
+                            "billing evidence remains a deterministic domain failure."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "financial.billing_profile.account_billing_mode_missing",
+                            "financial.billing_profile.account_offer_billing_mode_mismatch",
+                            "financial.billing_profile.billing_mode_unresolved",
+                            "financial.billing_profile.mixed_collectible_subscription_billing_modes",
+                            "financial.billing_profile.offer_not_found",
+                            "financial.billing_profile.requested_billing_mode_mismatch",
+                            "financial.billing_profile.subscriber_not_found",
+                        ),
+                        mapping_owner=(
+                            "catalog, account, cleanup, collections, and reporting adapters"
+                        ),
+                        fail_closed_on=(
+                            "missing account or offer evidence",
+                            "mixed collectible subscription modes",
+                            "missing canonical account mode",
+                            "account, subscription, offer, or requested-mode contradiction",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "primitive string outcomes, ValueError failures, caller-local "
+                            "billing-mode fallback, and cleanup-specific mode comparison"
+                        ),
+                        new_owner="financial.billing_profile",
+                        verification=(
+                            "Resolution, mixed-mode, missing-mode, transition, catalog-write, "
+                            "cleanup revalidation, grace-policy, and architecture tests."
+                        ),
+                        cutover_gate=(
+                            "Account, catalog, cleanup, collections, access, and reporting "
+                            "callers consume the canonical typed profile or transition."
+                        ),
+                        fallback_retirement=(
+                            "Raw string reasons, generic ValueError boundary failures, "
+                            "caller-local grace defaults, and duplicated cleanup mode-set "
+                            "decisions are removed."
+                        ),
+                    ),
+                    steward="finance operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/audits/BILLING_SOT_AUDIT_2026-07-12.md",
+                        "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
+                    ),
+                    test_refs=(
+                        "tests/test_billing_profile.py",
+                        "tests/test_shared_policy_services.py",
+                        "tests/test_billing_cleanup_remediation.py",
+                        "tests/architecture/test_billing_profile_boundary.py",
+                    ),
+                ),
             ),
             SOTService(
                 name="financial.prepaid_threshold",

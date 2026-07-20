@@ -429,7 +429,7 @@ def test_account_mode_plan_refuses_mixed_live_modes(db_session):
     )
 
     assert item["decision"] == "refuse"
-    assert item["reason"] == "mixed_or_changed_live_subscription_modes"
+    assert item["reason"] == "mixed_collectible_subscription_billing_modes"
 
 
 def test_deactivates_disabled_service_line_and_voids_empty_invoice(db_session):

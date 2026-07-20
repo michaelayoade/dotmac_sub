@@ -26,7 +26,7 @@ adapter files. The executable registry contains 28 domains and 233 service
 entries. Its one exact duplicate concern claim has been split into distinct
 observation-evidence and customer-resolution concerns.
 
-Typed manifest migration now has 29 fully contracted services and 217 indexed
+Typed manifest migration now has 30 fully contracted services and 216 indexed
 legacy services in a shrink-only baseline. New registry services cannot
 be added without role-qualified concerns, authoritative inputs, transaction and
 error semantics, migration state, stewardship, checked-in evidence, and any
@@ -154,6 +154,15 @@ Eligibility, explicit opt-in, network readiness, terminal lifecycle state, and
 active-lock precedence now produce one typed reason outcome. Hard reject remains
 the deterministic result for missing, invalid, stale, or conflicting evidence;
 financial, event, RADIUS, connectivity, and status callers share that policy.
+
+The completed billing-profile slice is `financial.billing_profile`. Account,
+collectible-subscription, offer, and requested billing-mode evidence now resolve
+through typed source and reason contracts with stable domain failures. Generic
+account updates, catalog writes, cleanup remediation, collections, access, and
+reporting consume the same resolver or transition policy. Cleanup revalidates
+the live profile immediately before applying an account-mode alignment, while
+grace policy fails closed instead of selecting a caller-local fallback when the
+profile is missing, mixed, or contradictory.
 
 The current completed access slice is `auth.system_user_assignments`. It is the
 only application writer for system-user role and direct-permission grants. Local
