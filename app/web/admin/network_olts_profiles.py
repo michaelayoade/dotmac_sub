@@ -112,9 +112,12 @@ def _dump_dir_for_olt(olt, dump_root: str | None) -> Path | None:
     return None
 
 
-@router.api_route(
+@router.get(
     "/olts/{olt_id}/tr069-profiles",
-    methods=["GET", "POST"],
+    dependencies=[Depends(require_permission("network:olt:read"))],
+)
+@router.post(
+    "/olts/{olt_id}/tr069-profiles",
     dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def olt_tr069_profiles_ssh(

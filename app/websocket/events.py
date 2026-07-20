@@ -6,21 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-
-class EventType(str, Enum):
-    """WebSocket event types for the inbox."""
-
-    MESSAGE_NEW = "message_new"
-    MESSAGE_STATUS_CHANGED = "message_status_changed"
-    CONVERSATION_UPDATED = "conversation_updated"
-    CONVERSATION_SUMMARY = "conversation_summary"
-    USER_TYPING = "user_typing"
-    CONNECTION_ACK = "connection_ack"
-    HEARTBEAT = "heartbeat"
-    # Network operations
-    OPERATION_STATUS = "operation_status"
-    # Workqueue
-    WORKQUEUE_CHANGED = "workqueue_changed"
+from app.services.realtime_platform import EventType
 
 
 class WebSocketEvent(BaseModel):
@@ -48,5 +34,11 @@ class InboundMessage(BaseModel):
     """Message received from WebSocket client."""
 
     type: InboundMessageType
+    topic: str | None = None
     conversation_id: str | None = None
     data: dict[str, Any] | None = None
+
+    @property
+    def requested_topic(self) -> str | None:
+        """Explicit v1 topic, with the old conversation_id field as a shim."""
+        return self.topic or self.conversation_id
