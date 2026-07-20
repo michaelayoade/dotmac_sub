@@ -170,6 +170,11 @@ The account-adjustment cutover removes another service-layer HTTP-exception
 module and reduces that baseline from 221 to 220; its manifest migration
 reduces the indexed legacy-service baseline from 222 to 221.
 
+After reconciling `origin/main` through PR #1487, five additional upstream
+ownership slices reduce the current undeclared writer-like baseline from 269 to
+264. Those upstream declarations must satisfy this branch's typed manifest and
+transport/transaction boundaries before the integration state is green.
+
 These are burn-down measures, not approved exceptions. Reproducible inventory
 and shrink-only enforcement are part of the foundation workstream.
 

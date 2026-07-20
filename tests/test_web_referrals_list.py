@@ -2,10 +2,20 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 
 from app.services import web_referrals
 from app.services.ui_contracts import Kpi
+
+
+def test_reward_display_uses_program_currency_when_reward_has_no_snapshot():
+    referral = SimpleNamespace(reward_amount=Decimal("25.00"), reward_currency=None)
+
+    assert (
+        web_referrals._reward_display(referral, program_currency="USD") == "USD 25.00"
+    )
 
 
 def test_referral_list_definition_declares_its_capabilities():

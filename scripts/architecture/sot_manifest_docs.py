@@ -75,11 +75,18 @@ def extract_manifest_block(document: str) -> str | None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
+    output_group = parser.add_mutually_exclusive_group()
+    output_group.add_argument(
         "--print",
         action="store_true",
         dest="print_block",
         help="print the expected generated block instead of checking the map",
+    )
+    output_group.add_argument(
+        "--write",
+        action="store_true",
+        dest="write_block",
+        help="replace the generated block in the relationship map",
     )
     args = parser.parse_args()
 
@@ -90,7 +97,18 @@ def main() -> int:
         print(expected, end="")
         return 0
 
-    current = extract_manifest_block(RELATIONSHIP_MAP.read_text(encoding="utf-8"))
+    document = RELATIONSHIP_MAP.read_text(encoding="utf-8")
+    current = extract_manifest_block(document)
+    if args.write_block:
+        if current is None:
+            print("SOT relationship-map manifest markers are missing or duplicated.")
+            return 1
+        RELATIONSHIP_MAP.write_text(
+            document.replace(current, expected, 1),
+            encoding="utf-8",
+        )
+        print("SOT relationship-map manifest updated.")
+        return 0
     if current != expected:
         print(
             "SOT relationship-map manifest is stale; run with --print and "

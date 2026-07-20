@@ -5058,10 +5058,100 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "FUP consumption window bounds",
                     "windowed FUP usage aggregation",
                 ),
-                depends_on=(),
+                depends_on=("sessions.radius_reconciliation",),
                 notes=(
                     "Single source of truth for FUP consumption windows and "
                     "windowed usage reads; read-only over usage facts."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="FUP consumption window bounds",
+                            role=OwnerRole.RESOLVER,
+                            input_names=("FUP consumption period policy",),
+                        ),
+                        ConcernContract(
+                            name="windowed FUP usage aggregation",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "FUP consumption period policy",
+                                "rated quota and session usage facts",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="FUP consumption period policy",
+                            owner="access.fup_usage_windows",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed period argument normalized to the supported "
+                                "daily, weekly, or monthly vocabulary"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="rated quota and session usage facts",
+                            owner="sessions.radius_reconciliation",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "rated QuotaBucket totals and timestamped RADIUS "
+                                "usage samples"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary=(
+                            "Window resolution and aggregation read usage facts on "
+                            "the caller session and never flush or complete a "
+                            "transaction."
+                        ),
+                        locking="Read-only aggregation requires no mutation lock.",
+                        idempotency=(
+                            "The same period, timezone, timestamp, and usage facts "
+                            "produce the same aligned window and total."
+                        ),
+                        retries=(
+                            "Callers may retry reads; unavailable sample evidence "
+                            "returns an explicit non-authoritative no-data result."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(),
+                        mapping_owner="FUP enforcement and usage-summary adapters",
+                        fail_closed_on=(
+                            "missing or unavailable non-monthly usage evidence",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "call-site-local FUP period arithmetic and direct usage "
+                            "reads"
+                        ),
+                        new_owner="access.fup_usage_windows",
+                        verification=(
+                            "Window-boundary, authoritative-source, and no-data "
+                            "behavior tests cover every supported period."
+                        ),
+                        cutover_gate=(
+                            "FUP evaluation, usage summaries, and notifications use "
+                            "the shared windowed reader."
+                        ),
+                        fallback_retirement=(
+                            "Independent daily, weekly, and monthly window "
+                            "calculations are removed from callers."
+                        ),
+                    ),
+                    steward="network access",
+                    design_refs=(
+                        "docs/designs/FUP_CONSUMPTION_WINDOWS.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_fup_window_bounds.py",
+                        "tests/test_fup_usage_reader.py",
+                    ),
                 ),
             ),
             SOTService(
@@ -5327,6 +5417,96 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "owner-provided canonical URL. Templates render ListQuery, "
                     "PageMeta, and Kpi contracts without deriving totals, cohort "
                     "links, sort rules, or pagination strings."
+                ),
+                contract=ServiceContract(
+                    concerns=tuple(
+                        ConcernContract(
+                            name=concern,
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical referral program state",
+                                "normalized referral list query",
+                                "UI projection vocabulary",
+                            ),
+                        )
+                        for concern in (
+                            "admin referral filter and stable sort semantics",
+                            "admin referral row and page projection",
+                            "admin referral KPI values and exact cohort links",
+                            "admin referral list canonical URL",
+                        )
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical referral program state",
+                            owner="referrals.program",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "Referral, ReferralCode, Party, Lead, Subscriber, "
+                                "and resolved referral-program policy"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="normalized referral list query",
+                            owner="ui.list_contracts",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="REFERRAL_LIST_DEFINITION and normalized ListQuery",
+                        ),
+                        AuthorityInput(
+                            name="UI projection vocabulary",
+                            owner="ui.projection_contracts",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="StateValue and Kpi contracts",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary=(
+                            "The projection reads referral and program facts on the "
+                            "adapter session and never mutates or completes a "
+                            "transaction."
+                        ),
+                        locking="Stable read projection requires no mutation lock.",
+                        idempotency=(
+                            "The same canonical query and referral facts produce the "
+                            "same rows, counts, cohort URLs, and canonical URL."
+                        ),
+                        retries="Read-only projection calls are safe to retry.",
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(),
+                        mapping_owner="app.web.admin.crm_referrals",
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "app.web.admin.crm_referrals route-local filtering and "
+                            "templates/admin/referrals list derivation"
+                        ),
+                        new_owner="ui.referral_list_projection",
+                        verification=(
+                            "List, stable-sort, exact-cohort KPI, canonicalization, "
+                            "and template boundary tests."
+                        ),
+                        cutover_gate=(
+                            "Admin referral routes and templates consume only the "
+                            "owner-provided ListQuery, PageMeta, rows, and KPIs."
+                        ),
+                        fallback_retirement=(
+                            "Route-local pagination and template-derived referral "
+                            "totals, filters, and URLs are removed."
+                        ),
+                    ),
+                    steward="subscriber growth",
+                    design_refs=(
+                        "docs/designs/LIST_QUERY_MIGRATION.md",
+                        "docs/designs/UI_PROJECTION_CONTRACTS.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_web_referrals_list.py",
+                        "tests/architecture/test_template_projection_boundary.py",
+                    ),
                 ),
             ),
             SOTService(
@@ -5803,6 +5983,76 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "Transport-neutral StateValue, Kpi, and Action shapes. Domain "
                     "read and command owners supply the facts and decisions; "
                     "templates and clients render them without deriving meaning."
+                ),
+                contract=ServiceContract(
+                    concerns=tuple(
+                        ConcernContract(
+                            name=concern,
+                            role=OwnerRole.POLICY,
+                            input_names=("UI projection contract vocabulary",),
+                        )
+                        for concern in (
+                            "UI value availability and freshness contract",
+                            "UI KPI exact-cohort contract",
+                            "UI action eligibility and confirmation contract",
+                        )
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="UI projection contract vocabulary",
+                            owner="ui.projection_contracts",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "StateKind, StateValue, Kpi, and Action typed "
+                                "invariants"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.NOT_APPLICABLE,
+                        boundary=(
+                            "Typed projection value objects validate in memory and "
+                            "never access a database session."
+                        ),
+                        locking="Immutable value objects require no lock.",
+                        idempotency=(
+                            "Construction is deterministic for the same typed inputs."
+                        ),
+                        retries="In-memory construction has no retry side effect.",
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(),
+                        mapping_owner="domain projection owners and UI adapters",
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "portal-specific dictionaries and template-derived "
+                            "availability, KPI, and action semantics"
+                        ),
+                        new_owner="ui.projection_contracts",
+                        verification=(
+                            "Typed invariant, projection-boundary, and portal "
+                            "adoption tests."
+                        ),
+                        cutover_gate=(
+                            "Adopted projections return StateValue, Kpi, and Action "
+                            "objects without template-side decision logic."
+                        ),
+                        fallback_retirement=(
+                            "Adopted templates no longer derive unknown/stale state, "
+                            "KPI cohorts, eligibility, or confirmation requirements."
+                        ),
+                    ),
+                    steward="platform UI",
+                    design_refs=(
+                        "docs/designs/UI_PROJECTION_CONTRACTS.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_ui_contracts.py",
+                        "tests/architecture/test_template_projection_boundary.py",
+                    ),
                 ),
             ),
             SOTService(
