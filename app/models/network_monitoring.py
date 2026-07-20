@@ -390,6 +390,14 @@ class DeviceInterface(Base):
 
 class DeviceMetric(Base):
     __tablename__ = "device_metrics"
+    __table_args__ = (
+        Index(
+            "ix_device_metrics_rx_bps_recorded_at",
+            "recorded_at",
+            postgresql_where=text("metric_type = 'rx_bps' AND value > 0"),
+            postgresql_include=["value"],
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4

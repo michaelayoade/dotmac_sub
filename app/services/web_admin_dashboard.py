@@ -4,7 +4,7 @@ import logging
 import os
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
-from threading import Lock
+from threading import Lock, Thread
 from time import monotonic
 from urllib.parse import urlencode
 
@@ -54,6 +54,14 @@ _DASHBOARD_GLOBAL_TTL_SECONDS = float(
 _dashboard_global_lock = Lock()
 _dashboard_global_cached_at = 0.0
 _dashboard_global_cache: dict[str, object] | None = None
+_dashboard_global_refreshing = False
+_DASHBOARD_GLOBAL_STALE_WHILE_REVALIDATE = os.getenv(
+    "DASHBOARD_GLOBAL_STALE_WHILE_REVALIDATE", "false"
+).lower() in {"1", "true", "yes", "on"}
+_DASHBOARD_GLOBAL_MAX_STALE_SECONDS = max(
+    _DASHBOARD_GLOBAL_TTL_SECONDS,
+    float(os.getenv("DASHBOARD_GLOBAL_MAX_STALE_SECONDS", "900")),
+)
 
 _DASHBOARD_INFRASTRUCTURE_TTL_SECONDS = max(
     5.0, float(os.getenv("DASHBOARD_INFRASTRUCTURE_CACHE_TTL_SECONDS", "60"))
@@ -652,6 +660,16 @@ def _get_cached_dashboard_global_context(db: Session) -> dict[str, object]:
     ):
         return _dashboard_global_cache
 
+    stale_cache = _dashboard_global_cache
+    stale_age = now - _dashboard_global_cached_at
+    if (
+        stale_cache
+        and _DASHBOARD_GLOBAL_STALE_WHILE_REVALIDATE
+        and stale_age < _DASHBOARD_GLOBAL_MAX_STALE_SECONDS
+    ):
+        _start_dashboard_global_refresh()
+        return stale_cache
+
     with _dashboard_global_lock:
         now = monotonic()
         if (
@@ -663,6 +681,60 @@ def _get_cached_dashboard_global_context(db: Session) -> dict[str, object]:
         _dashboard_global_cached_at = monotonic()
         _dashboard_global_cache = fresh
         return fresh
+
+
+def _start_dashboard_global_refresh() -> None:
+    """Start one non-blocking refresh while callers keep the stale snapshot."""
+    global _dashboard_global_refreshing
+
+    with _dashboard_global_lock:
+        if _dashboard_global_refreshing:
+            return
+        _dashboard_global_refreshing = True
+    try:
+        Thread(
+            target=_refresh_dashboard_global_cache,
+            name="dashboard-global-cache-refresh",
+            daemon=True,
+        ).start()
+    except Exception:
+        with _dashboard_global_lock:
+            _dashboard_global_refreshing = False
+        logger.exception("Failed to start dashboard cache refresh")
+
+
+def _refresh_dashboard_global_cache() -> None:
+    """Refresh dashboard data using a session owned by the background thread."""
+    global _dashboard_global_cache, _dashboard_global_cached_at
+    global _dashboard_global_refreshing
+
+    fresh: dict[str, object] | None = None
+    try:
+        from app.db import SessionLocal
+
+        with SessionLocal() as db:
+            fresh = _build_dashboard_global_context(db)
+    except Exception:
+        logger.exception("Background dashboard cache refresh failed")
+    finally:
+        with _dashboard_global_lock:
+            if fresh is not None:
+                _dashboard_global_cache = fresh
+                _dashboard_global_cached_at = monotonic()
+            _dashboard_global_refreshing = False
+
+
+def prewarm_dashboard_global_cache() -> bool:
+    """Populate the dashboard cache outside the first user's request path."""
+    from app.db import SessionLocal
+
+    try:
+        with SessionLocal() as db:
+            _get_cached_dashboard_global_context(db)
+        return True
+    except Exception:
+        logger.exception("Dashboard cache prewarm failed")
+        return False
 
 
 def _resolve_dashboard_permissions(
