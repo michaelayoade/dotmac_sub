@@ -47,11 +47,16 @@ def test_legacy_branch_merge_is_ancestor_of_current_head() -> None:
         "migration_369_vendor_project_lifecycle_evidence",
     )
     assert vendor_evidence.down_revision == migration.revision
-    current = _load_migration(
+    reports_retire = _load_migration(
         "371_retire_coarse_reports_permissions.py",
         "migration_371_retire_coarse_reports_permissions",
     )
-    assert current.down_revision == "370_reports_granular_permissions"
+    assert reports_retire.down_revision == "370_reports_granular_permissions"
+    current = _load_migration(
+        "372_vendor_purchase_invoice_payment_projection.py",
+        "migration_372_vendor_purchase_invoice_payment_projection",
+    )
+    assert current.down_revision == reports_retire.revision
 
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
