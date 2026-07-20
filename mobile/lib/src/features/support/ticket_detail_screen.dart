@@ -39,7 +39,9 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen> {
     if (body.isEmpty && _attachments.isEmpty) return;
     setState(() => _sending = true);
     try {
-      await ref.read(supportRepositoryProvider).addComment(
+      await ref
+          .read(supportRepositoryProvider)
+          .addComment(
             widget.ticketId,
             body,
             attachmentPaths: _attachments.isEmpty
@@ -91,6 +93,77 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen> {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text(e.message)));
+      }
+    }
+  }
+
+  Future<void> _confirmResolution(Ticket ticket) async {
+    try {
+      await ref.read(supportRepositoryProvider).confirmResolution(ticket.id);
+      ref.invalidate(ticketProvider(widget.ticketId));
+      ref.invalidate(ticketCommentsProvider(widget.ticketId));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Thanks for confirming the resolution.'),
+          ),
+        );
+      }
+    } on ApiException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.message)));
+      }
+    }
+  }
+
+  Future<void> _disputeResolution(Ticket ticket) async {
+    final controller = TextEditingController();
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('What still needs attention?'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLines: 4,
+          maxLength: 2000,
+          decoration: const InputDecoration(
+            hintText: 'Describe what is still wrong',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.pop(dialogContext, controller.text.trim()),
+            child: const Text('Reopen ticket'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (reason == null) return;
+    try {
+      await ref
+          .read(supportRepositoryProvider)
+          .disputeResolution(ticket.id, reason: reason);
+      ref.invalidate(ticketProvider(widget.ticketId));
+      ref.invalidate(ticketCommentsProvider(widget.ticketId));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('The ticket has been reopened.')),
+        );
+      }
+    } on ApiException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.message)));
       }
     }
   }
@@ -161,6 +234,41 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen> {
                       ),
                     ),
                   const SizedBox(height: 16),
+                  if (t.canConfirmResolution || t.canDisputeResolution) ...[
+                    Card(
+                      color: Theme.of(context).colorScheme.primaryContainer,
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Text(
+                              'Has this issue been resolved?',
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                            const SizedBox(height: 6),
+                            const Text(
+                              'Support has proposed a resolution. Confirm it or tell us what still needs attention.',
+                            ),
+                            const SizedBox(height: 12),
+                            if (t.canConfirmResolution)
+                              FilledButton.icon(
+                                onPressed: () => _confirmResolution(t),
+                                icon: const Icon(Icons.check_circle_outline),
+                                label: const Text('Yes, it is resolved'),
+                              ),
+                            if (t.canDisputeResolution)
+                              OutlinedButton.icon(
+                                onPressed: () => _disputeResolution(t),
+                                icon: const Icon(Icons.report_problem_outlined),
+                                label: const Text('No, I still need help'),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
                   if (t.canRate) ...[
                     _CsatCard(
                       rating: t.csatRating,
@@ -180,8 +288,9 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen> {
                     ),
                     error: (e, _) => Text('Could not load replies: $e'),
                     data: (page) {
-                      final visible =
-                          page.items.where((c) => !c.isInternal).toList();
+                      final visible = page.items
+                          .where((c) => !c.isInternal)
+                          .toList();
                       if (visible.isEmpty) {
                         return const Padding(
                           padding: EdgeInsets.symmetric(vertical: 16),
@@ -500,7 +609,7 @@ class _SupportRatingDialogState extends State<_SupportRatingDialog> {
           onPressed: _rating == 0
               ? null
               : () =>
-                  Navigator.of(context).pop((_rating, _comment.text.trim())),
+                    Navigator.of(context).pop((_rating, _comment.text.trim())),
           child: const Text('Submit'),
         ),
       ],

@@ -127,21 +127,25 @@ def test_customer_session_carries_customer_account_ticket_context(db_session):
 
 
 def test_customer_session_carries_owned_project_context(db_session):
-    from app.models.project_mirror import ProjectMirror
+    from app.models.project import Project
     from app.models.team_inbox import InboxConversation
     from app.services import chat_session
 
     sub = _make_subscriber(db_session)
-    db_session.add(
-        ProjectMirror(
-            crm_project_id="pj-9", subscriber_id=sub.id, name="Install", status="active"
-        )
+    project = Project(
+        subscriber_id=sub.id,
+        name="Install",
+        status="active",
+        project_type="fiber_optics_installation",
     )
+    db_session.add(project)
     db_session.commit()
     with _chat_settings():
-        chat_session.broker_customer_session(db_session, str(sub.id), project_id="pj-9")
+        chat_session.broker_customer_session(
+            db_session, str(sub.id), project_id=str(project.id)
+        )
     meta = db_session.query(InboxConversation).one().metadata_
-    assert meta["project_id"] == "pj-9"
+    assert meta["project_id"] == str(project.id)
     assert (
         db_session.query(InboxConversation).one().subject
         == "Chat about an installation project"

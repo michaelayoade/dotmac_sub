@@ -10,15 +10,14 @@ Compatibility and ownership decisions:
   assignments use sub principals = ``SystemUser`` ids, which is also how
   display/emails resolve — a legacy id that doesn't resolve simply skips the
   notification).
-* Task-to-ticket linkage is the real ``support_tickets`` foreign key.
-  Imported ``project_tasks.work_order_id`` remains a plain UUID validated
-  against ``work_order.public_id``; native ``sub-`` links require a later
-  project-task contract migration. The `work_links` work-order origin remains
-  deferred with that contract.
+* Task-to-ticket linkage is the real ``support_tickets`` foreign key. Field
+  execution links from ``work_order.project_task_id`` so one task can own many
+  visits; ``operations.work_order_commands`` is the sole writer of that link.
 * The fiber-stage engine (``FIBER_INSTALLATION_STAGE_ORDER``,
-  ``_compute_fiber_stage_due_at``, ``_seed_fiber_installation_tasks``),
+  ``_compute_fiber_stage_due_at``, ``_seed_fiber_installation_tasks``) and
   template instantiation (``replace_project_tasks`` + ``_calculate_task_dates``)
-  and ``build_portal_project_payload`` retain the established read contract.
+  remain project decisions. Customer composition lives in
+  ``customer_experience_lifecycle``.
 * Retired CRM-to-Sub mirror emitters are absent. The "Installation complete"
   consequence is owned by ``Projects.update``.
 * Events: sub has no ``project.*`` ``EventType`` members — lifecycle events are
@@ -75,7 +74,6 @@ from app.models.ticket_workflow import (
     SlaPolicy,
     WorkflowEntityType,
 )
-from app.models.work_order import WorkOrder
 from app.schemas.project import (
     ProjectCommentCreate,
     ProjectCommentUpdate,
@@ -89,7 +87,6 @@ from app.schemas.project import (
     ProjectTemplateUpdate,
     ProjectUpdate,
 )
-from app.services import control_registry
 from app.services import domain_settings as domain_settings_service
 from app.services.common import (
     apply_ordering,
@@ -235,18 +232,6 @@ def _lead_subscriber(db: Session, project: Project) -> Subscriber | None:
     if lead.subscriber_id:
         return db.get(Subscriber, lead.subscriber_id)
     return None
-
-
-def _resolve_customer_email(db: Session, project: Project) -> str | None:
-    """Resolve the customer party from Subscriber, then lead subscriber."""
-    email = _subscriber_email(project.subscriber)
-    if email:
-        return email
-    if project.subscriber_id and project.subscriber is None:
-        email = _subscriber_email(db.get(Subscriber, project.subscriber_id))
-        if email:
-            return email
-    return _subscriber_email(_lead_subscriber(db, project))
 
 
 def _resolve_customer_name(db: Session, project: Project) -> str:
@@ -508,17 +493,6 @@ def _queue_in_app_notification(
     )
 
 
-def _queue_email_notification(
-    db: Session, recipient: str, subject: str, body: str
-) -> None:
-    queue_staff_email(
-        db,
-        recipient=recipient,
-        subject=subject,
-        body=body,
-    )
-
-
 def _company_name(db: Session) -> str:
     """Company display name for customer-facing emails (best-effort)."""
     try:
@@ -603,8 +577,7 @@ def _next_template_task_label(
 def _notify_customer_task_completed(
     db: Session, project: Project, task: ProjectTask
 ) -> None:
-    recipient = _resolve_customer_email(db, project)
-    if not recipient:
+    if project.subscriber_id is None:
         return
     customer_name = _resolve_customer_name(db, project)
     next_stage = _next_template_task_label(
@@ -676,43 +649,53 @@ def _notify_customer_task_completed(
         "</p>"
         "</div>"
     )
-    _queue_email_notification(db, recipient, subject, body)
+    from app.models.notification import NotificationChannel
+    from app.services import customer_experience_communications
+
+    if project.subscriber_id is not None:
+        customer_experience_communications.request_update(
+            db,
+            subscriber_id=project.subscriber_id,
+            event_type="project_task_completed",
+            subject=subject,
+            body=body,
+            metadata={
+                "type": "project",
+                "project_id": str(project.id),
+                "project_task_id": str(task.id),
+            },
+            dedupe_key=f"project-task-completed:{task.id}:{task.completed_at}",
+            default_channels=(NotificationChannel.email,),
+        )
 
 
 def _notify_customer_project_completed(db: Session, project: Project) -> None:
-    recipient = _resolve_customer_email(db, project)
-    if not recipient:
+    if project.subscriber_id is None:
         return
     project_ref = project.number or str(project.id)
     subject = f"Project completed: {project.name}"
     body = (
         f"Your installation project '{project.name}' ({project_ref}) is now "
         "completed.\n"
-        "Please reply to this email to confirm your satisfaction with the service."
+        "You can review the completed installation and contact support from self-care."
     )
-    _queue_email_notification(db, recipient, subject, body)
+    from app.models.notification import NotificationChannel
+    from app.services import customer_experience_communications
 
-
-def _push_installation_complete(db: Session, project: Project) -> None:
-    """Project-owned customer push on completion.
-
-    ``data.project_id`` retains the established UUID contract so mobile deep
-    links keep resolving. A push failure never breaks the project update.
-    """
-    if not project.subscriber_id:
-        return
-    try:
-        from app.services import push as push_service
-
-        push_service.send_push(
-            db,
-            str(project.subscriber_id),
-            title="Installation complete",
-            body="Your installation project is now complete.",
-            data={"type": "project", "project_id": str(project.id)},
-        )
-    except Exception as exc:  # noqa: BLE001 - notification is advisory
-        logger.warning("project_push_failed project_id=%s: %s", project.id, exc)
+    customer_experience_communications.request_update(
+        db,
+        subscriber_id=project.subscriber_id,
+        event_type="project_completed",
+        subject=subject,
+        body=body,
+        metadata={"type": "project", "project_id": str(project.id)},
+        dedupe_key=f"project-completed:{project.id}:{project.completed_at}",
+        default_channels=(
+            NotificationChannel.email,
+            NotificationChannel.whatsapp,
+            NotificationChannel.push,
+        ),
+    )
 
 
 def notify_project_task_sla_breach(db: Session, clock: SlaClock) -> None:
@@ -937,22 +920,6 @@ def _ensure_ticket(db: Session, ticket_id) -> None:
         raise HTTPException(status_code=404, detail="Ticket not found")
 
 
-def _ensure_work_order(db: Session, work_order_id) -> None:
-    """Validate a work-order link against Sub's native identity
-    (`work_order.public_id`, WORK_ORDER_IDENTITY_SOT). Imported rows seed
-    public_id from their CRM id, so legacy links keep resolving."""
-    row = db.query(WorkOrder).filter(WorkOrder.public_id == str(work_order_id)).first()
-    if not row:
-        raise HTTPException(status_code=404, detail="Work order not found")
-
-
-def _link_work_order_origin(db: Session, task: ProjectTask) -> None:
-    """Deferred owner boundary for the ``project_task.linked_work_order``
-    contract. Until the shared work-link schema supports native work-order
-    identity, ``project_tasks.work_order_id`` carries the imported association."""
-    del db, task
-
-
 # ── assignee handling ─────────────────────────────────────────────────────────
 
 
@@ -1024,8 +991,6 @@ def _notify_project_task_assigned(
     assigned_to: SystemUser,
     created_by: SystemUser | None,
 ) -> None:
-    from app.services import email as email_service
-
     try:
         if not assigned_to.email:
             logger.warning("project_task_assigned_missing_email task_id=%s", task.id)
@@ -1142,13 +1107,11 @@ def _notify_project_task_assigned(
             "</div>"
         )
 
-        email_service.send_email(
-            db=db,
-            to_email=assigned_to.email,
+        queue_staff_email(
+            db,
+            recipient=assigned_to.email,
             subject=subject,
-            body_html=body,
-            body_text=None,
-            track=True,
+            body=body,
         )
         queue_staff_push(
             db,
@@ -1235,130 +1198,6 @@ def _emit_project_event(
     )
 
 
-# ── customer installation tracker read contract ──────────────────────────────
-
-
-def _portal_stage_status(task_status: str | None) -> str:
-    if task_status == ProjectTaskStatus.done.value:
-        return "done"
-    if task_status in (
-        ProjectTaskStatus.in_progress.value,
-        ProjectTaskStatus.blocked.value,
-    ):
-        return "in_progress"
-    return "pending"
-
-
-def build_portal_project_payload(project: Project) -> dict:
-    """Customer-facing project view: stage timeline + progress %.
-
-    This retains the established CRM and ``project_mirror`` response shape:
-    item keys, integer ``progress_pct``, stage
-    ``status ∈ pending|in_progress|done`` and ``id`` = project UUID (the same
-    value the mirror exposed as ``crm_project_id``). Fiber installs use
-    the canonical 6-stage order; other project types fall back to a generic
-    per-task timeline.
-    """
-    tasks = [t for t in (project.tasks or []) if getattr(t, "is_active", True)]
-    fiber_tasks: dict[str, ProjectTask] = {}
-    for t in tasks:
-        key = _resolve_fiber_stage_key(t)
-        if key:
-            fiber_tasks.setdefault(key, t)
-
-    stages: list[dict] = []
-    if fiber_tasks:
-        for key in FIBER_INSTALLATION_STAGE_ORDER:
-            t = fiber_tasks.get(key)
-            title = FIBER_INSTALLATION_STAGE_TITLES.get(key, key)
-            if t is None:
-                stages.append(
-                    {
-                        "key": key,
-                        "title": title,
-                        "status": "pending",
-                        "completed_at": None,
-                    }
-                )
-            else:
-                stages.append(
-                    {
-                        "key": key,
-                        "title": title,
-                        "status": _portal_stage_status(t.status),
-                        "completed_at": t.completed_at.isoformat()
-                        if t.completed_at
-                        else None,
-                    }
-                )
-    else:
-        for t in tasks:
-            stages.append(
-                {
-                    "key": None,
-                    "title": t.title,
-                    "status": _portal_stage_status(t.status),
-                    "completed_at": t.completed_at.isoformat()
-                    if t.completed_at
-                    else None,
-                }
-            )
-
-    total = len(stages)
-    done = sum(1 for s in stages if s["status"] == "done")
-    completed = project.status == ProjectStatus.completed.value
-    progress_pct = 100 if completed else (round(done / total * 100) if total else 0)
-    current_stage = (
-        None
-        if completed
-        else next((s["title"] for s in stages if s["status"] != "done"), None)
-    )
-
-    return {
-        "id": str(project.id),
-        "name": project.name,
-        "status": project.status if project.status else "open",
-        "project_type": project.project_type,
-        "progress_pct": progress_pct,
-        "current_stage": current_stage,
-        "stages": stages,
-        "customer_address": project.customer_address,
-        "region": project.region,
-        "start_at": project.start_at.isoformat() if project.start_at else None,
-        "due_at": project.due_at.isoformat() if project.due_at else None,
-        "completed_at": project.completed_at.isoformat()
-        if project.completed_at
-        else None,
-        "created_at": project.created_at.isoformat() if project.created_at else None,
-    }
-
-
-# Mirror parity: projects_mirror.read_for_subscriber counts these as inactive.
-_PORTAL_INACTIVE_STATUSES = ("completed", "canceled")
-
-
-def native_read_enabled(db: Session) -> bool:
-    """Explicit native-project read control.
-
-    OFF (default) — ``/me/projects``, the web tracker and the reseller views
-    keep serving ``projects_mirror``; ON — they serve the native ``projects``
-    table via ``portal_read_for_subscriber`` / ``Projects.portal_list``. The
-    cutover requires verified parity and an approved authority decision.
-    """
-    return control_registry.is_enabled(db, "projects.native_read")
-
-
-def portal_read_for_subscriber(db: Session, subscriber_id: str) -> dict:
-    """Native ``GET /me/projects`` / web-tracker payload — the exact response
-    shell ``projects_mirror.read_for_subscriber`` served:
-    ``{projects[], total, active}`` with ``build_portal_project_payload``
-    items. Customer reads use this owner only when the explicit native-read
-    control is enabled."""
-    items = Projects.portal_list(db, subscriber_id)
-    active = sum(1 for i in items if i["status"] not in _PORTAL_INACTIVE_STATUSES)
-    return {"projects": items, "total": len(items), "active": active}
-
-
 class Projects(ListResponseMixin):
     PROJECT_TYPE_DURATIONS: ClassVar[dict[str, int]] = {
         ProjectType.air_fiber_installation.value: 3,
@@ -1419,28 +1258,6 @@ class Projects(ListResponseMixin):
             .order_by(Project.name)
             .all()
         )
-
-    @staticmethod
-    def portal_list(db: Session, subscriber_ids: list[str] | str) -> list[dict]:
-        """Customer-facing project list (stage timeline + progress %) for the
-        installation tracker. Scoped to one subscriber, or to a set of
-        subscribers in a reseller's customer subtree. Native customer and
-        reseller reads consume this projection after the approved cutover."""
-        if isinstance(subscriber_ids, str):
-            subscriber_ids = [subscriber_ids]
-        uuids = [coerce_uuid(str(s)) for s in subscriber_ids]
-        uuids = [u for u in uuids if u is not None]
-        if not uuids:
-            return []
-        projects = (
-            db.query(Project)
-            .options(selectinload(Project.tasks))
-            .filter(Project.subscriber_id.in_(uuids))
-            .filter(Project.is_active.is_(True))
-            .order_by(Project.created_at.desc())
-            .all()
-        )
-        return [build_portal_project_payload(p) for p in projects]
 
     @staticmethod
     def create(db: Session, payload: ProjectCreate):
@@ -1880,8 +1697,6 @@ class Projects(ListResponseMixin):
                 },
             )
             _notify_customer_project_completed(db, project)
-            # Completion consequences are owned by the project lifecycle.
-            _push_installation_complete(db, project)
         elif (
             new_status == ProjectStatus.canceled.value
             and previous_status != ProjectStatus.canceled.value
@@ -2244,8 +2059,6 @@ class ProjectTasks(ListResponseMixin):
             _ensure_staff_uuid(str(payload.created_by_person_id))
         if payload.ticket_id:
             _ensure_ticket(db, payload.ticket_id)
-        if payload.work_order_id:
-            _ensure_work_order(db, payload.work_order_id)
         data = _model_data(payload.model_dump(exclude={"assigned_to_person_ids"}))
         fields_set = payload.model_fields_set
         assignee_ids: list[str] | None = None
@@ -2292,8 +2105,6 @@ class ProjectTasks(ListResponseMixin):
             task.completed_at = datetime.now(UTC)
         _sync_task_sla_clock(db, task)
         _sync_project_task_assignees(db, task, assignee_ids)
-        if task.work_order_id:
-            _link_work_order_origin(db, task)
         db.commit()
         db.refresh(task)
         if task.assigned_to_person_id:
@@ -2393,7 +2204,6 @@ class ProjectTasks(ListResponseMixin):
         if not task:
             raise HTTPException(status_code=404, detail="Project task not found")
         previous_status = task.status
-        previous_work_order_id = task.work_order_id
         changed_fields: list[str] = []
         data = _model_data(payload.model_dump(exclude_unset=True))
         assignee_ids: list[str] | None = None
@@ -2421,8 +2231,6 @@ class ProjectTasks(ListResponseMixin):
             _ensure_staff_uuid(str(data["created_by_person_id"]))
         if data.get("ticket_id"):
             _ensure_ticket(db, data["ticket_id"])
-        if data.get("work_order_id"):
-            _ensure_work_order(db, data["work_order_id"])
         changed_fields.extend(list(data.keys()))
         for key, value in data.items():
             setattr(task, key, value)
@@ -2431,8 +2239,6 @@ class ProjectTasks(ListResponseMixin):
             task.completed_at = datetime.now(UTC)
         _sync_task_sla_clock(db, task)
         _sync_project_task_assignees(db, task, assignee_ids)
-        if task.work_order_id and task.work_order_id != previous_work_order_id:
-            _link_work_order_origin(db, task)
         db.commit()
         db.refresh(task)
         if (

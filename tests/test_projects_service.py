@@ -238,43 +238,45 @@ class TestTaskStateMachine:
         )
         assert task.ticket_id == ticket.id
 
-    def test_work_order_id_validated_against_phase2_mirror(
+    def test_project_task_exposes_native_one_to_many_field_visits(
         self, db_session, subscriber
     ):
-        """Imported work-order UUIDs remain plain values validated against
-        authoritative ``work_order.public_id``."""
         project = _create_fiber_project(db_session, subscriber)
-        wo_id = uuid.uuid4()
-
-        with pytest.raises(HTTPException) as exc:
-            project_tasks.create(
-                db_session,
-                ProjectTaskCreate(
-                    project_id=project.id,
-                    title="WO task",
-                    work_order_id=wo_id,
-                ),
-            )
-        assert exc.value.status_code == 404
-
-        db_session.add(
-            WorkOrder(
-                crm_work_order_id=str(wo_id),
-                subscriber_id=subscriber.id,
-                title="Install",
-                status="scheduled",
-            )
-        )
-        db_session.commit()
         task = project_tasks.create(
             db_session,
-            ProjectTaskCreate(
-                project_id=project.id,
-                title="WO task",
-                work_order_id=wo_id,
-            ),
+            ProjectTaskCreate(project_id=project.id, title="WO task"),
         )
-        assert task.work_order_id == wo_id
+        first = WorkOrder(
+            public_id="sub-visit-one",
+            subscriber_id=subscriber.id,
+            project_id=project.id,
+            project_task_id=task.id,
+            title="First visit",
+            status="scheduled",
+        )
+        second = WorkOrder(
+            public_id="sub-visit-two",
+            subscriber_id=subscriber.id,
+            project_id=project.id,
+            project_task_id=task.id,
+            title="Follow-up visit",
+            status="scheduled",
+        )
+        db_session.add_all(
+            [
+                first,
+                second,
+            ]
+        )
+        db_session.commit()
+        db_session.refresh(task)
+
+        assert {row.public_id for row in task.work_orders} == {
+            "sub-visit-one",
+            "sub-visit-two",
+        }
+        assert first.project_task_id == task.id
+        assert second.project_task_id == task.id
 
 
 class TestTemplateInstantiation:
@@ -395,14 +397,9 @@ class TestProjectLifecycle:
         assert any(n.subject.startswith("Project completed:") for n in emails)
 
     def test_update_status_kanban_move_uses_canonical_lifecycle(
-        self, db_session, subscriber, emitted_events, monkeypatch
+        self, db_session, subscriber, emitted_events
     ):
         project = _create_fiber_project(db_session, subscriber)
-        pushed_project_ids: list[str] = []
-        monkeypatch.setattr(
-            "app.services.projects._push_installation_complete",
-            lambda _db, updated: pushed_project_ids.append(str(updated.id)),
-        )
         emitted_events.clear()
 
         result = projects.update_status(db_session, str(project.id), "completed")
@@ -424,7 +421,6 @@ class TestProjectLifecycle:
         assert clock is not None
         assert clock.status == SlaClockStatus.completed.value
         assert [event["name"] for event in emitted_events] == ["project.completed"]
-        assert pushed_project_ids == [str(project.id)]
 
         emails = (
             db_session.query(Notification)

@@ -463,14 +463,6 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.profile_sync.execute_due_profile_sync_tasks": _c(
         "network", STATE, STATEFUL, STATUS
     ),
-    "app.tasks.projects.reconcile_project_mirror": _c("crm", SWEEP, IDEMP, HEALTH),
-    "app.tasks.projects.refresh_project_mirror_for_subscriber": _c(
-        "crm",
-        NONE,
-        IDEMP,
-        LOG,
-        "Best-effort on-view refresh; periodic reconcile backs it.",
-    ),
     "app.tasks.provisioning.reap_stale_provisioning_runs": _c(
         "provisioning", SWEEP, IDEMP, STATUS
     ),
@@ -664,16 +656,6 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.wireguard.cleanup_expired_tokens": _c("network", SWEEP, IDEMP, LOG),
     "app.tasks.wireguard.generate_connection_log_report": _c(
         "network", MANUAL, IDEMP, STATUS
-    ),
-    "app.tasks.work_orders.reconcile_work_order_mirror": _c(
-        "crm", SWEEP, IDEMP, HEALTH
-    ),
-    "app.tasks.work_orders.refresh_work_order_mirror_for_subscriber": _c(
-        "crm",
-        NONE,
-        IDEMP,
-        LOG,
-        "Best-effort on-view refresh; periodic reconcile backs it.",
     ),
     "app.tasks.workflow.detect_sla_breaches": _c("workflow", SWEEP, IDEMP, STATUS),
     "router_sync.capture_scheduled_snapshots": _c("router", SWEEP, IDEMP, HEALTH),

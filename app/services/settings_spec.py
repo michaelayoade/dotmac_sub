@@ -1324,18 +1324,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
         label="CRM Ticket Pull Interval (minutes)",
     ),
     SettingSpec(
-        # flip lever: gates the CRM work-order webhook branch, the
-        # work_order_mirror_reconcile beat, and the lazy mirror refresh
-        # (crm.work_order_pull in the control registry). Default ON — inert
-        # until the work-order SoT flip deliberately turns it off.
-        domain=SettingDomain.scheduler,
-        key="crm_work_order_pull_enabled",
-        env_var="CRM_WORK_ORDER_PULL_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=True,
-        label="CRM Work-Order Pull Enabled",
-    ),
-    SettingSpec(
         domain=SettingDomain.scheduler,
         key="crm_cache_list_seconds",
         env_var="CRM_CACHE_LIST_SECONDS",
@@ -3904,22 +3892,8 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=False,
         label="Quotes: native write path",
     ),
-    # read-flip flags: OFF =
-    # the read surfaces (/me/*, web customer portal, reseller views) keep
-    # serving the CRM mirrors; ON = they serve the native services
-    # (projects.portal_read_for_subscriber, sales.selfserve read,
-    # referrals.read_for_subscriber). Shapes are identical (
-    # golden-payload contract), so flipping back is the cheap rollback
-    # during the sync window. Sales orders have no read surface of their
-    # own.
-    SettingSpec(
-        domain=SettingDomain.projects,
-        key="projects_native_read_enabled",
-        env_var="PROJECTS_NATIVE_READ_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=False,
-        label="Projects: native read path",
-    ),
+    # Quotes retain their independent read cutover. Project/task/work-order
+    # customer reads are unconditionally native Sub paths.
     SettingSpec(
         domain=SettingDomain.projects,
         key="quotes_native_read_enabled",
@@ -4187,7 +4161,6 @@ _RETIRED_FEATURE_ALIAS_SPECS = frozenset(
         (SettingDomain.collections, "dunning_enabled"),
         (SettingDomain.collections, "billing_notifications_hourly_enabled"),
         (SettingDomain.scheduler, "crm_ticket_pull_enabled"),
-        (SettingDomain.scheduler, "crm_work_order_pull_enabled"),
         (SettingDomain.radius, "coa_enabled"),
         (SettingDomain.billing, "prepaid_monthly_invoicing_enabled"),
         (SettingDomain.billing, "overdue_check_enabled"),
@@ -4200,7 +4173,6 @@ _RETIRED_FEATURE_ALIAS_SPECS = frozenset(
         (SettingDomain.network, "wireguard_log_cleanup_enabled"),
         (SettingDomain.network, "wireguard_token_cleanup_enabled"),
         (SettingDomain.projects, "quotes_native_write_enabled"),
-        (SettingDomain.projects, "projects_native_read_enabled"),
         (SettingDomain.projects, "quotes_native_read_enabled"),
     }
 )

@@ -57,8 +57,21 @@ JobDetail _detail({
     accountNumber: 'ACCT-1001',
     status: 'active',
   ),
-  ticketRef: 'TCK-1001',
-  projectId: projectId,
+  customerExperience: JobCustomerExperience(
+    project: projectId == null
+        ? null
+        : JobLifecycleReference(
+            id: projectId,
+            title: 'Fiber installation',
+            status: 'active',
+          ),
+    originTicket: const JobLifecycleReference(
+      id: 'ticket-1',
+      number: 'TCK-1001',
+      title: 'Connectivity incident',
+      status: 'open',
+    ),
+  ),
   accessNotes: accessNotes,
   additionalContacts: additionalContacts,
   recentVisits: recentVisits,
@@ -260,8 +273,19 @@ void main() {
         'account_number': 'ACCT-1001',
         'status': 'active',
       },
-      'ticket_ref': 'TCK-1001',
-      'project_id': 'project-1',
+      'customer_experience': {
+        'project': {
+          'id': 'project-1',
+          'name': 'Fiber installation',
+          'status': 'active',
+        },
+        'origin_ticket': {
+          'id': 'ticket-1',
+          'number': 'TCK-1001',
+          'title': 'Connectivity incident',
+          'status': 'open',
+        },
+      },
       'access_notes': 'Ask estate security for rack room key.',
       'additional_contacts': [
         {
@@ -293,7 +317,8 @@ void main() {
     expect(detail.customer?.email, 'adaeze@example.com');
     expect(detail.completionRequirements.evidenceRequired, isFalse);
     expect(detail.completionRequirements.minimumPhotoCount, 0);
-    expect(detail.projectId, 'project-1');
+    expect(detail.customerExperience.project?.id, 'project-1');
+    expect(detail.customerExperience.originTicket?.number, 'TCK-1001');
     expect(detail.accessNotes, contains('rack room key'));
     expect(detail.additionalContacts.single.name, 'Facilities Desk');
     expect(detail.openTickets.single.ref, 'TCK-1002');
@@ -534,8 +559,8 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.text('Ticket TCK-1001'), findsOneWidget);
-      expect(find.text('Project 12345678'), findsOneWidget);
+      expect(find.textContaining('Ticket TCK-1001'), findsOneWidget);
+      expect(find.textContaining('Project Fiber installation'), findsOneWidget);
       expect(find.text('Navigation targets'), findsOneWidget);
       expect(find.text('Customer site'), findsOneWidget);
       expect(find.text('POP Lekki-01'), findsOneWidget);

@@ -15,7 +15,7 @@ from app.models.notification import (
     NotificationChannel,
     NotificationStatus,
 )
-from app.models.subscriber import Reseller, ResellerUser, Subscriber
+from app.models.subscriber import Reseller, ResellerUser, Subscriber, SubscriberContact
 from app.schemas.notification import NotificationCreate
 from app.services.communication_eligibility import suppression_reason
 from app.services.customer_notification_policy import (
@@ -81,16 +81,36 @@ def list_intents(
     )
 
 
-def _subscriber_address(
-    subscriber: Subscriber, channel: NotificationChannel
-) -> str | None:
+def _subscriber_addresses(
+    db: Session, subscriber: Subscriber, channel: NotificationChannel
+) -> list[str]:
+    addresses: list[str] = []
     if channel == NotificationChannel.email:
-        return subscriber.email
-    if channel in {NotificationChannel.sms, NotificationChannel.whatsapp}:
-        return subscriber.phone
-    if channel == NotificationChannel.push:
-        return str(subscriber.id)
-    return None
+        if subscriber.email:
+            addresses.append(subscriber.email)
+    elif channel in {NotificationChannel.sms, NotificationChannel.whatsapp}:
+        if subscriber.phone:
+            addresses.append(subscriber.phone)
+    elif channel == NotificationChannel.push:
+        addresses.append(str(subscriber.id))
+
+    if channel != NotificationChannel.push:
+        contacts = (
+            db.query(SubscriberContact)
+            .filter(SubscriberContact.subscriber_id == subscriber.id)
+            .filter(SubscriberContact.receives_notifications.is_(True))
+            .all()
+        )
+        for contact in contacts:
+            if channel == NotificationChannel.email and contact.email:
+                addresses.append(contact.email)
+            elif channel == NotificationChannel.sms and contact.phone:
+                addresses.append(contact.phone)
+            elif channel == NotificationChannel.whatsapp:
+                address = contact.whatsapp or contact.phone
+                if address:
+                    addresses.append(address)
+    return list(dict.fromkeys(address.strip() for address in addresses if address))
 
 
 def _reseller_addresses(
@@ -193,12 +213,17 @@ def submit(db: Session, intent: CommunicationIntent) -> CommunicationIntentResul
 
     queued: list[Notification] = []
     for channel in channels:
-        delivery_recipient = intent.subscriber_recipients.get(channel) or (
-            _subscriber_address(subscriber, channel) if subscriber else None
+        explicit_recipient = intent.subscriber_recipients.get(channel)
+        delivery_recipients = (
+            [explicit_recipient]
+            if explicit_recipient
+            else _subscriber_addresses(db, subscriber, channel)
+            if subscriber
+            else []
         )
-        if not delivery_recipient:
+        if not delivery_recipients:
             suppressed.append(f"subscriber:{channel.value}:missing_address")
-        else:
+        for delivery_recipient in delivery_recipients:
             reason = suppression_reason(
                 db,
                 channel=channel,

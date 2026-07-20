@@ -56,7 +56,7 @@ from app.schemas.project import (
     ProjectTemplateUpdate,
     ProjectUpdate,
 )
-from app.services import project_filters
+from app.services import customer_experience_lifecycle, project_filters
 from app.services import projects as projects_service
 from app.services import support as support_service
 from app.services import support_ticket_settings as support_ticket_settings_service
@@ -445,9 +445,9 @@ def build_fiber_stage_rows(tasks: list[ProjectTask]) -> list[dict]:
             {
                 "key": stage_key,
                 "title": projects_service.FIBER_INSTALLATION_STAGE_TITLES[stage_key],
-                "status": projects_service._portal_stage_status(
-                    stage_task.status if stage_task else None
-                ),
+                "status": customer_experience_lifecycle.project_task_stage_state(
+                    stage_task.status if stage_task else ProjectTaskStatus.todo.value
+                ).value,
                 "task_ref": (
                     (stage_task.number or str(stage_task.id)) if stage_task else None
                 ),

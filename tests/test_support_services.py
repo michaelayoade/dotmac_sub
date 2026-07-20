@@ -414,6 +414,7 @@ def test_resolution_confirmation_queues_customer_notifications(
         "+2348012345678",
         "authorized@example.com",
         "+2348099999999",
+        str(subscriber.id),
     }
     assert all(row.status == NotificationStatus.queued for row in rows)
     assert all("/ticket-confirm/" in (row.body or "") for row in rows)
@@ -426,7 +427,10 @@ def test_resolution_confirmation_queues_customer_notifications(
         row.channel
         for row in rows
         if row.recipient in {"+2348012345678", "+2348099999999"}
-    } == {NotificationChannel.sms}
+    } == {NotificationChannel.whatsapp}
+    assert {row.channel for row in rows if row.recipient == str(subscriber.id)} == {
+        NotificationChannel.push
+    }
 
 
 def test_resolution_confirmation_confirm_closes_ticket(db_session, subscriber):
@@ -508,6 +512,62 @@ def test_auto_confirm_pending_ignores_crm_provenance(db_session, subscriber):
     assert ticket.status == TicketStatus.closed.value
     assert token_row.is_active is False
     assert token_row.responded_at is not None
+
+
+def test_authenticated_selfcare_resolution_uses_same_confirmation_owner(
+    db_session, subscriber
+):
+    ticket = support_service.tickets.create(
+        db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id)
+    )
+    support_service.tickets.request_resolution_confirmation(
+        db_session, str(ticket.id), actor_id=str(subscriber.id)
+    )
+
+    confirmed = support_service.tickets.respond_to_resolution_for_customer(
+        db_session, ticket, confirm=True
+    )
+
+    assert confirmed.status == TicketStatus.closed.value
+    assert confirmed.closed_at is not None
+
+
+def test_authenticated_selfcare_dispute_reopens_with_reason(db_session, subscriber):
+    ticket = support_service.tickets.create(
+        db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id)
+    )
+    support_service.tickets.request_resolution_confirmation(
+        db_session, str(ticket.id), actor_id=str(subscriber.id)
+    )
+
+    reopened = support_service.tickets.respond_to_resolution_for_customer(
+        db_session,
+        ticket,
+        confirm=False,
+        reason="Optical light is still red",
+    )
+
+    assert reopened.status == TicketStatus.open.value
+    assert reopened.metadata_["resolution_confirmation"]["customer_dispute_reason"] == (
+        "Optical light is still red"
+    )
+
+
+def test_authenticated_selfcare_rejects_expired_confirmation(db_session, subscriber):
+    ticket = support_service.tickets.create(
+        db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id)
+    )
+    _, token = support_service.tickets.request_resolution_confirmation(
+        db_session, str(ticket.id), actor_id=str(subscriber.id)
+    )
+    token.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as expired:
+        support_service.tickets.respond_to_resolution_for_customer(
+            db_session, ticket, confirm=True
+        )
+    assert expired.value.status_code == 409
 
 
 def test_resolution_confirmation_rejects_closed_ticket(db_session, subscriber):

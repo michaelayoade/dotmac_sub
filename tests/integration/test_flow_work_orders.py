@@ -24,7 +24,6 @@ from app.services.field.notes import field_notes
 from app.services.field.transitions import field_transitions
 from app.services.field.worklogs import field_worklogs
 from app.services.subscriber import _default_reseller_id
-from app.services.work_orders_mirror import is_sub_authoritative
 
 
 def _user(db) -> SystemUser:
@@ -108,7 +107,6 @@ def test_work_order_lifecycle_native(db_session):
     )
     assert row.public_id.startswith("sub-")
     assert row.crm_work_order_id is None
-    assert is_sub_authoritative(row)
 
     # 2. Assign — the queue row resolves the header by public_id and stores
     # only the native FK. Its old string-shaped response is a derived projection.
