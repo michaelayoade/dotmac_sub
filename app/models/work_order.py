@@ -1,8 +1,9 @@
 """Work-order headers and their field-execution activity.
 
-Sub owns work orders. ``public_id`` is the identity; ``crm_work_order_id`` is a
-nullable reference to the CRM row a header was imported from during migration,
-and is NULL for natively created work orders. Field activity (worklogs, notes,
+Sub owns work orders. ``public_id`` is the identity; ``project_id`` is the
+native project relationship; ``crm_work_order_id`` is nullable import
+provenance and is NULL for natively created work orders; ``crm_project_id`` is
+legacy project provenance and never a native join key. Field activity (worklogs, notes,
 attachments, materials, movements, fiber tests, chat, job events) hangs off
 ``work_order.id`` and has no upstream to rebuild from, so this table is
 authoritative storage, not a cache.
@@ -11,9 +12,9 @@ authoritative storage, not a cache.
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, true
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON, DateTime
 
 from app.db import Base
@@ -49,6 +50,22 @@ class WorkOrder(Base):
         ForeignKey("subscribers.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
+    )
+    # Native project scope. ``crm_project_id`` below remains import provenance;
+    # business policy and joins use this FK.
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    # The work-order command owner is the sole writer for this policy. Vendor
+    # project verification consumes it but never changes it.
+    requires_as_built_evidence: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default=true(),
     )
     title: Mapped[str] = mapped_column(String(200), nullable=False, default="")
     description: Mapped[str | None] = mapped_column(Text)
@@ -92,6 +109,8 @@ class WorkOrder(Base):
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
     )
+
+    project = relationship("Project", back_populates="work_orders")
 
 
 class WorkOrderSyncState(Base):

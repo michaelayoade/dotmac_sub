@@ -27,7 +27,6 @@ from app.models.billing import (
     PaymentReversalOrigin,
     PaymentSettlementOrigin,
     PaymentStatus,
-    PaymentWebhookDeadLetterStatus,
     TaxApplication,
 )
 from app.models.catalog import BillingCycle
@@ -1206,8 +1205,6 @@ class PaymentAllocationRead(PaymentAllocationBase):
 class PaymentProviderBase(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     provider_type: PaymentProviderType = PaymentProviderType.custom
-    connector_config_id: UUID | None = None
-    webhook_secret_ref: str | None = Field(default=None, max_length=255)
     is_active: bool = True
     notes: str | None = None
 
@@ -1219,8 +1216,6 @@ class PaymentProviderCreate(PaymentProviderBase):
 class PaymentProviderUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=160)
     provider_type: PaymentProviderType | None = None
-    connector_config_id: UUID | None = None
-    webhook_secret_ref: str | None = Field(default=None, max_length=255)
     is_active: bool | None = None
     notes: str | None = None
 
@@ -1288,22 +1283,6 @@ class PaymentProviderEventIngest(BaseModel):
     # either a successful or a failed charge), so the raw event_type alone is
     # not always mappable. When set, this overrides the static event-type map.
     status_hint: PaymentStatus | None = None
-
-
-class PaymentWebhookDeadLetterRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: UUID
-    provider_type: str
-    event_type: str | None = None
-    external_id: str | None = None
-    idempotency_key: str | None = None
-    status: PaymentWebhookDeadLetterStatus
-    payload: dict | None = None
-    error: str | None = None
-    retry_count: int
-    received_at: datetime
-    last_attempt_at: datetime | None = None
 
 
 class LedgerEntryBase(BaseModel):

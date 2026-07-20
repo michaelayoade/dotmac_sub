@@ -625,21 +625,6 @@ _FEATURE_CONTROLS: tuple[Control, ...] = (
         description="Pull work orders from CRM (webhook + reconcile + lazy refresh).",
     ),
     Control(
-        key="crm.phase3_native_sync",
-        layer=Layer.feature,
-        owner_module="crm",
-        default=False,
-        on_missing=False,
-        legacy=(
-            LegacyAlias(
-                _PRJ,
-                "crm_phase3_native_sync_enabled",
-                "CRM_PHASE3_NATIVE_SYNC_ENABLED",
-            ),
-        ),
-        description="Sync CRM compatibility deltas into native project and sales tables.",
-    ),
-    Control(
         key="projects.native_read",
         layer=Layer.feature,
         default=False,

@@ -92,7 +92,7 @@ be restated in durable domain language here or in the owning design document.
 
 Architecture liveness is checked in both directions. Every declared owner must
 have a real application/operator caller, and every new service module with a
-persistence-like mutation must name a declared owner. The 261 existing
+persistence-like mutation must name a declared owner. The 255 existing
 undeclared writer-like modules are an explicit shrink-only migration baseline,
 not approved parallel writers; resolving an owner or removing its write requires
 deleting the baseline entry. Adding an entry requires an explicit ownership
@@ -149,16 +149,19 @@ do not hand-edit these rows.
 | `operations.material_dependencies` | service-work-order material need and operational approval | `command_writer` | canonical service work-order state ← `operations.work_orders`<br>material dependency transition protocol ← `operations.work_order_status`<br>material-support cutover controls ← `control.settings_spec` | `owner_managed` | `cutover_ready` | field operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_field_material_requests.py`<br>`tests/test_dotmac_erp_material_sync.py` |
 | `operations.material_dependencies` | ERP material-outcome projection into the service workflow | `reconciler` | canonical material dependency state ← `operations.material_dependencies`<br>ERP material-support outcome observation ← `external:dotmac_erp`<br>material dependency transition protocol ← `operations.work_order_status` | `owner_managed` | `cutover_ready` | field operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_field_material_requests.py`<br>`tests/test_dotmac_erp_material_sync.py` |
 | `operations.material_dependencies` | work-order material allocation after ERP-confirmed issue | `projection_writer` | canonical material dependency state ← `operations.material_dependencies`<br>ERP material-support outcome observation ← `external:dotmac_erp` | `owner_managed` | `cutover_ready` | field operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_field_material_requests.py`<br>`tests/test_dotmac_erp_material_sync.py` |
-| `operations.vendor_project_lifecycle` | vendor start/complete installation-project transitions | `command_writer` | canonical installation-project lifecycle state ← `operations.project_lifecycle`<br>authenticated assigned-vendor transition evidence ← `auth.permission_gate`<br>vendor lifecycle transition protocol ← `operations.vendor_project_lifecycle` | `participant` | `complete` | vendor operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_vendor_lifecycle.py`<br>`tests/test_vendor_submission_proposals.py`<br>`tests/architecture/test_vendor_project_lifecycle_boundary.py` |
-| `operations.vendor_project_lifecycle` | durable vendor lifecycle actor/time/event evidence | `authoritative_record` | canonical installation-project lifecycle state ← `operations.project_lifecycle`<br>authenticated assigned-vendor transition evidence ← `auth.permission_gate` | `participant` | `complete` | vendor operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_vendor_lifecycle.py`<br>`tests/test_vendor_submission_proposals.py`<br>`tests/architecture/test_vendor_project_lifecycle_boundary.py` |
-| `operations.vendor_project_lifecycle` | typed vendor project lifecycle outbox events | `authoritative_record` | canonical installation-project lifecycle state ← `operations.project_lifecycle`<br>authenticated assigned-vendor transition evidence ← `auth.permission_gate` | `participant` | `complete` | vendor operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_vendor_lifecycle.py`<br>`tests/test_vendor_submission_proposals.py`<br>`tests/architecture/test_vendor_project_lifecycle_boundary.py` |
-| `operations.vendor_project_workspace` | vendor project workspace read and action projections | `resolver` | canonical installation-project lifecycle state ← `operations.project_lifecycle`<br>canonical vendor project records ← `operations.vendor_project_records` | `coordinator_managed` | `complete` | vendor operations | `docs/designs/UI_PROJECTION_CONTRACTS.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_vendor_project_workspace.py`<br>`tests/test_vendor_submission_proposals.py`<br>`tests/architecture/test_vendor_project_workspace_boundary.py`<br>`tests/test_vendor_action_eligibility.py` |
-| `operations.vendor_project_workspace` | vendor project workspace mutation coordination | `application_coordinator` | authenticated vendor workspace command context ← `auth.permission_gate`<br>canonical installation-project lifecycle state ← `operations.project_lifecycle`<br>canonical vendor project records ← `operations.vendor_project_records`<br>vendor quote currency and validity policy ← `control.settings_spec`<br>vendor workspace mutation protocol ← `operations.vendor_project_workspace` | `coordinator_managed` | `complete` | vendor operations | `docs/designs/UI_PROJECTION_CONTRACTS.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_vendor_project_workspace.py`<br>`tests/test_vendor_submission_proposals.py`<br>`tests/architecture/test_vendor_project_workspace_boundary.py`<br>`tests/test_vendor_action_eligibility.py` |
-| `operations.vendor_project_workspace` | quote submission eligibility and impact snapshot | `policy` | canonical installation-project lifecycle state ← `operations.project_lifecycle`<br>canonical vendor project records ← `operations.vendor_project_records`<br>vendor workspace mutation protocol ← `operations.vendor_project_workspace` | `coordinator_managed` | `complete` | vendor operations | `docs/designs/UI_PROJECTION_CONTRACTS.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_vendor_project_workspace.py`<br>`tests/test_vendor_submission_proposals.py`<br>`tests/architecture/test_vendor_project_workspace_boundary.py`<br>`tests/test_vendor_action_eligibility.py` |
-| `operations.vendor_project_workspace` | as-built submission eligibility and impact snapshot | `policy` | canonical installation-project lifecycle state ← `operations.project_lifecycle`<br>canonical vendor project records ← `operations.vendor_project_records`<br>vendor workspace mutation protocol ← `operations.vendor_project_workspace` | `coordinator_managed` | `complete` | vendor operations | `docs/designs/UI_PROJECTION_CONTRACTS.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_vendor_project_workspace.py`<br>`tests/test_vendor_submission_proposals.py`<br>`tests/architecture/test_vendor_project_workspace_boundary.py`<br>`tests/test_vendor_action_eligibility.py` |
-| `operations.vendor_project_records` | vendor installation-project quote lifecycle | `command_writer` | validated vendor project record transition ← `operations.vendor_project_workspace`<br>canonical installation-project lifecycle state ← `operations.project_lifecycle` | `participant` | `complete` | vendor operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_vendor_project_workspace.py`<br>`tests/test_vendor_submission_proposals.py`<br>`tests/architecture/test_vendor_project_workspace_boundary.py` |
-| `operations.vendor_project_records` | proposed vendor route-revision lifecycle | `command_writer` | validated vendor project record transition ← `operations.vendor_project_workspace`<br>canonical installation-project lifecycle state ← `operations.project_lifecycle` | `participant` | `complete` | vendor operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_vendor_project_workspace.py`<br>`tests/test_vendor_submission_proposals.py`<br>`tests/architecture/test_vendor_project_workspace_boundary.py` |
-| `operations.vendor_project_records` | as-built evidence lifecycle | `authoritative_record` | validated vendor project record transition ← `operations.vendor_project_workspace`<br>canonical installation-project lifecycle state ← `operations.project_lifecycle` | `participant` | `complete` | vendor operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_vendor_project_workspace.py`<br>`tests/test_vendor_submission_proposals.py`<br>`tests/architecture/test_vendor_project_workspace_boundary.py` |
+| `operations.vendor_project_lifecycle` | vendor start/complete and staff verify/rework installation-project transitions | `command_writer` | canonical installation-project lifecycle state ← `operations.project_lifecycle`<br>authenticated assigned-vendor transition evidence ← `auth.permission_gate`<br>vendor lifecycle transition protocol ← `operations.vendor_project_lifecycle`<br>work-order as-built evidence policy ← `operations.work_order_commands` | `participant` | `complete` | vendor operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_vendor_lifecycle.py`<br>`tests/test_vendor_project_review.py`<br>`tests/test_vendor_submission_proposals.py`<br>`tests/architecture/test_vendor_project_lifecycle_boundary.py` |
+| `operations.vendor_project_lifecycle` | durable vendor lifecycle actor/time/reason/event evidence | `authoritative_record` | canonical installation-project lifecycle state ← `operations.project_lifecycle`<br>authenticated assigned-vendor transition evidence ← `auth.permission_gate`<br>work-order as-built evidence policy ← `operations.work_order_commands` | `participant` | `complete` | vendor operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_vendor_lifecycle.py`<br>`tests/test_vendor_project_review.py`<br>`tests/test_vendor_submission_proposals.py`<br>`tests/architecture/test_vendor_project_lifecycle_boundary.py` |
+| `operations.vendor_project_lifecycle` | typed vendor project lifecycle outbox events | `authoritative_record` | canonical installation-project lifecycle state ← `operations.project_lifecycle`<br>authenticated assigned-vendor transition evidence ← `auth.permission_gate` | `participant` | `complete` | vendor operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_vendor_lifecycle.py`<br>`tests/test_vendor_project_review.py`<br>`tests/test_vendor_submission_proposals.py`<br>`tests/architecture/test_vendor_project_lifecycle_boundary.py` |
+| `operations.vendor_project_workspace` | vendor project workspace read and action projections | `resolver` | canonical installation-project lifecycle state ← `operations.project_lifecycle`<br>canonical vendor project records ← `operations.vendor_project_records` | `coordinator_managed` | `complete` | vendor operations | `docs/designs/UI_PROJECTION_CONTRACTS.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_vendor_project_workspace.py`<br>`tests/test_vendor_submission_proposals.py`<br>`tests/test_vendor_project_review.py`<br>`tests/test_vendor_as_built_review.py`<br>`tests/architecture/test_vendor_project_workspace_boundary.py`<br>`tests/test_vendor_action_eligibility.py` |
+| `operations.vendor_project_workspace` | vendor project workspace mutation coordination | `application_coordinator` | authenticated vendor workspace command context ← `auth.permission_gate`<br>canonical installation-project lifecycle state ← `operations.project_lifecycle`<br>canonical vendor project records ← `operations.vendor_project_records`<br>vendor quote currency and validity policy ← `control.settings_spec`<br>vendor workspace mutation protocol ← `operations.vendor_project_workspace` | `coordinator_managed` | `complete` | vendor operations | `docs/designs/UI_PROJECTION_CONTRACTS.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_vendor_project_workspace.py`<br>`tests/test_vendor_submission_proposals.py`<br>`tests/test_vendor_project_review.py`<br>`tests/test_vendor_as_built_review.py`<br>`tests/architecture/test_vendor_project_workspace_boundary.py`<br>`tests/test_vendor_action_eligibility.py` |
+| `operations.vendor_project_workspace` | quote submission eligibility and impact snapshot | `policy` | canonical installation-project lifecycle state ← `operations.project_lifecycle`<br>canonical vendor project records ← `operations.vendor_project_records`<br>vendor workspace mutation protocol ← `operations.vendor_project_workspace` | `coordinator_managed` | `complete` | vendor operations | `docs/designs/UI_PROJECTION_CONTRACTS.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_vendor_project_workspace.py`<br>`tests/test_vendor_submission_proposals.py`<br>`tests/test_vendor_project_review.py`<br>`tests/test_vendor_as_built_review.py`<br>`tests/architecture/test_vendor_project_workspace_boundary.py`<br>`tests/test_vendor_action_eligibility.py` |
+| `operations.vendor_project_workspace` | as-built submission eligibility and impact snapshot | `policy` | canonical installation-project lifecycle state ← `operations.project_lifecycle`<br>canonical vendor project records ← `operations.vendor_project_records`<br>vendor workspace mutation protocol ← `operations.vendor_project_workspace` | `coordinator_managed` | `complete` | vendor operations | `docs/designs/UI_PROJECTION_CONTRACTS.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_vendor_project_workspace.py`<br>`tests/test_vendor_submission_proposals.py`<br>`tests/test_vendor_project_review.py`<br>`tests/test_vendor_as_built_review.py`<br>`tests/architecture/test_vendor_project_workspace_boundary.py`<br>`tests/test_vendor_action_eligibility.py` |
+| `operations.vendor_project_workspace` | staff project-review eligibility and impact snapshot | `policy` | canonical installation-project lifecycle state ← `operations.project_lifecycle`<br>canonical vendor project records ← `operations.vendor_project_records`<br>work-order as-built evidence policy ← `operations.work_order_commands`<br>vendor workspace mutation protocol ← `operations.vendor_project_workspace` | `coordinator_managed` | `complete` | vendor operations | `docs/designs/UI_PROJECTION_CONTRACTS.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_vendor_project_workspace.py`<br>`tests/test_vendor_submission_proposals.py`<br>`tests/test_vendor_project_review.py`<br>`tests/test_vendor_as_built_review.py`<br>`tests/architecture/test_vendor_project_workspace_boundary.py`<br>`tests/test_vendor_action_eligibility.py` |
+| `operations.vendor_project_workspace` | staff as-built-review eligibility and impact snapshot | `policy` | canonical installation-project lifecycle state ← `operations.project_lifecycle`<br>canonical vendor project records ← `operations.vendor_project_records`<br>vendor workspace mutation protocol ← `operations.vendor_project_workspace` | `coordinator_managed` | `complete` | vendor operations | `docs/designs/UI_PROJECTION_CONTRACTS.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_vendor_project_workspace.py`<br>`tests/test_vendor_submission_proposals.py`<br>`tests/test_vendor_project_review.py`<br>`tests/test_vendor_as_built_review.py`<br>`tests/architecture/test_vendor_project_workspace_boundary.py`<br>`tests/test_vendor_action_eligibility.py` |
+| `operations.vendor_project_records` | vendor installation-project quote lifecycle | `command_writer` | validated vendor project record transition ← `operations.vendor_project_workspace`<br>canonical installation-project lifecycle state ← `operations.project_lifecycle` | `participant` | `complete` | vendor operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_vendor_project_workspace.py`<br>`tests/test_vendor_submission_proposals.py`<br>`tests/test_vendor_as_built_review.py`<br>`tests/architecture/test_vendor_project_workspace_boundary.py` |
+| `operations.vendor_project_records` | proposed vendor route-revision lifecycle | `command_writer` | validated vendor project record transition ← `operations.vendor_project_workspace`<br>canonical installation-project lifecycle state ← `operations.project_lifecycle` | `participant` | `complete` | vendor operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_vendor_project_workspace.py`<br>`tests/test_vendor_submission_proposals.py`<br>`tests/test_vendor_as_built_review.py`<br>`tests/architecture/test_vendor_project_workspace_boundary.py` |
+| `operations.vendor_project_records` | vendor as-built route and line-item lifecycle | `authoritative_record` | validated vendor project record transition ← `operations.vendor_project_workspace`<br>canonical installation-project lifecycle state ← `operations.project_lifecycle` | `participant` | `complete` | vendor operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_vendor_project_workspace.py`<br>`tests/test_vendor_submission_proposals.py`<br>`tests/test_vendor_as_built_review.py`<br>`tests/architecture/test_vendor_project_workspace_boundary.py` |
+| `operations.vendor_project_records` | staff as-built review state and immutable evidence | `authoritative_record` | validated vendor project record transition ← `operations.vendor_project_workspace`<br>canonical installation-project lifecycle state ← `operations.project_lifecycle` | `participant` | `complete` | vendor operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_vendor_project_workspace.py`<br>`tests/test_vendor_submission_proposals.py`<br>`tests/test_vendor_as_built_review.py`<br>`tests/architecture/test_vendor_project_workspace_boundary.py` |
 | `operations.vendor_purchase_invoices` | vendor purchase-invoice read and action projections | `resolver` | canonical vendor purchase-invoice records ← `operations.vendor_purchase_invoice_records`<br>canonical installation-project lifecycle state ← `operations.vendor_project_lifecycle` | `coordinator_managed` | `complete` | vendor operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_phase5_vendor_purchase_invoices.py`<br>`tests/test_vendor_payment_visibility.py`<br>`tests/test_vendor_submission_proposals.py`<br>`tests/architecture/test_vendor_purchase_invoice_boundary.py` |
 | `operations.vendor_purchase_invoices` | vendor purchase-invoice mutation coordination | `application_coordinator` | authenticated purchase-invoice command context ← `auth.permission_gate`<br>canonical vendor purchase-invoice records ← `operations.vendor_purchase_invoice_records`<br>canonical installation-project lifecycle state ← `operations.vendor_project_lifecycle`<br>purchase-invoice currency policy ← `control.settings_spec`<br>purchase-invoice mutation protocol ← `operations.vendor_purchase_invoices` | `coordinator_managed` | `complete` | vendor operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_phase5_vendor_purchase_invoices.py`<br>`tests/test_vendor_payment_visibility.py`<br>`tests/test_vendor_submission_proposals.py`<br>`tests/architecture/test_vendor_purchase_invoice_boundary.py` |
 | `operations.vendor_purchase_invoices` | purchase-invoice submission eligibility and financial preview | `policy` | canonical vendor purchase-invoice records ← `operations.vendor_purchase_invoice_records`<br>canonical installation-project lifecycle state ← `operations.vendor_project_lifecycle`<br>purchase-invoice mutation protocol ← `operations.vendor_purchase_invoices` | `coordinator_managed` | `complete` | vendor operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_phase5_vendor_purchase_invoices.py`<br>`tests/test_vendor_payment_visibility.py`<br>`tests/test_vendor_submission_proposals.py`<br>`tests/architecture/test_vendor_purchase_invoice_boundary.py` |
@@ -169,6 +172,12 @@ do not hand-edit these rows.
 | `operations.vendor_submission_confirmation` | short-lived signed vendor submission proposal | `policy` | authenticated vendor principal context ← `auth.permission_gate`<br>vendor project workspace submission preview ← `operations.vendor_project_workspace`<br>vendor project lifecycle submission preview ← `operations.vendor_project_lifecycle`<br>vendor purchase-invoice submission preview ← `operations.vendor_purchase_invoices`<br>capability signing envelope ← `auth.token_signing`<br>vendor confirmation protocol invariants ← `operations.vendor_submission_confirmation` | `coordinator_managed` | `complete` | vendor operations | `docs/designs/UI_PROJECTION_CONTRACTS.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_vendor_submission_proposals.py`<br>`tests/architecture/test_vendor_submission_confirmation_boundary.py`<br>`tests/test_vendor_lifecycle.py` |
 | `operations.vendor_submission_confirmation` | vendor submission stale-preview verification | `policy` | authenticated vendor principal context ← `auth.permission_gate`<br>vendor project workspace submission preview ← `operations.vendor_project_workspace`<br>vendor project lifecycle submission preview ← `operations.vendor_project_lifecycle`<br>vendor purchase-invoice submission preview ← `operations.vendor_purchase_invoices`<br>capability signing envelope ← `auth.token_signing` | `coordinator_managed` | `complete` | vendor operations | `docs/designs/UI_PROJECTION_CONTRACTS.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_vendor_submission_proposals.py`<br>`tests/architecture/test_vendor_submission_confirmation_boundary.py`<br>`tests/test_vendor_lifecycle.py` |
 | `operations.vendor_submission_confirmation` | vendor submission idempotency and replay result | `application_coordinator` | authenticated vendor principal context ← `auth.permission_gate`<br>vendor project workspace submission preview ← `operations.vendor_project_workspace`<br>vendor project lifecycle submission preview ← `operations.vendor_project_lifecycle`<br>vendor purchase-invoice submission preview ← `operations.vendor_purchase_invoices`<br>capability signing envelope ← `auth.token_signing`<br>canonical vendor submission replay record ← `operations.vendor_submission_confirmation` | `coordinator_managed` | `complete` | vendor operations | `docs/designs/UI_PROJECTION_CONTRACTS.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_vendor_submission_proposals.py`<br>`tests/architecture/test_vendor_submission_confirmation_boundary.py`<br>`tests/test_vendor_lifecycle.py` |
+| `operations.vendor_project_review_confirmation` | short-lived signed staff project-review proposal | `policy` | authenticated staff review context ← `auth.permission_gate`<br>canonical staff project-review preview ← `operations.vendor_project_workspace`<br>capability signing envelope ← `auth.token_signing`<br>staff project-review confirmation protocol ← `operations.vendor_project_review_confirmation` | `coordinator_managed` | `complete` | vendor operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_vendor_project_review.py`<br>`tests/architecture/test_vendor_project_lifecycle_boundary.py` |
+| `operations.vendor_project_review_confirmation` | staff project-review stale-preview verification | `policy` | authenticated staff review context ← `auth.permission_gate`<br>canonical staff project-review preview ← `operations.vendor_project_workspace`<br>capability signing envelope ← `auth.token_signing` | `coordinator_managed` | `complete` | vendor operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_vendor_project_review.py`<br>`tests/architecture/test_vendor_project_lifecycle_boundary.py` |
+| `operations.vendor_project_review_confirmation` | staff project-review idempotency and replay result | `application_coordinator` | authenticated staff review context ← `auth.permission_gate`<br>canonical staff project-review preview ← `operations.vendor_project_workspace`<br>capability signing envelope ← `auth.token_signing`<br>canonical staff project-review replay record ← `operations.vendor_project_review_confirmation` | `coordinator_managed` | `complete` | vendor operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_vendor_project_review.py`<br>`tests/architecture/test_vendor_project_lifecycle_boundary.py` |
+| `operations.vendor_as_built_review_confirmation` | short-lived signed staff as-built review proposal | `policy` | authenticated staff as-built review context ← `auth.permission_gate`<br>canonical staff as-built review preview ← `operations.vendor_project_workspace`<br>capability signing envelope ← `auth.token_signing`<br>staff as-built review confirmation protocol ← `operations.vendor_as_built_review_confirmation` | `coordinator_managed` | `complete` | vendor operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_vendor_as_built_review.py`<br>`tests/architecture/test_vendor_project_workspace_boundary.py` |
+| `operations.vendor_as_built_review_confirmation` | staff as-built review stale-preview verification | `policy` | authenticated staff as-built review context ← `auth.permission_gate`<br>canonical staff as-built review preview ← `operations.vendor_project_workspace`<br>capability signing envelope ← `auth.token_signing` | `coordinator_managed` | `complete` | vendor operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_vendor_as_built_review.py`<br>`tests/architecture/test_vendor_project_workspace_boundary.py` |
+| `operations.vendor_as_built_review_confirmation` | staff as-built review idempotency and replay result | `application_coordinator` | authenticated staff as-built review context ← `auth.permission_gate`<br>canonical staff as-built review preview ← `operations.vendor_project_workspace`<br>capability signing envelope ← `auth.token_signing`<br>canonical staff as-built review replay record ← `operations.vendor_as_built_review_confirmation` | `coordinator_managed` | `complete` | vendor operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_vendor_as_built_review.py`<br>`tests/architecture/test_vendor_project_workspace_boundary.py` |
 | `auth.subscriber_assignments` | subscriber role and direct-permission assignments | `command_writer` | authorized subscriber assignment principal ← `auth.permission_gate`<br>active role and permission catalog ← `auth.rbac_catalog`<br>canonical subscriber assignment state ← `auth.subscriber_assignments` | `owner_managed` | `complete` | platform security | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_subscriber_assignments.py`<br>`tests/architecture/test_subscriber_assignment_boundary.py` |
 | `auth.rbac_catalog` | role catalog and role-permission policy | `command_writer` | authorized RBAC catalog principal ← `auth.permission_gate`<br>canonical role and role-permission catalog ← `auth.rbac_catalog`<br>system-user role grant references ← `auth.system_user_assignments`<br>subscriber role grant references ← `auth.subscriber_assignments` | `owner_managed` | `complete` | platform security | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_rbac_catalog_owner.py`<br>`tests/architecture/test_rbac_catalog_boundary.py` |
 | `auth.rbac_catalog` | permission catalog | `command_writer` | authorized RBAC catalog principal ← `auth.permission_gate`<br>canonical permission catalog ← `auth.rbac_catalog`<br>system-user permission grant references ← `auth.system_user_assignments`<br>subscriber permission grant references ← `auth.subscriber_assignments` | `owner_managed` | `complete` | platform security | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_rbac_catalog_owner.py`<br>`tests/architecture/test_rbac_catalog_boundary.py` |
@@ -200,6 +209,18 @@ do not hand-edit these rows.
 | `access.fup_enforcement_sweep` | FUP enforcement transition and cooldown hysteresis | `policy` | canonical FUP rule decisions ← `access.fup_rule_engine`<br>canonical FUP runtime state ← `access.fup_runtime_state`<br>FUP sweep command protocol ← `access.fup_enforcement_sweep` | `coordinator_managed` | `complete` | network access | `docs/designs/FUP_CONSUMPTION_WINDOWS.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_fup_evaluate_commits.py`<br>`tests/test_fup_enforcement_hardening.py`<br>`tests/test_fup_hysteresis.py`<br>`tests/test_fup_notifications.py`<br>`tests/architecture/test_fup_enforcement_boundary.py` |
 | `access.fup_enforcement_sweep` | FUP repeat-upsell nudge policy | `policy` | canonical FUP rule decisions ← `access.fup_rule_engine`<br>canonical FUP notification history ← `communications.notification_service`<br>period-scoped FUP usage observations ← `access.fup_usage_windows` | `coordinator_managed` | `complete` | network access | `docs/designs/FUP_CONSUMPTION_WINDOWS.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_fup_evaluate_commits.py`<br>`tests/test_fup_enforcement_hardening.py`<br>`tests/test_fup_hysteresis.py`<br>`tests/test_fup_notifications.py`<br>`tests/architecture/test_fup_enforcement_boundary.py` |
 | `access.fup_enforcement_sweep` | FUP customer notification fan-out | `policy` | resolved FUP enforcement decision ← `access.fup_enforcement_sweep`<br>FUP communication channel policy ← `communications.notification_service` | `coordinator_managed` | `complete` | network access | `docs/designs/FUP_CONSUMPTION_WINDOWS.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_fup_evaluate_commits.py`<br>`tests/test_fup_enforcement_hardening.py`<br>`tests/test_fup_hysteresis.py`<br>`tests/test_fup_notifications.py`<br>`tests/architecture/test_fup_enforcement_boundary.py` |
+| `integration.installations` | version-pinned integration installation lifecycle | `command_writer` | deployed connector manifest ← `integration.registry`<br>integration installation protocol ← `integration.installations`<br>canonical integration installation aggregate ← `integration.installations` | `owner_managed` | `complete` | platform integrations | `docs/designs/INTEGRATION_PLATFORM_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_integration_installations.py`<br>`tests/test_integration_installation_api.py`<br>`tests/architecture/test_integration_platform_boundary.py` |
+| `integration.installations` | immutable integration configuration revisions | `authoritative_record` | deployed connector manifest ← `integration.registry`<br>approved integration secret references ← `secrets.reference_store`<br>integration installation protocol ← `integration.installations`<br>canonical integration installation aggregate ← `integration.installations` | `owner_managed` | `complete` | platform integrations | `docs/designs/INTEGRATION_PLATFORM_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_integration_installations.py`<br>`tests/test_integration_installation_api.py`<br>`tests/architecture/test_integration_platform_boundary.py` |
+| `integration.installations` | integration capability grants and bindings | `authoritative_record` | deployed connector manifest ← `integration.registry`<br>integration installation protocol ← `integration.installations`<br>canonical integration installation aggregate ← `integration.installations` | `owner_managed` | `complete` | platform integrations | `docs/designs/INTEGRATION_PLATFORM_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_integration_installations.py`<br>`tests/test_integration_installation_api.py`<br>`tests/architecture/test_integration_platform_boundary.py` |
+| `integration.runtime` | version-pinned connector runner selection | `resolver` | deployed connector runtime definition ← `integration.registry`<br>enabled version-pinned capability binding ← `integration.installations`<br>bounded integration secret materialization ← `secrets.reference_store` | `read_only` | `complete` | platform integrations | `docs/designs/INTEGRATION_PLATFORM_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_integration_manifest_registry.py`<br>`tests/test_integration_installations.py`<br>`tests/architecture/test_integration_platform_boundary.py` |
+| `integration.runtime` | connector operation envelope construction | `policy` | deployed connector runtime definition ← `integration.registry`<br>enabled version-pinned capability binding ← `integration.installations`<br>bounded integration secret materialization ← `secrets.reference_store` | `read_only` | `complete` | platform integrations | `docs/designs/INTEGRATION_PLATFORM_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_integration_manifest_registry.py`<br>`tests/test_integration_installations.py`<br>`tests/architecture/test_integration_platform_boundary.py` |
+| `integration.runtime` | bounded secret materialization for connector execution | `policy` | deployed connector runtime definition ← `integration.registry`<br>enabled version-pinned capability binding ← `integration.installations`<br>bounded integration secret materialization ← `secrets.reference_store` | `read_only` | `complete` | platform integrations | `docs/designs/INTEGRATION_PLATFORM_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_integration_manifest_registry.py`<br>`tests/test_integration_installations.py`<br>`tests/architecture/test_integration_platform_boundary.py` |
+| `integration.delivery` | integration event subscription projection | `projection_writer` | canonical domain event envelope ← `events.store`<br>enabled outbound capability binding ← `integration.installations`<br>integration delivery protocol ← `integration.delivery` | `owner_managed` | `complete` | platform integrations | `docs/designs/INTEGRATION_PLATFORM_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_integration_delivery.py`<br>`tests/architecture/test_integration_platform_boundary.py` |
+| `integration.delivery` | deduplicated integration delivery lifecycle | `command_writer` | canonical domain event envelope ← `events.store`<br>enabled outbound capability binding ← `integration.installations`<br>connector delivery receipt ← `integration.runtime`<br>integration delivery protocol ← `integration.delivery` | `owner_managed` | `complete` | platform integrations | `docs/designs/INTEGRATION_PLATFORM_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_integration_delivery.py`<br>`tests/architecture/test_integration_platform_boundary.py` |
+| `integration.delivery` | outbound capability delivery evidence | `authoritative_record` | canonical domain event envelope ← `events.store`<br>enabled outbound capability binding ← `integration.installations`<br>connector delivery receipt ← `integration.runtime` | `owner_managed` | `complete` | platform integrations | `docs/designs/INTEGRATION_PLATFORM_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_integration_delivery.py`<br>`tests/architecture/test_integration_platform_boundary.py` |
+| `integration.inbox` | verified provider event receipt identity | `observation_collector` | verified external provider event ← `external:integration_provider`<br>enabled inbound capability binding ← `integration.installations`<br>integration inbox protocol ← `integration.inbox` | `owner_managed` | `complete` | platform integrations | `docs/designs/INTEGRATION_PLATFORM_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_integration_installation_api.py`<br>`tests/test_integration_whatsapp_capability.py`<br>`tests/architecture/test_integration_platform_boundary.py` |
+| `integration.inbox` | integration inbox deduplication lifecycle | `authoritative_record` | verified external provider event ← `external:integration_provider`<br>enabled inbound capability binding ← `integration.installations`<br>integration inbox protocol ← `integration.inbox` | `owner_managed` | `complete` | platform integrations | `docs/designs/INTEGRATION_PLATFORM_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_integration_installation_api.py`<br>`tests/test_integration_whatsapp_capability.py`<br>`tests/architecture/test_integration_platform_boundary.py` |
+| `integration.inbox` | inbound consequence processing evidence | `command_writer` | canonical domain consequence result ← `integration.runtime`<br>integration inbox protocol ← `integration.inbox` | `owner_managed` | `complete` | platform integrations | `docs/designs/INTEGRATION_PLATFORM_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_integration_installation_api.py`<br>`tests/test_integration_whatsapp_capability.py`<br>`tests/architecture/test_integration_platform_boundary.py` |
 | `integration.vendor_purchase_invoice_erp_projection` | vendor purchase-invoice ERP origination projection | `projection_writer` | canonical vendor purchase-invoice records ← `operations.vendor_purchase_invoice_records`<br>ERP purchase-invoice origination response ← `external:dotmac_erp`<br>ERP purchase-invoice flow controls ← `control.settings_spec` | `owner_managed` | `cut_over` | vendor finance integrations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_vendor_payment_visibility.py`<br>`tests/test_dotmac_erp_outbox.py` |
 | `integration.vendor_purchase_invoice_erp_projection` | vendor purchase-invoice ERP attachment projection | `projection_writer` | canonical vendor purchase-invoice records ← `operations.vendor_purchase_invoice_records`<br>ERP purchase-invoice attachment response ← `external:dotmac_erp`<br>ERP purchase-invoice flow controls ← `control.settings_spec` | `owner_managed` | `cut_over` | vendor finance integrations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_vendor_payment_visibility.py`<br>`tests/test_dotmac_erp_outbox.py` |
 | `integration.vendor_purchase_invoice_erp_projection` | timestamped ERP accounts-payable status observation | `reconciler` | canonical vendor purchase-invoice records ← `operations.vendor_purchase_invoice_records`<br>ERP accounts-payable status observation ← `external:dotmac_erp`<br>ERP purchase-invoice flow controls ← `control.settings_spec` | `owner_managed` | `cut_over` | vendor finance integrations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_vendor_payment_visibility.py`<br>`tests/test_dotmac_erp_outbox.py` |
@@ -608,12 +629,13 @@ detailed security and delivery boundary is
     suspension/restoration permission.
 18. Scheduled billing, collections, and payment-reconciliation services own DB
    sessions, transaction outcomes, and operational logging for Celery runners.
-19. `financial.payment_webhooks` owns signature-verified provider-payload
-   projection and inbound dead-letter lifecycle. Replay rebuilds the same
-   settlement command as live delivery; `financial.payment_provider_events`
-   owns idempotent event processing, delegates the monetary write to the
-   payment owner, and must resume an incomplete event rather than treating
-   receipt identity as proof that money was posted.
+19. `integration.inbox` owns signature-verified payment receipt identity,
+   failure state, and replay authorization. `financial.payment_webhooks`
+   projects a claimed receipt into the billing consequence;
+   `financial.payment_provider_events` owns idempotent event processing,
+   delegates the monetary write to the payment owner, and must resume an
+   incomplete event rather than treating receipt identity as proof that money
+   was posted.
 20. Referral rewards are account credits owned by `financial.credit_notes`;
    neither CRM nor referral services post a parallel wallet balance. Automated
    referral issuance uses the same owner-generated preview, locked confirmation,
@@ -2448,14 +2470,20 @@ Dependency order:
 3. `operations.work_order_status`: declares persisted work-order values and the
    canonical open, assignable, and terminal sets.
 4. `operations.work_order_commands`: owns native work-order creation and header
-   commands, assignment decisions/projection, and assignment-queue transitions.
+   commands, the native `work_order.project_id` binding, the default-enabled
+   `requires_as_built_evidence` policy, assignment decisions/projection, and
+   assignment-queue transitions.
    Dispatch API/web and field-manager handlers are authorization/transport
    adapters around this owner. Assignment preview is read-only; execution locks
    the work order, atomically updates the queue and assignee projection, records
    exact previous/result actor audit evidence, and treats an equivalent retry as
    a replay. Direct header assignment fields and direct field-execution status
    changes are rejected. CRM ingest remains a provenance importer and does not
-   become native command authority.
+   become native command authority; it may resolve an exact retained CRM
+   project UUID into an otherwise-empty native link, but never replaces a
+   native binding. Native project-binding and evidence-policy
+   rejections use transport-neutral `WorkOrderCommandError`; only
+   `app.errors` maps them to HTTP responses.
 5. `operations.work_orders`: exposes work-order read models and customer links.
    The `work_order` table is Sub's authoritative work-order storage
    (WORK_ORDER_IDENTITY_SOT): identity is the Sub-generated `public_id`;
@@ -2481,19 +2509,24 @@ Dependency order:
 8. `operations.project_lifecycle`: owns native project field/status mutations,
    project SLA synchronization, and lifecycle event/notification requests.
 9. `operations.vendor_project_lifecycle` (`app.services.vendor_portal_operations`)
-   is the only writer for vendor start/complete transitions on
-   `installation_projects`: `approved -> in_progress -> completed`. It locks
+   is the only writer for vendor and staff work transitions on
+   `installation_projects`: vendor `approved -> in_progress -> completed`, staff
+   `completed -> verified`, and staff rework `completed -> in_progress`. It locks
    the project, rechecks the assigned vendor and current state, and atomically
    appends `installation_project_lifecycle_events` evidence carrying the
    authenticated actor type/id, transition time, previous/result state, vendor,
-   and durable event id. The same transaction stages the typed outbox events
-   `vendor_project.started` or `vendor_project.completed`. Cross-team consumers
+   optional review/rework reason, and durable event id. The same transaction
+   stages typed outbox events `vendor_project.started`, `vendor_project.completed`,
+   `vendor_project.verified`, or `vendor_project.rework_requested`. Cross-team consumers
    may read that timeline or consume those events; they do not infer actor/time
    from `updated_at` and do not write project status directly. Vendor routes,
    confirmation handlers, templates, and future delivery integrations are thin
-   adapters around this owner. The owner raises transport-neutral
-   `VendorProjectLifecycleError` rejections; the confirmation/delivery adapter
-   alone maps them to HTTP responses. The same named owner also owns the
+   adapters around this owner. Project verification is an operational decision:
+   invoice approval and ERP payment observations do not gate it and are not
+   modified by it. The owner raises transport-neutral
+   `VendorPortalOperationError` rejections; the application HTTP error handler
+   alone maps them to responses. An architecture test prevents this owner from
+   importing FastAPI or Starlette. The same named owner also owns the
    installation-project quote and as-built evidence lifecycles, including the
    read-only impact snapshot used before submit; one implementation module is
    therefore declared under one owner name. The vendor project-detail map reads
@@ -2501,7 +2534,23 @@ Dependency order:
    `app.services.vendor_routes_api.build_project_route_geojson`; its capture
    controls render only from the owner's `as_built_action` projection and
    serialize the existing `VendorAsBuiltCreate.geojson` contract rather than
-   writing route evidence from the template.
+   writing route evidence from the template. The same owner controls as-built
+   submission versions and staff review transitions from `submitted` or
+   `under_review` to `accepted` or `rejected`. Each decision updates the current
+   review projection and atomically appends `as_built_route_review_events`
+   evidence plus `vendor_as_built.accepted` or `vendor_as_built.rejected`.
+   Rejection requires a reason. An evidence decision never implicitly verifies
+   or reworks the project, approves an invoice, or infers ERP payment.
+   For `completed -> verified`, this owner consumes—but never writes—the active
+   linked work orders' `requires_as_built_evidence` policy. The policy defaults
+   to enabled, including when no active work order is linked; any active linked
+   work order requiring evidence means the latest project as-built submission
+   must be `accepted`. A newer pending or rejected submission supersedes an
+   older accepted submission for this decision. Verification stores the exact
+   work-order policy rows and accepted-evidence identity in the append-only
+   lifecycle event `decision_context` and typed outbox payload. The optional
+   vendor-supplied `work_order_ref` remains observational and is never used to
+   decide verification eligibility.
 10. `operations.vendor_purchase_invoices` owns vendor purchase-invoice state,
    financial totals, submit eligibility, and the financial impact snapshot.
    ERP owns accounts-payable settlement. Its dedicated
@@ -2524,6 +2573,20 @@ Dependency order:
    The proposal carries no decision authority: each domain owner locks and
    rechecks its current facts, and the mutation plus idempotency result commit
    once. Vendor web routes only request preview or confirmation.
+12. `operations.vendor_project_review_confirmation` (implemented by
+   `app.services.vendor_project_review_proposals`) owns signed staff review
+   proposals, stale-preview comparison, and exact-replay idempotency for verify
+   and rework commands. It carries no project decision policy: it asks
+   `operations.vendor_project_lifecycle` for both preview and lock-time
+   revalidation, then records the confirmation result in the same transaction.
+   Admin routes and templates are thin adapters and require `inventory:write`.
+13. `operations.vendor_as_built_review_confirmation` (implemented by
+   `app.services.vendor_as_built_review_proposals`) owns the signed, stale-safe,
+   exactly idempotent confirmation around an as-built accept/reject decision.
+   The proposal is not decision authority: lock-time eligibility and the
+   transition remain with `operations.vendor_project_lifecycle`. Staff actions
+   require `inventory:write`; vendors receive the resulting status and review
+   reason through the project projection.
 
 Rule: provisioning callers should resolve customer/network context once through
 the operations context service before running workflow steps. Step executors may
@@ -2844,20 +2907,66 @@ project configured intent without a parallel catalog-to-network adapter.
 
 Integrations:
 
-1. `integration.registry`: owns connectors and capabilities.
-2. `integration.jobs`: owns targets, jobs, and runs.
-3. `integration.sync`: owns sync orchestration.
-4. `integration.hooks`: owns hook dispatch and subscriptions.
-5. `integration.erp_material_support`: maps an approved Sub material need to the
-   neutral ERP contract, assigns the stable idempotency key, and observes/reconciles
-   ERP outcomes. It is a transport and observation owner, not an inventory or
-   service-workflow decision owner.
+The implemented contract is `docs/designs/INTEGRATION_PLATFORM_SOT.md`. The
+live owners are:
 
-Rule: integration routes/webhooks validate and enqueue. Connector behavior,
-sync lifecycle, and hook delivery stay inside integration services.
-The effective-state projection derives connector/webhook health from runs and
-deliveries and reads OpenBao metadata without reading secret values. It does
-not own connector, subscription, delivery, or credential decisions.
+1. `integration.registry`: owns deterministic deployed manifests, manifest
+   validation, and current connector capability metadata.
+2. `integration.installations`: solely owns version-pinned installation
+   lifecycle, immutable config revisions, secret references, and capability
+   bindings for platform-managed connectors.
+3. `integration.runtime`: solely owns runner selection, version-pinned
+   operation envelopes, deadlines, and bounded secret materialization. Runners
+   have no Sub database session and cannot decide a domain consequence.
+4. `integration.delivery`: solely owns outbound HTTP event subscription,
+   delivery identity, retry, dead-letter, and replay evidence.
+5. `integration.inbox`: solely owns verified CRM, WhatsApp, and payment provider
+   receipt identity, deduplication, and consequence-attempt evidence. Provider
+   routes verify before receipt; domain owners decide every consequence.
+6. `integration.jobs`: owns targets, capability-bound jobs, pinned runs, and
+   their operator lifecycle. Active jobs cannot use string adapter/action
+   transport selection.
+7. `integration.sync`: owns sync orchestration and checkpoints. CRM observation
+   jobs execute only through their enabled `dotmac.crm` capability binding.
+8. `integration.erp_material_support`: maps an approved Sub material need to
+   the neutral ERP contract, assigns the stable idempotency key, and observes or
+   reconciles ERP outcomes through `dotmac.erp`. It remains a transport and
+   observation owner; `operations.material_dependencies` alone projects the
+   outcome into Sub service-workflow state.
+9. `events.store` remains the domain-event fact owner,
+   `scheduler.registry` remains cadence owner, and `secrets.reference_store`
+   remains secret resolution owner.
+
+The control plane separates deployed connector definitions, configured
+installations, capability grants, runtime execution, inbox, delivery, and
+sync/checkpoint responsibilities. Connector definitions are deployed and
+approved artifacts; the admin UI does not install arbitrary executable code.
+
+Authority cutover is complete for the platform-managed first-party paths:
+
+| Concern | Retired owner/path | Live owner/path | Cutover state |
+| --- | --- | --- | --- |
+| Connector catalogue | File discovery and static catalogue projections | Manifest-based `integration.registry` | Complete; runtime registration requires a valid manifest |
+| Installation configuration | Provider environment settings and provider-specific credential columns | `integration.installations` with immutable config revisions and secret references | Complete for CRM, ERP, WhatsApp, payments, and outbound HTTP webhooks |
+| Sync dispatch | String adapter/action selection | Capability-bound `integration.sync` through `integration.runtime` | Complete; active jobs require a binding |
+| CRM | Direct client construction and CRM-specific webhook delivery rows | `dotmac.crm` typed capabilities and `integration.inbox` | Complete; Sub remains authoritative for operational and support consequences |
+| Outbound webhooks and hooks | `events.webhook_deliveries`, endpoint tables, and `integration.hooks` | `integration.delivery` consuming `events.store` | Complete; duplicate models, routes, tasks, and CLI hooks are removed |
+| WhatsApp messaging | Settings-backed provider transport | Direct Meta typed messaging capabilities plus `integration.inbox` | Complete; no Twilio or fallback transport |
+| ERP | Direct ERP transport clients | `dotmac.erp` typed capabilities | Complete; ERP remains observation/transport only |
+| Payments | Direct Paystack/Flutterwave services and payment-specific webhook dead letters | Typed payment capabilities plus `integration.inbox` | Complete; billing owners alone decide financial state |
+
+Migration `380_integration_platform_cutover` removes the retired tables,
+columns, settings, and enums and has no downgrade path. Disabling or correcting
+the current binding is the recovery mechanism; retired transports are not a
+fallback.
+
+Rule: integration routes and webhooks validate and enqueue. Connectors translate
+bounded, typed contracts; they never write Sub domain tables or decide payment,
+subscriber, access, ticket, work-order, network-intent, communications, or
+official-timeline state. Domain owners produce outbound projections and decide
+inbound consequences. The effective-state projection derives health from run,
+delivery, backlog, authentication, and circuit facts and reads OpenBao metadata
+without reading secret values; installed or enabled never implies healthy.
 
 ## VPN / Remote Access
 

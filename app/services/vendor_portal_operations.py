@@ -13,11 +13,14 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.models.domain_settings import SettingDomain
 from app.models.vendor_routes import (
+    AsBuiltRoute,
+    AsBuiltRouteStatus,
     InstallationProject,
     InstallationProjectStatus,
     ProjectQuote,
     ProjectQuoteStatus,
 )
+from app.models.work_order import WorkOrder
 from app.schemas.vendor_portal import (
     VendorAsBuiltCreate,
     VendorQuoteCreate,
@@ -34,6 +37,10 @@ from app.services.owner_commands import (
 )
 from app.services.settings_spec import resolve_value
 from app.services.ui_contracts import Action
+from app.services.vendor_portal_errors import (
+    VendorPortalOperationError,
+    VendorProjectLifecycleError,
+)
 
 _EDITABLE_QUOTES = {
     ProjectQuoteStatus.draft.value,
@@ -151,12 +158,138 @@ class StageVendorAsBuiltSubmission:
     user_id: str
 
 
+def _lifecycle_project(
+    db: Session, project_id: str, *, for_update: bool = False
+) -> InstallationProject:
+    query = db.query(InstallationProject).filter(
+        InstallationProject.id == coerce_uuid(project_id)
+    )
+    if for_update:
+        query = query.with_for_update(of=InstallationProject)
+    row = query.one_or_none()
+    if row is None or not row.is_active:
+        raise VendorProjectLifecycleError(
+            "not_found", "Installation project not found", kind="not_found"
+        )
+    return row
+
+
 def _now() -> datetime:
     return datetime.now(UTC)
 
 
 def _money(value) -> Decimal:
     return Decimal(str(value or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def _as_built_submission_eligibility(
+    project: InstallationProject,
+) -> tuple[bool, str | None]:
+    if project.status == InstallationProjectStatus.verified.value:
+        return False, "Verified work cannot receive another as-built submission"
+    if project.status not in {
+        InstallationProjectStatus.in_progress.value,
+        InstallationProjectStatus.completed.value,
+    }:
+        return False, "As-built evidence is available after field work starts"
+    submissions = sorted(
+        getattr(project, "as_built_routes", ()),
+        key=lambda item: (item.submitted_at or item.created_at, str(item.id)),
+    )
+    if not submissions:
+        return True, None
+    latest = submissions[-1]
+    if latest.status in {
+        AsBuiltRouteStatus.submitted.value,
+        AsBuiltRouteStatus.under_review.value,
+    }:
+        return False, "The latest as-built submission is awaiting staff review"
+    if (
+        latest.status == AsBuiltRouteStatus.accepted.value
+        and project.status != InstallationProjectStatus.in_progress.value
+    ):
+        return False, "The latest as-built submission has already been accepted"
+    return True, None
+
+
+def _verification_evidence_policy(
+    db: Session,
+    project: InstallationProject,
+    *,
+    for_update: bool = False,
+) -> dict:
+    """Resolve work-order policy and the latest project-level evidence."""
+
+    work_order_query = (
+        db.query(WorkOrder)
+        .filter(
+            WorkOrder.project_id == project.project_id,
+            WorkOrder.is_active.is_(True),
+        )
+        .order_by(WorkOrder.id.asc())
+    )
+    if for_update:
+        work_order_query = work_order_query.with_for_update(of=WorkOrder)
+    work_orders = work_order_query.all()
+
+    evidence_query = (
+        db.query(AsBuiltRoute)
+        .filter(AsBuiltRoute.project_id == project.id)
+        .order_by(
+            AsBuiltRoute.version.desc(),
+            AsBuiltRoute.submitted_at.desc(),
+            AsBuiltRoute.created_at.desc(),
+            AsBuiltRoute.id.desc(),
+        )
+    )
+    if for_update:
+        evidence_query = evidence_query.with_for_update(of=AsBuiltRoute)
+    latest = evidence_query.first()
+
+    required = (
+        any(row.requires_as_built_evidence for row in work_orders)
+        if work_orders
+        else True
+    )
+    accepted = latest is not None and latest.status == AsBuiltRouteStatus.accepted.value
+    eligible = not required or accepted
+    if eligible:
+        blocked_reason = None
+    elif latest is None:
+        blocked_reason = "Accepted as-built evidence is required before verification"
+    else:
+        blocked_reason = (
+            "The latest as-built evidence must be accepted before verification "
+            f"(currently {latest.status.replace('_', ' ')})"
+        )
+
+    return {
+        "required": required,
+        "eligible": eligible,
+        "reason": blocked_reason,
+        "source": "work_order" if work_orders else "default_enabled",
+        "work_orders": [
+            {
+                "id": str(row.id),
+                "public_id": row.public_id,
+                "requires_as_built_evidence": row.requires_as_built_evidence,
+                "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+            }
+            for row in work_orders
+        ],
+        "latest_as_built": (
+            {
+                "id": str(latest.id),
+                "version": latest.version,
+                "status": latest.status,
+                "updated_at": (
+                    latest.updated_at.isoformat() if latest.updated_at else None
+                ),
+            }
+            if latest is not None
+            else None
+        ),
+    }
 
 
 def _project(
@@ -196,6 +329,31 @@ def _quote(
     return row
 
 
+def _as_built(
+    db: Session, as_built_id: str, *, for_update: bool = False
+) -> AsBuiltRoute:
+    query = (
+        db.query(AsBuiltRoute)
+        .options(
+            joinedload(AsBuiltRoute.project).joinedload(
+                InstallationProject.assigned_vendor
+            ),
+            joinedload(AsBuiltRoute.project).joinedload(InstallationProject.project),
+            selectinload(AsBuiltRoute.line_items),
+            selectinload(AsBuiltRoute.review_events),
+        )
+        .filter(AsBuiltRoute.id == coerce_uuid(as_built_id))
+    )
+    if for_update:
+        query = query.with_for_update(of=AsBuiltRoute)
+    row = query.one_or_none()
+    if row is None:
+        raise VendorPortalOperationError(
+            "as_built_not_found", "As-built evidence not found", kind="not_found"
+        )
+    return row
+
+
 def _serialize_project(
     row: InstallationProject, viewer_vendor_id: str | None = None
 ) -> dict:
@@ -224,11 +382,15 @@ def _serialize_project(
             affected=1,
             requires_confirmation=True,
         )
+    as_built_allowed, as_built_reason = _as_built_submission_eligibility(row)
+    as_built_allowed = is_mine and as_built_allowed
+    if not is_mine:
+        as_built_reason = "As-built submission is available after award"
     as_built_action = Action(
         key="submit_as_built",
         label="Review and submit as-built",
-        allowed=is_mine,
-        reason=None if is_mine else "As-built submission is available after award",
+        allowed=as_built_allowed,
+        reason=as_built_reason,
     )
     return {
         "id": row.id,
@@ -248,6 +410,42 @@ def _serialize_project(
         "updated_at": row.updated_at,
         "lifecycle_action": lifecycle_action,
         "as_built_action": as_built_action,
+        "lifecycle_events": [
+            {
+                "id": event.id,
+                "event_type": event.event_type,
+                "from_status": event.from_status,
+                "to_status": event.to_status,
+                "actor_type": event.actor_type,
+                "actor_id": event.actor_id,
+                "reason": event.reason,
+                "decision_context": event.decision_context,
+                "occurred_at": event.occurred_at,
+            }
+            for event in sorted(
+                getattr(row, "lifecycle_events", ()),
+                key=lambda item: (item.occurred_at, str(item.id)),
+            )
+        ],
+        "as_built_submissions": [
+            {
+                "id": item.id,
+                "status": item.status,
+                "version": item.version,
+                "submitted_at": item.submitted_at,
+                "reviewed_at": item.reviewed_at,
+                "review_notes": item.review_notes,
+                "actual_length_meters": item.actual_length_meters,
+                "line_item_count": len(item.line_items),
+            }
+            for item in sorted(
+                getattr(row, "as_built_routes", ()),
+                key=lambda item: (
+                    item.submitted_at or item.created_at,
+                    str(item.id),
+                ),
+            )
+        ],
     }
 
 
@@ -282,7 +480,165 @@ def _serialize_quote(row: ProjectQuote) -> dict:
     }
 
 
+def _serialize_as_built_review(row: AsBuiltRoute) -> dict:
+    project = row.project
+    vendor = project.assigned_vendor
+    status_reviewable = row.status in {
+        AsBuiltRouteStatus.submitted.value,
+        AsBuiltRouteStatus.under_review.value,
+    }
+    reviewable = status_reviewable and project.assigned_vendor_id is not None
+    blocked_reason = None
+    if not status_reviewable:
+        blocked_reason = f"Evidence is already {row.status}"
+    elif project.assigned_vendor_id is None:
+        blocked_reason = "Evidence has no assigned vendor"
+    return {
+        "id": row.id,
+        "project_id": row.project_id,
+        "project_name": getattr(project.project, "name", None),
+        "project_code": getattr(project.project, "code", None),
+        "vendor_id": project.assigned_vendor_id,
+        "vendor_name": getattr(vendor, "name", None),
+        "status": row.status,
+        "version": row.version,
+        "submitted_at": row.submitted_at,
+        "submitted_by_person_id": row.submitted_by_person_id,
+        "reviewed_at": row.reviewed_at,
+        "review_notes": row.review_notes,
+        "has_geometry": row.route_geom is not None,
+        "actual_length_meters": row.actual_length_meters,
+        "variation_type": row.variation_type,
+        "variation_reason": row.variation_reason,
+        "work_order_ref": row.work_order_ref,
+        "line_items": [item for item in row.line_items if item.is_active],
+        "review_events": [
+            {
+                "id": event.id,
+                "event_type": event.event_type,
+                "from_status": event.from_status,
+                "to_status": event.to_status,
+                "actor_type": event.actor_type,
+                "actor_id": event.actor_id,
+                "reason": event.reason,
+                "occurred_at": event.occurred_at,
+            }
+            for event in row.review_events
+        ],
+        "accept_action": Action(
+            key="accept_as_built",
+            label="Accept evidence",
+            allowed=reviewable,
+            reason=blocked_reason,
+            permission="inventory:write",
+            preview_url=(f"/admin/vendors/operations/as-built/{row.id}/accept/preview"),
+            affected=1,
+            requires_confirmation=True,
+        ),
+        "reject_action": Action(
+            key="reject_as_built",
+            label="Reject evidence",
+            allowed=reviewable,
+            reason=blocked_reason,
+            permission="inventory:write",
+            preview_url=(f"/admin/vendors/operations/as-built/{row.id}/reject/preview"),
+            affected=1,
+            requires_confirmation=True,
+        ),
+    }
+
+
 class VendorPortalOperations:
+    @staticmethod
+    def list_reviewable_as_builts(db: Session, *, limit: int = 200) -> list[dict]:
+        rows = (
+            db.query(AsBuiltRoute)
+            .join(
+                InstallationProject,
+                AsBuiltRoute.project_id == InstallationProject.id,
+            )
+            .options(
+                joinedload(AsBuiltRoute.project).joinedload(
+                    InstallationProject.assigned_vendor
+                ),
+                joinedload(AsBuiltRoute.project).joinedload(
+                    InstallationProject.project
+                ),
+                selectinload(AsBuiltRoute.line_items),
+                selectinload(AsBuiltRoute.review_events),
+            )
+            .filter(
+                InstallationProject.is_active.is_(True),
+                AsBuiltRoute.status.in_(
+                    (
+                        AsBuiltRouteStatus.submitted.value,
+                        AsBuiltRouteStatus.under_review.value,
+                    )
+                ),
+            )
+            .order_by(AsBuiltRoute.submitted_at.asc(), AsBuiltRoute.id.asc())
+            .limit(max(1, min(limit, 500)))
+            .all()
+        )
+        return [_serialize_as_built_review(row) for row in rows]
+
+    @staticmethod
+    def list_reviewable_projects(db: Session, *, limit: int = 200) -> list[dict]:
+        """Project the exact staff cohort awaiting acceptance or rework."""
+
+        rows = (
+            db.query(InstallationProject)
+            .options(
+                joinedload(InstallationProject.project),
+                joinedload(InstallationProject.assigned_vendor),
+                selectinload(InstallationProject.lifecycle_events),
+            )
+            .filter(
+                InstallationProject.status == InstallationProjectStatus.completed.value,
+                InstallationProject.is_active.is_(True),
+            )
+            .order_by(
+                InstallationProject.updated_at.asc(),
+                InstallationProject.id.asc(),
+            )
+            .limit(max(1, min(limit, 500)))
+            .all()
+        )
+        projected = []
+        for row in rows:
+            evidence_policy = _verification_evidence_policy(db, row)
+            projected.append(
+                {
+                    **_serialize_project(row),
+                    "vendor_name": getattr(row.assigned_vendor, "name", None),
+                    "verification_evidence": evidence_policy,
+                    "verify_action": Action(
+                        key="verify",
+                        label="Verify completed work",
+                        allowed=bool(evidence_policy["eligible"]),
+                        reason=evidence_policy["reason"],
+                        permission="inventory:write",
+                        preview_url=(
+                            f"/admin/vendors/operations/projects/{row.id}/verify/preview"
+                        ),
+                        affected=1,
+                        requires_confirmation=True,
+                    ),
+                    "rework_action": Action(
+                        key="rework",
+                        label="Request rework",
+                        allowed=True,
+                        permission="inventory:write",
+                        preview_url=(
+                            f"/admin/vendors/operations/projects/{row.id}/rework/preview"
+                        ),
+                        affected=1,
+                        requires_confirmation=True,
+                    ),
+                }
+            )
+        return projected
+
     @staticmethod
     def list_reviewable_quotes(db: Session, *, limit: int = 200) -> list[ProjectQuote]:
         return (
@@ -321,7 +677,11 @@ class VendorPortalOperations:
         db: Session, vendor_id: str, *, available: bool, limit: int, offset: int
     ) -> list[dict]:
         query = db.query(InstallationProject).options(
-            joinedload(InstallationProject.project)
+            joinedload(InstallationProject.project),
+            selectinload(InstallationProject.lifecycle_events),
+            selectinload(InstallationProject.as_built_routes).selectinload(
+                AsBuiltRoute.line_items
+            ),
         )
         if available:
             now = _now()
@@ -467,6 +827,9 @@ class VendorPortalOperations:
                 "project_not_assigned",
                 "Project is assigned to another vendor.",
             )
+        allowed, reason = _as_built_submission_eligibility(project)
+        if not allowed:
+            raise _error("as_built_submission_not_allowed", str(reason))
         if not payload.geojson and not payload.line_items:
             raise _error(
                 "as_built_evidence_required",
@@ -589,6 +952,271 @@ class VendorPortalOperations:
             context=command.context,
             name="review_vendor_quote",
             operation=operation,
+        )
+
+    @staticmethod
+    def preview_staff_project_lifecycle(
+        db: Session,
+        project_id: str,
+        *,
+        action: str,
+        reason: str | None = None,
+        for_update: bool = False,
+    ) -> dict:
+        """Own staff acceptance/rework eligibility and its impact snapshot."""
+
+        project = _lifecycle_project(db, project_id, for_update=for_update)
+        if project.assigned_vendor_id is None:
+            raise VendorProjectLifecycleError(
+                "vendor_assignment_required",
+                "Completed work must have an assigned vendor before review",
+            )
+        normalized_reason = str(reason or "").strip() or None
+        if normalized_reason and len(normalized_reason) > 2000:
+            raise VendorProjectLifecycleError(
+                "reason_too_long",
+                "Review reason must be 2,000 characters or fewer",
+                kind="invalid",
+            )
+        transitions = {
+            "verify": (
+                InstallationProjectStatus.verified.value,
+                "Verify completed work",
+                "Accepts the vendor completion as operationally verified",
+            ),
+            "rework": (
+                InstallationProjectStatus.in_progress.value,
+                "Request vendor rework",
+                "Returns the project to field work with a required reason",
+            ),
+        }
+        if action not in transitions:
+            raise VendorProjectLifecycleError(
+                "unsupported_action", "Unsupported lifecycle action", kind="invalid"
+            )
+        if project.status != InstallationProjectStatus.completed.value:
+            raise VendorProjectLifecycleError(
+                "invalid_transition",
+                "Only a completed project can be verified or returned for rework",
+            )
+        if action == "rework" and normalized_reason is None:
+            raise VendorProjectLifecycleError(
+                "reason_required", "A rework reason is required", kind="invalid"
+            )
+        verification_evidence = (
+            _verification_evidence_policy(db, project, for_update=for_update)
+            if action == "verify"
+            else None
+        )
+        if verification_evidence and not verification_evidence["eligible"]:
+            raise VendorProjectLifecycleError(
+                "as_built_evidence_required",
+                str(verification_evidence["reason"]),
+            )
+        target, title, summary = transitions[action]
+        native_project = project.project
+        return {
+            "review_type": f"project_{action}",
+            "project_id": str(project.id),
+            "title": title,
+            "summary": summary,
+            "details": [
+                ("Project", getattr(native_project, "name", None) or str(project.id)),
+                ("Current state", "Completed"),
+                ("Result", target.replace("_", " ").title()),
+                ("Reason", normalized_reason or "No additional note"),
+                (
+                    "As-built evidence",
+                    (
+                        "Required and latest submission accepted"
+                        if verification_evidence and verification_evidence["required"]
+                        else "Not required by linked work orders"
+                        if verification_evidence
+                        else "Not evaluated for rework"
+                    ),
+                ),
+                (
+                    "Financial effect",
+                    "None; invoice approval and ERP payment remain separate",
+                ),
+            ],
+            "state": {
+                "project_id": str(project.id),
+                "vendor_id": str(project.assigned_vendor_id),
+                "from_status": project.status,
+                "to_status": target,
+                "reason": normalized_reason,
+                "updated_at": project.updated_at,
+                "verification_evidence": verification_evidence,
+            },
+        }
+
+    @staticmethod
+    def transition_staff_project(
+        db: Session,
+        project_id: str,
+        *,
+        action: str,
+        actor_id: str,
+        reason: str | None = None,
+    ) -> dict:
+        """Delegate the staff decision write to the lifecycle record owner."""
+
+        from app.services.vendor_project_lifecycle import (
+            StageStaffVendorProjectTransition,
+            stage_staff_project_transition,
+        )
+
+        return stage_staff_project_transition(
+            db,
+            StageStaffVendorProjectTransition(
+                project_id=project_id,
+                action=action,
+                actor_id=actor_id,
+                reason=reason,
+            ),
+        )
+
+    @staticmethod
+    def preview_as_built_review(
+        db: Session,
+        as_built_id: str,
+        *,
+        action: str,
+        reason: str | None = None,
+        for_update: bool = False,
+    ) -> dict:
+        """Own accept/reject eligibility and the exact evidence preview."""
+
+        row = _as_built(db, as_built_id, for_update=for_update)
+        if row.project.assigned_vendor_id is None:
+            raise VendorPortalOperationError(
+                "vendor_assignment_required",
+                "As-built evidence must belong to an assigned vendor",
+            )
+        if row.status not in {
+            AsBuiltRouteStatus.submitted.value,
+            AsBuiltRouteStatus.under_review.value,
+        }:
+            raise VendorPortalOperationError(
+                "as_built_not_reviewable",
+                "Only submitted as-built evidence can be reviewed",
+            )
+        normalized_reason = str(reason or "").strip() or None
+        if normalized_reason and len(normalized_reason) > 2000:
+            raise VendorPortalOperationError(
+                "reason_too_long",
+                "Review reason must be 2,000 characters or fewer",
+                kind="invalid",
+            )
+        transitions = {
+            "accept": (
+                AsBuiltRouteStatus.accepted.value,
+                "Accept as-built evidence",
+                "Records that staff accepted this submitted evidence",
+            ),
+            "reject": (
+                AsBuiltRouteStatus.rejected.value,
+                "Reject as-built evidence",
+                "Records why this evidence is insufficient",
+            ),
+        }
+        if action not in transitions:
+            raise VendorPortalOperationError(
+                "unsupported_action",
+                "Unsupported as-built review action",
+                kind="invalid",
+            )
+        if action == "reject" and normalized_reason is None:
+            raise VendorPortalOperationError(
+                "reason_required", "A rejection reason is required", kind="invalid"
+            )
+        target, title, summary = transitions[action]
+        project = row.project
+        return {
+            "review_type": f"as_built_{action}",
+            "as_built_id": str(row.id),
+            "project_id": str(row.project_id),
+            "title": title,
+            "summary": summary,
+            "details": [
+                (
+                    "Project",
+                    getattr(project.project, "name", None) or str(project.id),
+                ),
+                ("Vendor", getattr(project.assigned_vendor, "name", None) or "—"),
+                ("Current evidence state", row.status.replace("_", " ").title()),
+                ("Result", target.title()),
+                (
+                    "Route geometry",
+                    "Provided" if row.route_geom is not None else "None",
+                ),
+                (
+                    "Line items",
+                    str(len([item for item in row.line_items if item.is_active])),
+                ),
+                ("Review reason", normalized_reason or "No additional note"),
+                (
+                    "Project effect",
+                    "None; project verification or rework remains a separate decision",
+                ),
+                (
+                    "Financial effect",
+                    "None; invoice approval and ERP payment remain separate",
+                ),
+            ],
+            "state": {
+                "as_built_id": str(row.id),
+                "project_id": str(row.project_id),
+                "vendor_id": str(project.assigned_vendor_id),
+                "from_status": row.status,
+                "to_status": target,
+                "reason": normalized_reason,
+                "updated_at": row.updated_at,
+                "actual_length_meters": row.actual_length_meters,
+                "variation_type": row.variation_type,
+                "variation_reason": row.variation_reason,
+                "work_order_ref": row.work_order_ref,
+                "has_geometry": row.route_geom is not None,
+                "line_items": [
+                    {
+                        "id": str(item.id),
+                        "description": item.description,
+                        "quantity": item.quantity,
+                        "unit_price": item.unit_price,
+                        "amount": item.amount,
+                        "is_active": item.is_active,
+                        "updated_at": item.updated_at,
+                    }
+                    for item in sorted(row.line_items, key=lambda item: str(item.id))
+                ],
+            },
+        }
+
+    @staticmethod
+    def transition_as_built_review(
+        db: Session,
+        as_built_id: str,
+        *,
+        action: str,
+        actor_id: str,
+        reason: str | None = None,
+    ) -> dict:
+        """Delegate the staff evidence write to the record owner."""
+
+        from app.services.vendor_project_records import (
+            StageVendorAsBuiltReview,
+            stage_as_built_review,
+        )
+
+        return stage_as_built_review(
+            db,
+            StageVendorAsBuiltReview(
+                as_built_id=as_built_id,
+                action=action,
+                actor_id=actor_id,
+                reason=reason,
+            ),
         )
 
     @staticmethod

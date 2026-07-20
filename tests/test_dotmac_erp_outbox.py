@@ -367,11 +367,11 @@ def test_client_404_is_not_found():
 
 
 # ---------------------------------------------------------------------------
-# Settings registration
+# Capability registration
 # ---------------------------------------------------------------------------
 
 
-def test_integration_settings_registered():
+def test_erp_settings_are_retired():
     from app.models.domain_settings import SettingDomain
     from app.services import settings_spec
 
@@ -380,55 +380,39 @@ def test_integration_settings_registered():
         for spec in settings_spec.SETTINGS_SPECS
         if spec.domain == SettingDomain.integration
     }
-    assert {
-        "dotmac_erp_sync_enabled",
-        "dotmac_erp_base_url",
-        "dotmac_erp_token",
-        "dotmac_erp_timeout_seconds",
-        "dotmac_erp_max_retries",
-    } <= keys
-
-
-def test_integration_settings_defaults_and_secret():
-    from app.models.domain_settings import SettingDomain
-    from app.services import settings_spec
-
-    enabled = settings_spec.get_spec(
-        SettingDomain.integration, "dotmac_erp_sync_enabled"
-    )
-    assert enabled is not None and enabled.default is False
-
-    base = settings_spec.get_spec(SettingDomain.integration, "dotmac_erp_base_url")
-    assert base is not None and base.default == "https://erp.dotmac.io"
-
-    token = settings_spec.get_spec(SettingDomain.integration, "dotmac_erp_token")
-    assert token is not None and token.is_secret is True
-
-
-def test_integration_settings_resolve_defaults(db_session):
-    from app.models.domain_settings import SettingDomain
-    from app.services import settings_spec
-
     assert (
-        settings_spec.resolve_value(
-            db_session, SettingDomain.integration, "dotmac_erp_sync_enabled"
-        )
-        is False
-    )
-    assert (
-        settings_spec.resolve_value(
-            db_session, SettingDomain.integration, "dotmac_erp_base_url"
-        )
-        == "https://erp.dotmac.io"
+        not {
+            "dotmac_erp_sync_enabled",
+            "dotmac_erp_base_url",
+            "dotmac_erp_token",
+            "dotmac_erp_timeout_seconds",
+            "dotmac_erp_max_retries",
+        }
+        & keys
     )
 
 
-def test_build_erp_client_raises_without_token(db_session, monkeypatch):
-    from app.services.dotmac_erp.client import build_erp_client
+def test_erp_manifest_owns_config_secrets_and_capabilities():
+    from app.services.integrations.registry import require_connector_definition
 
-    # base_url resolves to its default, but token is unset → refuse to build.
-    with pytest.raises(ValueError):
-        build_erp_client(db_session)
+    definition = require_connector_definition("dotmac.erp")
+    assert definition.config_schema["required"] == ["base_url"]
+    assert {secret.name for secret in definition.secrets} == {"service_credentials"}
+    assert {capability.id for capability in definition.capabilities} == {
+        "erp.outbox.deliver.v1",
+        "erp.status.read.v1",
+        "erp.inventory.read.v1",
+        "erp.operational_context.sync.v1",
+        "erp.regulatory.read.v1",
+    }
+
+
+def test_erp_capability_fails_closed_without_binding(db_session):
+    from app.services.integrations import installations
+    from app.services.integrations.erp_capability import capability_client
+
+    with pytest.raises(installations.InstallationError, match="no enabled binding"):
+        capability_client(db_session).get_ncc_staff_headcount()
 
 
 # ---------------------------------------------------------------------------

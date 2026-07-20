@@ -33,11 +33,15 @@ def test_lifecycle_participant_has_a_complete_contract() -> None:
         service_names={item.name for item in all_services()},
     )
     concerns = {item.name: item for item in service.contract.concerns}
-    assert concerns["vendor start/complete installation-project transitions"].role is (
-        OwnerRole.COMMAND_WRITER
+    assert (
+        concerns[
+            "vendor start/complete and staff verify/rework installation-project transitions"
+        ].role
+        is OwnerRole.COMMAND_WRITER
     )
-    assert concerns["durable vendor lifecycle actor/time/event evidence"].role is (
-        OwnerRole.AUTHORITATIVE_RECORD
+    assert (
+        concerns["durable vendor lifecycle actor/time/reason/event evidence"].role
+        is OwnerRole.AUTHORITATIVE_RECORD
     )
 
 

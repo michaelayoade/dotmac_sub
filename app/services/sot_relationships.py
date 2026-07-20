@@ -2536,10 +2536,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.api_billing_webhooks",
                 owns=(
                     "verified payment webhook projection",
-                    "inbound payment dead-letter lifecycle",
-                    "payment dead-letter replay",
+                    "billing consequence submission from verified receipts",
                 ),
-                depends_on=("financial.payment_provider_events",),
+                depends_on=(
+                    "integration.inbox",
+                    "financial.payment_provider_events",
+                ),
             ),
             SOTService(
                 name="financial.payment_reconciliation",
@@ -4250,21 +4252,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=("event persistence", "handler attempt tracking"),
                 depends_on=("events.dispatcher",),
             ),
-            SOTService(
-                name="events.webhook_deliveries",
-                module="app.services.webhook_deliveries",
-                owns=("webhook delivery rows", "webhook queueing"),
-                depends_on=("events.dispatcher",),
-            ),
         ),
         entrypoints=(
             "app.services.events.handlers.*",
-            "app.tasks.webhooks",
+            "app.tasks.integration_delivery",
             "app.web.admin.integrations",
         ),
         rule=(
-            "Handlers orchestrate; persistence, retry, and delivery bookkeeping "
-            "live in event/webhook services."
+            "Handlers orchestrate; event persistence stays in events.store and "
+            "external delivery is requested from integration.delivery."
         ),
     ),
     DomainSOT(
@@ -4523,6 +4519,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.work_order_commands",
                 owns=(
                     "native work-order creation and header commands",
+                    "native work-order project binding",
+                    "work-order as-built evidence requirement",
                     "work-order assignment decisions and projection",
                     "work-order assignment-queue transitions",
                 ),
@@ -4538,7 +4536,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "projection atomically, records exact actor audit evidence, "
                     "and treats equivalent retries as replays. CRM mirror ingest "
                     "remains a provenance importer; field execution statuses remain "
-                    "owned by operations.field_completion."
+                    "owned by operations.field_completion. Native project-binding "
+                    "and evidence-policy rejections are transport-neutral "
+                    "WorkOrderCommandError values mapped only by the app boundary."
                 ),
             ),
             SOTService(
@@ -4821,14 +4821,16 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 name="operations.vendor_project_lifecycle",
                 module="app.services.vendor_project_lifecycle",
                 owns=(
-                    "vendor start/complete installation-project transitions",
-                    "durable vendor lifecycle actor/time/event evidence",
+                    "vendor start/complete and staff verify/rework "
+                    "installation-project transitions",
+                    "durable vendor lifecycle actor/time/reason/event evidence",
                     "typed vendor project lifecycle outbox events",
                 ),
                 depends_on=(
                     "auth.permission_gate",
                     "events.dispatcher",
                     "operations.project_lifecycle",
+                    "operations.work_order_commands",
                 ),
                 notes=(
                     "This participant is the sole writer for approved -> "
@@ -4838,21 +4840,29 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 contract=ServiceContract(
                     concerns=(
                         ConcernContract(
-                            name="vendor start/complete installation-project transitions",
+                            name=(
+                                "vendor start/complete and staff verify/rework "
+                                "installation-project transitions"
+                            ),
                             role=OwnerRole.COMMAND_WRITER,
                             input_names=(
                                 "canonical installation-project lifecycle state",
                                 "authenticated assigned-vendor transition evidence",
                                 "vendor lifecycle transition protocol",
+                                "work-order as-built evidence policy",
                             ),
                             canonical_writer="operations.vendor_project_lifecycle",
                         ),
                         ConcernContract(
-                            name="durable vendor lifecycle actor/time/event evidence",
+                            name=(
+                                "durable vendor lifecycle "
+                                "actor/time/reason/event evidence"
+                            ),
                             role=OwnerRole.AUTHORITATIVE_RECORD,
                             input_names=(
                                 "canonical installation-project lifecycle state",
                                 "authenticated assigned-vendor transition evidence",
+                                "work-order as-built evidence policy",
                             ),
                             canonical_writer="operations.vendor_project_lifecycle",
                         ),
@@ -4886,12 +4896,22 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             ),
                         ),
                         AuthorityInput(
+                            name="work-order as-built evidence policy",
+                            owner="operations.work_order_commands",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "active linked WorkOrder requires_as_built_evidence "
+                                "flags and the latest canonical project as-built status"
+                            ),
+                        ),
+                        AuthorityInput(
                             name="vendor lifecycle transition protocol",
                             owner="operations.vendor_project_lifecycle",
                             kind=AuthorityKind.CONTROL_INPUT,
                             source=(
-                                "approved-to-in-progress start and "
-                                "in-progress-to-completed completion transitions"
+                                "approved-to-in-progress start, in-progress-to-completed "
+                                "completion, completed-to-verified acceptance, and "
+                                "completed-to-in-progress rework transitions"
                             ),
                         ),
                     ),
@@ -4922,6 +4942,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "operations.vendor_project_lifecycle.unsupported_action",
                             "operations.vendor_project_lifecycle.actor_required",
                             "operations.vendor_project_lifecycle.invalid_transition",
+                            "operations.vendor_project_lifecycle.vendor_assignment_required",
+                            "operations.vendor_project_lifecycle.reason_required",
+                            "operations.vendor_project_lifecycle.reason_too_long",
+                            "operations.vendor_project_lifecycle.as_built_evidence_required",
                         ),
                         mapping_owner="operations.vendor_submission_confirmation",
                         fail_closed_on=(
@@ -4935,6 +4959,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         event_types=(
                             "vendor_project.started",
                             "vendor_project.completed",
+                            "vendor_project.verified",
+                            "vendor_project.rework_requested",
                         ),
                         schema_version=1,
                         delivery_owner="events.dispatcher",
@@ -4974,6 +5000,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     ),
                     test_refs=(
                         "tests/test_vendor_lifecycle.py",
+                        "tests/test_vendor_project_review.py",
                         "tests/test_vendor_submission_proposals.py",
                         "tests/architecture/test_vendor_project_lifecycle_boundary.py",
                     ),
@@ -4987,6 +5014,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "vendor project workspace mutation coordination",
                     "quote submission eligibility and impact snapshot",
                     "as-built submission eligibility and impact snapshot",
+                    "staff project-review eligibility and impact snapshot",
+                    "staff as-built-review eligibility and impact snapshot",
                 ),
                 depends_on=(
                     "auth.permission_gate",
@@ -4994,6 +5023,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "operations.project_lifecycle",
                     "operations.vendor_project_records",
                     "operations.vendor_project_lifecycle",
+                    "operations.work_order_commands",
                 ),
                 notes=(
                     "This service owns vendor workspace queries, impact policy, and "
@@ -5040,6 +5070,29 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "vendor workspace mutation protocol",
                             ),
                         ),
+                        ConcernContract(
+                            name=(
+                                "staff project-review eligibility and impact snapshot"
+                            ),
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical installation-project lifecycle state",
+                                "canonical vendor project records",
+                                "work-order as-built evidence policy",
+                                "vendor workspace mutation protocol",
+                            ),
+                        ),
+                        ConcernContract(
+                            name=(
+                                "staff as-built-review eligibility and impact snapshot"
+                            ),
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical installation-project lifecycle state",
+                                "canonical vendor project records",
+                                "vendor workspace mutation protocol",
+                            ),
+                        ),
                     ),
                     authoritative_inputs=(
                         AuthorityInput(
@@ -5068,6 +5121,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "ProjectQuote, ProjectQuoteLineItem, "
                                 "ProposedRouteRevision, AsBuiltRoute, and "
                                 "AsBuiltLineItem rows"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="work-order as-built evidence policy",
+                            owner="operations.work_order_commands",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "active linked WorkOrder requires_as_built_evidence "
+                                "flags with default-enabled behavior"
                             ),
                         ),
                         AuthorityInput(
@@ -5123,6 +5185,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "operations.vendor_project_workspace.quote_line_required",
                             "operations.vendor_project_workspace.route_revision_not_draft",
                             "operations.vendor_project_workspace.as_built_evidence_required",
+                            "operations.vendor_project_workspace.as_built_submission_not_allowed",
+                            "operations.vendor_project_workspace.as_built_not_reviewable",
+                            "operations.vendor_project_workspace.vendor_assignment_required",
+                            "operations.vendor_project_workspace.reason_required",
+                            "operations.vendor_project_workspace.reason_too_long",
+                            "operations.vendor_project_workspace.unsupported_action",
                             "operations.vendor_project_workspace.invalid_as_built_route",
                             "operations.vendor_project_workspace.invalid_write_evidence",
                             "operations.vendor_project_workspace.invalid_command_context",
@@ -5174,6 +5242,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     test_refs=(
                         "tests/test_vendor_project_workspace.py",
                         "tests/test_vendor_submission_proposals.py",
+                        "tests/test_vendor_project_review.py",
+                        "tests/test_vendor_as_built_review.py",
                         "tests/architecture/test_vendor_project_workspace_boundary.py",
                         "tests/test_vendor_action_eligibility.py",
                     ),
@@ -5185,7 +5255,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "vendor installation-project quote lifecycle",
                     "proposed vendor route-revision lifecycle",
-                    "as-built evidence lifecycle",
+                    "vendor as-built route and line-item lifecycle",
+                    "staff as-built review state and immutable evidence",
                 ),
                 depends_on=(
                     "events.dispatcher",
@@ -5216,7 +5287,16 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             canonical_writer="operations.vendor_project_records",
                         ),
                         ConcernContract(
-                            name="as-built evidence lifecycle",
+                            name="vendor as-built route and line-item lifecycle",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "validated vendor project record transition",
+                                "canonical installation-project lifecycle state",
+                            ),
+                            canonical_writer="operations.vendor_project_records",
+                        ),
+                        ConcernContract(
+                            name="staff as-built review state and immutable evidence",
                             role=OwnerRole.AUTHORITATIVE_RECORD,
                             input_names=(
                                 "validated vendor project record transition",
@@ -5278,6 +5358,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "operations.vendor_project_workspace.quote_line_required",
                             "operations.vendor_project_workspace.route_revision_not_draft",
                             "operations.vendor_project_workspace.as_built_evidence_required",
+                            "operations.vendor_project_workspace.as_built_submission_not_allowed",
+                            "operations.vendor_project_workspace.as_built_not_reviewable",
+                            "operations.vendor_project_workspace.vendor_assignment_required",
+                            "operations.vendor_project_workspace.reason_required",
+                            "operations.vendor_project_workspace.reason_too_long",
+                            "operations.vendor_project_workspace.unsupported_action",
                             "operations.vendor_project_workspace.invalid_as_built_route",
                             "operations.vendor_project_workspace.invalid_write_evidence",
                         ),
@@ -5296,6 +5382,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "vendor_quote.changed",
                             "vendor_route_revision.changed",
                             "vendor_as_built.submitted",
+                            "vendor_as_built.accepted",
+                            "vendor_as_built.rejected",
                         ),
                         schema_version=1,
                         delivery_owner="events.dispatcher",
@@ -5336,6 +5424,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     test_refs=(
                         "tests/test_vendor_project_workspace.py",
                         "tests/test_vendor_submission_proposals.py",
+                        "tests/test_vendor_as_built_review.py",
                         "tests/architecture/test_vendor_project_workspace_boundary.py",
                     ),
                 ),
@@ -5941,6 +6030,372 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         "tests/test_vendor_submission_proposals.py",
                         "tests/architecture/test_vendor_submission_confirmation_boundary.py",
                         "tests/test_vendor_lifecycle.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="operations.vendor_project_review_confirmation",
+                module="app.services.vendor_project_review_proposals",
+                owns=(
+                    "short-lived signed staff project-review proposal",
+                    "staff project-review stale-preview verification",
+                    "staff project-review idempotency and replay result",
+                ),
+                depends_on=(
+                    "auth.permission_gate",
+                    "auth.token_signing",
+                    "operations.vendor_project_lifecycle",
+                    "operations.vendor_project_workspace",
+                ),
+                notes=(
+                    "This supporting service cannot decide project state. It binds "
+                    "an authenticated staff actor to the lifecycle owner's preview "
+                    "and invokes that owner once after lock-time revalidation."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="short-lived signed staff project-review proposal",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "authenticated staff review context",
+                                "canonical staff project-review preview",
+                                "capability signing envelope",
+                                "staff project-review confirmation protocol",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="staff project-review stale-preview verification",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "authenticated staff review context",
+                                "canonical staff project-review preview",
+                                "capability signing envelope",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="staff project-review idempotency and replay result",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "authenticated staff review context",
+                                "canonical staff project-review preview",
+                                "capability signing envelope",
+                                "canonical staff project-review replay record",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="authenticated staff review context",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "authenticated staff actor, action, reason, command, "
+                                "and correlation identifiers"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical staff project-review preview",
+                            owner="operations.vendor_project_workspace",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "locked project verification or rework impact, work-order "
+                                "evidence policy, and state fingerprint"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="capability signing envelope",
+                            owner="auth.token_signing",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="configured context-signing key and algorithm",
+                        ),
+                        AuthorityInput(
+                            name="staff project-review confirmation protocol",
+                            owner="operations.vendor_project_review_confirmation",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "versioned purpose, issuer, claim allowlist, ten-minute "
+                                "lifetime, and verify/rework scopes"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical staff project-review replay record",
+                            owner="operations.vendor_project_review_confirmation",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "IdempotencyKey row keyed by signed proposal jti and "
+                                "staff project-review scope"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        boundary=(
+                            "A typed confirmation command owns locked stale verification, "
+                            "replay reservation, lifecycle participant mutation, result "
+                            "evidence, and one root commit."
+                        ),
+                        locking=(
+                            "The InstallationProject aggregate is locked before replay "
+                            "reservation and fingerprint comparison."
+                        ),
+                        idempotency=(
+                            "Signed jti plus verify/rework scope identifies one immutable "
+                            "lifecycle-event result."
+                        ),
+                        retries=(
+                            "Invalid or stale proposals are terminal; concurrency failures "
+                            "retry the complete typed command."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "operations.vendor_project_review_confirmation.invalid_proposal",
+                            "operations.vendor_project_review_confirmation.expired_proposal",
+                            "operations.vendor_project_review_confirmation.proposal_context_mismatch",
+                            "operations.vendor_project_review_confirmation.confirmation_in_progress",
+                            "operations.vendor_project_review_confirmation.stale_proposal",
+                            "operations.vendor_project_review_confirmation.missing_result_evidence",
+                            "operations.vendor_project_review_confirmation.invalid_command_context",
+                            "operations.vendor_project_review_confirmation.command_contract_violation",
+                            "operations.vendor_project_review_confirmation.nested_owner_command",
+                            "operations.vendor_project_review_confirmation.active_caller_transaction",
+                            "operations.vendor_project_review_confirmation.nested_transaction_completion",
+                        ),
+                        mapping_owner="app.web.admin.vendor_operations",
+                        fail_closed_on=(
+                            "invalid, expired, or context-mismatched proposal",
+                            "project state, policy, or evidence drift",
+                            "ambiguous concurrent confirmation",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "vendor_project.verified",
+                            "vendor_project.rework_requested",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 carries project, vendor, transition, actor, reason, "
+                            "and verification-evidence fields additively."
+                        ),
+                        replay=(
+                            "InstallationProjectLifecycleEvent and the idempotency row "
+                            "rebuild the decision and stable replay result."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "staff review proposal helper with transport-coded errors, "
+                            "helper rollback, and direct commit"
+                        ),
+                        new_owner="operations.vendor_project_review_confirmation",
+                        verification=(
+                            "Proposal, stale-state, evidence-policy, replay, rollback, "
+                            "event, and adapter-mapping tests."
+                        ),
+                        cutover_gate=(
+                            "Staff confirmation routes pass a typed command on a clean "
+                            "session and lifecycle writes remain participant-only."
+                        ),
+                        fallback_retirement=(
+                            "Untyped confirmation arguments and helper-owned rollback or "
+                            "manual commit paths are removed."
+                        ),
+                    ),
+                    steward="vendor operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/adr/0002-owner-command-transaction-boundary.md",
+                    ),
+                    test_refs=(
+                        "tests/test_vendor_project_review.py",
+                        "tests/architecture/test_vendor_project_lifecycle_boundary.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="operations.vendor_as_built_review_confirmation",
+                module="app.services.vendor_as_built_review_proposals",
+                owns=(
+                    "short-lived signed staff as-built review proposal",
+                    "staff as-built review stale-preview verification",
+                    "staff as-built review idempotency and replay result",
+                ),
+                depends_on=(
+                    "auth.permission_gate",
+                    "auth.token_signing",
+                    "operations.vendor_project_records",
+                    "operations.vendor_project_workspace",
+                ),
+                notes=(
+                    "This supporting service carries no evidence or project "
+                    "decision policy. It binds staff to the vendor operations "
+                    "owner's preview and invokes that owner after revalidation."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="short-lived signed staff as-built review proposal",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "authenticated staff as-built review context",
+                                "canonical staff as-built review preview",
+                                "capability signing envelope",
+                                "staff as-built review confirmation protocol",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="staff as-built review stale-preview verification",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "authenticated staff as-built review context",
+                                "canonical staff as-built review preview",
+                                "capability signing envelope",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="staff as-built review idempotency and replay result",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "authenticated staff as-built review context",
+                                "canonical staff as-built review preview",
+                                "capability signing envelope",
+                                "canonical staff as-built review replay record",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="authenticated staff as-built review context",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "authenticated staff actor, action, reason, command, "
+                                "and correlation identifiers"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical staff as-built review preview",
+                            owner="operations.vendor_project_workspace",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "locked as-built record state, immutable evidence impact, "
+                                "and state fingerprint"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="capability signing envelope",
+                            owner="auth.token_signing",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="configured context-signing key and algorithm",
+                        ),
+                        AuthorityInput(
+                            name="staff as-built review confirmation protocol",
+                            owner="operations.vendor_as_built_review_confirmation",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "versioned purpose, issuer, claim allowlist, ten-minute "
+                                "lifetime, and accept/reject scopes"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical staff as-built review replay record",
+                            owner="operations.vendor_as_built_review_confirmation",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "IdempotencyKey row keyed by signed proposal jti and "
+                                "staff as-built review scope"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        boundary=(
+                            "A typed confirmation command owns locked stale verification, "
+                            "replay reservation, record participant mutation, result "
+                            "evidence, and one root commit."
+                        ),
+                        locking=(
+                            "The AsBuiltRoute aggregate is locked before replay reservation "
+                            "and fingerprint comparison."
+                        ),
+                        idempotency=(
+                            "Signed jti plus accept/reject scope identifies one immutable "
+                            "review-event result."
+                        ),
+                        retries=(
+                            "Invalid or stale proposals are terminal; concurrency failures "
+                            "retry the complete typed command."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "operations.vendor_as_built_review_confirmation.invalid_proposal",
+                            "operations.vendor_as_built_review_confirmation.expired_proposal",
+                            "operations.vendor_as_built_review_confirmation.proposal_context_mismatch",
+                            "operations.vendor_as_built_review_confirmation.confirmation_in_progress",
+                            "operations.vendor_as_built_review_confirmation.stale_proposal",
+                            "operations.vendor_as_built_review_confirmation.missing_result_evidence",
+                            "operations.vendor_as_built_review_confirmation.invalid_command_context",
+                            "operations.vendor_as_built_review_confirmation.command_contract_violation",
+                            "operations.vendor_as_built_review_confirmation.nested_owner_command",
+                            "operations.vendor_as_built_review_confirmation.active_caller_transaction",
+                            "operations.vendor_as_built_review_confirmation.nested_transaction_completion",
+                        ),
+                        mapping_owner="app.web.admin.vendor_operations",
+                        fail_closed_on=(
+                            "invalid, expired, or context-mismatched proposal",
+                            "as-built state or evidence drift",
+                            "ambiguous concurrent confirmation",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "vendor_as_built.accepted",
+                            "vendor_as_built.rejected",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 carries as-built, project, vendor, transition, "
+                            "actor, and reason fields additively."
+                        ),
+                        replay=(
+                            "AsBuiltRouteReviewEvent and the idempotency row rebuild the "
+                            "decision and stable replay result."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "as-built review proposal helper with transport-coded errors, "
+                            "helper rollback, and direct commit"
+                        ),
+                        new_owner="operations.vendor_as_built_review_confirmation",
+                        verification=(
+                            "Proposal, stale-state, replay, rollback, immutable-evidence, "
+                            "event, and adapter-mapping tests."
+                        ),
+                        cutover_gate=(
+                            "Staff confirmation routes pass a typed command on a clean "
+                            "session and as-built writes remain participant-only."
+                        ),
+                        fallback_retirement=(
+                            "Untyped confirmation arguments and helper-owned rollback or "
+                            "manual commit paths are removed."
+                        ),
+                    ),
+                    steward="vendor operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/adr/0002-owner-command-transaction-boundary.md",
+                    ),
+                    test_refs=(
+                        "tests/test_vendor_as_built_review.py",
+                        "tests/architecture/test_vendor_project_workspace_boundary.py",
                     ),
                 ),
             ),
@@ -8808,25 +9263,734 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             SOTService(
                 name="integration.registry",
                 module="app.services.integrations.registry",
-                owns=("integration connector registry", "connector capabilities"),
+                owns=(
+                    "deployed integration connector catalogue",
+                    "current connector capability metadata",
+                ),
+                notes=(
+                    "The live manifest, installation, capability, and isolation "
+                    "contract is docs/designs/INTEGRATION_PLATFORM_SOT.md. "
+                    "Definitions are deployed code artifacts and the manifest "
+                    "registry is the executable connector contract."
+                ),
+            ),
+            SOTService(
+                name="integration.installations",
+                module="app.services.integrations.installations",
+                owns=(
+                    "version-pinned integration installation lifecycle",
+                    "immutable integration configuration revisions",
+                    "integration capability grants and bindings",
+                ),
+                depends_on=("integration.registry", "secrets.reference_store"),
+                notes=(
+                    "This is the sole owner of integration_installations, "
+                    "integration_config_revisions, and integration_capability_"
+                    "bindings. CRM, ERP, WhatsApp, payment, and webhook callers "
+                    "resolve configuration only through versioned bindings."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="version-pinned integration installation lifecycle",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "deployed connector manifest",
+                                "integration installation protocol",
+                                "canonical integration installation aggregate",
+                            ),
+                            canonical_writer="integration.installations",
+                        ),
+                        ConcernContract(
+                            name="immutable integration configuration revisions",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "deployed connector manifest",
+                                "approved integration secret references",
+                                "integration installation protocol",
+                                "canonical integration installation aggregate",
+                            ),
+                            canonical_writer="integration.installations",
+                        ),
+                        ConcernContract(
+                            name="integration capability grants and bindings",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "deployed connector manifest",
+                                "integration installation protocol",
+                                "canonical integration installation aggregate",
+                            ),
+                            canonical_writer="integration.installations",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="deployed connector manifest",
+                            owner="integration.registry",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "registered connector version, digest, runtime, config "
+                                "schema, secret declarations, and capabilities"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="approved integration secret references",
+                            owner="secrets.reference_store",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "validated OpenBao references; secret material is never "
+                                "persisted in configuration revisions"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="integration installation protocol",
+                            owner="integration.installations",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "draft, validated, enabled, quarantined, and retired "
+                                "transition rules plus immutable revision semantics"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical integration installation aggregate",
+                            owner="integration.installations",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "IntegrationInstallation, IntegrationConfigRevision, and "
+                                "IntegrationCapabilityBinding rows"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "Installation mutations stage one aggregate and the named "
+                            "installation commit boundary completes the unit of work."
+                        ),
+                        locking=(
+                            "Lifecycle transitions resolve one installation and immutable "
+                            "configuration revisions serialize by installation revision."
+                        ),
+                        idempotency=(
+                            "Configuration digests replay to an existing immutable revision; "
+                            "capability synchronization converges by capability id."
+                        ),
+                        retries=(
+                            "Manifest, secret-reference, or lifecycle violations are "
+                            "terminal; database conflicts retry the whole mutation."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "integration.installations.not_found",
+                            "integration.installations.invalid_manifest",
+                            "integration.installations.invalid_configuration",
+                            "integration.installations.invalid_secret_reference",
+                            "integration.installations.invalid_transition",
+                            "integration.installations.invalid_command_context",
+                            "integration.installations.command_contract_violation",
+                            "integration.installations.nested_owner_command",
+                            "integration.installations.active_caller_transaction",
+                            "integration.installations.nested_transaction_completion",
+                        ),
+                        mapping_owner=(
+                            "app.api.integrations and integration admin web adapters"
+                        ),
+                        fail_closed_on=(
+                            "missing deployed connector version or digest",
+                            "undeclared or materialized secret value",
+                            "ambiguous enabled default capability",
+                            "retired or quarantined lifecycle mismatch",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("integration.installation.lifecycle.v1",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 installation evidence is additive and identifies "
+                            "the installation, manifest pin, revision, capability, state, "
+                            "and actor without secret material."
+                        ),
+                        replay=(
+                            "Canonical installation, immutable revision, validation, and "
+                            "capability-binding rows rebuild current installation state."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "connector configuration, provider, hook, and integration-job "
+                            "records with independent runtime selection"
+                        ),
+                        new_owner="integration.installations",
+                        verification=(
+                            "Manifest pin, immutable revision, secret reference, lifecycle, "
+                            "capability, API, and migration cutover tests."
+                        ),
+                        cutover_gate=(
+                            "Every executable connector resolves an enabled version-pinned "
+                            "capability binding before runtime execution."
+                        ),
+                        fallback_retirement=(
+                            "Legacy connector configs, hooks, provider secret columns, and "
+                            "arbitrary registration paths are removed by revision 380."
+                        ),
+                    ),
+                    steward="platform integrations",
+                    design_refs=(
+                        "docs/designs/INTEGRATION_PLATFORM_SOT.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_integration_installations.py",
+                        "tests/test_integration_installation_api.py",
+                        "tests/architecture/test_integration_platform_boundary.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="integration.runtime",
+                module="app.services.integrations.runtime_execution",
+                owns=(
+                    "version-pinned connector runner selection",
+                    "connector operation envelope construction",
+                    "bounded secret materialization for connector execution",
+                ),
+                depends_on=(
+                    "integration.registry",
+                    "integration.installations",
+                    "secrets.reference_store",
+                ),
+                notes=(
+                    "Runtime code selects an explicitly registered runner and "
+                    "passes it a pinned envelope. Runners receive no Sub "
+                    "database session and return observations or receipts; "
+                    "domain owners decide every consequence."
+                ),
+                contract=ServiceContract(
+                    concerns=tuple(
+                        ConcernContract(
+                            name=concern,
+                            role=role,
+                            input_names=(
+                                "deployed connector runtime definition",
+                                "enabled version-pinned capability binding",
+                                "bounded integration secret materialization",
+                            ),
+                        )
+                        for concern, role in (
+                            (
+                                "version-pinned connector runner selection",
+                                OwnerRole.RESOLVER,
+                            ),
+                            (
+                                "connector operation envelope construction",
+                                OwnerRole.POLICY,
+                            ),
+                            (
+                                "bounded secret materialization for connector execution",
+                                OwnerRole.POLICY,
+                            ),
+                        )
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="deployed connector runtime definition",
+                            owner="integration.registry",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "registered connector version, digest, runtime type, and "
+                                "operation-capability declaration"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="enabled version-pinned capability binding",
+                            owner="integration.installations",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "enabled installation, current immutable config revision, "
+                                "and enabled capability binding"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="bounded integration secret materialization",
+                            owner="secrets.reference_store",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "declared secret references resolved only into the runtime "
+                                "execution context and never returned or persisted"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary=(
+                            "Runtime construction reads pinned installation state and "
+                            "returns an isolated executor; it never writes Sub domain state."
+                        ),
+                        locking=(
+                            "No write lock is taken; manifest and installation pins fail "
+                            "closed if deployment state differs during construction."
+                        ),
+                        idempotency=(
+                            "The same binding, manifest pin, config revision, operation, "
+                            "and input produce the same execution envelope."
+                        ),
+                        retries=(
+                            "Pin and capability mismatches are terminal; connector retry "
+                            "receipts are interpreted only by the calling domain owner."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "integration.runtime.binding_not_found",
+                            "integration.runtime.installation_disabled",
+                            "integration.runtime.configuration_missing",
+                            "integration.runtime.version_pin_mismatch",
+                            "integration.runtime.manifest_digest_mismatch",
+                            "integration.runtime.capability_not_declared",
+                            "integration.runtime.secret_resolution_failed",
+                        ),
+                        mapping_owner="calling integration or domain command owner",
+                        fail_closed_on=(
+                            "missing or disabled binding",
+                            "version or manifest digest drift",
+                            "undeclared capability or unresolved secret reference",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "provider-specific clients selecting configuration and "
+                            "materializing credentials independently"
+                        ),
+                        new_owner="integration.runtime",
+                        verification=(
+                            "Manifest pin, capability, secret isolation, runner selection, "
+                            "and connector persistence-boundary tests."
+                        ),
+                        cutover_gate=(
+                            "CRM, ERP, WhatsApp, payment, and webhook execution enters only "
+                            "through a registered version-pinned runtime binding."
+                        ),
+                        fallback_retirement=(
+                            "Provider-specific runtime selection and persisted secret-value "
+                            "fallbacks are removed."
+                        ),
+                    ),
+                    steward="platform integrations",
+                    design_refs=(
+                        "docs/designs/INTEGRATION_PLATFORM_SOT.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_integration_manifest_registry.py",
+                        "tests/test_integration_installations.py",
+                        "tests/architecture/test_integration_platform_boundary.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="integration.delivery",
+                module="app.services.integrations.delivery",
+                owns=(
+                    "integration event subscription projection",
+                    "deduplicated integration delivery lifecycle",
+                    "outbound capability delivery evidence",
+                ),
+                depends_on=(
+                    "events.store",
+                    "integration.installations",
+                    "integration.runtime",
+                ),
+                notes=(
+                    "Every outbound endpoint is an installation-bound typed "
+                    "capability. Delivery identity, retry, replay, and terminal "
+                    "failure state have one canonical writer."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="integration event subscription projection",
+                            role=OwnerRole.PROJECTION_WRITER,
+                            input_names=(
+                                "canonical domain event envelope",
+                                "enabled outbound capability binding",
+                                "integration delivery protocol",
+                            ),
+                            canonical_writer="integration.delivery",
+                        ),
+                        ConcernContract(
+                            name="deduplicated integration delivery lifecycle",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical domain event envelope",
+                                "enabled outbound capability binding",
+                                "connector delivery receipt",
+                                "integration delivery protocol",
+                            ),
+                            canonical_writer="integration.delivery",
+                        ),
+                        ConcernContract(
+                            name="outbound capability delivery evidence",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "canonical domain event envelope",
+                                "enabled outbound capability binding",
+                                "connector delivery receipt",
+                            ),
+                            canonical_writer="integration.delivery",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical domain event envelope",
+                            owner="events.store",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "versioned EventStore identity, type, actor, subject, and "
+                                "payload selected by an enabled event subscription"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="enabled outbound capability binding",
+                            owner="integration.installations",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "enabled events.deliver.v1 capability binding, installation, "
+                                "subscription filter, and payload policy"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="connector delivery receipt",
+                            owner="integration.runtime",
+                            kind=AuthorityKind.OBSERVATION,
+                            source=(
+                                "typed connector operation status, external receipt, error "
+                                "code, response status, and retry-after observation"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="integration delivery protocol",
+                            owner="integration.delivery",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "source-event, destination, and payload digest identity plus "
+                                "pending, leased, delivered, retry, reconciliation, and "
+                                "dead-letter transition rules"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "Subscription changes, delivery creation, execution evidence, "
+                            "and authorized replay each complete as one delivery-owned unit."
+                        ),
+                        locking=(
+                            "Unique source-event/destination identity and worker leasing "
+                            "serialize delivery creation and terminal transitions."
+                        ),
+                        idempotency=(
+                            "Source event, capability destination, and payload digest map to "
+                            "one IntegrationDelivery; terminal replay returns that evidence."
+                        ),
+                        retries=(
+                            "Typed runtime receipts drive bounded backoff, dead-letter, or "
+                            "reconciliation-required state; operators replay only eligible rows."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "integration.delivery.binding_not_found",
+                            "integration.delivery.capability_mismatch",
+                            "integration.delivery.binding_disabled",
+                            "integration.delivery.event_type_required",
+                            "integration.delivery.subscription_not_found",
+                            "integration.delivery.delivery_not_found",
+                            "integration.delivery.not_replayable",
+                            "integration.delivery.invalid_command_context",
+                            "integration.delivery.command_contract_violation",
+                            "integration.delivery.nested_owner_command",
+                            "integration.delivery.active_caller_transaction",
+                            "integration.delivery.nested_transaction_completion",
+                        ),
+                        mapping_owner=(
+                            "integration delivery task and integration admin adapters"
+                        ),
+                        retryable_codes=("integration.delivery.binding_disabled",),
+                        fail_closed_on=(
+                            "missing or disabled capability binding",
+                            "empty event type or ambiguous delivery identity",
+                            "unauthorized replay or unsupported connector receipt",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("domain_event.v1",),
+                        schema_version=1,
+                        delivery_owner="integration.delivery",
+                        compatibility=(
+                            "Delivery consumes the additive domain-event envelope and applies "
+                            "the subscription payload policy without changing domain meaning."
+                        ),
+                        replay=(
+                            "EventStore plus subscription and IntegrationDelivery evidence "
+                            "rebuilds missing pending deliveries idempotently."
+                        ),
+                    ),
+                    projections=(
+                        ProjectionContract(
+                            name="integration event subscription projection",
+                            input_names=(
+                                "canonical domain event envelope",
+                                "enabled outbound capability binding",
+                                "integration delivery protocol",
+                            ),
+                            writer="integration.delivery",
+                            freshness=(
+                                "Subscriptions change synchronously with the selected event set."
+                            ),
+                            stale_behavior=(
+                                "Disabled or absent subscriptions create no delivery; existing "
+                                "delivery evidence remains immutable."
+                            ),
+                            drift_signal=(
+                                "An enabled binding's selected event set differs from its "
+                                "persisted enabled subscriptions."
+                            ),
+                            rebuild_operation=(
+                                "Synchronize the selected event set for the capability binding."
+                            ),
+                            repair_owner="integration.delivery",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "integration hooks, webhook delivery rows, provider-specific "
+                            "webhook jobs, and independent retry paths"
+                        ),
+                        new_owner="integration.delivery",
+                        verification=(
+                            "Subscription, deduplication, typed runtime, retry, replay, task, "
+                            "and legacy-cutover tests."
+                        ),
+                        cutover_gate=(
+                            "Every outbound webhook is an enabled events.deliver.v1 binding "
+                            "and legacy hook/delivery paths are absent."
+                        ),
+                        fallback_retirement=(
+                            "Legacy webhook, integration-hook, and CRM webhook-delivery models, "
+                            "services, tasks, and routes are removed."
+                        ),
+                    ),
+                    steward="platform integrations",
+                    design_refs=(
+                        "docs/designs/INTEGRATION_PLATFORM_SOT.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_integration_delivery.py",
+                        "tests/architecture/test_integration_platform_boundary.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="integration.inbox",
+                module="app.services.integrations.inbox",
+                owns=(
+                    "verified provider event receipt identity",
+                    "integration inbox deduplication lifecycle",
+                    "inbound consequence processing evidence",
+                ),
+                depends_on=("integration.installations", "integration.runtime"),
+                notes=(
+                    "Provider-specific routes verify signatures before writing "
+                    "a receipt. The inbox records facts and processing state; "
+                    "the Team Inbox, financial, and other domain owners alone "
+                    "decide and persist consequences."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="verified provider event receipt identity",
+                            role=OwnerRole.OBSERVATION_COLLECTOR,
+                            input_names=(
+                                "verified external provider event",
+                                "enabled inbound capability binding",
+                                "integration inbox protocol",
+                            ),
+                            canonical_writer="integration.inbox",
+                        ),
+                        ConcernContract(
+                            name="integration inbox deduplication lifecycle",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "verified external provider event",
+                                "enabled inbound capability binding",
+                                "integration inbox protocol",
+                            ),
+                            canonical_writer="integration.inbox",
+                        ),
+                        ConcernContract(
+                            name="inbound consequence processing evidence",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical domain consequence result",
+                                "integration inbox protocol",
+                            ),
+                            canonical_writer="integration.inbox",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="verified external provider event",
+                            owner="external:integration_provider",
+                            kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                            source=(
+                                "provider event id, verified signature context, event type, "
+                                "normalized headers, payload, and payload digest"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="enabled inbound capability binding",
+                            owner="integration.installations",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "enabled installation capability binding selected by the "
+                                "provider-specific signature-verifying adapter"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical domain consequence result",
+                            owner="integration.runtime",
+                            kind=AuthorityKind.OBSERVATION,
+                            source=(
+                                "typed result returned after the named Sub domain owner "
+                                "accepts, rejects, or reconciles the verified fact"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="integration inbox protocol",
+                            owner="integration.inbox",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "provider-event identity, payload-collision quarantine, claim, "
+                                "processed, retryable, dead-letter, and replay rules"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "The inbox owner commits the verified receipt before domain work, "
+                            "then atomically commits successful consequence evidence or rolls "
+                            "back partial domain writes before recording retry evidence."
+                        ),
+                        locking=(
+                            "Capability/provider-event uniqueness deduplicates receipt; claim "
+                            "and replay operate on the canonical receipt aggregate."
+                        ),
+                        idempotency=(
+                            "The same binding and provider event id with the same payload digest "
+                            "returns the existing receipt without a second consequence."
+                        ),
+                        retries=(
+                            "Identity collisions quarantine the installation; processing "
+                            "failures become bounded retryable or dead-letter evidence."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "integration.inbox.receipt_not_found",
+                            "integration.inbox.invalid_state",
+                            "integration.inbox.binding_not_found",
+                            "integration.inbox.provider_event_id_required",
+                            "integration.inbox.provider_event_identity_collision",
+                            "integration.inbox.dead_letter_requires_replay",
+                            "integration.inbox.not_replayable",
+                            "integration.inbox.invalid_command_context",
+                            "integration.inbox.command_contract_violation",
+                            "integration.inbox.nested_owner_command",
+                            "integration.inbox.active_caller_transaction",
+                            "integration.inbox.nested_transaction_completion",
+                        ),
+                        mapping_owner=(
+                            "provider webhook, integration task, and integration admin adapters"
+                        ),
+                        retryable_codes=("integration.inbox.invalid_state",),
+                        fail_closed_on=(
+                            "unverified provider request",
+                            "missing capability binding or provider identity",
+                            "same provider identity with a different payload digest",
+                            "unauthorized dead-letter replay",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("provider_event.v1",),
+                        schema_version=1,
+                        delivery_owner="integration.inbox",
+                        compatibility=(
+                            "Version 1 receipt identity is additive and retains provider id, "
+                            "type, digest, normalized headers, payload, and processing state."
+                        ),
+                        replay=(
+                            "The canonical IntegrationInbox row re-enters processing only via "
+                            "authorized replay; domain consequences remain owned by their service."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "provider webhooks writing domain state directly or maintaining "
+                            "provider-specific deduplication records"
+                        ),
+                        new_owner="integration.inbox",
+                        verification=(
+                            "Verified receipt identity, collision quarantine, consequence, "
+                            "retry, replay, WhatsApp, and legacy-cutover tests."
+                        ),
+                        cutover_gate=(
+                            "Provider-specific routes verify signatures, write one inbox receipt, "
+                            "and delegate every consequence to a named Sub owner."
+                        ),
+                        fallback_retirement=(
+                            "Legacy webhook receipt models and direct provider-to-domain write "
+                            "paths are removed."
+                        ),
+                    ),
+                    steward="platform integrations",
+                    design_refs=(
+                        "docs/designs/INTEGRATION_PLATFORM_SOT.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_integration_installation_api.py",
+                        "tests/test_integration_whatsapp_capability.py",
+                        "tests/architecture/test_integration_platform_boundary.py",
+                    ),
+                ),
             ),
             SOTService(
                 name="integration.jobs",
                 module="app.services.integration",
                 owns=("integration targets", "integration jobs", "integration runs"),
                 depends_on=("integration.registry",),
+                notes=(
+                    "Jobs bind directly to versioned connector capabilities; "
+                    "adapter/action transport selection is not a runtime input."
+                ),
             ),
             SOTService(
                 name="integration.sync",
                 module="app.services.integration_sync",
                 owns=("integration sync orchestration", "sync run lifecycle"),
-                depends_on=("integration.jobs",),
-            ),
-            SOTService(
-                name="integration.hooks",
-                module="app.services.integration_hooks",
-                owns=("integration hook dispatch", "hook subscriptions"),
-                depends_on=("events.dispatcher", "integration.registry"),
+                depends_on=("integration.jobs", "integration.runtime"),
+                notes=(
+                    "CRM observation jobs resolve their version-pinned bindings "
+                    "and execute only through the registered CRM runner."
+                ),
             ),
             SOTService(
                 name="integration.vendor_purchase_invoice_erp_projection",
@@ -9263,11 +10427,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             "app.api.*_webhooks",
             "app.tasks.integrations",
             "app.tasks.dotmac_erp_outbox",
-            "app.services.events.handlers.integration_hook",
+            "app.tasks.integration_delivery",
         ),
         rule=(
-            "Integration routes and webhooks validate and enqueue; registry, job, "
-            "sync, and hook services own connector behavior and delivery flow."
+            "Integration routes and webhooks validate and enqueue through typed "
+            "capabilities; connectors never become business-state writers."
         ),
     ),
     DomainSOT(

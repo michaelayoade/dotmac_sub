@@ -16,7 +16,8 @@ from app.models.erp_domain_sync import ErpDomainSyncCursor
 from app.models.project import Project
 from app.models.support import Ticket
 from app.models.work_order import WorkOrder
-from app.services.dotmac_erp.client import DotMacERPClient, build_erp_client
+from app.services.dotmac_erp.client import DotMacERPClient
+from app.services.integrations.erp_capability import capability_client
 
 _DOMAINS = ("projects", "tickets", "work_orders")
 
@@ -171,7 +172,7 @@ def sync_operational_domains(
         "tickets": [_ticket_payload(row) for row in tickets],
         "work_orders": [_work_order_payload(row) for row in work_orders],
     }
-    owned_client = client or build_erp_client(db)
+    owned_client = client or capability_client(db)
     created_client = client is None
     try:
         response = owned_client.sync_operational_domains(payload)

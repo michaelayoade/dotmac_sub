@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, Protocol
 
 from sqlalchemy.orm import Session
 
@@ -21,8 +21,8 @@ from app.models.vendor_routes import (
     VendorPurchaseInvoiceStatus,
 )
 from app.services.dotmac_erp import outbox
-from app.services.dotmac_erp.client import DotMacERPClient, build_erp_client
 from app.services.file_storage import file_uploads
+from app.services.integrations.erp_capability import capability_client
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +35,12 @@ class _PaymentObservationContext:
     id: object
     erp_purchase_invoice_id: str
     currency: str
+
+
+class _PurchaseInvoiceStatusClient(Protocol):
+    def get_purchase_invoice_status(self, source_invoice_id: str) -> dict | None: ...
+
+    def close(self) -> None: ...
 
 
 def _normalized_status(value: object) -> str:
@@ -276,7 +282,7 @@ def upload_attachment(db: Session, invoice: VendorPurchaseInvoice) -> bool:
         "mime_type": invoice.attachment.content_type or "application/octet-stream",
         "content_base64": base64.b64encode(data).decode("ascii"),
     }
-    with build_erp_client(db) as client:
+    with capability_client(db) as client:
         client.upload_purchase_invoice_attachment(
             invoice.erp_purchase_invoice_id,
             payload,
@@ -354,7 +360,7 @@ def _record_status_error(
 def refresh_purchase_invoice_statuses(
     db: Session,
     *,
-    client: DotMacERPClient | None = None,
+    client: _PurchaseInvoiceStatusClient | None = None,
     limit: int = 100,
     observed_at: datetime | None = None,
 ) -> dict:
@@ -393,7 +399,7 @@ def refresh_purchase_invoice_statuses(
     owned_client = client
     created_client = False
     if owned_client is None:
-        owned_client = build_erp_client(db)
+        owned_client = capability_client(db)
         created_client = True
 
     # Never hold a database transaction open across the ERP request. The

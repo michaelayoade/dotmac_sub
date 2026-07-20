@@ -80,7 +80,6 @@ app/services/gis.py
 app/services/gis_sync.py
 app/services/imports.py
 app/services/integration.py
-app/services/integration_hooks.py
 app/services/lifecycle.py
 app/services/locking.py
 app/services/module_manager.py
@@ -213,8 +212,6 @@ app/services/web_system_common.py
 app/services/web_system_db_inspector.py
 app/services/web_system_restore_tool.py
 app/services/web_system_users.py
-app/services/webhook.py
-app/services/webhook_deliveries.py
 app/services/wireguard.py
 app/services/work_order_commands.py
 app/services/workqueue/snooze.py

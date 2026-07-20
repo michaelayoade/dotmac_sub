@@ -13,20 +13,16 @@ from app.models.vendor_routes import (
     InstallationProjectStatus,
 )
 from app.services.common import coerce_uuid
-from app.services.domain_errors import DomainError
 from app.services.events import EventType, emit_event
+from app.services.vendor_portal_errors import VendorProjectLifecycleError
 
 VendorProjectAction = Literal["start", "complete"]
 
 
-class VendorProjectLifecycleError(DomainError):
-    """Stable failures from the vendor project lifecycle owner."""
-
-
 def _error(suffix: str, message: str) -> VendorProjectLifecycleError:
     return VendorProjectLifecycleError(
-        code=f"operations.vendor_project_lifecycle.{suffix}",
-        message=message,
+        f"operations.vendor_project_lifecycle.{suffix}",
+        message,
     )
 
 
@@ -44,6 +40,14 @@ class StageVendorProjectTransition:
     action: str
     actor_id: str
     actor_type: str
+
+
+@dataclass(frozen=True, slots=True)
+class StageStaffVendorProjectTransition:
+    project_id: str
+    action: str
+    actor_id: str
+    reason: str | None = None
 
 
 def _project(
@@ -189,3 +193,83 @@ def stage_project_transition(
         "domain_event_id": str(domain_event.event_id),
         "transitioned_at": domain_event.occurred_at,
     }
+
+
+def stage_staff_project_transition(
+    db: Session,
+    command: StageStaffVendorProjectTransition,
+) -> dict:
+    """Stage one locked staff verification/rework decision and its evidence."""
+
+    normalized_actor = command.actor_id.strip()
+    if not normalized_actor:
+        raise VendorProjectLifecycleError(
+            "actor_required",
+            "Lifecycle transition actor is required",
+            kind="invalid",
+        )
+    from app.services.vendor_portal_operations import (
+        VendorPortalOperations,
+        _serialize_project,
+    )
+
+    preview = VendorPortalOperations.preview_staff_project_lifecycle(
+        db,
+        command.project_id,
+        action=command.action,
+        reason=command.reason,
+        for_update=True,
+    )
+    project = _project(db, command.project_id, for_update=True)
+    previous = str(preview["state"]["from_status"])
+    target = str(preview["state"]["to_status"])
+    normalized_reason = preview["state"]["reason"]
+    event_type = (
+        EventType.vendor_project_verified
+        if command.action == "verify"
+        else EventType.vendor_project_rework_requested
+    )
+    project.status = target
+    domain_event = emit_event(
+        db,
+        event_type,
+        {
+            "schema_version": 1,
+            "project_id": str(project.id),
+            "native_project_id": str(project.project_id),
+            "vendor_id": str(project.assigned_vendor_id),
+            "from_status": previous,
+            "to_status": target,
+            "actor_type": "staff_user",
+            "actor_id": normalized_actor,
+            "reason": normalized_reason,
+            "verification_evidence": preview["state"]["verification_evidence"],
+        },
+        actor=normalized_actor,
+        subscriber_id=project.subscriber_id,
+        account_id=project.subscriber_id,
+    )
+    evidence = InstallationProjectLifecycleEvent(
+        event_id=domain_event.event_id,
+        project_id=project.id,
+        vendor_id=project.assigned_vendor_id,
+        event_type=domain_event.event_type.value,
+        from_status=previous,
+        to_status=target,
+        actor_type="staff_user",
+        actor_id=normalized_actor,
+        reason=normalized_reason,
+        decision_context=(
+            {"verification_evidence": preview["state"]["verification_evidence"]}
+            if command.action == "verify"
+            else None
+        ),
+        occurred_at=domain_event.occurred_at,
+    )
+    db.add(evidence)
+    db.flush()
+    result = _serialize_project(project)
+    result["lifecycle_event_id"] = str(evidence.id)
+    result["domain_event_id"] = str(domain_event.event_id)
+    result["transitioned_at"] = domain_event.occurred_at
+    return result

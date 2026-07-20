@@ -407,7 +407,6 @@ def _initialize_handlers(dispatcher: EventDispatcher) -> None:
         CredentialSessionProjectionHandler,
     )
     from app.services.events.handlers.enforcement import EnforcementHandler
-    from app.services.events.handlers.integration_hook import IntegrationHookHandler
     from app.services.events.handlers.lifecycle import LifecycleHandler
     from app.services.events.handlers.notification import NotificationHandler
     from app.services.events.handlers.password_recovery import PasswordRecoveryHandler
@@ -418,7 +417,6 @@ def _initialize_handlers(dispatcher: EventDispatcher) -> None:
     from app.services.events.handlers.webhook import WebhookHandler
 
     dispatcher.register_handler(WebhookHandler())
-    dispatcher.register_handler(IntegrationHookHandler())
     dispatcher.register_handler(LifecycleHandler())
     dispatcher.register_handler(NotificationHandler())
     dispatcher.register_handler(ProvisioningHandler())
@@ -439,7 +437,9 @@ def _initialize_handlers(dispatcher: EventDispatcher) -> None:
     validate_event_execution_policy(dispatcher._handlers)
 
     logger.info(
-        "Event handlers initialized: webhook, integration_hooks, lifecycle, notification, provisioning, enforcement, credential_session_projection, arrangements, referral, staff_invite, reseller_invite, password_recovery",
+        "Event handlers initialized: integration_delivery, lifecycle, "
+        "notification, provisioning, enforcement, credential_session_projection, "
+        "arrangements, referral, staff_invite, reseller_invite, password_recovery",
         extra={
             "event": "event_handlers_initialized",
             "handler_count": len(dispatcher._handlers),

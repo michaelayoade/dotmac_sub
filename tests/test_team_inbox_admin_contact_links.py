@@ -252,18 +252,9 @@ def test_admin_macro_create_and_reply_records_execution(db_session, monkeypatch)
     conversation.contact_address = "0803 555 0114"
     conversation.channel_type = InboxChannelType.whatsapp.value
     from app.services import web_admin as web_admin_service
-    from app.services.integrations.connectors import whatsapp as whatsapp_connector
 
     monkeypatch.setattr(
         web_admin_service, "get_actor_id", lambda request: str(actor_id)
-    )
-    monkeypatch.setattr(
-        whatsapp_connector,
-        "send_text_message",
-        lambda db, recipient, body: {
-            "ok": True,
-            "provider_message_id": "wamid.macro",
-        },
     )
 
     create_response = inbox_web.team_inbox_macro_create(

@@ -11,8 +11,8 @@ from sqlalchemy import event
 from starlette.requests import Request
 
 from app.api import crm as crm_routes
-from app.config import settings
 from app.models.audit import AuditEvent
+from app.models.auth import ApiKey
 from app.models.billing import (
     Invoice,
     InvoiceLine,
@@ -44,22 +44,28 @@ from app.models.subscriber import Subscriber, SubscriberStatus
 from app.models.system_user import SystemUser
 from app.models.usage import AccountingStatus, RadiusAccountingSession
 from app.services import crm_api
+from app.services.auth import hash_api_key
 
 TOKEN = "crm-test-token"
 
 
 @pytest.fixture()
-def crm_auth():
-    original = settings.selfcare_api_token
-    object.__setattr__(settings, "selfcare_api_token", TOKEN)
-    try:
-        yield
-    finally:
-        object.__setattr__(settings, "selfcare_api_token", original)
+def crm_auth(db_session):
+    db_session.add(
+        ApiKey(
+            label="crm-test",
+            key_hash=hash_api_key(TOKEN),
+            scopes=["integration:crm"],
+            is_active=True,
+            expires_at=datetime.now(UTC) + timedelta(days=1),
+        )
+    )
+    db_session.commit()
+    return TOKEN
 
 
 def _headers() -> dict[str, str]:
-    return {"Authorization": f"Bearer {TOKEN}"}
+    return {"X-Api-Key": TOKEN}
 
 
 class _RouteResponse:
@@ -201,20 +207,19 @@ def _session(db_session, subscription: Subscription) -> None:
     db_session.flush()
 
 
-def test_ping_requires_bearer_token(crm_auth):
+def test_ping_requires_scoped_api_key(db_session, crm_auth):
     from types import SimpleNamespace
 
-    def _auth(authorization=None):
+    def _auth(x_api_key=None):
         return _call_route(
             crm_routes.require_crm_service_auth,
             request=SimpleNamespace(state=SimpleNamespace(), cookies={}),
-            authorization=authorization,
-            x_api_key=None,
-            db=None,
+            x_api_key=x_api_key,
+            db=db_session,
         )
 
     missing = _auth()
-    valid = _auth(f"Bearer {TOKEN}")
+    valid = _auth(TOKEN)
 
     assert missing.status_code == 401
     assert valid.status_code == 200

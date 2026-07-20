@@ -1,4 +1,4 @@
-"""Admin review workspace for vendor quotes and purchase invoices."""
+"""Admin review workspace for vendor projects, quotes, and purchase invoices."""
 
 from uuid import uuid4
 
@@ -8,13 +8,27 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.services.auth_dependencies import require_any_permission
+from app.services import (
+    vendor_as_built_review_proposals,
+    vendor_project_review_proposals,
+)
+from app.services.auth_dependencies import (
+    can,
+    require_any_permission,
+    require_permission,
+)
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.owner_commands import CommandContext
+from app.services.vendor_as_built_review_proposals import (
+    ConfirmVendorAsBuiltReviewCommand,
+)
 from app.services.vendor_portal_operations import (
     ReviewVendorQuoteCommand,
     vendor_portal_operations,
+)
+from app.services.vendor_project_review_proposals import (
+    ConfirmVendorProjectReviewCommand,
 )
 from app.services.vendor_purchase_invoices import (
     ReviewVendorPurchaseInvoiceCommand,
@@ -25,6 +39,7 @@ templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/vendors/operations", tags=["web-admin-vendor-operations"])
 _read = require_any_permission("inventory:read", "finance:ap:read")
 _write = require_any_permission("inventory:write", "finance:ap:write")
+_project_write = require_permission("inventory:write")
 
 
 def _ctx(request: Request, db: Session) -> dict:
@@ -66,6 +81,22 @@ def _invoice_review_context(request: Request, *, invoice_id: str) -> CommandCont
     )
 
 
+def _staff_confirmation_context(
+    request: Request,
+    *,
+    scope: str,
+    reason: str,
+) -> CommandContext:
+    command_id = uuid4()
+    return CommandContext(
+        command_id=command_id,
+        correlation_id=command_id,
+        actor=_actor(request),
+        scope=scope,
+        reason=reason,
+    )
+
+
 def _quote_error(exc: DomainError) -> HTTPException:
     suffix = exc.code.rsplit(".", 1)[-1]
     status_code = 404 if suffix.endswith("not_found") else 409
@@ -75,12 +106,26 @@ def _quote_error(exc: DomainError) -> HTTPException:
 @router.get("", response_class=HTMLResponse)
 def vendor_operations_queue(
     request: Request,
+    message: str | None = None,
     _auth: dict = Depends(_read),
     db: Session = Depends(get_db),
 ):
     context = _ctx(request, db)
+    show_field_reviews = can(request, "inventory:read")
     context.update(
         {
+            "message": message,
+            "show_field_reviews": show_field_reviews,
+            "projects": (
+                vendor_portal_operations.list_reviewable_projects(db)
+                if show_field_reviews
+                else []
+            ),
+            "as_builts": (
+                vendor_portal_operations.list_reviewable_as_builts(db)
+                if show_field_reviews
+                else []
+            ),
             "quotes": vendor_portal_operations.list_reviewable_quotes(db),
             "invoices": vendor_purchase_invoices.list(
                 db, status="submitted", limit=200, offset=0
@@ -114,6 +159,117 @@ def approve_vendor_quote(
     except DomainError as exc:
         raise _quote_error(exc) from exc
     return RedirectResponse("/admin/vendors/operations", status_code=303)
+
+
+@router.post("/projects/{project_id}/{action}/preview", response_class=HTMLResponse)
+def preview_vendor_project_review(
+    request: Request,
+    project_id: str,
+    action: str,
+    reason: str | None = Form(default=None),
+    _auth: dict = Depends(_project_write),
+    db: Session = Depends(get_db),
+):
+    proposal = vendor_project_review_proposals.issue_review(
+        db,
+        project_id=project_id,
+        action=action,
+        actor_id=_actor(request),
+        reason=reason,
+    )
+    context = _ctx(request, db)
+    context["proposal"] = proposal
+    return templates.TemplateResponse(
+        "admin/vendors/project_review_confirm.html", context
+    )
+
+
+@router.post("/projects/{project_id}/{action}/confirm")
+def confirm_vendor_project_review(
+    request: Request,
+    project_id: str,
+    action: str,
+    confirmation_token: str = Form(...),
+    _auth: dict = Depends(_project_write),
+    db: Session = Depends(get_db),
+):
+    actor_id = _actor(request)
+    context = _staff_confirmation_context(
+        request,
+        scope=project_id,
+        reason="vendor_project_review_confirmation",
+    )
+    db_session_adapter.release_read_transaction(db)
+    result = vendor_project_review_proposals.confirm_review(
+        db,
+        ConfirmVendorProjectReviewCommand(
+            context=context,
+            confirmation_token=confirmation_token,
+            project_id=project_id,
+            action=action,
+            actor_id=actor_id,
+        ),
+    )
+    label = "verified" if result.action == "verify" else "returned for rework"
+    return RedirectResponse(
+        f"/admin/vendors/operations?message=Project+{label}", status_code=303
+    )
+
+
+@router.post("/as-built/{as_built_id}/{action}/preview", response_class=HTMLResponse)
+def preview_vendor_as_built_review(
+    request: Request,
+    as_built_id: str,
+    action: str,
+    reason: str | None = Form(default=None),
+    _auth: dict = Depends(_project_write),
+    db: Session = Depends(get_db),
+):
+    proposal = vendor_as_built_review_proposals.issue_review(
+        db,
+        as_built_id=as_built_id,
+        action=action,
+        actor_id=_actor(request),
+        reason=reason,
+    )
+    context = _ctx(request, db)
+    context["proposal"] = proposal
+    return templates.TemplateResponse(
+        "admin/vendors/as_built_review_confirm.html", context
+    )
+
+
+@router.post("/as-built/{as_built_id}/{action}/confirm")
+def confirm_vendor_as_built_review(
+    request: Request,
+    as_built_id: str,
+    action: str,
+    confirmation_token: str = Form(...),
+    _auth: dict = Depends(_project_write),
+    db: Session = Depends(get_db),
+):
+    actor_id = _actor(request)
+    context = _staff_confirmation_context(
+        request,
+        scope=as_built_id,
+        reason="vendor_as_built_review_confirmation",
+    )
+    db_session_adapter.release_read_transaction(db)
+    result = vendor_as_built_review_proposals.confirm_review(
+        db,
+        ConfirmVendorAsBuiltReviewCommand(
+            context=context,
+            confirmation_token=confirmation_token,
+            as_built_id=as_built_id,
+            action=action,
+            actor_id=actor_id,
+        ),
+    )
+    label = "accepted" if result.action == "accept" else "rejected"
+    return RedirectResponse(
+        f"/admin/vendors/operations?message=As-built+evidence+{label}",
+        status_code=303,
+    )
 
 
 @router.post("/quotes/{quote_id}/request-revision")

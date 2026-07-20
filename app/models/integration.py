@@ -2,7 +2,18 @@ import enum
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, Enum, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -44,9 +55,6 @@ class IntegrationTarget(Base):
     target_type: Mapped[IntegrationTargetType] = mapped_column(
         Enum(IntegrationTargetType), default=IntegrationTargetType.custom
     )
-    connector_config_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("connector_configs.id")
-    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     notes: Mapped[str | None] = mapped_column(Text)
 
@@ -59,12 +67,22 @@ class IntegrationTarget(Base):
         onupdate=lambda: datetime.now(UTC),
     )
 
-    connector_config = relationship("ConnectorConfig")
     jobs = relationship("IntegrationJob", back_populates="target")
 
 
 class IntegrationJob(Base):
     __tablename__ = "integration_jobs"
+    __table_args__ = (
+        CheckConstraint(
+            "NOT is_active OR capability_binding_id IS NOT NULL",
+            name="ck_integration_jobs_active_binding",
+        ),
+        Index(
+            "ix_integration_jobs_capability_active",
+            "capability_binding_id",
+            "is_active",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -81,8 +99,13 @@ class IntegrationJob(Base):
     )
     interval_minutes: Mapped[int | None] = mapped_column(Integer)
     interval_seconds: Mapped[int | None] = mapped_column(Integer)
-    adapter_key: Mapped[str | None] = mapped_column(String(80))
-    action: Mapped[str | None] = mapped_column(String(80))
+    capability_binding_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "integration_capability_bindings.id",
+            name="fk_integration_jobs_capability_binding",
+        ),
+    )
     entity_type: Mapped[str | None] = mapped_column(String(80))
     direction: Mapped[str | None] = mapped_column(String(24))
     trigger_mode: Mapped[str | None] = mapped_column(String(24))
@@ -103,11 +126,19 @@ class IntegrationJob(Base):
     )
 
     target = relationship("IntegrationTarget", back_populates="jobs")
+    capability_binding = relationship("IntegrationCapabilityBinding")
     runs = relationship("IntegrationRun", back_populates="job")
 
 
 class IntegrationRun(Base):
     __tablename__ = "integration_runs"
+    __table_args__ = (
+        Index(
+            "ix_integration_runs_binding_started",
+            "capability_binding_id",
+            "started_at",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -124,6 +155,19 @@ class IntegrationRun(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     trigger: Mapped[str | None] = mapped_column(String(32))
     requested_by: Mapped[str | None] = mapped_column(String(160))
+    installation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("integration_installations.id")
+    )
+    capability_binding_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("integration_capability_bindings.id")
+    )
+    config_revision_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("integration_config_revisions.id")
+    )
+    capability_id: Mapped[str | None] = mapped_column(String(160))
+    connector_key: Mapped[str | None] = mapped_column(String(120))
+    connector_version: Mapped[str | None] = mapped_column(String(32))
+    manifest_digest: Mapped[str | None] = mapped_column(String(64))
     error: Mapped[str | None] = mapped_column(Text)
     metrics: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(
@@ -131,6 +175,9 @@ class IntegrationRun(Base):
     )
 
     job = relationship("IntegrationJob", back_populates="runs")
+    installation = relationship("IntegrationInstallation")
+    capability_binding = relationship("IntegrationCapabilityBinding")
+    config_revision = relationship("IntegrationConfigRevision")
     records = relationship("IntegrationRecord", back_populates="run")
 
 

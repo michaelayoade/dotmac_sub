@@ -29,7 +29,7 @@ from app.services.ephemeral_communication_actions import (
     has_ephemeral_action,
     materialize_email,
 )
-from app.services.integrations.connectors import whatsapp as whatsapp_service
+from app.services.integrations import whatsapp_capability as whatsapp_service
 from app.services.observability import record_notification_queue_result
 from app.services.settings_spec import resolve_value
 from app.services.whatsapp_notification_templates import provider_template_from_template
@@ -384,6 +384,10 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
                         language=str(whatsapp_payload.get("language") or "") or None,
                         variables=whatsapp_payload.get("variables") or {},
                         dry_run=False,
+                        correlation_id=(
+                            f"notification:{notification.id}:"
+                            f"attempt:{notification.retry_count}"
+                        ),
                     )
                 elif notification.template:
                     provider_template = provider_template_from_template(
@@ -400,6 +404,10 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
                         or None,
                         variables=(provider_template or {}).get("variables") or {},
                         dry_run=False,
+                        correlation_id=(
+                            f"notification:{notification.id}:"
+                            f"attempt:{notification.retry_count}"
+                        ),
                     )
                 else:
                     result = whatsapp_service.send_text_message(
@@ -407,6 +415,10 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
                         recipient=notification.recipient,
                         body=body,
                         dry_run=False,
+                        correlation_id=(
+                            f"notification:{notification.id}:"
+                            f"attempt:{notification.retry_count}"
+                        ),
                     )
                 success = bool(result.get("ok"))
                 db.add(

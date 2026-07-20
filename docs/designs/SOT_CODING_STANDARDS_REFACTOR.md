@@ -22,11 +22,11 @@ Base: `origin/main` at `ec6ee30a725f0f1c7619e3fa7b738d05d71b26ae`
 
 The foundation scanner additionally records 402 transaction operations or
 legacy transaction-helper calls across 89 API, web, task, and event-handler
-adapter files. The executable registry contains 28 domains and 233 service
+adapter files. The executable registry contains 28 domains and 254 service
 entries. Its one exact duplicate concern claim has been split into distinct
 observation-evidence and customer-resolution concerns.
 
-Typed manifest migration now has 37 fully contracted services and 213 indexed
+Typed manifest migration now has 43 fully contracted services and 211 indexed
 legacy services in a shrink-only baseline. New registry services cannot
 be added without role-qualified concerns, authoritative inputs, transaction and
 error semantics, migration state, stewardship, checked-in evidence, and any
@@ -240,6 +240,13 @@ After reconciling `origin/main` through PR #1487, five additional upstream
 ownership slices reduce the current undeclared writer-like baseline from 269 to
 264. Those upstream declarations must satisfy this branch's typed manifest and
 transport/transaction boundaries before the integration state is green.
+
+The integration-platform and vendor field-review cutovers from PRs #1495 and
+#1497 retire six more undeclared writer-like integration modules, reducing the
+current baseline from 261 to 255. Their four new integration authorities and two
+new staff-review confirmation coordinators are fully contracted rather than
+being added to the legacy-service baseline; removal of the retired hook and
+webhook-delivery owners reduces that baseline from 213 to 211.
 
 These are burn-down measures, not approved exceptions. Reproducible inventory
 and shrink-only enforcement are part of the foundation workstream.

@@ -4,12 +4,10 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from app.schemas.subscriber import SubscriberCreate
-from app.schemas.webhook import WebhookEndpointCreate, WebhookSubscriptionCreate
 from app.services import audit as audit_service
 from app.services import rbac_catalog, subscriber_assignments
 from app.services import scheduler as scheduler_service
 from app.services import subscriber as subscriber_service
-from app.services import webhook as webhook_service
 from app.services.owner_commands import CommandContext
 
 
@@ -83,18 +81,6 @@ def test_rbac_role_permission_link(db_session, person):
     )
     assert link.subscriber_id == person_id
     assert permission.key == "tickets:read"
-
-
-def test_webhook_endpoint_subscription(db_session):
-    endpoint = webhook_service.webhook_endpoints.create(
-        db_session,
-        WebhookEndpointCreate(name="CRM", url="https://example.com/webhook"),
-    )
-    subscription = webhook_service.webhook_subscriptions.create(
-        db_session,
-        WebhookSubscriptionCreate(endpoint_id=endpoint.id, event_type="custom"),
-    )
-    assert subscription.endpoint_id == endpoint.id
 
 
 def test_audit_log_request(db_session):

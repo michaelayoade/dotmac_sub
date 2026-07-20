@@ -227,6 +227,7 @@ def test_purchase_invoice_confirmation_uses_financial_preview(db_session):
 
 def test_as_built_confirmation_uses_signed_payload_and_is_idempotent(db_session):
     installation, vendor, user = _chain(db_session)
+    installation.status = InstallationProjectStatus.in_progress.value
     db_session.commit()
     payload = VendorAsBuiltCreate(
         project_id=installation.id,

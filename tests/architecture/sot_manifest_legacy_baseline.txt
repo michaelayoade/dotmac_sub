@@ -46,7 +46,6 @@ customer.service_status
 customer.usage_summary
 events.dispatcher
 events.store
-events.webhook_deliveries
 financial.account_credit_applications
 financial.account_credit_deposits
 financial.addon_purchases
@@ -76,7 +75,6 @@ financial.tax_accounting
 financial.tax_configuration
 gis.geocoding
 gis.spatial_sync
-integration.hooks
 integration.jobs
 integration.registry
 integration.sync

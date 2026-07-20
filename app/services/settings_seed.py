@@ -1796,12 +1796,6 @@ def seed_billing_settings(db: Session) -> None:
     )
     billing_settings.ensure_by_key(
         db,
-        key="payment_gateway_timeout_seconds",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("BILLING_PAYMENT_GATEWAY_TIMEOUT_SECONDS", "30"),
-    )
-    billing_settings.ensure_by_key(
-        db,
         key="ar_aging_bucket_days",
         value_type=SettingValueType.string,
         value_text=os.getenv("BILLING_AR_AGING_BUCKET_DAYS", "30,60,90"),
@@ -1877,44 +1871,6 @@ def seed_billing_settings(db: Session) -> None:
         value_type=SettingValueType.integer,
         value_text=os.getenv("BILLING_CREDIT_NOTE_NUMBER_START", "1"),
     )
-    billing_settings.ensure_by_key(
-        db,
-        key="paystack_secret_key",
-        value_type=SettingValueType.string,
-        value_text=os.getenv("PAYSTACK_SECRET_KEY", ""),
-        is_secret=True,
-    )
-    billing_settings.ensure_by_key(
-        db,
-        key="paystack_public_key",
-        value_type=SettingValueType.string,
-        value_text=os.getenv("PAYSTACK_PUBLIC_KEY", ""),
-    )
-    # Flutterwave settings
-    billing_settings.ensure_by_key(
-        db,
-        key="flutterwave_secret_key",
-        value_type=SettingValueType.string,
-        value_text=os.getenv("FLUTTERWAVE_SECRET_KEY", ""),
-        is_secret=True,
-    )
-    billing_settings.ensure_by_key(
-        db,
-        key="flutterwave_public_key",
-        value_type=SettingValueType.string,
-        value_text=os.getenv("FLUTTERWAVE_PUBLIC_KEY", ""),
-    )
-    billing_settings.ensure_by_key(
-        db,
-        key="flutterwave_secret_hash",
-        value_type=SettingValueType.string,
-        value_text=os.getenv("FLUTTERWAVE_SECRET_HASH", ""),
-        is_secret=True,
-    )
-
-    from app.services.payment_routing import backfill_legacy_provider_routes
-
-    backfill_legacy_provider_routes(db)
 
 
 def seed_catalog_settings(db: Session) -> None:
@@ -2593,61 +2549,9 @@ def seed_comms_settings(db: Session) -> None:
     )
     comms_settings.ensure_by_key(
         db,
-        key="meta_webhook_verify_token",
-        value_type=SettingValueType.string,
-        value_text=os.getenv("META_WEBHOOK_VERIFY_TOKEN", ""),
-        is_secret=True,
-    )
-    comms_settings.ensure_by_key(
-        db,
         key="meta_graph_api_version",
         value_type=SettingValueType.string,
         value_text=os.getenv("META_GRAPH_API_VERSION", "v19.0"),
-    )
-    comms_settings.ensure_by_key(
-        db,
-        key="whatsapp_provider",
-        value_type=SettingValueType.string,
-        value_text=os.getenv("WHATSAPP_PROVIDER", "meta_cloud_api"),
-    )
-    comms_settings.ensure_by_key(
-        db,
-        key="whatsapp_api_key",
-        value_type=SettingValueType.string,
-        value_text=os.getenv("WHATSAPP_API_KEY", ""),
-        is_secret=True,
-    )
-    comms_settings.ensure_by_key(
-        db,
-        key="whatsapp_api_secret",
-        value_type=SettingValueType.string,
-        value_text=os.getenv("WHATSAPP_API_SECRET", ""),
-        is_secret=True,
-    )
-    comms_settings.ensure_by_key(
-        db,
-        key="whatsapp_phone_number",
-        value_type=SettingValueType.string,
-        value_text=os.getenv("WHATSAPP_PHONE_NUMBER", ""),
-    )
-    comms_settings.ensure_by_key(
-        db,
-        key="whatsapp_webhook_url",
-        value_type=SettingValueType.string,
-        value_text=os.getenv("WHATSAPP_WEBHOOK_URL", ""),
-    )
-    templates_json_raw = os.getenv("WHATSAPP_MESSAGE_TEMPLATES_JSON", "[]")
-    try:
-        templates_json_value = json.loads(templates_json_raw)
-        if not isinstance(templates_json_value, list):
-            templates_json_value = []
-    except json.JSONDecodeError:
-        templates_json_value = []
-    comms_settings.ensure_by_key(
-        db,
-        key="whatsapp_message_templates",
-        value_type=SettingValueType.json,
-        value_json=templates_json_value,
     )
 
 

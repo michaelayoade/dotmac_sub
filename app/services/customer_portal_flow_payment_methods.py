@@ -103,9 +103,11 @@ def capture_card_after_payment(
     if provider_type not in (None, "", "paystack"):
         return None
     try:
-        from app.services import paystack
+        from app.services.integrations import payment_capability
 
-        data = paystack.verify_transaction(db, reference)
+        data = payment_capability.verify_transaction(
+            db, provider_type="paystack", reference=reference
+        )
         return save_card_from_authorization(db, account_id, data.get("authorization"))
     except Exception:  # noqa: BLE001 - capture is non-critical
         logger.warning("card capture skipped for %s", reference, exc_info=True)
@@ -261,9 +263,11 @@ def capture_card_after_payment_for_reseller(
     if provider_type not in (None, "", "paystack"):
         return None
     try:
-        from app.services import paystack
+        from app.services.integrations import payment_capability
 
-        data = paystack.verify_transaction(db, reference)
+        data = payment_capability.verify_transaction(
+            db, provider_type="paystack", reference=reference
+        )
         return save_card_for_reseller(db, reseller_id, data.get("authorization"))
     except Exception:  # noqa: BLE001 - capture is non-critical
         logger.warning("reseller card capture skipped for %s", reference, exc_info=True)

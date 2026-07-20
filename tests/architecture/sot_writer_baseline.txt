@@ -34,10 +34,8 @@ app.services.connector
 app.services.contracts
 app.services.crm_api
 app.services.crm_customers
-app.services.crm_native_sync
 app.services.crm_portal
 app.services.crm_ticket_pull
-app.services.crm_webhook_deliveries
 app.services.cross_app_drift
 app.services.crud
 app.services.customer_identity_resolution
@@ -152,7 +150,6 @@ app.services.numbering
 app.services.olt_observed_state_adapter
 app.services.operational_escalation
 app.services.operational_escalation_delivery
-app.services.payment_routing
 app.services.pppoe_credentials
 app.services.projects_mirror
 app.services.provisioning_helpers
@@ -217,7 +214,6 @@ app.services.web_customer_auth
 app.services.web_customer_details
 app.services.web_customer_user_access
 app.services.web_integration_syncs
-app.services.web_integrations
 app.services.web_network_core_devices_forms
 app.services.web_network_core_runtime
 app.services.web_network_dns_threats
@@ -255,10 +251,8 @@ app.services.web_system_profiles
 app.services.web_system_restore_tool
 app.services.web_system_user_edit
 app.services.web_system_user_mutations
-app.services.web_system_webhook_forms
 app.services.web_vpn_peers
 app.services.web_vpn_servers
-app.services.webhook
 app.services.whatsapp_notification_templates
 app.services.wireless_mast
 app.services.work_orders_mirror

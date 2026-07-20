@@ -93,6 +93,10 @@ class EventType(enum.Enum):
     vendor_route_revision_changed = "vendor_route_revision.changed"
     vendor_as_built_submitted = "vendor_as_built.submitted"
     vendor_submission_confirmed = "vendor_submission.confirmed"
+    vendor_project_verified = "vendor_project.verified"
+    vendor_project_rework_requested = "vendor_project.rework_requested"
+    vendor_as_built_accepted = "vendor_as_built.accepted"
+    vendor_as_built_rejected = "vendor_as_built.rejected"
 
     # Operations - Appointment events (2)
     appointment_scheduled = "appointment.scheduled"

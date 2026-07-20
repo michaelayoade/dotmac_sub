@@ -63,7 +63,7 @@ def test_reconcile_upserts_projects_and_sync_state(db_session):
     client = MagicMock()
     client.get_portal_projects.return_value = _crm_resp()
     with (
-        patch("app.services.projects_mirror.get_crm_client", return_value=client),
+        patch("app.services.projects_mirror.capability_client", return_value=client),
         patch(
             "app.services.projects_mirror.resolve_crm_subscriber_id",
             return_value="crm-1",
@@ -95,7 +95,7 @@ def test_read_builds_payload_and_counts_active(db_session):
     client = MagicMock()
     client.get_portal_projects.return_value = _crm_resp()
     with (
-        patch("app.services.projects_mirror.get_crm_client", return_value=client),
+        patch("app.services.projects_mirror.capability_client", return_value=client),
         patch(
             "app.services.projects_mirror.resolve_crm_subscriber_id",
             return_value="crm-1",

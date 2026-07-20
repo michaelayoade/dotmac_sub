@@ -16,9 +16,9 @@ from app.models.catalog import (
     UsageAllowance,
 )
 from app.models.connector import ConnectorConfig
+from app.models.integration_platform import IntegrationInstallation
 from app.models.network_monitoring import PopSite
 from app.models.radius import RadiusServer
-from app.models.webhook import WebhookEndpoint
 from app.models.wireguard import WireGuardPeer, WireGuardServer
 
 logger = logging.getLogger(__name__)
@@ -43,6 +43,14 @@ def get_configuration_counts(db: Session) -> dict[str, int]:
         "sla_profiles_count": _count(SlaProfile),
         "addons_count": _count(AddOn),
         "connectors_count": _count(ConnectorConfig),
-        "webhooks_count": _count(WebhookEndpoint),
+        "webhooks_count": int(
+            db.scalar(
+                select(func.count())
+                .select_from(IntegrationInstallation)
+                .where(IntegrationInstallation.connector_key == "webhook.http")
+                .where(IntegrationInstallation.state != "retired")
+            )
+            or 0
+        ),
         "tax_rates_count": _count(TaxRate),
     }

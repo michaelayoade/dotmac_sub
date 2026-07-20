@@ -21,11 +21,13 @@ from app.models.dispatch import (
     WorkOrderAssignmentQueue,
 )
 from app.models.field_location import FieldTechPresence
+from app.models.project import Project
 from app.models.subscriber import Subscriber
 from app.models.work_order import WorkOrder, WorkOrderSyncState
 from app.services.common import coerce_uuid
-from app.services.crm_client import CRMClientError, get_crm_client
+from app.services.crm_client import CRMClientError
 from app.services.crm_portal import resolve_crm_subscriber_id
+from app.services.integrations.crm_capability import capability_client
 from app.services.work_order_views import row_to_item
 
 logger = logging.getLogger(__name__)
@@ -259,6 +261,23 @@ def _upsert_row(
         row.crm_ticket_id = crm_ticket_id
     if crm_project_id is not None:
         row.crm_project_id = crm_project_id
+        # Resolve imported provenance once into the native FK. Never replace an
+        # existing native binding from a later CRM observation.
+        if row.project_id is None:
+            try:
+                native_project_id = coerce_uuid(crm_project_id)
+            except (TypeError, ValueError):
+                native_project_id = None
+            native_project = (
+                db.get(Project, native_project_id)
+                if native_project_id is not None
+                else None
+            )
+            if native_project is not None and native_project.subscriber_id in {
+                None,
+                coerce_uuid(subscriber_id),
+            }:
+                row.project_id = native_project.id
     if assigned_to_crm_person_id is not None:
         row.assigned_to_crm_person_id = assigned_to_crm_person_id
     if assigned_to_name is not None:
@@ -375,7 +394,7 @@ def reconcile_subscriber(db: Session, subscriber_id: str) -> bool:
     if not crm_subscriber_id:
         return False
 
-    data = get_crm_client().get_portal_work_orders(crm_subscriber_id)
+    data = capability_client(db).get_portal_work_orders(crm_subscriber_id)
     sub_uuid = coerce_uuid(str(subscriber_id))
 
     for item in data.get("work_orders") or []:

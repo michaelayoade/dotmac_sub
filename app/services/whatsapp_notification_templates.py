@@ -9,7 +9,8 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.models.notification import NotificationChannel, NotificationTemplate
-from app.services.integrations.connectors import whatsapp as whatsapp_connector
+from app.services.integrations import whatsapp_capability
+from app.services.integrations.installations import InstallationError
 
 WHATSAPP_TEMPLATE_MARKER = "__whatsapp_template__"
 
@@ -71,13 +72,16 @@ def sync_whatsapp_registry_templates(db: Session) -> list[NotificationTemplate]:
     matches a provider template name are converted to marker-backed rows.
     """
 
-    config = whatsapp_connector.load_whatsapp_config(db)
-    registry = _normalized_registry(config.get("templates") or [])
     existing = (
         db.query(NotificationTemplate)
         .filter(NotificationTemplate.channel == NotificationChannel.whatsapp)
         .all()
     )
+    try:
+        config = whatsapp_capability.active_config(db)
+    except InstallationError:
+        return existing
+    registry = _normalized_registry(config.get("templates") or [])
     if not registry:
         return existing
 

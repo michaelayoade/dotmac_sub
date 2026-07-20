@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -12,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.models.vendor_routes import (
     AsBuiltLineItem,
     AsBuiltRoute,
+    AsBuiltRouteReviewEvent,
     InstallationProjectStatus,
     ProjectQuote,
     ProjectQuoteLineItem,
@@ -23,6 +25,7 @@ from app.models.vendor_routes import (
 from app.services.common import coerce_uuid
 from app.services.events import EventType, emit_event
 from app.services.owner_commands import CommandContext
+from app.services.vendor_portal_errors import VendorPortalOperationError
 from app.services.vendor_portal_operations import (
     _EDITABLE_QUOTES,
     AddVendorQuoteLineCommand,
@@ -34,12 +37,24 @@ from app.services.vendor_portal_operations import (
     StageVendorQuoteSubmission,
     SubmitVendorRouteRevisionCommand,
     UpdateVendorQuoteLineCommand,
+    VendorPortalOperations,
+    _as_built,
+    _as_built_submission_eligibility,
     _error,
     _money,
     _project,
     _quote,
+    _serialize_as_built_review,
     _serialize_quote,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class StageVendorAsBuiltReview:
+    as_built_id: str
+    action: str
+    actor_id: str
+    reason: str | None = None
 
 
 def _now() -> datetime:
@@ -387,6 +402,9 @@ def stage_as_built_submission(
             "project_not_assigned",
             "Project is assigned to another vendor.",
         )
+    allowed, reason = _as_built_submission_eligibility(project)
+    if not allowed:
+        raise _error("as_built_submission_not_allowed", str(reason))
     if not command.payload.geojson and not command.payload.line_items:
         raise _error(
             "as_built_evidence_required",
@@ -404,6 +422,11 @@ def stage_as_built_submission(
         variation_type=command.payload.variation_type,
         variation_reason=command.payload.variation_reason,
         work_order_ref=command.payload.work_order_ref,
+        version=max(
+            (item.version for item in project.as_built_routes),
+            default=0,
+        )
+        + 1,
     )
     for item in command.payload.line_items:
         row.line_items.append(
@@ -431,3 +454,76 @@ def stage_as_built_submission(
         "submitted_at": row.submitted_at,
         "line_items": row.line_items,
     }
+
+
+def stage_as_built_review(
+    db: Session,
+    command: StageVendorAsBuiltReview,
+) -> dict:
+    """Stage one locked staff evidence decision and immutable event."""
+
+    normalized_actor = command.actor_id.strip()
+    if not normalized_actor:
+        raise VendorPortalOperationError(
+            "actor_required", "Review actor is required", kind="invalid"
+        )
+    preview = VendorPortalOperations.preview_as_built_review(
+        db,
+        command.as_built_id,
+        action=command.action,
+        reason=command.reason,
+        for_update=True,
+    )
+    row = _as_built(db, command.as_built_id, for_update=True)
+    previous = str(preview["state"]["from_status"])
+    target = str(preview["state"]["to_status"])
+    normalized_reason = preview["state"]["reason"]
+    event_type = (
+        EventType.vendor_as_built_accepted
+        if command.action == "accept"
+        else EventType.vendor_as_built_rejected
+    )
+    row.status = target
+    row.reviewed_at = _now()
+    row.reviewed_by_person_id = coerce_uuid(normalized_actor)
+    row.review_notes = normalized_reason
+    project = row.project
+    domain_event = emit_event(
+        db,
+        event_type,
+        {
+            "schema_version": 1,
+            "as_built_id": str(row.id),
+            "project_id": str(row.project_id),
+            "native_project_id": str(project.project_id),
+            "vendor_id": str(project.assigned_vendor_id),
+            "from_status": previous,
+            "to_status": target,
+            "actor_type": "staff_user",
+            "actor_id": normalized_actor,
+            "reason": normalized_reason,
+        },
+        actor=normalized_actor,
+        subscriber_id=project.subscriber_id,
+        account_id=project.subscriber_id,
+    )
+    evidence = AsBuiltRouteReviewEvent(
+        event_id=domain_event.event_id,
+        as_built_id=row.id,
+        project_id=row.project_id,
+        vendor_id=project.assigned_vendor_id,
+        event_type=domain_event.event_type.value,
+        from_status=previous,
+        to_status=target,
+        actor_type="staff_user",
+        actor_id=normalized_actor,
+        reason=normalized_reason,
+        occurred_at=domain_event.occurred_at,
+    )
+    db.add(evidence)
+    db.flush()
+    result = _serialize_as_built_review(row)
+    result["review_event_id"] = str(evidence.id)
+    result["domain_event_id"] = str(domain_event.event_id)
+    result["reviewed_at"] = domain_event.occurred_at
+    return result

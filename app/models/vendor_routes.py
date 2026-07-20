@@ -331,6 +331,8 @@ class InstallationProjectLifecycleEvent(Base):
     to_status: Mapped[str] = mapped_column(String(40), nullable=False)
     actor_type: Mapped[str] = mapped_column(String(40), nullable=False)
     actor_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    reason: Mapped[str | None] = mapped_column(Text)
+    decision_context: Mapped[dict | None] = mapped_column(JSON)
     occurred_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_now
     )
@@ -667,6 +669,83 @@ class AsBuiltRoute(Base):
     fiber_segment = relationship("FiberSegment")
     line_items = relationship(
         "AsBuiltLineItem", back_populates="as_built", cascade="all, delete-orphan"
+    )
+    review_events = relationship(
+        "AsBuiltRouteReviewEvent",
+        back_populates="as_built",
+        order_by="AsBuiltRouteReviewEvent.occurred_at",
+    )
+
+
+class AsBuiltRouteReviewEvent(Base):
+    """Append-only official evidence for staff as-built review decisions."""
+
+    __tablename__ = "as_built_route_review_events"
+    __table_args__ = (
+        CheckConstraint(
+            "from_status <> to_status",
+            name="ck_as_built_review_event_status_change",
+        ),
+        Index(
+            "ix_as_built_review_event_route_occurred",
+            "as_built_id",
+            "occurred_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    event_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False, unique=True, index=True
+    )
+    as_built_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("as_built_routes.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("installation_projects.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    vendor_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("vendors.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    event_type: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    from_status: Mapped[str] = mapped_column(String(40), nullable=False)
+    to_status: Mapped[str] = mapped_column(String(40), nullable=False)
+    actor_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    actor_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    reason: Mapped[str | None] = mapped_column(Text)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now
+    )
+
+    as_built = relationship("AsBuiltRoute", back_populates="review_events")
+    project = relationship("InstallationProject")
+    vendor = relationship("Vendor")
+
+
+class AsBuiltRouteReviewEventImmutableError(RuntimeError):
+    pass
+
+
+@event.listens_for(AsBuiltRouteReviewEvent, "before_update")
+def _reject_as_built_review_event_update(*_args: object) -> None:
+    raise AsBuiltRouteReviewEventImmutableError(
+        "As-built review evidence is append-only"
+    )
+
+
+@event.listens_for(AsBuiltRouteReviewEvent, "before_delete")
+def _reject_as_built_review_event_delete(*_args: object) -> None:
+    raise AsBuiltRouteReviewEventImmutableError(
+        "As-built review evidence is append-only"
     )
 
 

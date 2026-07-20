@@ -43,18 +43,44 @@ def test_reports_permission_migrations_form_the_single_head_chain():
         "vendor_payment_projection_chain",
         "372_vendor_purchase_invoice_payment_projection.py",
     )
+    vendor_review = _load(
+        "vendor_lifecycle_review_chain",
+        "373_vendor_lifecycle_review_evidence.py",
+    )
+    as_built_review = _load(
+        "as_built_review_chain",
+        "374_as_built_review_evidence.py",
+    )
+    work_order_evidence = _load(
+        "work_order_evidence_policy_chain",
+        "375_work_order_evidence_policy.py",
+    )
+    integration_cutover = _load(
+        "integration_platform_cutover_chain",
+        "380_integration_platform_cutover.py",
+    )
     current = _load(
-        "rbac_catalog_identity_chain", "373_rbac_catalog_normalized_identity.py"
+        "rbac_catalog_identity_chain", "381_rbac_catalog_normalized_identity.py"
     )
 
     assert granular.down_revision == "369_vendor_lifecycle_evidence"
     assert retire.down_revision == granular.revision
     assert vendor_payment.down_revision == retire.revision
-    assert current.down_revision == vendor_payment.revision
+    assert vendor_review.down_revision == vendor_payment.revision
+    assert as_built_review.down_revision == vendor_review.revision
+    assert work_order_evidence.down_revision == as_built_review.revision
+    assert current.down_revision == integration_cutover.revision
 
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
-    assert ScriptDirectory.from_config(config).get_heads() == [current.revision]
+    script = ScriptDirectory.from_config(config)
+    assert script.get_heads() == [current.revision]
+    assert retire.revision in {
+        item.revision
+        for item in script.iterate_revisions(
+            current.revision, retire.revision, inclusive=True
+        )
+    }
 
 
 def test_upgrade_and_rollback_preserve_role_and_direct_grants(monkeypatch):

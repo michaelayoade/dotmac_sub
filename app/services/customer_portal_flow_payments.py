@@ -794,7 +794,7 @@ def _init_flutterwave_checkout(
     Shared by the top-up and invoice-pay flows; they differ only in
     ``default_callback_path`` (the verify route to return to).
     """
-    from app.services import flutterwave
+    from app.services.integrations import payment_capability
 
     callback_url = redirect_url or default_callback_path
     if callback_url.startswith("/"):
@@ -807,8 +807,9 @@ def _init_flutterwave_checkout(
             callback_url = f"{base_url}{callback_url}"
     separator = "&" if "?" in callback_url else "?"
     try:
-        checkout = flutterwave.initialize_transaction(
+        checkout = payment_capability.initialize_transaction(
             db,
+            provider_type="flutterwave",
             email=_resolve_customer_email(db, customer),
             amount=amount,
             reference=reference,
@@ -891,14 +892,14 @@ def _charge_saved_card_for_invoice(
         metadata={**checkout_metadata, "provider_id": provider_id},
     )
 
-    from app.services import paystack
+    from app.services.integrations import payment_capability
 
     try:
-        paystack.charge_authorization(
+        payment_capability.charge_authorization(
             db,
             authorization_code=token,
             email=_resolve_customer_email(db, customer),
-            amount_kobo=paystack.amount_to_kobo(amount),
+            amount_kobo=payment_capability.amount_to_kobo(amount),
             reference=reference,
             metadata=checkout_metadata,
         )
@@ -1522,14 +1523,14 @@ def create_topup_intent(
     checkout_metadata = {"topup_intent_id": str(intent.id)}
     charged = False
     if selected_payment_method is not None:
-        from app.services import paystack
+        from app.services.integrations import payment_capability
 
         try:
-            paystack.charge_authorization(
+            payment_capability.charge_authorization(
                 db,
                 authorization_code=selected_payment_token,
                 email=customer_email,
-                amount_kobo=paystack.amount_to_kobo(requested_amount),
+                amount_kobo=payment_capability.amount_to_kobo(requested_amount),
                 reference=gateway_context.reference,
                 metadata=checkout_metadata,
             )
