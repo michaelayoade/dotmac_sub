@@ -79,7 +79,7 @@ def test_migration_backfills_provenance_and_scopes_legacy_references() -> None:
     ).read_text()
 
     assert 'revision = "383_replaceable_backoffice"' in migration
-    assert 'down_revision = "380_integration_platform_cutover"' in migration
+    assert 'down_revision = "382_ticket_work_order_handoff"' in migration
     assert "SET supplier_system = 'dotmac_erp'" in migration
     assert "uq_vendors_supplier_system_reference" in migration
     assert "uq_organizations_backoffice_system_reference" in migration

@@ -1,7 +1,7 @@
 """Make back-office projections provider-neutral.
 
 Revision ID: 383_replaceable_backoffice
-Revises: 380_integration_platform_cutover
+Revises: 382_ticket_work_order_handoff
 """
 
 from __future__ import annotations

@@ -76,7 +76,7 @@ def test_legacy_branch_merge_is_ancestor_of_current_head() -> None:
         "383_replaceable_backoffice_boundary.py",
         "migration_383_replaceable_backoffice_boundary",
     )
-    assert current.down_revision == "380_integration_platform_cutover"
+    assert current.down_revision == "382_ticket_work_order_handoff"
 
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
