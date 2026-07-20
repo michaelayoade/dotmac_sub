@@ -246,7 +246,7 @@ def test_foundation_migration_is_linear_and_additive() -> None:
     spec.loader.exec_module(module)
 
     assert module.revision == "376_integration_platform_foundation"
-    assert module.down_revision == "372_vendor_payment_projection"
+    assert module.down_revision == "375_work_order_evidence_policy"
     source = path.read_text(encoding="utf-8")
     assert "integration_installations" in source
     assert "integration_config_revisions" in source
