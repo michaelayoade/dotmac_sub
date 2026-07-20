@@ -1,0 +1,163 @@
+"""Canonical verified inbound receipt and consequence lifecycle."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from typing import Any
+from uuid import UUID
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.models.integration_platform import (
+    IntegrationCapabilityBinding,
+    IntegrationInbox,
+)
+from app.services.integrations.delivery import payload_digest
+from app.services.integrations.installations import quarantine_installation
+
+
+class InboxError(ValueError):
+    """Raised when an inbound receipt violates identity or lifecycle rules."""
+
+
+def get_receipt(db: Session, *, receipt_id: UUID) -> IntegrationInbox:
+    receipt = db.get(IntegrationInbox, receipt_id)
+    if receipt is None:
+        raise InboxError("integration inbox receipt not found")
+    return receipt
+
+
+def list_receipts(
+    db: Session,
+    *,
+    state: str | None = None,
+    capability_binding_id: UUID | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[IntegrationInbox]:
+    query = select(IntegrationInbox)
+    if state:
+        normalized_state = state.strip().lower()
+        if normalized_state not in {
+            "verified",
+            "processing",
+            "processed",
+            "retryable",
+            "dead_letter",
+        }:
+            raise InboxError("invalid integration inbox state")
+        query = query.where(IntegrationInbox.state == normalized_state)
+    if capability_binding_id:
+        query = query.where(
+            IntegrationInbox.capability_binding_id == capability_binding_id
+        )
+    return list(
+        db.scalars(
+            query.order_by(IntegrationInbox.received_at.desc())
+            .offset(offset)
+            .limit(limit)
+        ).all()
+    )
+
+
+def receive_verified(
+    db: Session,
+    *,
+    capability_binding_id: UUID,
+    provider_event_id: str,
+    event_type: str,
+    payload: dict[str, Any],
+    headers: dict[str, str] | None = None,
+) -> tuple[IntegrationInbox, bool]:
+    binding = db.get(IntegrationCapabilityBinding, capability_binding_id)
+    if binding is None:
+        raise InboxError("capability binding not found")
+    normalized_event_id = provider_event_id.strip()
+    if not normalized_event_id:
+        raise InboxError("provider event id is required")
+    digest = payload_digest(payload)
+    existing = (
+        db.query(IntegrationInbox)
+        .filter(
+            IntegrationInbox.capability_binding_id == binding.id,
+            IntegrationInbox.provider_event_id == normalized_event_id,
+        )
+        .one_or_none()
+    )
+    if existing is not None:
+        if existing.payload_digest != digest:
+            quarantine_installation(
+                db,
+                installation_id=binding.installation_id,
+                reason="provider_event_identity_collision",
+                actor="integration.inbox",
+            )
+            raise InboxError("provider event identity collision")
+        return existing, False
+    receipt = IntegrationInbox(
+        installation_id=binding.installation_id,
+        capability_binding_id=binding.id,
+        provider_event_id=normalized_event_id,
+        event_type=event_type.strip() or "unknown",
+        payload_digest=digest,
+        headers_json={
+            str(key).lower(): str(value) for key, value in (headers or {}).items()
+        },
+        payload_json=payload,
+        state="verified",
+        attempt_count=0,
+        consequence_json={},
+    )
+    db.add(receipt)
+    db.flush()
+    return receipt, True
+
+
+def claim_for_processing(receipt: IntegrationInbox) -> bool:
+    if receipt.state == "processed":
+        return False
+    if receipt.state == "dead_letter":
+        raise InboxError("dead-letter receipt requires authorized replay")
+    receipt.state = "processing"
+    receipt.attempt_count += 1
+    receipt.error_code = None
+    receipt.error_detail = None
+    return True
+
+
+def mark_processed(
+    receipt: IntegrationInbox, *, consequence: dict[str, Any]
+) -> IntegrationInbox:
+    receipt.state = "processed"
+    receipt.consequence_json = consequence
+    receipt.processed_at = datetime.now(UTC)
+    receipt.error_code = None
+    receipt.error_detail = None
+    return receipt
+
+
+def mark_failed(
+    receipt: IntegrationInbox,
+    *,
+    error_code: str,
+    error_detail: str | None = None,
+    max_attempts: int = 10,
+) -> IntegrationInbox:
+    receipt.error_code = error_code[:120]
+    receipt.error_detail = (error_detail or "")[:2000] or None
+    receipt.state = (
+        "dead_letter" if receipt.attempt_count >= max(1, max_attempts) else "retryable"
+    )
+    return receipt
+
+
+def replay_receipt(db: Session, *, receipt_id: UUID) -> IntegrationInbox:
+    receipt = get_receipt(db, receipt_id=receipt_id)
+    if receipt.state not in {"retryable", "dead_letter"}:
+        raise InboxError("integration inbox receipt is not replayable")
+    receipt.state = "verified"
+    receipt.error_code = None
+    receipt.error_detail = None
+    db.flush()
+    return receipt
