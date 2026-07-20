@@ -64,7 +64,6 @@ flush 1 app/tasks/uisp_control.py
 helper:form_write 10 app/web/admin/catalog_settings.py
 helper:task_session 1 app/tasks/crm_native_sync.py
 helper:task_session 2 app/tasks/crm_ticket_pull.py
-helper:task_session 5 app/tasks/dotmac_erp_outbox.py
 helper:task_session 1 app/tasks/support_tickets.py
 rollback 2 app/api/bandwidth.py
 rollback 1 app/api/crm.py

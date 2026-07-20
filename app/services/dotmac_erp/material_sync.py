@@ -351,3 +351,11 @@ def refresh_material_request_statuses(
     result["processed"] = processed
     result["updated"] = updated
     return result
+
+
+def run_refresh_material_request_statuses() -> dict[str, object]:
+    """Own the background session for ERP material-outcome reconciliation."""
+    from app.db import task_session
+
+    with task_session() as db:
+        return refresh_material_request_statuses(db)

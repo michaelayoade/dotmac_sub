@@ -197,3 +197,11 @@ def sync_operational_domains(
         "work_orders": len(work_orders),
         "errors": [],
     }
+
+
+def run_sync_operational_domains() -> dict[str, object]:
+    """Own the background session for operational-domain ERP synchronization."""
+    from app.db import task_session
+
+    with task_session() as db:
+        return sync_operational_domains(db)

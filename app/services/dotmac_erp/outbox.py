@@ -99,6 +99,14 @@ class DeliveryResult:
         }
 
 
+def run_deliver_pending() -> dict[str, object]:
+    """Own the background session used by the ERP outbox delivery sweep."""
+    from app.db import task_session
+
+    with task_session() as db:
+        return deliver_pending(db).as_dict()
+
+
 def enqueue(
     db: Session,
     *,
