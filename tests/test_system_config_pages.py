@@ -271,12 +271,20 @@ def test_billing_config_save_rejects_non_numeric_integer(db_session):
 
 
 # --- 8.12 Direct bank transfer: config owns accounts, not enablement ---
-def test_direct_bank_transfer_save_preserves_json_without_alias_toggle(db_session):
+def test_direct_bank_transfer_save_persists_instructions_only(db_session):
+    """Bank accounts are owned by `collection_accounts`, not by this form.
+
+    This used to write the `direct_bank_transfer_accounts` JSON blob *and* the
+    legacy singular keys. Nothing reads them now, so continuing to write them
+    would silently accept staff edits that never reach a customer.
+    """
     web_system_config_service.save_direct_bank_transfer_config(
         db_session,
         {
             "direct_bank_transfer_enabled": "on",
             "direct_bank_transfer_instructions": "Pay to the account below.",
+            # A stale form may still post account fields; they must be ignored,
+            # not written somewhere nothing reads.
             "account_id": "acc-1",
             "account_enabled": "acc-1",
             "account_bank_name": "GTBank",
@@ -286,14 +294,19 @@ def test_direct_bank_transfer_save_preserves_json_without_alias_toggle(db_sessio
     )
 
     rows = _billing_rows(db_session)
+    assert (
+        rows["direct_bank_transfer_instructions"].value_text
+        == "Pay to the account below."
+    )
     assert "direct_bank_transfer_enabled" not in rows
-    assert rows["direct_bank_transfer_bank_name"].value_text == "GTBank"
-    # The accounts blob is a JSON *string* held in value_text (not value_json)
-    # so the customer-portal readers keep working.
-    accounts_row = rows["direct_bank_transfer_accounts"]
-    assert accounts_row.value_type == SettingValueType.string
-    assert accounts_row.value_json is None
-    assert '"bank_name": "GTBank"' in accounts_row.value_text
+    for retired in (
+        "direct_bank_transfer_accounts",
+        "direct_bank_transfer_bank_name",
+        "direct_bank_transfer_account_name",
+        "direct_bank_transfer_account_number",
+        "direct_bank_transfer_sort_code",
+    ):
+        assert retired not in rows, f"{retired} must no longer be written"
 
 
 def test_direct_bank_transfer_save_ignores_retired_alias_field(db_session):

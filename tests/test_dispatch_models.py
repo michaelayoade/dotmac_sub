@@ -55,7 +55,7 @@ def test_technician_profile_links_native_user_and_crm_person(db_session):
         crm_person_id="crm-person-1",
         title="Field Technician",
         region="Jabi",
-        erp_employee_id="EMP-1",
+        workforce_employee_reference="EMP-1",
         metadata_={"source": "crm"},
     )
     skill = Skill(name="fiber_splicing", description="Fiber splicing")

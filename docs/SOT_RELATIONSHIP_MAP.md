@@ -498,6 +498,19 @@ detailed security and delivery boundary is
    records idempotency and actor audit evidence, and structurally links the
    command result to its exact ledger transaction(s). Financial settlement may
    request access reconciliation, but it never promises restoration itself.
+23. `financial.collection_accounts`
+   (`app.services.billing.collection_accounts`) owns Dotmac receiving-account
+   identity, full customer-presented bank details, derived last-four digits,
+   active lifecycle, external accounting mapping, and explicit presentment
+   order. Portal, reseller, API, invoice, settings UI, payment-proof, and
+   attribution adapters carry its identity; they do not maintain bank-detail
+   copies. `financial.payment_routing` separately owns health-aware gateway
+   ordering. `payment_channels` and `payment_channel_accounts` classify where
+   recorded money arrived and never become the gateway-presentment policy.
+   Legacy direct-transfer and company-info bank settings are a temporary frozen
+   rollback snapshot during A1 verification, not a runtime fallback, and are
+   deleted at the contract gate. `accounting_code` fields are external mappings,
+   not a Sub chart of accounts or ledger.
 
 Account adjustments and add-on purchase debits use one evidenced contract:
 
@@ -2365,11 +2378,12 @@ Dependency order:
    `support.ticket_work_order_handoff`; that projection records evidence but
    never resolves or closes the ticket.
 7. `operations.material_dependencies`: owns the material need and approval that
-   can block a Sub service work order, then idempotently projects ERP's
-   authoritative issue/refusal outcome back into that workflow. It never posts
-   stock or selects ERP inventory. After the per-flow cutover, the old local
-   issue/fulfil actions fail closed. The cross-repository contract is
-   `dotmac_erp/docs/dotmac_sub_material_support_contract.md`.
+   can block a Sub service work order, then idempotently projects the configured
+   backoffice system's authoritative issue/refusal outcome back into that
+   workflow. It never posts stock or selects backoffice inventory. Backoffice
+   unavailability never reverses a valid Sub approval. After the per-flow
+   cutover, the old local issue/fulfil actions fail closed. The integration
+   boundary is `docs/BACKOFFICE_INTEGRATION_BOUNDARY.md`.
 8. `operations.project_lifecycle`: owns native project field/status mutations,
    project SLA synchronization, and lifecycle event/notification requests.
 9. `operations.vendor_project_lifecycle` (`app.services.vendor_portal_operations`)
@@ -2417,16 +2431,18 @@ Dependency order:
    decide verification eligibility.
 10. `operations.vendor_purchase_invoices` owns vendor purchase-invoice state,
    financial totals, submit eligibility, and the financial impact snapshot.
-   ERP owns accounts-payable settlement. Its dedicated
+   The configured payables system owns accounts-payable settlement. The current
+   Dotmac ERP adapter's dedicated
    `GET /api/v1/sync/sub/purchase-invoices/{source_invoice_id}` contract returns
    the organization-scoped supplier-invoice status and reconciled amounts.
-   `integration.vendor_purchase_invoice_erp_projection` is the only writer for
-   Sub's timestamped local observation. It validates source identity, ERP
-   identity, currency, and amount reconciliation, rechecks the link under lock,
-   and retains the last good observation on failure. The vendor read owner
+   `integration.dotmac_erp_payables_adapter` is the only current writer for
+   Sub's timestamped local observation for that provider. It validates source
+   identity, provider identity, currency, and amount reconciliation, rechecks
+   the link under lock, and retains the last good observation on failure. The
+   vendor read owner
    renders payment only from that observed state through `StateValue`; the ERP
-   creation response is preserved separately in
-   `erp_purchase_invoice_creation_status`, never proves paid or unpaid state,
+   creation response is preserved separately as the payables-document creation
+   status, never proves paid or unpaid state,
    and cannot overwrite the refreshed status during replay. Stale or unavailable
    observations remain visibly distinct.
 11. `operations.vendor_submission_confirmation` (implemented by
@@ -2773,12 +2789,16 @@ live owners are:
    transport selection.
 7. `integration.sync`: owns sync orchestration and checkpoints. CRM observation
    jobs execute only through their enabled `dotmac.crm` capability binding.
-8. `integration.erp_material_support`: maps an approved Sub material need to
-   the neutral ERP contract, assigns the stable idempotency key, and observes or
-   reconciles ERP outcomes through `dotmac.erp`. It remains a transport and
-   observation owner; `operations.material_dependencies` alone projects the
-   outcome into Sub service-workflow state.
-9. `events.store` remains the domain-event fact owner,
+8. `integration.backoffice_adapter`: is Sub's local anti-corruption port for
+   inventory, workforce, expense, procurement, and payables collaboration. It
+   resolves the default enabled versioned capability binding; domain owners do
+   not select or import `dotmac.erp`, Zoho, or another provider connector.
+9. `integration.erp_material_support`: maps an approved Sub material need to
+   the versioned backoffice contract, assigns the stable idempotency key, and
+   observes or reconciles provider outcomes. The current connector is
+   `dotmac.erp`; replacing it changes the binding and connector, not Sub's
+   service-workflow owner or provider-neutral fields.
+10. `events.store` remains the domain-event fact owner,
    `scheduler.registry` remains cadence owner, and `secrets.reference_store`
    remains secret resolution owner.
 
@@ -2797,7 +2817,7 @@ Authority cutover is complete for the platform-managed first-party paths:
 | CRM | Direct client construction and CRM-specific webhook delivery rows | `dotmac.crm` typed capabilities and `integration.inbox` | Complete; Sub remains authoritative for operational and support consequences |
 | Outbound webhooks and hooks | `events.webhook_deliveries`, endpoint tables, and `integration.hooks` | `integration.delivery` consuming `events.store` | Complete; duplicate models, routes, tasks, and CLI hooks are removed |
 | WhatsApp messaging | Settings-backed provider transport | Direct Meta typed messaging capabilities plus `integration.inbox` | Complete; no Twilio or fallback transport |
-| ERP | Direct ERP transport clients | `dotmac.erp` typed capabilities | Complete; ERP remains observation/transport only |
+| Backoffice/ERP | Direct provider transport clients | Default enabled typed backoffice capability binding (currently `dotmac.erp`) | Complete; the connector remains observation/transport only and is replaceable without changing Sub domain owners |
 | Payments | Direct Paystack/Flutterwave services and payment-specific webhook dead letters | Typed payment capabilities plus `integration.inbox` | Complete; billing owners alone decide financial state |
 
 Migration `380_integration_platform_cutover` removes the retired tables,
@@ -2812,6 +2832,14 @@ official-timeline state. Domain owners produce outbound projections and decide
 inbound consequences. The effective-state projection derives health from run,
 delivery, backlog, authentication, and circuit facts and reads OpenBao metadata
 without reading secret values; installed or enabled never implies healthy.
+
+Sub remains complete when a backoffice provider is unavailable. A valid Sub
+decision commits independently and records failed collaboration for retry or
+reconciliation. Sub never queries a provider database or stores a cross-system
+foreign key. Each system owns its local identifiers, including tax identifiers;
+contracts carry source-scoped correlation references only where collaboration
+requires them. The integration platform is local to Sub, not an enterprise-wide
+control plane or shared identifier registry.
 
 ## VPN / Remote Access
 

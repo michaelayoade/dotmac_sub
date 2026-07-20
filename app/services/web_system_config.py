@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import json
 import logging
-import uuid
 from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation
 from typing import Any, cast
@@ -16,6 +14,7 @@ from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingUpdate
 from app.services import settings_spec
+from app.services.billing import collection_account_directory
 from app.services.billing_settings import resolve_payment_due_days
 from app.services.domain_settings import DomainSettings
 
@@ -229,12 +228,7 @@ BILLING_KEYS = [
 ]
 
 DIRECT_BANK_TRANSFER_KEYS = [
-    "direct_bank_transfer_bank_name",
-    "direct_bank_transfer_account_name",
-    "direct_bank_transfer_account_number",
-    "direct_bank_transfer_sort_code",
     "direct_bank_transfer_instructions",
-    "direct_bank_transfer_accounts",
 ]
 
 
@@ -412,143 +406,42 @@ def save_billing_config(db: Session, data: Mapping[str, Any]) -> None:
 
 
 def get_direct_bank_transfer_context(db: Session) -> dict:
+    """Instructions copy from settings; accounts from their owner, read-only.
+
+    The accounts are shown here so staff can see what customers will be told,
+    but they are edited at /admin/billing/collection-accounts. Editing them in
+    two places is what produced four divergent copies of the same bank account.
+    """
     settings = _read_settings(db, SettingDomain.billing, DIRECT_BANK_TRANSFER_KEYS)
     return {
         "direct_bank_transfer": settings,
-        "direct_bank_transfer_accounts": _parse_direct_transfer_accounts(settings),
+        "collection_accounts": collection_account_directory.enabled_transfer_accounts(
+            db
+        ),
+        "collection_accounts_url": "/admin/billing/collection-accounts",
     }
 
 
 def save_direct_bank_transfer_config(db: Session, data: Mapping[str, Any]) -> None:
-    accounts = _direct_transfer_accounts_from_form(data)
-    primary = accounts[0] if accounts else {}
+    """Persist the instructions copy only.
+
+    This used to also write `direct_bank_transfer_accounts` and the legacy
+    singular `direct_bank_transfer_*` keys. Nothing reads them any more —
+    presentment resolves through `collection_accounts` — so continuing to write
+    them would silently accept staff edits that never reach a customer.
+    """
     payload = {
         "direct_bank_transfer_instructions": data.get(
             "direct_bank_transfer_instructions", ""
         ),
-        "direct_bank_transfer_accounts": json.dumps(accounts),
-        # Preserve the legacy single-account keys for older callers and as a
-        # readable fallback in the settings table.
-        "direct_bank_transfer_bank_name": primary.get("bank_name", ""),
-        "direct_bank_transfer_account_name": primary.get("account_name", ""),
-        "direct_bank_transfer_account_number": primary.get("account_number", ""),
-        "direct_bank_transfer_sort_code": primary.get("sort_code", ""),
     }
     _save_settings(
         db,
         SettingDomain.billing,
         payload,
-        DIRECT_BANK_TRANSFER_KEYS,
+        ["direct_bank_transfer_instructions"],
         use_specs=True,
     )
-
-
-def _parse_direct_transfer_accounts(
-    settings: Mapping[str, str],
-) -> list[dict[str, str]]:
-    raw = settings.get("direct_bank_transfer_accounts") or ""
-    accounts: list[dict[str, str]] = []
-    if raw:
-        try:
-            parsed = json.loads(raw)
-        except json.JSONDecodeError:
-            parsed = []
-        if isinstance(parsed, list):
-            for item in parsed:
-                if not isinstance(item, Mapping):
-                    continue
-                account = {
-                    "id": str(item.get("id") or uuid.uuid4().hex),
-                    "enabled": "true"
-                    if str(item.get("enabled", "")).lower()
-                    in {"1", "true", "yes", "on"}
-                    else "false",
-                    "bank_name": str(item.get("bank_name") or "").strip(),
-                    "account_name": str(item.get("account_name") or "").strip(),
-                    "account_number": str(item.get("account_number") or "").strip(),
-                    "sort_code": str(item.get("sort_code") or "").strip(),
-                }
-                if (
-                    account["bank_name"]
-                    and account["account_name"]
-                    and account["account_number"]
-                ):
-                    accounts.append(account)
-    if accounts:
-        return accounts
-
-    bank_name = (settings.get("direct_bank_transfer_bank_name") or "").strip()
-    account_name = (settings.get("direct_bank_transfer_account_name") or "").strip()
-    account_number = (settings.get("direct_bank_transfer_account_number") or "").strip()
-    sort_code = (settings.get("direct_bank_transfer_sort_code") or "").strip()
-    if bank_name and account_name and account_number:
-        accounts.append(
-            {
-                "id": uuid.uuid4().hex,
-                "enabled": "true",
-                "bank_name": bank_name,
-                "account_name": account_name,
-                "account_number": account_number,
-                "sort_code": sort_code,
-            }
-        )
-    return accounts
-
-
-def _form_list(data: Mapping[str, Any], key: str) -> list[str]:
-    getlist = getattr(data, "getlist", None)
-    if callable(getlist):
-        return [str(value) for value in getlist(key)]
-    value = data.get(key)
-    if value is None:
-        return []
-    if isinstance(value, list | tuple):
-        return [str(item) for item in value]
-    return [str(value)]
-
-
-def _direct_transfer_accounts_from_form(
-    data: Mapping[str, Any],
-) -> list[dict[str, str]]:
-    ids = _form_list(data, "account_id")
-    enabled_ids = set(_form_list(data, "account_enabled"))
-    bank_names = _form_list(data, "account_bank_name")
-    account_names = _form_list(data, "account_account_name")
-    account_numbers = _form_list(data, "account_account_number")
-    sort_codes = _form_list(data, "account_sort_code")
-    accounts: list[dict[str, str]] = []
-    row_count = max(
-        len(ids),
-        len(bank_names),
-        len(account_names),
-        len(account_numbers),
-        len(sort_codes),
-    )
-    for index in range(row_count):
-        account_id = (
-            ids[index] if index < len(ids) else ""
-        ).strip() or uuid.uuid4().hex
-        bank_name = (bank_names[index] if index < len(bank_names) else "").strip()
-        account_name = (
-            account_names[index] if index < len(account_names) else ""
-        ).strip()
-        account_number = (
-            account_numbers[index] if index < len(account_numbers) else ""
-        ).strip()
-        sort_code = (sort_codes[index] if index < len(sort_codes) else "").strip()
-        if not (bank_name and account_name and account_number):
-            continue
-        accounts.append(
-            {
-                "id": account_id,
-                "enabled": "true" if account_id in enabled_ids else "false",
-                "bank_name": bank_name,
-                "account_name": account_name,
-                "account_number": account_number,
-                "sort_code": sort_code,
-            }
-        )
-    return accounts
 
 
 # ---------------------------------------------------------------------------

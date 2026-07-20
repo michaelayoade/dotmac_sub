@@ -4846,15 +4846,13 @@ def config_direct_bank_transfer_save(request: Request, db: Session = Depends(get
     before_context = web_system_config_service.get_direct_bank_transfer_context(db)
     before = {
         **dict(before_context["direct_bank_transfer"]),
-        "direct_bank_transfer_accounts": before_context[
-            "direct_bank_transfer_accounts"
-        ],
+        "collection_accounts": before_context["collection_accounts"],
     }
     web_system_config_service.save_direct_bank_transfer_config(db, form)
     after_context = web_system_config_service.get_direct_bank_transfer_context(db)
     after = {
         **dict(after_context["direct_bank_transfer"]),
-        "direct_bank_transfer_accounts": after_context["direct_bank_transfer_accounts"],
+        "collection_accounts": after_context["collection_accounts"],
     }
     changes = _diff_audit_snapshots(before, after)
     if changes:

@@ -60,13 +60,39 @@
             <div class="grid gap-4 sm:grid-cols-2">
                 <div>
                     <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Bank Name</label>
-                    <input type="text" name="bank_name" value="{{ account.bank_name or '' }}"
+                    <input type="text" name="bank_name" maxlength="120" value="{{ account.bank_name or '' }}"
                            class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                 </div>
                 <div>
-                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Account Last 4</label>
-                    <input type="text" name="account_last4" maxlength="4" value="{{ account.account_last4 or '' }}"
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Account Name</label>
+                    <input type="text" name="account_name" maxlength="200" value="{{ account.account_name or '' }}"
                            class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+            </div>
+            <div class="grid gap-4 sm:grid-cols-2">
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Account Number</label>
+                    <input type="text" name="account_number" maxlength="64" autocomplete="off" value="{{ account.account_number or '' }}"
+                           class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 font-mono text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <p class="mt-1 text-xs text-slate-500">Last four digits are derived automatically.</p>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Sort Code</label>
+                    <input type="text" name="sort_code" maxlength="32" value="{{ account.sort_code or '' }}"
+                           class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 font-mono text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+            </div>
+            <div class="grid gap-4 sm:grid-cols-2">
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Display Priority</label>
+                    <input type="number" name="presentment_priority" value="{{ account.presentment_priority }}"
+                           class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <p class="mt-1 text-xs text-slate-500">Higher values are shown first and become the invoice default.</p>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">External Accounting Code</label>
+                    <input type="text" name="accounting_code" maxlength="64" value="{{ account.accounting_code or '' }}" placeholder="Optional accounting mapping"
+                           class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 font-mono text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                 </div>
             </div>
             <div>
