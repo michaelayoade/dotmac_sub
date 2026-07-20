@@ -150,6 +150,12 @@ def _serialize_project(
             affected=1,
             requires_confirmation=True,
         )
+    as_built_action = Action(
+        key="submit_as_built",
+        label="Review and submit as-built",
+        allowed=is_mine,
+        reason=None if is_mine else "As-built submission is available after award",
+    )
     return {
         "id": row.id,
         "project_id": row.project_id,
@@ -167,6 +173,7 @@ def _serialize_project(
         "created_at": row.created_at,
         "updated_at": row.updated_at,
         "lifecycle_action": lifecycle_action,
+        "as_built_action": as_built_action,
     }
 
 

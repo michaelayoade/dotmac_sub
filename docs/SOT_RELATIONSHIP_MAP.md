@@ -2315,9 +2315,20 @@ Dependency order:
    alone maps them to HTTP responses. The same named owner also owns the
    installation-project quote and as-built evidence lifecycles, including the
    read-only impact snapshot used before submit; one implementation module is
-   therefore declared under one owner name.
+   therefore declared under one owner name. The vendor project-detail map reads
+   proposed and prior as-built geometry through
+   `app.services.vendor_routes_api.build_project_route_geojson`; its capture
+   controls render only from the owner's `as_built_action` projection and
+   serialize the existing `VendorAsBuiltCreate.geojson` contract rather than
+   writing route evidence from the template.
 9. `operations.vendor_purchase_invoices` owns vendor purchase-invoice state,
    financial totals, submit eligibility, and the financial impact snapshot.
+   ERP owns accounts-payable settlement. The local
+   `erp_purchase_invoice_status` is currently only the ERP creation-response
+   snapshot; it is not a refreshed payment projection and must not be labelled
+   as "Paid" or "Awaiting payment" in Sub. Vendor payment visibility requires a
+   dedicated ERP read contract plus an idempotent Sub refresher that records
+   status and observation time before the portal may render it.
 10. `operations.vendor_submission_confirmation` (implemented by
    `app.services.vendor_submission_proposals`) owns the short-lived signed
    confirmation proposal, stale-preview comparison, idempotency reservation,
