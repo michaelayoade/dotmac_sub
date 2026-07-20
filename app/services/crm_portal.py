@@ -18,7 +18,8 @@ from sqlalchemy.orm import Session
 from app.models.subscriber import Subscriber
 from app.models.support import TicketCommentAuthorType
 from app.services.common import coerce_uuid
-from app.services.crm_client import CRMClientError, get_crm_client
+from app.services.crm_client import CRMClientError
+from app.services.integrations.crm_capability import capability_client
 from app.services.session_store import get_session_redis
 from app.services.status_presentation import ticket_status_presentation
 
@@ -101,7 +102,7 @@ def resolve_crm_subscriber_id(db: Session, subscriber_id: str) -> str | None:
         _cache_set(cache_key, "__none__", _CACHE_SUBSCRIBER_MAP)
         return None
 
-    client = get_crm_client(db)
+    client = capability_client(db)
     crm_id = client.resolve_subscriber_id(subscriber.splynx_customer_id)
     if crm_id:
         try:
@@ -497,7 +498,7 @@ def reseller_account_tickets_context(
                 "active_page": "accounts",
                 **_ok_context(),
             }
-        client = get_crm_client()
+        client = capability_client(db)
         tickets = client.list_tickets(subscriber_id=crm_sub_id)
     except CRMClientError:
         return {
@@ -539,7 +540,7 @@ def reseller_open_tickets_count(
     Returns None if CRM is unreachable so callers do not show a false zero.
     """
     total = 0
-    client = get_crm_client(db)
+    client = capability_client(db)
     for account_id in account_ids:
         try:
             crm_sub_id = resolve_crm_subscriber_id(db, account_id)

@@ -19,8 +19,9 @@ from sqlalchemy.orm import Session
 from app.models.quote_mirror import QuoteMirror, QuoteSyncState
 from app.models.subscriber import Subscriber
 from app.services.common import coerce_uuid
-from app.services.crm_client import CRMClientError, get_crm_client
+from app.services.crm_client import CRMClientError
 from app.services.crm_portal import resolve_crm_subscriber_id
+from app.services.integrations.crm_capability import capability_client
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +133,7 @@ def reconcile_subscriber(db: Session, subscriber_id: str) -> bool:
     if not crm_subscriber_id:
         return False
 
-    data = get_crm_client().get_portal_quotes(crm_subscriber_id)
+    data = capability_client(db).get_portal_quotes(crm_subscriber_id)
     sub_uuid = coerce_uuid(str(subscriber_id))
 
     for item in data.get("quotes") or []:
@@ -266,7 +267,7 @@ def request_quote(
         raise HTTPException(status_code=400, detail="Account is not linked to the CRM")
 
     try:
-        item = get_crm_client().request_portal_quote(
+        item = capability_client(db).request_portal_quote(
             crm_subscriber_id,
             latitude=latitude,
             longitude=longitude,
@@ -304,7 +305,7 @@ def accept_quote(
         raise HTTPException(status_code=400, detail="Account is not linked to the CRM")
 
     try:
-        item = get_crm_client().accept_portal_quote(
+        item = capability_client(db).accept_portal_quote(
             crm_subscriber_id,
             quote_id,
             deposit_reference=deposit_reference,

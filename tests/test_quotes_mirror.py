@@ -59,7 +59,7 @@ def test_reconcile_upserts_and_marks_synced(db_session):
     client = MagicMock()
     client.get_portal_quotes.return_value = _crm_resp()
     with (
-        patch("app.services.quotes_mirror.get_crm_client", return_value=client),
+        patch("app.services.quotes_mirror.capability_client", return_value=client),
         patch(
             "app.services.quotes_mirror.resolve_crm_subscriber_id", return_value="crm-1"
         ),
@@ -79,7 +79,7 @@ def test_read_counts_open_and_returns_payload(db_session):
     client = MagicMock()
     client.get_portal_quotes.return_value = _crm_resp()
     with (
-        patch("app.services.quotes_mirror.get_crm_client", return_value=client),
+        patch("app.services.quotes_mirror.capability_client", return_value=client),
         patch(
             "app.services.quotes_mirror.resolve_crm_subscriber_id", return_value="crm-1"
         ),
@@ -109,7 +109,7 @@ def test_request_quote_write_through_mirrors_result(db_session):
     client = MagicMock()
     client.request_portal_quote.return_value = _crm_quote(id="qNEW", status="draft")
     with (
-        patch("app.services.quotes_mirror.get_crm_client", return_value=client),
+        patch("app.services.quotes_mirror.capability_client", return_value=client),
         patch(
             "app.services.quotes_mirror.resolve_crm_subscriber_id", return_value="crm-1"
         ),

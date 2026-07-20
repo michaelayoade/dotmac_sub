@@ -25,8 +25,9 @@ from app.models.project import Project
 from app.models.subscriber import Subscriber
 from app.models.work_order import WorkOrder, WorkOrderSyncState
 from app.services.common import coerce_uuid
-from app.services.crm_client import CRMClientError, get_crm_client
+from app.services.crm_client import CRMClientError
 from app.services.crm_portal import resolve_crm_subscriber_id
+from app.services.integrations.crm_capability import capability_client
 from app.services.work_order_views import row_to_item
 
 logger = logging.getLogger(__name__)
@@ -393,7 +394,7 @@ def reconcile_subscriber(db: Session, subscriber_id: str) -> bool:
     if not crm_subscriber_id:
         return False
 
-    data = get_crm_client().get_portal_work_orders(crm_subscriber_id)
+    data = capability_client(db).get_portal_work_orders(crm_subscriber_id)
     sub_uuid = coerce_uuid(str(subscriber_id))
 
     for item in data.get("work_orders") or []:

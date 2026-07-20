@@ -14,7 +14,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from app.config import settings
 from app.models.subscriber import Subscriber
 from app.services import portal_session
 from app.services.crm_client import CRMClientError
@@ -22,12 +21,11 @@ from app.services.crm_client import CRMClientError
 
 @contextmanager
 def _crm_base(base="https://crm.example"):
-    saved = settings.crm_base_url
-    object.__setattr__(settings, "crm_base_url", base)
-    try:
+    with patch(
+        "app.services.portal_session.active_config",
+        return_value={"base_url": base},
+    ):
         yield
-    finally:
-        object.__setattr__(settings, "crm_base_url", saved)
 
 
 @contextmanager
@@ -37,7 +35,7 @@ def _fake_crm(return_value=None, error=None):
         client.create_portal_session.side_effect = error
     else:
         client.create_portal_session.return_value = return_value
-    with patch("app.services.portal_session.get_crm_client", return_value=client):
+    with patch("app.services.portal_session.capability_client", return_value=client):
         yield client
 
 

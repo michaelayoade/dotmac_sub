@@ -126,7 +126,7 @@ def test_resolve_crm_subscriber_id_caches_crm_mapping(
         "app.services.crm_portal._cache_set",
         lambda key, value, ttl: cache_sets.append((key, value, ttl)),
     )
-    monkeypatch.setattr("app.services.crm_portal.get_crm_client", lambda *_: client)
+    monkeypatch.setattr("app.services.crm_portal.capability_client", lambda *_: client)
 
     resolved = crm_portal.resolve_crm_subscriber_id(db_session, str(subscriber.id))
 
@@ -155,7 +155,7 @@ def test_resolve_crm_subscriber_id_uses_short_ttl_for_lookup_miss(
         "app.services.crm_portal._cache_set",
         lambda key, value, ttl: cache_sets.append((key, value, ttl)),
     )
-    monkeypatch.setattr("app.services.crm_portal.get_crm_client", lambda *_: client)
+    monkeypatch.setattr("app.services.crm_portal.capability_client", lambda *_: client)
 
     resolved = crm_portal.resolve_crm_subscriber_id(db_session, str(subscriber.id))
 
@@ -188,7 +188,7 @@ def test_reseller_open_tickets_count_returns_none_when_crm_unavailable(
         "app.services.crm_portal.resolve_crm_subscriber_id",
         lambda _db, _account_id: "crm-sub-1",
     )
-    monkeypatch.setattr("app.services.crm_portal.get_crm_client", lambda *_: client)
+    monkeypatch.setattr("app.services.crm_portal.capability_client", lambda *_: client)
 
     count = crm_portal.reseller_open_tickets_count(
         db_session,
@@ -481,7 +481,7 @@ def test_resolve_crm_subscriber_id_prefers_stored_id(
         "app.services.crm_portal._cache_set",
         lambda key, value, ttl: cache_sets.append((key, value, ttl)),
     )
-    monkeypatch.setattr("app.services.crm_portal.get_crm_client", lambda *_: client)
+    monkeypatch.setattr("app.services.crm_portal.capability_client", lambda *_: client)
 
     resolved = crm_portal.resolve_crm_subscriber_id(db_session, str(subscriber.id))
 
@@ -503,7 +503,7 @@ def test_resolve_crm_subscriber_id_persists_fallback_result(
     monkeypatch.setattr(
         "app.services.crm_portal._cache_set", lambda key, value, ttl: None
     )
-    monkeypatch.setattr("app.services.crm_portal.get_crm_client", lambda *_: client)
+    monkeypatch.setattr("app.services.crm_portal.capability_client", lambda *_: client)
 
     resolved = crm_portal.resolve_crm_subscriber_id(db_session, str(subscriber.id))
     db_session.refresh(subscriber)
