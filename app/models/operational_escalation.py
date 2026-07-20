@@ -25,11 +25,13 @@ class OperationalEntityType:
     ticket = "ticket"
     work_order = "work_order"
     project = "project"
+    project_task = "project_task"
     inbox_conversation = "inbox_conversation"
     subscriber = "subscriber"
     network_device = "network_device"
     site = "site"
     payment_incident = "payment_incident"
+    payment_proof = "payment_proof"
     provisioning_failure = "provisioning_failure"
 
 
@@ -239,9 +241,19 @@ class OperationalEscalationPolicy(Base):
         Index(
             "ix_operational_escalation_policies_scope",
             "entity_type",
+            "trigger",
             "scope_type",
             "scope_id",
             "is_active",
+        ),
+        Index(
+            "uq_operational_escalation_policy_event_level_active",
+            "entity_type",
+            "trigger",
+            "level",
+            unique=True,
+            sqlite_where=text("is_active IS TRUE AND trigger IS NOT NULL"),
+            postgresql_where=text("is_active IS TRUE AND trigger IS NOT NULL"),
         ),
     )
 
@@ -250,6 +262,7 @@ class OperationalEscalationPolicy(Base):
     )
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     entity_type: Mapped[str | None] = mapped_column(String(80))
+    trigger: Mapped[str | None] = mapped_column(String(120))
     scope_type: Mapped[str | None] = mapped_column(String(80))
     scope_id: Mapped[str | None] = mapped_column(String(100))
     level: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
@@ -261,7 +274,7 @@ class OperationalEscalationPolicy(Base):
     customer_update_due_within_seconds: Mapped[int | None] = mapped_column(Integer)
     unresolved_after_seconds: Mapped[int | None] = mapped_column(Integer)
     channels: Mapped[list | None] = mapped_column(JSON)
-    cooldown_seconds: Mapped[int] = mapped_column(Integer, default=1800, nullable=False)
+    cooldown_seconds: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     metadata_: Mapped[dict | None] = mapped_column(
         "metadata", MutableDict.as_mutable(JSON())

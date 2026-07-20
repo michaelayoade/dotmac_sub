@@ -659,9 +659,13 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "payment-proof review lifecycle",
                     "proof-backed payment request",
+                    "payment-proof reviewer notification request lifecycle",
                     "withholding-tax receivable source records",
                 ),
-                depends_on=("financial.payments",),
+                depends_on=(
+                    "financial.payments",
+                    "communications.staff_notifications",
+                ),
             ),
             SOTService(
                 name="financial.tax_accounting",
@@ -2357,10 +2361,32 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="operations.sla_escalation",
+                module="app.services.operational_escalation",
+                owns=(
+                    "operational SLA event policy lifecycle",
+                    "event-scoped escalation timing and channel policy",
+                    "operational escalation event and delivery planning",
+                    "operational escalation acknowledgement and cancellation",
+                ),
+                notes=(
+                    "Operational domains emit named facts. Operators configure "
+                    "entity type, event key, levels, delays and delivery channels "
+                    "in the admin UI; domain services do not embed SLA timings."
+                ),
+            ),
+            SOTService(
                 name="communications.staff_notifications",
                 module="app.services.staff_notifications",
-                owns=("admin/staff notification creation",),
-                depends_on=("communications.notification_service",),
+                owns=(
+                    "admin/staff notification creation",
+                    "permission-targeted staff notification audience resolution",
+                    "staff review inbox materialization",
+                ),
+                depends_on=(
+                    "communications.notification_service",
+                    "operations.sla_escalation",
+                ),
             ),
             SOTService(
                 name="communications.campaigns",
@@ -2616,12 +2642,28 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "operator-visible ticket status subset",
                     "ticket priority and type options",
-                    "ticket routing and SLA policy",
+                    "ticket routing and priority/type SLA target policy",
                 ),
                 depends_on=("support.ticket_lifecycle",),
                 notes=(
                     "Configured status choices are constrained to the lifecycle "
-                    "vocabulary and do not own semantic colors or tones."
+                    "vocabulary and do not own semantic colors or tones. Every "
+                    "ticket SLA target is operator-managed in the ticket settings UI."
+                ),
+            ),
+            SOTService(
+                name="support.ticket_sla_clock",
+                module="app.services.sla_assignment",
+                owns=(
+                    "ticket SLA policy assignment",
+                    "ticket SLA clock lifecycle",
+                    "ticket SLA breach records",
+                    "ticket SLA breach event emission",
+                ),
+                depends_on=(
+                    "support.ticket_lifecycle",
+                    "support.ticket_configuration",
+                    "operations.sla_escalation",
                 ),
             ),
             SOTService(

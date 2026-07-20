@@ -115,7 +115,19 @@ def _json_safe(value: Any) -> Any:
     return str(value)
 
 
-def sync_alert(db: Session, finding: AlertFinding) -> str:
+def sync_alert(
+    db: Session,
+    finding: AlertFinding,
+    *,
+    target_users: list[SystemUser] | None = None,
+) -> str:
+    """Create/update one alert and materialize its inbox notifications.
+
+    Infrastructure callers omit ``target_users`` and retain the established
+    admin/system audience. Domain-specific staff notifications resolve their
+    own authorized audience through ``communications.staff_notifications`` and
+    pass it here; the alert sink never re-decides the domain permission.
+    """
     now = datetime.now(UTC)
     alert = (
         db.query(AdminAlert)
@@ -140,7 +152,7 @@ def sync_alert(db: Session, finding: AlertFinding) -> str:
         )
         db.add(alert)
         db.flush()
-        _queue_admin_notifications(db, alert)
+        _queue_admin_notifications(db, alert, targets=target_users)
         return "opened"
 
     was_resolved = alert.status == AlertStatus.resolved
@@ -162,7 +174,7 @@ def sync_alert(db: Session, finding: AlertFinding) -> str:
         alert.acknowledged_at = None
     if was_resolved or severity_escalated:
         db.flush()
-        _queue_admin_notifications(db, alert)
+        _queue_admin_notifications(db, alert, targets=target_users)
         return "opened" if was_resolved else "escalated"
     return "updated"
 
@@ -307,9 +319,17 @@ def notification_menu_context(
 
 
 def mark_notification_read(
-    db: Session, notification_id: str
+    db: Session,
+    notification_id: str,
+    *,
+    system_user_id: str,
 ) -> AdminNotification | None:
-    notification = db.get(AdminNotification, notification_id)
+    notification = (
+        db.query(AdminNotification)
+        .filter(AdminNotification.id == notification_id)
+        .filter(AdminNotification.system_user_id == system_user_id)
+        .one_or_none()
+    )
     if notification is None:
         return None
     if notification.read_at is None:
@@ -340,6 +360,32 @@ def resolve_alert(db: Session, alert_id: str) -> AdminAlert | None:
     alert.resolved_at = now
     alert.updated_at = now
     db.commit()
+    return alert
+
+
+def resolve_alert_by_fingerprint(
+    db: Session,
+    fingerprint: str,
+    *,
+    mark_notifications_read: bool = False,
+) -> AdminAlert | None:
+    """Resolve a domain-owned alert inside the caller's transaction."""
+    alert = (
+        db.query(AdminAlert).filter(AdminAlert.fingerprint == fingerprint).one_or_none()
+    )
+    if alert is None:
+        return None
+    now = datetime.now(UTC)
+    alert.status = AlertStatus.resolved
+    alert.resolved_at = now
+    alert.updated_at = now
+    if mark_notifications_read:
+        (
+            db.query(AdminNotification)
+            .filter(AdminNotification.alert_id == alert.id)
+            .filter(AdminNotification.read_at.is_(None))
+            .update({"read_at": now}, synchronize_session=False)
+        )
     return alert
 
 
@@ -884,8 +930,13 @@ def _replication_severity(replication: dict[str, object]) -> AlertSeverity:
     return AlertSeverity.warning
 
 
-def _queue_admin_notifications(db: Session, alert: AdminAlert) -> int:
-    targets = _target_admin_users(db)
+def _queue_admin_notifications(
+    db: Session,
+    alert: AdminAlert,
+    *,
+    targets: list[SystemUser] | None = None,
+) -> int:
+    targets = _target_admin_users(db) if targets is None else targets
     target_url = alert.target_url or f"/admin/alerts?category={alert.category}"
     created_or_reset = 0
     for user in targets:
