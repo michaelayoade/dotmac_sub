@@ -9,7 +9,7 @@ from app.models.billing import CollectionAccount, CollectionAccountType
 def _migration():
     path = (
         Path(__file__).resolve().parents[2]
-        / "alembic/versions/373_collection_account_payment_details.py"
+        / "alembic/versions/384_collection_account_payment_details.py"
     )
     spec = importlib.util.spec_from_file_location("migration_373_postgres", path)
     assert spec and spec.loader

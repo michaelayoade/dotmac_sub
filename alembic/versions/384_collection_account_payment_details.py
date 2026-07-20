@@ -8,7 +8,7 @@ ambiguous or incomplete legacy facts fail the deployment closed.
 ``accounting_code`` is an external mapping only. Sub does not own a chart of
 accounts, journals, or balances for the accounting system.
 
-Revision ID: 373_collection_account_payment_details
+Revision ID: 384_collection_account_payment_details
 Revises: 372_vendor_payment_projection
 """
 
@@ -22,8 +22,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "373_collection_account_payment_details"
-down_revision = "372_vendor_payment_projection"
+revision = "384_collection_account_payment_details"
+down_revision = "383_replaceable_backoffice"
 branch_labels = None
 depends_on = None
 

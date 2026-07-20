@@ -8,7 +8,7 @@ import sqlalchemy as sa
 def _migration():
     path = (
         Path(__file__).resolve().parents[1]
-        / "alembic/versions/373_collection_account_payment_details.py"
+        / "alembic/versions/384_collection_account_payment_details.py"
     )
     spec = importlib.util.spec_from_file_location("migration_373", path)
     assert spec and spec.loader
