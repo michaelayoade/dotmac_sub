@@ -42,6 +42,40 @@ def _tx(**over):
     return exporter.GatewayTransaction(**base)
 
 
+def test_exporter_lists_transactions_through_typed_capability(monkeypatch):
+    calls = []
+
+    def _page(_db, **kwargs):
+        calls.append(kwargs)
+        if kwargs["page"] == 1:
+            return (
+                [{"id": 1001, "reference": "ref-1", "amount": 500000}],
+                {"pageCount": 2},
+            )
+        return (
+            [{"id": 1002, "reference": "ref-2", "amount": 250000}],
+            {"pageCount": 2},
+        )
+
+    monkeypatch.setattr(
+        exporter.payment_capability,
+        "list_transactions_page",
+        _page,
+    )
+
+    transactions = exporter._list_paystack_transactions(
+        object(),
+        from_date="2026-06-15",
+        to_date="2026-06-18",
+        status="success",
+        per_page=100,
+    )
+
+    assert [item.external_id for item in transactions] == ["1001", "1002"]
+    assert [call["page"] for call in calls] == [1, 2]
+    assert all(call["provider_type"] == "paystack" for call in calls)
+
+
 class _StubPayment:
     """Lightweight stand-in for a Payment row for classification tests."""
 

@@ -10,6 +10,7 @@ from enum import Enum
 from sqlalchemy.orm import Session
 
 from app.services.adapters import adapter_registry
+from app.services.integrations import payment_capability
 
 
 @dataclass(frozen=True)
@@ -61,24 +62,12 @@ class PaymentGatewayAdapter:
         provider_type: str,
         invoice_number: str | None = None,
     ) -> PaymentGatewayContext:
-        if provider_type == "flutterwave":
-            from app.services.flutterwave import generate_reference, get_public_key
-
-            return PaymentGatewayContext(
-                provider_type="flutterwave",
-                public_key=get_public_key(db),
-                reference=generate_reference(invoice_number),
-            )
-
-        if provider_type != "paystack":
+        if provider_type not in {"paystack", "flutterwave"}:
             raise ValueError(f"Unsupported payment provider {provider_type!r}")
-
-        from app.services.paystack import generate_reference, get_public_key
-
         return PaymentGatewayContext(
-            provider_type="paystack",
-            public_key=get_public_key(db),
-            reference=generate_reference(invoice_number),
+            provider_type=provider_type,
+            public_key=payment_capability.get_public_key(db, provider_type),
+            reference=payment_capability.generate_reference(invoice_number),
         )
 
     def verify(
@@ -89,9 +78,9 @@ class PaymentGatewayAdapter:
         reference: str,
     ) -> PaymentGatewayTransaction:
         if provider_type == "flutterwave":
-            from app.services import flutterwave as flutterwave_svc
-
-            tx = flutterwave_svc.verify_transaction(db, reference)
+            tx = payment_capability.verify_transaction(
+                db, provider_type="flutterwave", reference=reference
+            )
             if tx.get("status") != "successful":
                 raise ValueError(
                     f"Payment was not successful (status: {tx.get('status')})"
@@ -110,17 +99,17 @@ class PaymentGatewayAdapter:
         if provider_type != "paystack":
             raise ValueError(f"Unsupported payment provider {provider_type!r}")
 
-        from app.services.paystack import kobo_to_naira, verify_transaction
-
-        tx = verify_transaction(db, reference)
+        tx = payment_capability.verify_transaction(
+            db, provider_type="paystack", reference=reference
+        )
         if tx.get("status") != "success":
             raise ValueError(f"Payment was not successful (status: {tx.get('status')})")
         return PaymentGatewayTransaction(
             provider_type="paystack",
             external_id=str(tx.get("id", "")),
-            amount=kobo_to_naira(tx.get("amount", 0)),
+            amount=payment_capability.kobo_to_naira(tx.get("amount", 0)),
             currency=str(tx.get("currency") or "NGN"),
-            provider_fee=kobo_to_naira(tx.get("fees", 0)),
+            provider_fee=payment_capability.kobo_to_naira(tx.get("fees", 0)),
             metadata=dict(tx.get("metadata") or {}),
             memo_prefix="Paystack",
             raw=dict(tx),
@@ -137,32 +126,32 @@ class PaymentGatewayAdapter:
         request_key: str | None = None,
     ) -> PaymentGatewayRefund:
         if provider_type == "flutterwave":
-            from app.services import flutterwave as flutterwave_svc
-
             tx_id = str(transaction_id or "").strip()
             if not tx_id:
-                tx = flutterwave_svc.verify_transaction(db, reference)
+                tx = payment_capability.verify_transaction(
+                    db, provider_type="flutterwave", reference=reference
+                )
                 tx_id = str(tx.get("id") or "").strip()
             if not tx_id:
                 raise ValueError("Flutterwave transaction id not found for reference")
             raw = dict(
-                flutterwave_svc.refund_transaction(
+                payment_capability.refund_transaction(
                     db,
-                    tx_id,
-                    amount,
+                    provider_type="flutterwave",
+                    transaction_id=tx_id,
+                    amount=amount,
                     request_key=request_key,
                 )
             )
             return self._normalize_refund("flutterwave", raw, tx_id)
 
         if provider_type == "paystack":
-            from app.services import paystack as paystack_svc
-
             raw = dict(
-                paystack_svc.refund_transaction(
+                payment_capability.refund_transaction(
                     db,
-                    reference,
-                    amount,
+                    provider_type="paystack",
+                    transaction_id=reference,
+                    amount=amount,
                     request_key=request_key,
                 )
             )
@@ -183,24 +172,32 @@ class PaymentGatewayAdapter:
     ) -> PaymentGatewayRefund | None:
         """Observe a prior refund without initiating another money movement."""
         if provider_type == "paystack":
-            from app.services import paystack as paystack_service
-
             if refund_id:
-                raw = dict(paystack_service.fetch_refund(db, refund_id))
+                raw = dict(
+                    payment_capability.fetch_refund(
+                        db, provider_type="paystack", refund_id=refund_id
+                    )
+                )
                 return self._normalize_refund(provider_type, raw, transaction_id)
-            rows = paystack_service.list_refunds(db, transaction_id=transaction_id)
+            rows = payment_capability.list_refunds(
+                db, provider_type="paystack", transaction_id=transaction_id
+            )
             for row in rows:
                 if str(row.get("merchant_note") or "").strip() == request_key:
                     return self._normalize_refund(provider_type, row, transaction_id)
             return None
 
         if provider_type == "flutterwave":
-            from app.services import flutterwave as flutterwave_service
-
             if refund_id:
-                raw = dict(flutterwave_service.fetch_refund(db, refund_id))
+                raw = dict(
+                    payment_capability.fetch_refund(
+                        db, provider_type="flutterwave", refund_id=refund_id
+                    )
+                )
                 return self._normalize_refund(provider_type, raw, transaction_id)
-            rows = flutterwave_service.list_refunds(db, transaction_id=transaction_id)
+            rows = payment_capability.list_refunds(
+                db, provider_type="flutterwave", transaction_id=transaction_id
+            )
             for row in rows:
                 if request_key in str(row.get("comments") or ""):
                     return self._normalize_refund(provider_type, row, transaction_id)

@@ -28,9 +28,11 @@ from app.models.billing import (
     Payment,
     PaymentAllocation,
     PaymentStatus,
-    PaymentWebhookDeadLetter,
-    PaymentWebhookDeadLetterStatus,
     TopupIntent,
+)
+from app.models.integration_platform import (
+    IntegrationCapabilityBinding,
+    IntegrationInbox,
 )
 from app.schemas.billing import (
     PaymentAllocationConfirm,
@@ -544,17 +546,22 @@ class AccountCreditApplications:
                 )
             )
 
-        unresolved_statuses = {
-            PaymentWebhookDeadLetterStatus.received,
-            PaymentWebhookDeadLetterStatus.failed,
-            PaymentWebhookDeadLetterStatus.rejected,
-        }
-        for dead_letter in (
-            db.query(PaymentWebhookDeadLetter)
-            .filter(PaymentWebhookDeadLetter.status.in_(unresolved_statuses))
+        for receipt in (
+            db.query(IntegrationInbox)
+            .join(
+                IntegrationCapabilityBinding,
+                IntegrationCapabilityBinding.id
+                == IntegrationInbox.capability_binding_id,
+            )
+            .filter(
+                IntegrationCapabilityBinding.capability_id == "payments.webhook.v1",
+                IntegrationInbox.state.in_(
+                    {"verified", "processing", "retryable", "dead_letter"}
+                ),
+            )
             .all()
         ):
-            data = (dead_letter.payload or {}).get("data") or {}
+            data = (receipt.payload_json or {}).get("data") or {}
             metadata = data.get("metadata") or data.get("meta") or {}
             intent_id = metadata.get("topup_intent_id")
             if not intent_id:
@@ -571,7 +578,7 @@ class AccountCreditApplications:
                     AccountCreditInvariantViolation(
                         code="deposit_webhook_unresolved",
                         account_id=str(unresolved_intent.account_id or ""),
-                        detail=f"deposit webhook {dead_letter.id} needs attention",
+                        detail=f"deposit webhook {receipt.id} needs attention",
                     )
                 )
         return violations
