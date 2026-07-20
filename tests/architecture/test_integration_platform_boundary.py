@@ -8,6 +8,7 @@ from pathlib import Path
 from app.services import sot_relationships
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+ALEMBIC_ENV = PROJECT_ROOT / "alembic/env.py"
 DESIGN = PROJECT_ROOT / "docs/designs/INTEGRATION_PLATFORM_SOT.md"
 SOT_MAP = PROJECT_ROOT / "docs/SOT_RELATIONSHIP_MAP.md"
 CONNECTOR_ROOT = PROJECT_ROOT / "app/services/integrations/connectors"
@@ -67,6 +68,16 @@ def _direct_persistence_imports(path: Path) -> set[str]:
     return imports
 
 
+def _alembic_model_module_imports() -> set[str]:
+    tree = ast.parse(_read(ALEMBIC_ENV), filename=str(ALEMBIC_ENV))
+    return {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module == "app.models"
+        for alias in node.names
+    }
+
+
 def test_integration_platform_design_records_the_approved_invariants() -> None:
     design = _read(DESIGN)
     normalized_design = " ".join(design.split())
@@ -81,6 +92,14 @@ def test_integration_platform_design_records_the_approved_invariants() -> None:
     )
     for contract in required_contracts:
         assert contract in normalized_design
+
+
+def test_alembic_registry_does_not_import_retired_integration_models() -> None:
+    retired_model_modules = {
+        Path(path).stem for path in RETIRED_PATHS if path.startswith("app/models/")
+    }
+
+    assert _alembic_model_module_imports().isdisjoint(retired_model_modules)
 
 
 def test_integration_sot_names_the_live_cutover_owners() -> None:
