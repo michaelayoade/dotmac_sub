@@ -183,6 +183,7 @@ class PaymentCreationPreview:
     unallocated_amount: Decimal
     unallocated_ledger_entry_type: LedgerEntryType | None
     unallocated_ledger_source: LedgerSource | None
+    include_prepaid_service_effect: bool
     prepaid_service_effect: PaymentPrepaidServiceEffect | None
     access_consequence: str
     fingerprint: str
@@ -1097,6 +1098,11 @@ def _apply_previewed_prepaid_service_effect(
     payment: Payment,
     preview: PaymentCreationPreview,
 ) -> LedgerEntry | None:
+    # Typed account-credit deposits fingerprint prepaid renewal as excluded.
+    # Execution must honor that owner decision instead of invoking the generic
+    # payment-triggered renewal path and manufacturing a consequence afterward.
+    if not preview.include_prepaid_service_effect:
+        return None
     apply_prepaid_service_credit(db, payment)
     entry = _existing_prepaid_renewal_debit(db, payment)
     actual = (
@@ -1642,6 +1648,7 @@ def _build_payment_creation_preview(
             unallocated_amount=Decimal("0.00"),
             unallocated_ledger_entry_type=None,
             unallocated_ledger_source=None,
+            include_prepaid_service_effect=include_prepaid_service_effect,
             prepaid_service_effect=None,
             access_consequence="none_until_payment_settlement",
             fingerprint=fingerprint,
@@ -1756,6 +1763,7 @@ def _build_payment_creation_preview(
             LedgerEntryType.credit if remaining > 0 else None
         ),
         unallocated_ledger_source=(LedgerSource.payment if remaining > 0 else None),
+        include_prepaid_service_effect=include_prepaid_service_effect,
         prepaid_service_effect=prepaid_service_effect,
         access_consequence="recheck_after_payment_settlement",
         fingerprint=fingerprint,
