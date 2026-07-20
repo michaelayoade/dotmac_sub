@@ -24,10 +24,9 @@ LIVE_SERVICE_STATUSES = (
 # keep chasing and auto-charging so they can pay and be restored. Excluding it
 # (the pre-2026-06-26 behavior) meant that the moment enforcement walled a
 # non-payer, autopay/reminders/dunning could never recover them — a major
-# collections leak. Only truly-terminal states stay excluded: ``stopped``
-# (admin-paused), ``disabled`` (admin-terminated), ``hidden``, ``archived``,
-# ``canceled`` (soft-deleted) and ``expired`` (period ended) — these must not
-# keep pinging or charging the customer.
+# collections leak. Paused states (``stopped`` and the reversible ``disabled``)
+# and terminal states (``hidden``, ``archived``, ``canceled`` and ``expired``)
+# stay excluded — these must not keep pinging or charging the customer.
 COLLECTIBLE_SERVICE_STATUSES = (
     SubscriptionStatus.active,
     SubscriptionStatus.suspended,
@@ -200,8 +199,8 @@ def accounts_with_live_service(db: Session) -> set:
 
     Billing automation that *chases an existing balance* — invoice reminders,
     dunning escalations, autopay charges — must skip accounts whose services
-    are all terminal: a disabled/canceled/expired service should not keep
-    pinging or charging the customer. This mirrors the eligibility gate in
+    are all paused or terminal: a disabled/canceled/expired service should not
+    keep pinging or charging the customer. This mirrors the eligibility gate in
     ``collections.DunningWorkflow`` but spans every billing mode, since
     reminders and autopay are not postpaid-specific.
     """

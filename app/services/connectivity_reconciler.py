@@ -100,11 +100,11 @@ def derive_desired_connectivity(
 
     - pending/hidden/archived → not provisioned (no RADIUS row, no IP).
     - active → full access, IP active AND retained, don't kick.
-    - blocked family (suspended/blocked/stopped) → ``suspended`` by default;
+    - blocked family (suspended/blocked/stopped/disabled) → ``suspended`` by default;
       ``captive`` only for the explicit effective captive tier. Credentials stay
       active and the IP is RETAINED (INV-1 paid→offline / INV-3 reversible),
       and the live session is kicked once (INV-5).
-    - terminal (canceled/expired/disabled) → ``terminated``; credentials
+    - terminal (canceled/expired) → ``terminated``; credentials
       inactive, IP released and cache cleared (INV-3/INV-4), kick once.
     """
     access = derive_access_state(

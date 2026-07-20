@@ -42,6 +42,7 @@ logger = logging.getLogger(__name__)
 HANDLED_EVENT_TYPES = frozenset(
     {
         EventType.subscription_suspended,
+        EventType.subscription_disabled,
         EventType.subscription_canceled,
         EventType.subscription_expired,
         EventType.subscription_activated,
@@ -69,6 +70,8 @@ class EnforcementHandler:
     def handle(self, db: Session, event: Event) -> None:
         if event.event_type == EventType.subscription_suspended:
             self._handle_subscription_block(db, event, "suspended")
+        elif event.event_type == EventType.subscription_disabled:
+            self._handle_subscription_block(db, event, "disabled")
         elif event.event_type == EventType.subscription_canceled:
             self._handle_subscription_cancel(db, event)
         elif event.event_type == EventType.subscription_expired:

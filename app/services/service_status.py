@@ -52,18 +52,22 @@ _CURRENT_STATUSES = (
     SubscriptionStatus.blocked,
     SubscriptionStatus.suspended,
     SubscriptionStatus.stopped,
+    SubscriptionStatus.disabled,
 )
 _ENDED_STATUSES = frozenset(
     {
         SubscriptionStatus.expired,
         SubscriptionStatus.canceled,
-        SubscriptionStatus.disabled,
         SubscriptionStatus.archived,
         SubscriptionStatus.hidden,
     }
 )
 _UNAVAILABLE_STATUSES = frozenset(
-    {SubscriptionStatus.blocked, SubscriptionStatus.suspended}
+    {
+        SubscriptionStatus.blocked,
+        SubscriptionStatus.suspended,
+        SubscriptionStatus.disabled,
+    }
 )
 _UNAVAILABLE_STATUS_VALUES = frozenset(
     {status.value for status in _UNAVAILABLE_STATUSES}

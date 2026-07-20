@@ -73,11 +73,13 @@ class TestDeriveAccessStateTerminated:
         [
             SubscriptionStatus.canceled,
             SubscriptionStatus.expired,
-            SubscriptionStatus.disabled,
         ],
     )
     def test_terminal_statuses_map_to_terminated(self, status):
         assert derive_access_state(status) == AccessState.terminated
+
+    def test_disabled_maps_to_reversible_suspended_access(self):
+        assert derive_access_state(SubscriptionStatus.disabled) == AccessState.suspended
 
     def test_terminal_ignores_captive_restriction(self):
         assert (

@@ -78,6 +78,7 @@ class TestEventType:
         assert EventType.subscription_suspended.value == "subscription.suspended"
         assert EventType.subscription_resumed.value == "subscription.resumed"
         assert EventType.subscription_canceled.value == "subscription.canceled"
+        assert EventType.subscription_disabled.value == "subscription.disabled"
         assert EventType.subscription_upgraded.value == "subscription.upgraded"
         assert EventType.subscription_downgraded.value == "subscription.downgraded"
         assert EventType.subscription_expiring.value == "subscription.expiring"
@@ -120,6 +121,7 @@ class TestEventType:
             EventType.subscription_activated,
             EventType.subscription_suspended,
             EventType.subscription_resumed,
+            EventType.subscription_disabled,
             EventType.subscription_canceled,
             EventType.subscription_upgraded,
             EventType.subscription_downgraded,
@@ -133,6 +135,7 @@ class TestEventType:
         )
         assert SUBSCRIPTION_LIFECYCLE_MAP[EventType.subscription_suspended] == "suspend"
         assert SUBSCRIPTION_LIFECYCLE_MAP[EventType.subscription_resumed] == "resume"
+        assert SUBSCRIPTION_LIFECYCLE_MAP[EventType.subscription_disabled] == "other"
         assert SUBSCRIPTION_LIFECYCLE_MAP[EventType.subscription_canceled] == "cancel"
 
 

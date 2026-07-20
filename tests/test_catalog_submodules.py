@@ -2014,12 +2014,10 @@ class TestSubscriptions:
         assert updated.status == SubscriptionStatus.canceled
         assert updated.service_description == "closed account note"
 
-    def test_disabled_transition_resolves_locks_and_releases_ips(
+    def test_disabled_transition_resolves_locks_and_preserves_ips(
         self, db_session, subscriber, catalog_offer, monkeypatch
     ):
-        """Transition to a terminal status (disabled) via the catalog write
-        path must resolve enforcement locks and release service IPs, same as
-        cancel/expire."""
+        """Disabled resolves locks but keeps service assignments for restore."""
         from app.models.enforcement_lock import EnforcementLock, EnforcementReason
         from app.services import account_lifecycle as al
 
@@ -2057,7 +2055,7 @@ class TestSubscriptions:
         db_session.refresh(lock)
         assert lock.is_active is False
         assert lock.resolved_at is not None
-        assert str(sub.id) in released
+        assert released == []
 
     def test_expire_subscriptions(self, db_session, subscriber, catalog_offer):
         """Subscriptions past end_at should be expired."""
