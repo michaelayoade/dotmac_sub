@@ -2,8 +2,8 @@
 
 The sub never lets a client self-declare identity: the broker asserts the
 authenticated principal to the native team inbox and returns only an opaque
-visitor token. The legacy chat webhook is HMAC-gated and fans agent replies
-out to FCM.
+visitor token. The CRM chat observation enters through the verified integration
+inbox and fans agent replies out to FCM.
 """
 
 from __future__ import annotations
@@ -22,32 +22,24 @@ from fastapi import HTTPException
 from app.api.crm_webhooks import receive_crm_chat_event
 from app.config import settings
 from app.models.subscriber import Reseller, ResellerUser, Subscriber
+from tests.integration_platform_helpers import enable_crm_inbound
 
 CHAT_SECRET = "test-chat-secret"
 
 
 @contextmanager
-def _chat_settings(*, enabled=True, config_id="cfg-1", base="https://crm.example"):
-    saved = {
-        k: getattr(settings, k)
-        for k in (
-            "chat_live_enabled",
-            "crm_chat_config_id",
-            "crm_base_url",
-            "crm_chat_ws_url",
-            "crm_webhook_secret",
-        )
-    }
+def _chat_settings(*, enabled=True, **_unused):
+    saved = settings.chat_live_enabled
     object.__setattr__(settings, "chat_live_enabled", enabled)
-    object.__setattr__(settings, "crm_chat_config_id", config_id)
-    object.__setattr__(settings, "crm_base_url", base)
-    object.__setattr__(settings, "crm_chat_ws_url", "")
-    object.__setattr__(settings, "crm_webhook_secret", CHAT_SECRET)
     try:
         yield
     finally:
-        for k, v in saved.items():
-            object.__setattr__(settings, k, v)
+        object.__setattr__(settings, "chat_live_enabled", saved)
+
+
+@pytest.fixture(autouse=True)
+def _crm_inbound_installation(db_session, monkeypatch):
+    enable_crm_inbound(db_session, monkeypatch, signing_secret=CHAT_SECRET)
 
 
 # ── customer broker ────────────────────────────────────────────────────────
@@ -268,6 +260,9 @@ class _FakeRequest:
 
     async def body(self) -> bytes:
         return self._raw
+
+    async def json(self):
+        return json.loads(self._raw)
 
 
 def _run(coro):
