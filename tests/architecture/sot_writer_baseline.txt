@@ -148,7 +148,6 @@ app.services.network_vendor_polling
 app.services.nin_verifications
 app.services.numbering
 app.services.olt_observed_state_adapter
-app.services.operational_escalation
 app.services.operational_escalation_delivery
 app.services.pppoe_credentials
 app.services.projects_mirror
@@ -168,7 +167,6 @@ app.services.router_management.config
 app.services.router_management.inventory
 app.services.service_entitlements
 app.services.service_extensions
-app.services.sla_assignment
 app.services.sms
 app.services.stale_overdue_lock_reconcile
 app.services.subscription_changes

@@ -5,8 +5,11 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from app.websocket.events import EventType, WebSocketEvent
-from app.websocket.manager import get_connection_manager
+from app.services.realtime_platform import (
+    EventType,
+    conversation_topic,
+    publish_topic_event,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,10 +47,11 @@ async def broadcast_conversation_event(
     event_type: EventType,
     payload: dict[str, Any],
 ) -> None:
-    manager = get_connection_manager()
-    await manager.broadcast_to_conversation(
-        conversation_id,
-        WebSocketEvent(event=event_type, data=payload),
+    await asyncio.to_thread(
+        publish_topic_event,
+        conversation_topic(conversation_id),
+        event_type=event_type,
+        payload=payload,
     )
 
 
@@ -57,25 +61,12 @@ def publish_conversation_event(
     event_type: EventType,
     payload: dict[str, Any],
 ) -> None:
+    """Best-effort projection after the inbox owner commits durable state."""
     try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        try:
-            asyncio.run(
-                broadcast_conversation_event(
-                    conversation_id,
-                    event_type=event_type,
-                    payload=payload,
-                )
-            )
-        except Exception:
-            logger.debug("team_inbox_realtime_publish_failed", exc_info=True)
-        return
-
-    loop.create_task(
-        broadcast_conversation_event(
-            conversation_id,
+        publish_topic_event(
+            conversation_topic(conversation_id),
             event_type=event_type,
             payload=payload,
         )
-    )
+    except Exception:
+        logger.debug("team_inbox_realtime_publish_failed", exc_info=True)

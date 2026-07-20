@@ -5,6 +5,9 @@ claimed transfer date) through the standard billing service, optionally
 auto-allocated to the account's oldest open invoices; anything unallocated
 stays as account credit. Rejection records why. Both outcomes notify the
 customer (and the submitting reseller user, when different) on push + email.
+Submission requests confirmation from active staff authorized by
+``billing:proof:verify`` through the staff inbox plus email/WhatsApp; the shared
+request closes only after verification or rejection.
 """
 
 from __future__ import annotations
@@ -42,6 +45,7 @@ logger = logging.getLogger(__name__)
 _UPLOAD_DIR = Path("uploads/payment_proofs")
 _ALLOWED_SUFFIXES = {".jpg", ".jpeg", ".png", ".pdf", ".webp"}
 _MAX_BYTES = 10 * 1024 * 1024
+_REVIEW_PERMISSION = "billing:proof:verify"
 _MEDIA_TYPES = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
@@ -302,6 +306,8 @@ def submit_proof(
         file_path=file_path,
     )
     db.add(proof)
+    db.flush()
+    _queue_reviewer_confirmation(db, proof)
     db.commit()
     db.refresh(proof)
     out = _serialize(proof)
@@ -537,6 +543,7 @@ def verify_proof(
     proof.verified_by = str(verified_by)
     proof.review_notes = (review_notes or "").strip() or None
     proof.payment_id = payment.id
+    _resolve_reviewer_confirmation(db, proof)
     db.commit()
     db.refresh(proof)
     _audit(
@@ -720,6 +727,7 @@ def _verify_consolidated_proof(
         _initialize_wht_lifecycle(db, record.id, actor_id=verified_by)
         wht_record_id = str(record.id)
 
+    _resolve_reviewer_confirmation(db, proof)
     db.commit()
     db.refresh(proof)
     _audit(
@@ -821,6 +829,7 @@ def reject_proof(
     proof.status = PaymentProofStatus.rejected
     proof.verified_by = str(verified_by)
     proof.review_notes = review_notes.strip()
+    _resolve_reviewer_confirmation(db, proof)
     db.commit()
     db.refresh(proof)
     _audit(
@@ -838,6 +847,80 @@ def reject_proof(
     )
     _notify(db, proof, approved=False)
     return _serialize(proof)
+
+
+def _review_notification_fingerprint(proof: PaymentProof) -> str:
+    return f"payment-proof-review:{proof.id}"
+
+
+def _review_notification_event_type(proof: PaymentProof) -> str:
+    return f"payment_proof_review_requested:{proof.id}"
+
+
+def _queue_reviewer_confirmation(db: Session, proof: PaymentProof) -> None:
+    """Best-effort request to the authorized staff notification owner."""
+    try:
+        from app.services import staff_notifications
+
+        reference = (proof.reference or "").strip() or "not provided"
+        duplicate_note = (
+            " A matching submitted reference already exists; check for a duplicate."
+            if find_duplicate_proofs(db, proof)
+            else ""
+        )
+        body = (
+            f"A bank-transfer receipt for {proof.currency} {proof.amount} is waiting "
+            f"for confirmation. Reference: {reference}.{duplicate_note}"
+        )
+        with db.begin_nested():
+            result = staff_notifications.queue_permission_review_request(
+                db,
+                permission_key=_REVIEW_PERMISSION,
+                fingerprint=_review_notification_fingerprint(proof),
+                event_type=_review_notification_event_type(proof),
+                title="Bank transfer receipt needs confirmation",
+                body=body,
+                target_url=f"/admin/billing/payment-proofs/{proof.id}",
+                category="billing",
+                source="payment_proofs",
+                sla_entity_type="payment_proof",
+                sla_entity_id=str(proof.id),
+                sla_trigger="payment_proof.review_requested",
+            )
+        if result.target_count == 0:
+            logger.error(
+                "payment-proof %s has no active reviewer with %s",
+                proof.id,
+                _REVIEW_PERMISSION,
+            )
+    except Exception:
+        logger.warning(
+            "payment-proof reviewer notification failed for %s",
+            proof.id,
+            exc_info=True,
+        )
+
+
+def _resolve_reviewer_confirmation(db: Session, proof: PaymentProof) -> None:
+    """Best-effort close of the shared review work item after a decision."""
+    try:
+        from app.services import staff_notifications
+
+        with db.begin_nested():
+            staff_notifications.resolve_permission_review_request(
+                db,
+                fingerprint=_review_notification_fingerprint(proof),
+                event_type=_review_notification_event_type(proof),
+                sla_entity_type="payment_proof",
+                sla_entity_id=str(proof.id),
+                sla_trigger="payment_proof.review_requested",
+            )
+    except Exception:
+        logger.warning(
+            "payment-proof reviewer notification resolution failed for %s",
+            proof.id,
+            exc_info=True,
+        )
 
 
 def _audit(

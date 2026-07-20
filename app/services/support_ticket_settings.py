@@ -24,6 +24,7 @@ AUTO_ASSIGN_MAX_OPEN_TICKETS_KEY = "support_ticket_auto_assign_max_open_tickets"
 REGION_ASSIGNMENT_RULES_KEY = "support_region_assignment_rules"
 SERVICE_TEAM_MEMBERS_KEY = "support_service_team_members"
 SLA_POLICY_KEY = "support_ticket_sla_policy"
+TYPE_SLA_POLICY_KEY = "support_ticket_type_sla_policy"
 SETTINGS_DOMAIN = SettingDomain.workflow
 
 DEFAULT_STATUS_OPTIONS = [status.value for status in TicketStatus]
@@ -545,6 +546,23 @@ def sla_policy(db: Session) -> dict[str, dict[str, int]]:
     return policy
 
 
+def ticket_type_sla_policy(db: Session) -> dict[str, int]:
+    """Return UI-owned resolution hours keyed by normalized ticket type."""
+    raw = _read_raw_setting(db, TYPE_SLA_POLICY_KEY)
+    configured = raw if isinstance(raw, dict) else {}
+    policy: dict[str, int] = {
+        " ".join(str(ticket_type).strip().lower().split()): (
+            _normalize_non_negative_int(hours)
+        )
+        for ticket_type, hours in configured.items()
+        if str(ticket_type).strip()
+    }
+    for ticket_type in list_ticket_type_options(db):
+        key = " ".join(str(ticket_type).strip().lower().split())
+        policy.setdefault(key, 0)
+    return policy
+
+
 def update_options(
     db: Session,
     *,
@@ -568,6 +586,8 @@ def update_options(
     sla_response_hours: list[str] | None = None,
     sla_resolution_hours: list[str] | None = None,
     sla_aging_hours: list[str] | None = None,
+    sla_ticket_types: list[str] | None = None,
+    sla_ticket_type_resolution_hours: list[str] | None = None,
 ) -> None:
     requested_statuses = _normalize_list(
         statuses,
@@ -705,6 +725,21 @@ def update_options(
                 ),
             }
         _write_json(db, key=SLA_POLICY_KEY, value=policy)
+    if sla_ticket_types is not None:
+        type_policy: dict[str, int] = {}
+        for index, ticket_type_raw in enumerate(sla_ticket_types):
+            ticket_type = " ".join(str(ticket_type_raw).strip().lower().split())
+            if not ticket_type:
+                continue
+            resolution_hours = _normalize_non_negative_int(
+                sla_ticket_type_resolution_hours[index]
+                if sla_ticket_type_resolution_hours
+                and index < len(sla_ticket_type_resolution_hours)
+                else None
+            )
+            if resolution_hours > 0:
+                type_policy[ticket_type] = resolution_hours
+        _write_json(db, key=TYPE_SLA_POLICY_KEY, value=type_policy)
 
 
 def default_status(db: Session) -> str:

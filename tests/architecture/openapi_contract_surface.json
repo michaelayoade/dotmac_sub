@@ -10699,6 +10699,19 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "GET /api/v1/workqueue/events": {
+   "params": [
+    "header:Last-Event-ID",
+    "header:authorization",
+    "header:x-api-key",
+    "query:audience"
+   ],
+   "request": null,
+   "responses": {
+    "200": "a2431939694c",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "GET /api/v1/workqueue/view": {
    "params": [
     "header:authorization",
