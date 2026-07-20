@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import base64
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -18,12 +21,95 @@ from app.models.vendor_routes import (
     VendorPurchaseInvoiceStatus,
 )
 from app.services.dotmac_erp import outbox
-from app.services.dotmac_erp.client import build_erp_client
+from app.services.dotmac_erp.client import DotMacERPClient, build_erp_client
 from app.services.file_storage import file_uploads
 
 logger = logging.getLogger(__name__)
 
 ENTITY_TYPE = "vendor_purchase_invoice"
+_AMOUNT_TOLERANCE = Decimal("0.02")
+
+
+@dataclass(frozen=True, slots=True)
+class _PaymentObservationContext:
+    id: object
+    erp_purchase_invoice_id: str
+    currency: str
+
+
+def _normalized_status(value: object) -> str:
+    status = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if not status:
+        raise ValueError("ERP payment observation did not include a status")
+    return status[:40]
+
+
+def _decimal_field(response: dict[str, Any], field: str) -> Decimal:
+    try:
+        value = Decimal(str(response[field]))
+    except (KeyError, InvalidOperation, TypeError, ValueError) as exc:
+        raise ValueError(f"ERP payment observation has invalid {field}") from exc
+    if not value.is_finite() or value < 0:
+        raise ValueError(f"ERP payment observation has invalid {field}")
+    return value
+
+
+def _optional_source_updated_at(value: object) -> datetime | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError(
+                "ERP payment observation has invalid source_updated_at"
+            ) from exc
+    if parsed.tzinfo is None:
+        raise ValueError("ERP payment observation source_updated_at has no timezone")
+    return parsed
+
+
+def _canonical_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _validated_payment_observation(
+    invoice: VendorPurchaseInvoice | _PaymentObservationContext,
+    response: dict[str, Any],
+) -> dict[str, Any]:
+    source_invoice_id = str(response.get("source_invoice_id") or "")
+    if source_invoice_id != str(invoice.id):
+        raise ValueError("ERP payment observation source invoice does not match")
+    erp_invoice_id = str(response.get("purchase_invoice_id") or "")
+    if erp_invoice_id != str(invoice.erp_purchase_invoice_id or ""):
+        raise ValueError("ERP payment observation purchase invoice does not match")
+    currency = str(response.get("currency") or "").strip().upper()
+    if currency != invoice.currency.upper():
+        raise ValueError("ERP payment observation currency does not match")
+
+    total_amount = _decimal_field(response, "total_amount")
+    amount_paid = _decimal_field(response, "amount_paid")
+    balance_due = _decimal_field(response, "balance_due")
+    if amount_paid > total_amount + _AMOUNT_TOLERANCE:
+        raise ValueError("ERP payment observation amount paid exceeds total")
+    if abs(total_amount - amount_paid - balance_due) > _AMOUNT_TOLERANCE:
+        raise ValueError("ERP payment observation amounts do not reconcile")
+
+    return {
+        "status": _normalized_status(response.get("status")),
+        "total_amount": total_amount,
+        "amount_paid": amount_paid,
+        "balance_due": balance_due,
+        "source_updated_at": _optional_source_updated_at(
+            response.get("source_updated_at")
+        ),
+    }
 
 
 def purchase_invoice_idempotency_key(invoice: VendorPurchaseInvoice) -> str:
@@ -171,7 +257,7 @@ def apply_erp_response(db: Session, event: FieldErpSyncEvent) -> None:
         invoice.erp_sync_error = "ERP response did not include a purchase invoice ID"
         return
     invoice.erp_purchase_invoice_id = erp_id[:100]
-    invoice.erp_purchase_invoice_status = str(
+    invoice.erp_purchase_invoice_creation_status = str(
         (event.erp_response or {}).get("status") or "created"
     )[:40]
     invoice.erp_sync_error = None
@@ -239,3 +325,173 @@ def repair_purchase_invoice_sync(db: Session, *, limit: int = 100) -> dict:
         "attachments": attachments,
         "errors": errors,
     }
+
+
+def _record_status_error(
+    db: Session,
+    *,
+    invoice_id: object,
+    expected_erp_invoice_id: str,
+    message: str,
+) -> None:
+    current = (
+        db.query(VendorPurchaseInvoice)
+        .filter(VendorPurchaseInvoice.id == invoice_id)
+        .filter(VendorPurchaseInvoice.is_active.is_(True))
+        .with_for_update(of=VendorPurchaseInvoice)
+        .one_or_none()
+    )
+    if (
+        current is not None
+        and current.erp_purchase_invoice_id == expected_erp_invoice_id
+    ):
+        current.erp_purchase_invoice_status_error = message[:500]
+        db.commit()
+    else:
+        db.commit()
+
+
+def refresh_purchase_invoice_statuses(
+    db: Session,
+    *,
+    client: DotMacERPClient | None = None,
+    limit: int = 100,
+    observed_at: datetime | None = None,
+) -> dict:
+    """Refresh ERP-owned AP settlement observations for linked vendor invoices.
+
+    Candidate identifiers are snapshotted and the read transaction is closed
+    before any network call. Each response is validated, then the source row is
+    re-locked and its ERP link rechecked before the observation is projected.
+    Repeated responses are safe; a failure retains the last good observation.
+    """
+    limit = max(1, min(int(limit or 100), 500))
+    candidates = (
+        db.query(
+            VendorPurchaseInvoice.id,
+            VendorPurchaseInvoice.erp_purchase_invoice_id,
+            VendorPurchaseInvoice.currency,
+        )
+        .filter(VendorPurchaseInvoice.is_active.is_(True))
+        .filter(VendorPurchaseInvoice.erp_purchase_invoice_id.isnot(None))
+        .order_by(
+            VendorPurchaseInvoice.erp_purchase_invoice_status_observed_at.asc().nullsfirst(),
+            VendorPurchaseInvoice.id.asc(),
+        )
+        .limit(limit)
+        .all()
+    )
+    result: dict[str, object] = {
+        "processed": 0,
+        "observed": 0,
+        "changed": 0,
+        "errors": [],
+    }
+    if not candidates:
+        return result
+
+    owned_client = client
+    created_client = False
+    if owned_client is None:
+        owned_client = build_erp_client(db)
+        created_client = True
+
+    # Never hold a database transaction open across the ERP request. The
+    # candidate read is complete and has no writes, so closing it by commit is
+    # safe and does not give the completed read rollback/failure semantics.
+    db.commit()
+    errors: list[str] = []
+    processed = 0
+    observed = 0
+    changed = 0
+    try:
+        for invoice_id, linked_erp_id, currency in candidates:
+            expected_erp_id = str(linked_erp_id)
+            processed += 1
+            try:
+                response = owned_client.get_purchase_invoice_status(str(invoice_id))
+                if not response:
+                    raise ValueError("ERP purchase invoice was not found")
+                observation = _validated_payment_observation(
+                    _PaymentObservationContext(
+                        id=invoice_id,
+                        erp_purchase_invoice_id=expected_erp_id,
+                        currency=str(currency),
+                    ),
+                    response,
+                )
+
+                current = (
+                    db.query(VendorPurchaseInvoice)
+                    .filter(VendorPurchaseInvoice.id == invoice_id)
+                    .filter(VendorPurchaseInvoice.is_active.is_(True))
+                    .with_for_update(of=VendorPurchaseInvoice)
+                    .one_or_none()
+                )
+                if (
+                    current is None
+                    or current.erp_purchase_invoice_id != expected_erp_id
+                    or current.currency != currency
+                ):
+                    db.commit()
+                    continue
+                before = (
+                    current.erp_purchase_invoice_status,
+                    current.erp_purchase_invoice_total_amount,
+                    current.erp_purchase_invoice_amount_paid,
+                    current.erp_purchase_invoice_balance_due,
+                    _canonical_datetime(
+                        current.erp_purchase_invoice_status_source_updated_at
+                    ),
+                )
+                current.erp_purchase_invoice_status = observation["status"]
+                current.erp_purchase_invoice_total_amount = observation["total_amount"]
+                current.erp_purchase_invoice_amount_paid = observation["amount_paid"]
+                current.erp_purchase_invoice_balance_due = observation["balance_due"]
+                current.erp_purchase_invoice_status_source_updated_at = observation[
+                    "source_updated_at"
+                ]
+                current.erp_purchase_invoice_status_observed_at = (
+                    observed_at or datetime.now(UTC)
+                )
+                current.erp_purchase_invoice_status_error = None
+                after = (
+                    current.erp_purchase_invoice_status,
+                    current.erp_purchase_invoice_total_amount,
+                    current.erp_purchase_invoice_amount_paid,
+                    current.erp_purchase_invoice_balance_due,
+                    _canonical_datetime(
+                        current.erp_purchase_invoice_status_source_updated_at
+                    ),
+                )
+                observed += 1
+                if before != after:
+                    changed += 1
+                db.commit()
+            except Exception as exc:  # noqa: BLE001 - rows retry independently
+                if db.in_transaction():
+                    db.rollback()
+                message = str(exc)
+                errors.append(f"{invoice_id}: {message}")
+                logger.warning(
+                    "purchase_invoice_sync: status refresh failed for %s: %s",
+                    invoice_id,
+                    message,
+                )
+                _record_status_error(
+                    db,
+                    invoice_id=invoice_id,
+                    expected_erp_invoice_id=expected_erp_id,
+                    message=message,
+                )
+    finally:
+        if created_client:
+            owned_client.close()
+
+    result.update(
+        processed=processed,
+        observed=observed,
+        changed=changed,
+        errors=errors,
+    )
+    return result

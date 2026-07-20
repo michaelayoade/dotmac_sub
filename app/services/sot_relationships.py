@@ -2833,8 +2833,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "vendor purchase-invoice lifecycle",
                     "purchase-invoice submission eligibility and financial preview",
+                    "vendor-facing ERP payment observation projection",
                 ),
-                depends_on=("operations.vendor_project_lifecycle",),
+                depends_on=(
+                    "operations.vendor_project_lifecycle",
+                    "ui.projection_contracts",
+                ),
             ),
             SOTService(
                 name="operations.vendor_submission_confirmation",
@@ -3403,6 +3407,21 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.integration_hooks",
                 owns=("integration hook dispatch", "hook subscriptions"),
                 depends_on=("events.dispatcher", "integration.registry"),
+            ),
+            SOTService(
+                name="integration.vendor_purchase_invoice_erp_projection",
+                module="app.services.dotmac_erp.purchase_invoice_sync",
+                owns=(
+                    "vendor purchase-invoice ERP origination projection",
+                    "vendor purchase-invoice ERP attachment projection",
+                    "timestamped ERP accounts-payable status observation",
+                ),
+                depends_on=("operations.vendor_purchase_invoices",),
+                notes=(
+                    "ERP owns AP settlement. This reconciler is the only writer "
+                    "of Sub's refreshed ERP status and amount observation fields; "
+                    "the creation response remains origination evidence only."
+                ),
             ),
             SOTService(
                 name="integration.erp_material_support",
@@ -3975,6 +3994,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "RADIUS access-session observation labels, semantic tones, and icon keys",
                     "support-ticket status labels, semantic tones, and icon keys",
                     "field work-order status labels, semantic tones, and icon keys",
+                    "ERP supplier-invoice status labels, semantic tones, and icon keys",
                     "status presentation fallback semantics",
                 ),
                 depends_on=(
@@ -3985,6 +4005,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "network.outage_lifecycle",
                     "support.ticket_lifecycle",
                     "operations.work_order_status",
+                    "integration.vendor_purchase_invoice_erp_projection",
                 ),
                 notes=(
                     "Domain services own lifecycle or derived operational state. "

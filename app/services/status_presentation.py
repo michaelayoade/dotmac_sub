@@ -747,6 +747,32 @@ def vendor_purchase_invoice_status_presentation(
     return _presentation(_status_value(status), _VENDOR_PURCHASE_INVOICE_PRESENTATIONS)
 
 
+_ERP_SUPPLIER_INVOICE_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    "draft": ("Finance draft", StatusTone.neutral, StatusIcon.archive),
+    "submitted": ("Submitted to finance", StatusTone.info, StatusIcon.info),
+    "pending_approval": (
+        "Payment approval pending",
+        StatusTone.warning,
+        StatusIcon.clock,
+    ),
+    "approved": ("Approved for payment", StatusTone.info, StatusIcon.check),
+    "posted": ("Awaiting payment", StatusTone.warning, StatusIcon.clock),
+    "partially_paid": ("Partly paid", StatusTone.info, StatusIcon.info),
+    "paid": ("Paid", StatusTone.positive, StatusIcon.check),
+    "on_hold": ("Payment on hold", StatusTone.warning, StatusIcon.alert),
+    "rejected": ("Rejected by finance", StatusTone.negative, StatusIcon.x),
+    "void": ("Voided", StatusTone.neutral, StatusIcon.archive),
+    "disputed": ("Disputed", StatusTone.warning, StatusIcon.alert),
+}
+
+
+def erp_supplier_invoice_status_presentation(
+    status: str | None,
+) -> StatusPresentation:
+    """Project ERP's authoritative AP state without inferring settlement."""
+    return _presentation(_status_value(status), _ERP_SUPPLIER_INVOICE_PRESENTATIONS)
+
+
 _FIELD_EXPENSE_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
     "draft": ("Draft", StatusTone.neutral, StatusIcon.archive),
     "submitted": ("Submitted", StatusTone.info, StatusIcon.clock),

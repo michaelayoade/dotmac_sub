@@ -259,6 +259,14 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.dotmac_erp_outbox.repair_purchase_invoice_sync": _c(
         "integration", SWEEP, IDEMP, STATUS
     ),
+    "app.tasks.dotmac_erp_outbox.refresh_purchase_invoice_statuses": _c(
+        "integration",
+        SWEEP,
+        IDEMP,
+        STATUS,
+        "ERP-owned AP status poll; validates identity/currency/amounts, retains "
+        "the last good observation, and records per-invoice refresh errors.",
+    ),
     "app.tasks.dotmac_erp_outbox.sync_erp_operational_domains": _c(
         "integration",
         SWEEP,

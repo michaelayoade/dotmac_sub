@@ -457,6 +457,10 @@ def test_outbox_task_registered_with_celery():
     from app.celery_app import celery_app
 
     assert "app.tasks.dotmac_erp_outbox.deliver_erp_sync_events" in celery_app.tasks
+    assert (
+        "app.tasks.dotmac_erp_outbox.refresh_purchase_invoice_statuses"
+        in celery_app.tasks
+    )
 
 
 # ---------------------------------------------------------------------------

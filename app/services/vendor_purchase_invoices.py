@@ -26,6 +26,7 @@ from app.schemas.vendor_purchase_invoice import (
 from app.services.common import apply_pagination, coerce_uuid
 from app.services.file_storage import FileValidationError, file_uploads
 from app.services.ui_contracts import Action
+from app.services.vendor_payment_status import project_vendor_payment_status
 
 _MONEY = Decimal("0.01")
 _EDITABLE = {
@@ -168,7 +169,29 @@ def serialize(invoice: VendorPurchaseInvoice) -> dict:
         "attachment_file_size": attachment.file_size if attachment else None,
         "erp_purchase_order_id": invoice.erp_purchase_order_id,
         "erp_purchase_invoice_id": invoice.erp_purchase_invoice_id,
+        "erp_purchase_invoice_creation_status": getattr(
+            invoice, "erp_purchase_invoice_creation_status", None
+        ),
         "erp_purchase_invoice_status": invoice.erp_purchase_invoice_status,
+        "erp_purchase_invoice_total_amount": getattr(
+            invoice, "erp_purchase_invoice_total_amount", None
+        ),
+        "erp_purchase_invoice_amount_paid": getattr(
+            invoice, "erp_purchase_invoice_amount_paid", None
+        ),
+        "erp_purchase_invoice_balance_due": getattr(
+            invoice, "erp_purchase_invoice_balance_due", None
+        ),
+        "erp_purchase_invoice_status_observed_at": getattr(
+            invoice, "erp_purchase_invoice_status_observed_at", None
+        ),
+        "erp_purchase_invoice_status_source_updated_at": getattr(
+            invoice, "erp_purchase_invoice_status_source_updated_at", None
+        ),
+        "erp_purchase_invoice_status_error": getattr(
+            invoice, "erp_purchase_invoice_status_error", None
+        ),
+        "payment": project_vendor_payment_status(invoice),
         "erp_sync_error": invoice.erp_sync_error,
         "erp_synced_at": invoice.erp_synced_at,
         "erp_attachment_synced_at": invoice.erp_attachment_synced_at,

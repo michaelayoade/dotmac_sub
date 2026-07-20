@@ -2658,6 +2658,24 @@ def build_beat_schedule() -> dict:
             interval_seconds=max(dotmac_erp_outbox_interval, 60),
         )
 
+        # ERP remains authoritative for AP settlement. Poll its dedicated
+        # source-invoice read contract and project timestamped observations for
+        # the vendor portal; never infer payment from the creation response.
+        dotmac_erp_purchase_invoice_status_interval = _effective_int(
+            session,
+            SettingDomain.integration,
+            "dotmac_erp_purchase_invoice_status_refresh_interval_seconds",
+            "DOTMAC_ERP_PURCHASE_INVOICE_STATUS_REFRESH_INTERVAL_SECONDS",
+            300,
+        )
+        _sync_scheduled_task(
+            session,
+            name="dotmac_erp_purchase_invoice_status_refresh",
+            task_name=("app.tasks.dotmac_erp_outbox.refresh_purchase_invoice_statuses"),
+            enabled=dotmac_erp_sync_enabled,
+            interval_seconds=max(dotmac_erp_purchase_invoice_status_interval, 120),
+        )
+
         # Non-money operational context replaces ERP's legacy pull from CRM.
         # It has a separate switch so money-flow cutovers remain independent.
         dotmac_erp_domain_sync_enabled = _effective_bool(
