@@ -4730,8 +4730,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         ConcernContract(
                             name=(
-                                "ERP material-outcome projection into the service "
-                                "workflow"
+                                "backoffice material-outcome projection into the "
+                                "service workflow"
                             ),
                             role=OwnerRole.RECONCILER,
                             input_names=(
@@ -4743,8 +4743,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         ConcernContract(
                             name=(
-                                "work-order material allocation after ERP-confirmed "
-                                "issue"
+                                "work-order material allocation after confirmed "
+                                "external issue"
                             ),
                             role=OwnerRole.PROJECTION_WRITER,
                             input_names=(
@@ -5559,7 +5559,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=(
                     "auth.permission_gate",
                     "control.settings_spec",
-                    "integration.vendor_purchase_invoice_erp_projection",
+                    "integration.dotmac_erp_payables_adapter",
                     "operations.vendor_project_lifecycle",
                     "operations.vendor_purchase_invoice_records",
                     "ui.projection_contracts",
@@ -5606,7 +5606,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             ),
                         ),
                         ConcernContract(
-                            name="vendor-facing ERP payment observation projection",
+                            name="vendor-facing payables-status observation projection",
                             role=OwnerRole.RESOLVER,
                             input_names=(
                                 "canonical vendor purchase-invoice records",
@@ -5660,9 +5660,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         AuthorityInput(
                             name="timestamped ERP accounts-payable observation",
-                            owner=(
-                                "integration.vendor_purchase_invoice_erp_projection"
-                            ),
+                            owner=("integration.dotmac_erp_payables_adapter"),
                             kind=AuthorityKind.DERIVED_PROJECTION,
                             source=(
                                 "validated ERP status, total, paid, balance, source "
@@ -10126,10 +10124,20 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "authority over Sub customer, subscriber, service, workflow, or "
                     "operational state."
                 ),
+            ),
+            SOTService(
+                name="integration.dotmac_erp_payables_adapter",
+                module="app.services.dotmac_erp.purchase_invoice_sync",
+                owns=(
+                    "Dotmac ERP purchase-invoice payload mapping",
+                    "Dotmac ERP attachment delivery",
+                    "timestamped Dotmac ERP payables-status observation",
+                ),
+                depends_on=("integration.backoffice_adapter",),
                 contract=ServiceContract(
                     concerns=(
                         ConcernContract(
-                            name="vendor purchase-invoice ERP origination projection",
+                            name="Dotmac ERP purchase-invoice payload mapping",
                             role=OwnerRole.PROJECTION_WRITER,
                             input_names=(
                                 "canonical vendor purchase-invoice records",
@@ -10137,11 +10145,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "ERP purchase-invoice flow controls",
                             ),
                             canonical_writer=(
-                                "integration.vendor_purchase_invoice_erp_projection"
+                                "integration.dotmac_erp_payables_adapter"
                             ),
                         ),
                         ConcernContract(
-                            name="vendor purchase-invoice ERP attachment projection",
+                            name="Dotmac ERP attachment delivery",
                             role=OwnerRole.PROJECTION_WRITER,
                             input_names=(
                                 "canonical vendor purchase-invoice records",
@@ -10149,13 +10157,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "ERP purchase-invoice flow controls",
                             ),
                             canonical_writer=(
-                                "integration.vendor_purchase_invoice_erp_projection"
+                                "integration.dotmac_erp_payables_adapter"
                             ),
                         ),
                         ConcernContract(
-                            name=(
-                                "timestamped ERP accounts-payable status observation"
-                            ),
+                            name=("timestamped Dotmac ERP payables-status observation"),
                             role=OwnerRole.RECONCILER,
                             input_names=(
                                 "canonical vendor purchase-invoice records",
@@ -10163,7 +10169,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "ERP purchase-invoice flow controls",
                             ),
                             canonical_writer=(
-                                "integration.vendor_purchase_invoice_erp_projection"
+                                "integration.dotmac_erp_payables_adapter"
                             ),
                         ),
                     ),
@@ -10239,39 +10245,36 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     errors=ErrorContract(
                         domain_codes=(
                             (
-                                "integration.vendor_purchase_invoice_erp_projection."
+                                "integration.dotmac_erp_payables_adapter."
                                 "invalid_observation"
                             ),
                             (
-                                "integration.vendor_purchase_invoice_erp_projection."
+                                "integration.dotmac_erp_payables_adapter."
                                 "identity_mismatch"
                             ),
+                            ("integration.dotmac_erp_payables_adapter.amount_mismatch"),
                             (
-                                "integration.vendor_purchase_invoice_erp_projection."
-                                "amount_mismatch"
-                            ),
-                            (
-                                "integration.vendor_purchase_invoice_erp_projection."
+                                "integration.dotmac_erp_payables_adapter."
                                 "transport_unavailable"
                             ),
                             (
-                                "integration.vendor_purchase_invoice_erp_projection."
+                                "integration.dotmac_erp_payables_adapter."
                                 "invalid_command_context"
                             ),
                             (
-                                "integration.vendor_purchase_invoice_erp_projection."
+                                "integration.dotmac_erp_payables_adapter."
                                 "command_contract_violation"
                             ),
                             (
-                                "integration.vendor_purchase_invoice_erp_projection."
+                                "integration.dotmac_erp_payables_adapter."
                                 "nested_owner_command"
                             ),
                             (
-                                "integration.vendor_purchase_invoice_erp_projection."
+                                "integration.dotmac_erp_payables_adapter."
                                 "active_caller_transaction"
                             ),
                             (
-                                "integration.vendor_purchase_invoice_erp_projection."
+                                "integration.dotmac_erp_payables_adapter."
                                 "nested_transaction_completion"
                             ),
                         ),
@@ -10280,7 +10283,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         retryable_codes=(
                             (
-                                "integration.vendor_purchase_invoice_erp_projection."
+                                "integration.dotmac_erp_payables_adapter."
                                 "transport_unavailable"
                             ),
                         ),
@@ -10315,9 +10318,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "ERP purchase-invoice attachment response",
                                 "ERP accounts-payable status observation",
                             ),
-                            writer=(
-                                "integration.vendor_purchase_invoice_erp_projection"
-                            ),
+                            writer=("integration.dotmac_erp_payables_adapter"),
                             freshness=(
                                 "Origination and attachment links are durable; AP status is "
                                 "fresh for fifteen minutes from observed_at."
@@ -10334,9 +10335,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "Run purchase-invoice repair and status reconciliation from "
                                 "the canonical invoice and its stable ERP identities."
                             ),
-                            repair_owner=(
-                                "integration.vendor_purchase_invoice_erp_projection"
-                            ),
+                            repair_owner=("integration.dotmac_erp_payables_adapter"),
                         ),
                     ),
                     migration=MigrationContract(
@@ -10345,9 +10344,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "ERP creation-response status and vendor UI paths that treated "
                             "origination evidence as accounts-payable settlement state"
                         ),
-                        new_owner=(
-                            "integration.vendor_purchase_invoice_erp_projection"
-                        ),
+                        new_owner=("integration.dotmac_erp_payables_adapter"),
                         verification=(
                             "Identity, currency, amount, rollback, stale, last-good, creation "
                             "separation, scheduler, and vendor visibility tests."
@@ -10370,19 +10367,6 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         "tests/test_vendor_payment_visibility.py",
                         "tests/test_dotmac_erp_outbox.py",
                     ),
-                ),
-            ),
-            SOTService(
-                name="integration.dotmac_erp_payables_adapter",
-                module="app.services.dotmac_erp.purchase_invoice_sync",
-                owns=(
-                    "Dotmac ERP purchase-invoice payload mapping",
-                    "Dotmac ERP attachment delivery",
-                    "timestamped Dotmac ERP payables-status observation",
-                ),
-                depends_on=(
-                    "integration.backoffice_adapter",
-                    "operations.vendor_purchase_invoices",
                 ),
                 notes=(
                     "Provider-specific transport and observation only. The configured "
@@ -10410,7 +10394,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 contract=ServiceContract(
                     concerns=(
                         ConcernContract(
-                            name="Sub-to-ERP material-support payload mapping",
+                            name="Sub-to-Dotmac-ERP material-support payload mapping",
                             role=OwnerRole.RESOLVER,
                             input_names=(
                                 "approved canonical material dependency",
@@ -10418,7 +10402,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             ),
                         ),
                         ConcernContract(
-                            name="stable material-support idempotency key",
+                            name="provider-specific stable idempotency key",
                             role=OwnerRole.POLICY,
                             input_names=(
                                 "approved canonical material dependency",
@@ -10427,7 +10411,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         ConcernContract(
                             name=(
-                                "ERP material-outcome observation and reconciliation"
+                                "Dotmac ERP material-outcome observation and reconciliation"
                             ),
                             role=OwnerRole.APPLICATION_COORDINATOR,
                             input_names=(
@@ -10497,16 +10481,16 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     ),
                     errors=ErrorContract(
                         domain_codes=(
-                            "integration.erp_material_support.invalid_payload",
-                            "integration.erp_material_support.ineligible_request",
-                            "integration.erp_material_support.transport_unavailable",
-                            "integration.erp_material_support.invalid_outcome",
-                            "integration.erp_material_support.invalid_command_context",
-                            "integration.erp_material_support.command_contract_violation",
-                            "integration.erp_material_support.nested_owner_command",
-                            "integration.erp_material_support.active_caller_transaction",
+                            "integration.dotmac_erp_material_support_adapter.invalid_payload",
+                            "integration.dotmac_erp_material_support_adapter.ineligible_request",
+                            "integration.dotmac_erp_material_support_adapter.transport_unavailable",
+                            "integration.dotmac_erp_material_support_adapter.invalid_outcome",
+                            "integration.dotmac_erp_material_support_adapter.invalid_command_context",
+                            "integration.dotmac_erp_material_support_adapter.command_contract_violation",
+                            "integration.dotmac_erp_material_support_adapter.nested_owner_command",
+                            "integration.dotmac_erp_material_support_adapter.active_caller_transaction",
                             (
-                                "integration.erp_material_support."
+                                "integration.dotmac_erp_material_support_adapter."
                                 "nested_transaction_completion"
                             ),
                         ),
@@ -10515,7 +10499,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "operations.material_dependencies"
                         ),
                         retryable_codes=(
-                            "integration.erp_material_support.transport_unavailable",
+                            "integration.dotmac_erp_material_support_adapter.transport_unavailable",
                         ),
                         fail_closed_on=(
                             "flow not owned by Sub",
@@ -10530,7 +10514,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "CRM material-request ERP mapper, delivery path, and local "
                             "material fulfilment workflow"
                         ),
-                        new_owner="integration.erp_material_support",
+                        new_owner="integration.dotmac_erp_material_support_adapter",
                         verification=(
                             "Payload parity, stable-key, flow gate, approval atomicity, "
                             "outbox response, reconciliation, and failure-isolation tests."

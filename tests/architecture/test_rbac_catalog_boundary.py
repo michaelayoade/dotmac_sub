@@ -17,7 +17,7 @@ ROLE_FORM = PROJECT_ROOT / "app" / "services" / "web_system_role_forms.py"
 SEED = PROJECT_ROOT / "scripts" / "seed" / "seed_rbac.py"
 TEST_SEED = PROJECT_ROOT / "scripts" / "seed" / "seed_test_fixtures.py"
 MIGRATION = (
-    PROJECT_ROOT / "alembic" / "versions" / "381_rbac_catalog_normalized_identity.py"
+    PROJECT_ROOT / "alembic" / "versions" / "385_rbac_catalog_normalized_identity.py"
 )
 
 

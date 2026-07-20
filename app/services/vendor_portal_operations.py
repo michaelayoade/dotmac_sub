@@ -404,7 +404,7 @@ def _serialize_project(
         "bidding_open_at": row.bidding_open_at,
         "bidding_close_at": row.bidding_close_at,
         "approved_quote_id": row.approved_quote_id,
-        "erp_purchase_order_id": row.erp_purchase_order_id,
+        "procurement_order_reference": row.procurement_order_reference,
         "notes": row.notes,
         "created_at": row.created_at,
         "updated_at": row.updated_at,

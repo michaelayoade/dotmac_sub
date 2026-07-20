@@ -331,8 +331,9 @@ def stage_review(db: Session, command: ReviewVendorPurchaseInvoiceCommand) -> di
     if command.approve:
         _recalculate(invoice)
         invoice.status = VendorPurchaseInvoiceStatus.approved.value
-        invoice.erp_purchase_order_id = (
-            invoice.project.erp_purchase_order_id or invoice.erp_purchase_order_id
+        invoice.procurement_order_reference = (
+            invoice.project.procurement_order_reference
+            or invoice.procurement_order_reference
         )
         db.flush()
         from app.services.dotmac_erp.purchase_invoice_sync import (

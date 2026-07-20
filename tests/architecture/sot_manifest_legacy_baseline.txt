@@ -53,6 +53,7 @@ financial.billing_accounts
 financial.billing_health
 financial.billing_reporting
 financial.billing_scheduled
+financial.collection_accounts
 financial.collections_scheduled
 financial.consolidated_payments
 financial.credit_notes
@@ -64,6 +65,7 @@ financial.payment_arrangements
 financial.payment_proofs
 financial.payment_provider_events
 financial.payment_reconciliation
+financial.payment_routing
 financial.payment_webhooks
 financial.payments
 financial.prepaid_enforcement_readiness
@@ -75,6 +77,7 @@ financial.tax_accounting
 financial.tax_configuration
 gis.geocoding
 gis.spatial_sync
+integration.backoffice_adapter
 integration.jobs
 integration.registry
 integration.sync
@@ -139,6 +142,7 @@ operations.field_completion
 operations.project_lifecycle
 operations.provisioning_context
 operations.provisioning_workflow
+operations.sla_escalation
 operations.work_order_commands
 operations.work_order_status
 operations.work_orders
@@ -152,6 +156,7 @@ party.registry
 runtime.db_sessions
 runtime.infrastructure_health
 runtime.infrastructure_polling
+runtime.realtime_projection
 runtime.task_heartbeat
 runtime.task_idempotency
 sales.lead_lifecycle
@@ -185,6 +190,8 @@ subscriber.growth_reports
 support.ticket_bulk_commands
 support.ticket_configuration
 support.ticket_lifecycle
+support.ticket_sla_clock
+support.ticket_work_order_handoff
 ui.action_form_contracts
 ui.audit_events_list_projection
 ui.bulk_action_contracts
