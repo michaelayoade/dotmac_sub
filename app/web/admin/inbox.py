@@ -16,7 +16,7 @@ from app.models.team_inbox import (
     InboxConversationStatus,
 )
 from app.services import (
-    subscriber as subscriber_service,
+    subscriber_summary as subscriber_summary_service,
 )
 from app.services import (
     team_inbox_commands,
@@ -372,50 +372,8 @@ def _contact_link_candidates(
 
 
 def _subscriber_summary(db: Session, subscriber_id: str | None) -> dict | None:
-    """Minimal server-owned identity projection for the inbox context rail.
-
-    Plan/balance/network are intentionally out of scope here; they belong to the
-    subscriber-360 projection (docs/design/ADMIN_UI_ARCHETYPES.md). A bad or
-    stale id must never break the thread view.
-    """
-    if not subscriber_id:
-        return None
-    try:
-        subscriber = subscriber_service.subscribers.get(
-            db=db, subscriber_id=subscriber_id
-        )
-    except Exception:  # noqa: BLE001
-        return None
-    if subscriber is None:
-        return None
-    status = getattr(subscriber, "status", None)
-    kind = "business" if getattr(subscriber, "is_business", False) else "person"
-    name = (
-        getattr(subscriber, "display_name", None)
-        or getattr(subscriber, "company_name", None)
-        or " ".join(
-            part
-            for part in (
-                getattr(subscriber, "first_name", None),
-                getattr(subscriber, "last_name", None),
-            )
-            if part
-        )
-        or getattr(subscriber, "email", None)
-    )
-    return {
-        "id": str(subscriber_id),
-        "name": name,
-        "account_number": getattr(subscriber, "account_number", None),
-        "subscriber_number": getattr(subscriber, "subscriber_number", None),
-        "status": status.value
-        if hasattr(status, "value")
-        else (str(status) if status else None),
-        "email": getattr(subscriber, "email", None),
-        "phone": getattr(subscriber, "phone", None),
-        "is_business": kind == "business",
-        "url": f"/admin/customers/{kind}/{subscriber_id}",
-    }
+    """Thin adapter over the shared subscriber-summary read-owner."""
+    return subscriber_summary_service.subscriber_summary(db, subscriber_id)
 
 
 def _conversation_view(
