@@ -127,3 +127,28 @@ def test_same_source_id_across_types_are_distinct_rows(db_session, monkeypatch):
 
     assert result.inserted == 2
     assert set(_rows(db_session)) == {("olt", "1"), ("ont", "1")}
+
+
+def test_class_facts_and_new_device_types_are_projected(db_session, monkeypatch):
+    """NAS + routers project as first-class rows; class_facts round-trips."""
+    _patch_collect(
+        monkeypatch,
+        [
+            _device(
+                "n1",
+                "nas",
+                class_facts={"health_status": "healthy", "site_name": "Abuja"},
+            ),
+            _device("r1", "router", class_facts={"routeros_version": "7.10"}),
+            _device("o1", "ont", class_facts={"onu_rx_dbm": -21.2}),
+            _device("c1", "core", class_facts=None),
+        ],
+    )
+    reconcile_device_projections(db_session)
+    rows = _rows(db_session)
+    assert {("nas", "n1"), ("router", "r1")} <= set(rows)
+    assert rows[("nas", "n1")].class_facts["health_status"] == "healthy"
+    assert rows[("nas", "n1")].class_facts["site_name"] == "Abuja"
+    assert rows[("router", "r1")].class_facts["routeros_version"] == "7.10"
+    assert rows[("ont", "o1")].class_facts["onu_rx_dbm"] == -21.2
+    assert rows[("core", "c1")].class_facts is None

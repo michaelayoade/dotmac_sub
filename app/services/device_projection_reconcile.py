@@ -40,6 +40,7 @@ logger = logging.getLogger(__name__)
 
 # Columns copied verbatim from a derived device dict onto its projection row.
 _PROJECTED_FIELDS = (
+    "class_facts",
     "name",
     "serial_number",
     "ip_address",
