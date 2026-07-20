@@ -236,6 +236,7 @@ def test_sweep_never_processes_quarantined_account_for_money_action(
         offer_id=subscription.offer_id,
         billing_mode=BillingMode.prepaid,
         status=SubscriptionStatus.active,
+        unit_price=Decimal("100.00"),
         created_at=position_at - timedelta(days=1),
     )
     db_session.add(verified_subscription)

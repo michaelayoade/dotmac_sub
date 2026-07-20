@@ -26,7 +26,7 @@ adapter files. The executable registry contains 28 domains and 233 service
 entries. Its one exact duplicate concern claim has been split into distinct
 observation-evidence and customer-resolution concerns.
 
-Typed manifest migration now has 32 fully contracted services and 215 indexed
+Typed manifest migration now has 33 fully contracted services and 214 indexed
 legacy services in a shrink-only baseline. New registry services cannot
 be added without role-qualified concerns, authoritative inputs, transaction and
 error semantics, migration state, stewardship, checked-in evidence, and any
@@ -173,6 +173,16 @@ and unfunded-renewal provenance from the batched owner. The duplicate
 service-status derivation is removed, and missing accounts, invalid minimums,
 unpriced collectible subscriptions, and cross-currency prices are stable domain
 failures instead of guessed or silently ignored inputs.
+
+The completed collections grace slice is `financial.grace_policy`. Account,
+reseller, offer/version, policy-set, and billing-mode default precedence now
+returns typed policy-set provenance, grace provenance, deadline, and phase.
+Default policy identifiers resolve only through `control.settings_spec`; the raw
+setting-row bypass is retired. Invalid identifiers and negative or malformed day
+values are stable domain failures, never silent zero-day grace that can trigger
+an immediate financial access consequence. Naive input timestamps are normalized
+to UTC before phase decisions. Retiring the direct setting-row query reduces the
+decision-input inventory from 350 to 346 occurrences and from 83 to 82 files.
 
 The current completed access slice is `auth.system_user_assignments`. It is the
 only application writer for system-user role and direct-permission grants. Local

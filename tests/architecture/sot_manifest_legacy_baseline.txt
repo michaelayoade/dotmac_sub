@@ -58,7 +58,6 @@ financial.collections_scheduled
 financial.consolidated_payments
 financial.credit_notes
 financial.dunning
-financial.grace_policy
 financial.import_payment_batch_reversals
 financial.invoices
 financial.ledger

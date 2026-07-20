@@ -855,6 +855,22 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.collections,
+        key="default_prepaid_policy_set_id",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default=None,
+        label="Default Prepaid Collections Policy Set",
+    ),
+    SettingSpec(
+        domain=SettingDomain.collections,
+        key="default_postpaid_policy_set_id",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default=None,
+        label="Default Postpaid Collections Policy Set",
+    ),
+    SettingSpec(
+        domain=SettingDomain.collections,
         key="billing_enforcement_min_enforcing_day_offset",
         env_var="BILLING_ENFORCEMENT_MIN_ENFORCING_DAY_OFFSET",
         value_type=SettingValueType.integer,

@@ -1547,7 +1547,188 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "grace provenance and deadline",
                     "post-grace elapsed-day decision",
                 ),
-                depends_on=("financial.billing_profile",),
+                depends_on=(
+                    "access.subscription_lifecycle",
+                    "control.settings_spec",
+                    "customer.accounts",
+                    "customer.identity_scope",
+                    "financial.billing_profile",
+                    "service_intent.catalog_policy",
+                ),
+                notes=(
+                    "Resolves account, reseller, offer/version, policy-set, and "
+                    "billing-mode defaults with typed provenance. Invalid identifiers or "
+                    "day values halt consequences instead of becoming zero-day grace."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="account/policy/billing-default grace precedence",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical billing profile",
+                                "canonical account grace configuration",
+                                "canonical reseller policy assignment",
+                                "canonical service policy assignments",
+                                "canonical policy-set configuration",
+                                "canonical grace settings",
+                                "grace policy protocol",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="grace provenance and deadline",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical billing profile",
+                                "canonical account grace configuration",
+                                "canonical reseller policy assignment",
+                                "canonical service policy assignments",
+                                "canonical policy-set configuration",
+                                "canonical grace settings",
+                                "grace policy protocol",
+                                "evaluation time",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="post-grace elapsed-day decision",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "grace policy protocol",
+                                "evaluation time",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical billing profile",
+                            owner="financial.billing_profile",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="valid effective prepaid or postpaid billing mode",
+                        ),
+                        AuthorityInput(
+                            name="canonical account grace configuration",
+                            owner="customer.accounts",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "Subscriber grace_period_days and policy_set_id overrides"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical reseller policy assignment",
+                            owner="customer.identity_scope",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="active account reseller relationship and policy_set_id",
+                        ),
+                        AuthorityInput(
+                            name="canonical service policy assignments",
+                            owner="access.subscription_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "collectible Subscription lifecycle plus offer-version and "
+                                "offer policy-set references"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical policy-set configuration",
+                            owner="service_intent.catalog_policy",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="active PolicySet identity and grace_days",
+                        ),
+                        AuthorityInput(
+                            name="canonical grace settings",
+                            owner="control.settings_spec",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed default prepaid/postpaid policy-set identifiers and "
+                                "billing-mode grace-day defaults"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="grace policy protocol",
+                            owner="financial.grace_policy",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed provenance and phase vocabularies, service priority, "
+                                "precedence order, date boundary, and non-negative-day rule"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="evaluation time",
+                            owner="external:system_clock",
+                            kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                            source="explicit as-of time or current UTC system time",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary=(
+                            "Caller owns the session; grace resolution reads canonical "
+                            "account, service, policy, and setting evidence without writes "
+                            "or transaction completion."
+                        ),
+                        locking=(
+                            "No row lock for projections. State-changing collections and "
+                            "enforcement commands re-resolve against their visible snapshot."
+                        ),
+                        idempotency=(
+                            "The same account, policy override, start time, as-of time, and "
+                            "visible configuration produce the same typed decision."
+                        ),
+                        retries=(
+                            "Transient reads may be retried. Invalid policy identifiers, "
+                            "billing profiles, or grace-day evidence remain terminal until "
+                            "the authoritative input is corrected."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "financial.grace_policy.invalid_grace_days",
+                            "financial.grace_policy.invalid_policy_set_id",
+                        ),
+                        mapping_owner=(
+                            "collections, prepaid enforcement, customer status, and admin "
+                            "adapters"
+                        ),
+                        fail_closed_on=(
+                            "missing or invalid canonical billing profile",
+                            "invalid default policy-set identifier",
+                            "negative, malformed, or ambiguous grace days",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "raw DomainSetting queries, primitive source/phase strings, "
+                            "silent invalid policy identifiers, and invalid-day zero clamp"
+                        ),
+                        new_owner="financial.grace_policy",
+                        verification=(
+                            "Precedence, provenance, zero-day, date-boundary, invalid-setting, "
+                            "UTC-normalization, caller, and architecture tests."
+                        ),
+                        cutover_gate=(
+                            "Dunning, prepaid enforcement, customer status, and admin "
+                            "projections consume the shared grace decision or policy."
+                        ),
+                        fallback_retirement=(
+                            "Raw setting reads, untyped provenance/phase values, invalid UUID "
+                            "fallback, negative-day clamping, and invalid-setting immediate "
+                            "action are removed."
+                        ),
+                    ),
+                    steward="collections operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/audits/BILLING_SOT_AUDIT_2026-07-12.md",
+                        "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
+                    ),
+                    test_refs=(
+                        "tests/test_grace_policy_sot.py",
+                        "tests/test_prepaid_balance_sweep.py",
+                        "tests/test_service_status.py",
+                        "tests/architecture/test_grace_policy_boundary.py",
+                    ),
+                ),
             ),
             SOTService(
                 name="financial.prepaid_enforcement",
