@@ -7,11 +7,12 @@ import uuid
 import pytest
 from fastapi import HTTPException
 
-from app.config import settings
+from app.models.auth import ApiKey
 from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.network import CPEDevice, DeviceType
 from app.models.subscriber import Subscriber
 from app.services import radio_registration, unmatched_radio_queue
+from app.services.auth import hash_api_key
 
 MAC = "24:A4:3C:AA:BB:01"
 MAC_COMPACT = "24a43caabb01"
@@ -458,13 +459,17 @@ TOKEN = "crm-test-token"
 
 
 @pytest.fixture()
-def crm_auth():
-    original = settings.selfcare_api_token
-    object.__setattr__(settings, "selfcare_api_token", TOKEN)
-    try:
-        yield
-    finally:
-        object.__setattr__(settings, "selfcare_api_token", original)
+def crm_auth(db_session):
+    db_session.add(
+        ApiKey(
+            label="crm-radio-test",
+            key_hash=hash_api_key(TOKEN),
+            scopes=["integration:crm"],
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    return TOKEN
 
 
 def _call(func, *args, **kwargs):
@@ -476,32 +481,25 @@ def _call(func, *args, **kwargs):
 
 
 class TestCrmEndpoint:
-    def test_requires_bearer(self, crm_auth):
-        # Legacy shared bearer is still accepted while crm_legacy_bearer_enabled
-        # is true (default); the bearer path uses neither request nor db.
+    def test_requires_scoped_api_key(self, db_session, crm_auth):
         from app.api.crm import require_crm_service_auth
 
         with pytest.raises(HTTPException) as excinfo:
-            require_crm_service_auth(
-                request=None, authorization=None, x_api_key=None, db=None
-            )
+            require_crm_service_auth(request=None, x_api_key=None, db=db_session)
         assert excinfo.value.status_code == 401
         with pytest.raises(HTTPException) as excinfo:
             require_crm_service_auth(
                 request=None,
-                authorization="Bearer wrong-token",
-                x_api_key=None,
-                db=None,
+                x_api_key="wrong-token",
+                db=db_session,
             )
         assert excinfo.value.status_code == 401
         assert (
-            require_crm_service_auth(
-                request=None, authorization=f"Bearer {TOKEN}", x_api_key=None, db=None
-            )
+            require_crm_service_auth(request=None, x_api_key=TOKEN, db=db_session)
             is None
         )
 
-    def test_route_declares_bearer_guard(self):
+    def test_route_declares_api_key_guard(self):
         from app.api.crm import router
 
         route = next(

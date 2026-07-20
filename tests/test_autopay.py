@@ -11,12 +11,12 @@ from decimal import Decimal
 
 import pytest
 
-import app.services.paystack as paystack
 from app.models.billing import InvoiceStatus, Payment, PaymentStatus
 from app.models.catalog import SubscriptionStatus
 from app.schemas.billing import InvoiceCreate, PaymentMethodCreate
 from app.services import autopay
 from app.services import billing as billing_service
+from app.services.integrations import payment_capability
 
 
 @pytest.fixture(autouse=True)
@@ -74,15 +74,18 @@ def _mock_charge(monkeypatch, *, status="success", calls=None):
             calls.append(kwargs)
         return {"status": status, "reference": kwargs.get("reference")}
 
-    monkeypatch.setattr(paystack, "charge_authorization", fake)
+    monkeypatch.setattr(payment_capability, "charge_authorization", fake)
 
 
 def _mock_no_recovery(monkeypatch):
     """verify_transaction finds nothing recoverable (prior attempts declined)."""
     monkeypatch.setattr(
-        paystack,
+        payment_capability,
         "verify_transaction",
-        lambda db, ref: {"status": "failed", "reference": ref},
+        lambda db, *, provider_type, reference: {
+            "status": "failed",
+            "reference": reference,
+        },
     )
 
 
@@ -251,11 +254,14 @@ def test_recovers_capture_when_charge_errors(db_session, subscriber, monkeypatch
     def boom(db, **kwargs):
         raise RuntimeError("Duplicate Transaction Reference")
 
-    monkeypatch.setattr(paystack, "charge_authorization", boom)
+    monkeypatch.setattr(payment_capability, "charge_authorization", boom)
     monkeypatch.setattr(
-        paystack,
+        payment_capability,
         "verify_transaction",
-        lambda db, ref: {"status": "success", "reference": ref},
+        lambda db, *, provider_type, reference: {
+            "status": "success",
+            "reference": reference,
+        },
     )
 
     result = autopay.run_account_autopay(db_session, str(subscriber.id))
@@ -377,7 +383,9 @@ def test_decline_increments_failure_count_and_retries_with_fresh_reference(
     # A decline burns the reference at Paystack: each retry must use a fresh,
     # attempt-suffixed reference (attempt 0 keeps the legacy format).
     refs = [c["reference"] for c in calls]
-    base = f"AUTOPAY-{invoice.id}-{paystack.amount_to_kobo(Decimal('5000.00'))}"
+    base = (
+        f"AUTOPAY-{invoice.id}-{payment_capability.amount_to_kobo(Decimal('5000.00'))}"
+    )
     assert refs == [base, f"{base}-A1"]
     assert len(set(refs)) == len(refs)
 
@@ -529,7 +537,7 @@ def test_no_double_charge_when_succeeded_autopay_payment_exists(
     invoice = _open_invoice(db_session, subscriber.id, Decimal("5000.00"))
     autopay.enable(db_session, str(subscriber.id))
 
-    kobo = paystack.amount_to_kobo(Decimal("5000.00"))
+    kobo = payment_capability.amount_to_kobo(Decimal("5000.00"))
     db_session.add(
         Payment(
             account_id=subscriber.id,
@@ -567,9 +575,12 @@ def test_recovers_prior_attempt_capture_before_recharging(
 
     # The "failed" attempt 0 turns out to have captured at Paystack.
     monkeypatch.setattr(
-        paystack,
+        payment_capability,
         "verify_transaction",
-        lambda db, ref: {"status": "success", "reference": ref},
+        lambda db, *, provider_type, reference: {
+            "status": "success",
+            "reference": reference,
+        },
     )
     result = autopay.run_account_autopay(db_session, str(subscriber.id))
     assert result["charged"] == 1
@@ -577,7 +588,7 @@ def test_recovers_prior_attempt_capture_before_recharging(
     db_session.refresh(invoice)
     assert Decimal(str(invoice.balance_due)) == Decimal("0.00")
 
-    kobo = paystack.amount_to_kobo(Decimal("5000.00"))
+    kobo = payment_capability.amount_to_kobo(Decimal("5000.00"))
     payment = (
         db_session.query(Payment)
         .filter(Payment.external_id == f"AUTOPAY-{invoice.id}-{kobo}")

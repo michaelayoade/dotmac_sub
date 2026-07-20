@@ -1,112 +1,39 @@
-"""Webhook handler for the event system.
-
-Creates WebhookDelivery records for matching subscriptions and queues
-Celery tasks for HTTP delivery.
-"""
+"""Event adapter for capability-bound outbound integration delivery."""
 
 import logging
 
 from sqlalchemy.orm import Session
 
-from app.models.webhook import WebhookEventType
-from app.services.events.types import Event, EventType
-from app.services.webhook_deliveries import create_for_event, queue_deliveries
+from app.services.events.types import Event
+from app.services.integrations.delivery import (
+    create_platform_deliveries_for_event,
+    queue_platform_deliveries,
+)
 
 logger = logging.getLogger(__name__)
 
 
-# Mapping from EventType to WebhookEventType
-# This maps our internal event types to the webhook event types stored in DB
-# Now that WebhookEventType has been expanded, most events have direct mappings
-EVENT_TYPE_TO_WEBHOOK = {
-    # Subscriber events
-    EventType.subscriber_created: WebhookEventType.subscriber_created,
-    EventType.subscriber_updated: WebhookEventType.subscriber_updated,
-    EventType.subscriber_suspended: WebhookEventType.subscriber_suspended,
-    EventType.subscriber_reactivated: WebhookEventType.subscriber_reactivated,
-    # Subscription events
-    EventType.subscription_created: WebhookEventType.subscription_created,
-    EventType.subscription_activated: WebhookEventType.subscription_activated,
-    EventType.subscription_suspended: WebhookEventType.subscription_suspended,
-    EventType.subscription_resumed: WebhookEventType.subscription_resumed,
-    EventType.subscription_canceled: WebhookEventType.subscription_canceled,
-    EventType.subscription_upgraded: WebhookEventType.subscription_upgraded,
-    EventType.subscription_downgraded: WebhookEventType.subscription_downgraded,
-    EventType.subscription_expiring: WebhookEventType.subscription_expiring,
-    # Invoice events
-    EventType.invoice_created: WebhookEventType.invoice_created,
-    EventType.invoice_sent: WebhookEventType.invoice_sent,
-    EventType.invoice_paid: WebhookEventType.invoice_paid,
-    EventType.invoice_overdue: WebhookEventType.invoice_overdue,
-    # Payment events
-    EventType.payment_received: WebhookEventType.payment_received,
-    EventType.payment_failed: WebhookEventType.payment_failed,
-    EventType.payment_refunded: WebhookEventType.payment_refunded,
-    EventType.payment_reversed: WebhookEventType.payment_reversed,
-    # Usage events
-    EventType.usage_recorded: WebhookEventType.usage_recorded,
-    EventType.usage_warning: WebhookEventType.usage_warning,
-    EventType.usage_exhausted: WebhookEventType.usage_exhausted,
-    EventType.usage_topped_up: WebhookEventType.usage_topped_up,
-    # Provisioning events
-    EventType.provisioning_started: WebhookEventType.provisioning_started,
-    EventType.provisioning_completed: WebhookEventType.provisioning_completed,
-    EventType.provisioning_failed: WebhookEventType.provisioning_failed,
-    # Service order events
-    EventType.service_order_created: WebhookEventType.service_order_created,
-    EventType.service_order_assigned: WebhookEventType.service_order_assigned,
-    EventType.service_order_completed: WebhookEventType.service_order_completed,
-    # Appointment events
-    EventType.appointment_scheduled: WebhookEventType.appointment_scheduled,
-    EventType.appointment_missed: WebhookEventType.appointment_missed,
-    # Network events
-    EventType.device_offline: WebhookEventType.device_offline,
-    EventType.device_online: WebhookEventType.device_online,
-    EventType.session_started: WebhookEventType.session_started,
-    EventType.session_ended: WebhookEventType.session_ended,
-    EventType.network_alert: WebhookEventType.network_alert,
-    # Custom
-    EventType.custom: WebhookEventType.custom,
-}
-
-
 class WebhookHandler:
-    """Handler that creates webhook deliveries for subscribed endpoints."""
+    """Request typed delivery for enabled event subscriptions."""
 
     def handle(self, db: Session, event: Event) -> None:
-        """Process an event by creating webhook deliveries.
-
-        Finds all active webhook subscriptions for the event type and
-        creates a WebhookDelivery record for each. Then queues a Celery
-        task to perform the HTTP delivery.
-
-        Args:
-            db: Database session
-            event: The event to process
-        """
-        # Map to webhook event type
-        webhook_event_type = EVENT_TYPE_TO_WEBHOOK.get(event.event_type)
-        if webhook_event_type is None:
-            logger.debug(f"No webhook event type mapping for {event.event_type.value}")
-            return
-
-        deliveries = create_for_event(
+        deliveries = create_platform_deliveries_for_event(
             db,
             event=event,
-            webhook_event_type=webhook_event_type,
+            event_type=event.event_type.value,
         )
         if not deliveries:
             logger.debug(
-                f"No webhook subscriptions for event type {webhook_event_type.value}"
+                "No integration subscriptions for event type %s",
+                event.event_type.value,
             )
             return
-
-        # Queue Celery task for delivery
         try:
-            queue_deliveries(deliveries, event=event)
+            queue_platform_deliveries(deliveries, event=event)
             logger.info(
-                f"Queued {len(deliveries)} webhook deliveries for "
-                f"event {event.event_type.value}"
+                "Queued %s integration deliveries for event %s",
+                len(deliveries),
+                event.event_type.value,
             )
-        except Exception as exc:
-            logger.error(f"Failed to queue webhook delivery tasks: {exc}")
+        except Exception:
+            logger.exception("Failed to queue integration delivery tasks")

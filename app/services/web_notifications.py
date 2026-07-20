@@ -21,7 +21,7 @@ from app.services import notification as notification_service
 from app.services import notification_template_conditions as condition_service
 from app.services import notification_template_renderer as template_renderer
 from app.services import sms as sms_service
-from app.services.integrations.connectors import whatsapp as whatsapp_connector
+from app.services.integrations import whatsapp_capability
 from app.services.list_query import (
     ListDefinition,
     ListFieldDefinition,
@@ -386,7 +386,7 @@ def send_template_test(
 ) -> str:
     from app.services import email as email_service
     from app.services import sms as sms_service
-    from app.services.integrations.connectors import whatsapp as whatsapp_service
+    from app.services.integrations import whatsapp_capability as whatsapp_service
 
     template = notification_service.templates.get(db=db, template_id=str(template_id))
     variables = preview_variables(test_variables_json)
@@ -466,13 +466,13 @@ def _sms_channel_ready(db: Session) -> tuple[bool, str]:
 
 
 def _whatsapp_channel_ready(db: Session) -> tuple[bool, str]:
-    config = whatsapp_connector.load_whatsapp_config(db)
-    if not str(config.get("api_key") or "").strip():
-        return False, "WhatsApp API key is missing"
+    try:
+        config = whatsapp_capability.active_config(db)
+    except Exception:
+        return False, "No enabled WhatsApp capability binding"
     if not str(config.get("phone_number") or "").strip():
         return False, "WhatsApp phone number is missing"
-    provider = str(config.get("provider") or "").strip() or "provider"
-    return True, f"{provider.replace('_', ' ').title()} is configured"
+    return True, "Meta Cloud API is configured"
 
 
 def bulk_notification_setup_context(db: Session) -> dict[str, object]:

@@ -15,7 +15,11 @@ from sqlalchemy.orm import Session
 
 from app.models.subscriber import Subscriber
 from app.models.support import Ticket, TicketChannel, TicketComment, TicketStatus
-from app.services.crm_client import CRMClient, CRMClientError, get_crm_client
+from app.services.crm_client import CRMClientError
+from app.services.integrations.connectors.dotmac_crm import (
+    CrmTicketObservationSource,
+)
+from app.services.integrations.crm_capability import capability_client
 from app.services.support import _coerce_uuid
 
 logger = logging.getLogger(__name__)
@@ -148,7 +152,9 @@ def _find_existing_ticket(db: Session, ticket: dict[str, Any]) -> Ticket | None:
 
 
 def _find_local_subscriber_id(
-    db: Session, client: CRMClient, crm_subscriber_id: str | None
+    db: Session,
+    client: CrmTicketObservationSource,
+    crm_subscriber_id: str | None,
 ) -> UUID | None:
     if not crm_subscriber_id:
         return None
@@ -268,7 +274,7 @@ def _persist_crm_subscriber_id(
 
 def build_subscriber_cache(
     db: Session,
-    client: CRMClient,
+    client: CrmTicketObservationSource,
     *,
     max_pages: int = 200,
 ) -> dict[str, UUID]:
@@ -294,7 +300,7 @@ def load_local_subscriber_map(db: Session) -> dict[int, UUID]:
 
 def build_subscriber_cache_from_map(
     local_by_splynx: dict[int, UUID],
-    client: CRMClient,
+    client: CrmTicketObservationSource,
     *,
     max_pages: int = 200,
 ) -> dict[str, UUID]:
@@ -380,7 +386,7 @@ def _comment_exists(db: Session, crm_comment_id: str) -> bool:
 
 def _sync_comments(
     db: Session,
-    client: CRMClient,
+    client: CrmTicketObservationSource,
     local_ticket: Ticket,
     crm_ticket_id: str,
 ) -> int:
@@ -416,14 +422,14 @@ def sync_ticket(
     db: Session,
     crm_ticket: dict[str, Any],
     *,
-    client: CRMClient | None = None,
+    client: CrmTicketObservationSource | None = None,
     sync_comments: bool = True,
     fetch_comments_when_unchanged: bool = True,
     subscriber_cache: dict[str, UUID] | None = None,
     local_by_splynx: dict[int, UUID] | None = None,
     local_by_crm_id: dict[str, UUID] | None = None,
 ) -> tuple[str, int, Ticket | None]:
-    client = client or get_crm_client()
+    client = client or capability_client(db)
     crm_ticket_id = str(crm_ticket.get("id") or "").strip()
     if not crm_ticket_id:
         raise ValueError("CRM ticket id is required")
@@ -518,10 +524,10 @@ def sync_ticket_by_id(
     db: Session,
     crm_ticket_id: str,
     *,
-    client: CRMClient | None = None,
+    client: CrmTicketObservationSource | None = None,
     sync_comments: bool = True,
 ) -> CrmTicketPullResult:
-    client = client or get_crm_client()
+    client = client or capability_client(db)
     result = CrmTicketPullResult()
     crm_ticket = client.get_ticket(crm_ticket_id)
     subscriber_cache = build_subscriber_cache(db, client)
@@ -582,7 +588,7 @@ def latest_crm_updated_at(db: Session) -> datetime | None:
 
 def _sweep_open_ticket_comments(
     db: Session,
-    client: CRMClient,
+    client: CrmTicketObservationSource,
     already_synced: set[str],
 ) -> int:
     """Fetch comments for open-state synced tickets not covered this run."""
@@ -611,7 +617,7 @@ def _sweep_open_ticket_comments(
 def pull_tickets(
     db: Session,
     *,
-    client: CRMClient | None = None,
+    client: CrmTicketObservationSource | None = None,
     limit: int = 200,
     max_pages: int = 50,
     sync_comments: bool = True,
@@ -630,7 +636,7 @@ def pull_tickets(
     Without ``since`` (full mode) every ticket is visited and comments are
     fetched even for unchanged tickets — the drift-healing reconciliation.
     """
-    client = client or get_crm_client()
+    client = client or capability_client(db)
     page_size = min(max(limit, 1), 200)
     result = CrmTicketPullResult()
     local_by_splynx = local_by_splynx or load_local_subscriber_map(db)

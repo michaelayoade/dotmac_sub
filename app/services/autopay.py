@@ -42,13 +42,14 @@ from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber
 from app.schemas.billing import PaymentAllocationApply
 from app.services import billing as billing_service
-from app.services import paystack, settings_spec
+from app.services import settings_spec
 from app.services.billing._common import lock_account
 from app.services.billing_adapter import PaymentIntent, billing_adapter
 from app.services.billing_settings import account_has_collectible_service
 from app.services.common import coerce_uuid, round_money, to_decimal
 from app.services.events import emit_event
 from app.services.events.types import EventType
+from app.services.integrations import payment_capability
 from app.services.invoice_collectibility import list_open_invoices
 
 logger = logging.getLogger(__name__)
@@ -240,7 +241,9 @@ def _recover_charge(db: Session, reference: str) -> dict | None:
     charge attempt errored but may already have captured). Returns the tx data
     or None if it can't be confirmed successful."""
     try:
-        tx = paystack.verify_transaction(db, reference)
+        tx = payment_capability.verify_transaction(
+            db, provider_type="paystack", reference=reference
+        )
     except Exception:  # noqa: BLE001 - couldn't confirm; treat as not charged
         return None
     return tx if str(tx.get("status")) == "success" else None
@@ -345,7 +348,7 @@ def run_account_autopay(db: Session, account_id: str) -> dict:
         amount = round_money(to_decimal(getattr(invoice, "balance_due", 0)))
         if amount <= Decimal("0.00"):
             continue
-        amount_kobo = paystack.amount_to_kobo(amount)
+        amount_kobo = payment_capability.amount_to_kobo(amount)
         reference = _autopay_reference(str(invoice.id), amount_kobo, attempt)
 
         # Already charged + recorded this exact (invoice, amount) — at this or
@@ -373,7 +376,7 @@ def run_account_autopay(db: Session, account_id: str) -> dict:
 
         if tx is None:
             try:
-                tx = paystack.charge_authorization(
+                tx = payment_capability.charge_authorization(
                     db,
                     authorization_code=token,
                     email=email,

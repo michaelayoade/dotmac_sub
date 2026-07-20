@@ -11,41 +11,50 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from app.models.auth import ApiKey
-from app.models.connector import ConnectorConfig
 from app.models.integration import (
     IntegrationJob,
     IntegrationRun,
     IntegrationRunStatus,
     IntegrationTarget,
 )
+from app.models.integration_platform import IntegrationInstallation
 from app.services import web_integrations
 from app.services.auth import hash_api_key
 from app.services.auth_dependencies import require_user_auth
+from tests.integration_platform_helpers import enable_capability
 
 
-def _make_connector(db, name: str | None = None) -> ConnectorConfig:
-    connector = ConnectorConfig(name=name or f"conn-{uuid4().hex[:10]}")
-    db.add(connector)
+def _make_installation(db, name: str | None = None) -> IntegrationInstallation:
+    binding = enable_capability(
+        db,
+        connector_key="webhook.http",
+        capability_id="events.deliver.v1",
+        config={"url": "https://webhook.example.test/events"},
+        secret_refs={},
+        policy={"approved_egress_hosts": ["webhook.example.test"]},
+    )
+    installation = binding.installation
+    installation.name = name or f"installation-{uuid4().hex[:10]}"
     db.commit()
-    return connector
+    return installation
 
 
 def _make_run(
     db,
-    connector: ConnectorConfig,
+    installation: IntegrationInstallation,
     *,
     status: IntegrationRunStatus,
     started_at: datetime,
     finished_at: datetime | None = None,
     job_name: str | None = None,
 ) -> IntegrationRun:
-    target = IntegrationTarget(
-        name=f"target-{uuid4().hex[:10]}", connector_config_id=connector.id
-    )
+    target = IntegrationTarget(name=f"target-{uuid4().hex[:10]}")
     db.add(target)
     db.flush()
     job = IntegrationJob(
-        target_id=target.id, name=job_name or f"job-{uuid4().hex[:10]}"
+        target_id=target.id,
+        name=job_name or f"job-{uuid4().hex[:10]}",
+        capability_binding_id=installation.capability_bindings[0].id,
     )
     db.add(job)
     db.flush()
@@ -54,21 +63,23 @@ def _make_run(
         status=status,
         started_at=started_at,
         finished_at=finished_at,
+        installation_id=installation.id,
+        capability_binding_id=installation.capability_bindings[0].id,
     )
     db.add(run)
     db.commit()
     return run
 
 
-def _health_for(data: dict, connector: ConnectorConfig) -> str:
+def _health_for(data: dict, installation: IntegrationInstallation) -> str:
     for row in data["integrations"]:
-        if row["connector"].id == connector.id:
+        if row["installation"].id == installation.id:
             return row["health"]
-    raise AssertionError("connector not in installed integrations data")
+    raise AssertionError("installation not in installed integrations data")
 
 
 def test_connector_health_unknown_when_no_signals(db_session):
-    connector = _make_connector(db_session)
+    connector = _make_installation(db_session)
 
     data = web_integrations.build_installed_integrations_data(db_session)
 
@@ -77,7 +88,7 @@ def test_connector_health_unknown_when_no_signals(db_session):
 
 
 def test_connector_health_healthy_when_last_run_succeeded(db_session):
-    connector = _make_connector(db_session)
+    connector = _make_installation(db_session)
     now = datetime.now(UTC)
     _make_run(
         db_session,
@@ -101,7 +112,7 @@ def test_connector_health_healthy_when_last_run_succeeded(db_session):
 
 
 def test_connector_health_degraded_when_last_run_failed(db_session):
-    connector = _make_connector(db_session)
+    connector = _make_installation(db_session)
     now = datetime.now(UTC)
     _make_run(
         db_session,
@@ -124,7 +135,7 @@ def test_connector_health_degraded_when_last_run_failed(db_session):
 
 
 def test_connector_health_ignores_in_flight_runs(db_session):
-    connector = _make_connector(db_session)
+    connector = _make_installation(db_session)
     _make_run(
         db_session,
         connector,
@@ -138,7 +149,7 @@ def test_connector_health_ignores_in_flight_runs(db_session):
 
 
 def test_activity_log_resolves_connector_name_and_run_duration(db_session):
-    connector = _make_connector(db_session, name=f"Billing sync {uuid4().hex[:6]}")
+    connector = _make_installation(db_session, name=f"Billing sync {uuid4().hex[:6]}")
     started = datetime.now(UTC) - timedelta(minutes=10)
     _make_run(
         db_session,

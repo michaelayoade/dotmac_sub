@@ -19,11 +19,13 @@ from app.models.billing import (
     PaymentProvider,
     PaymentProviderType,
     PaymentStatus,
-    PaymentWebhookDeadLetter,
-    PaymentWebhookDeadLetterStatus,
     TopupIntent,
 )
 from app.models.domain_settings import SettingDomain
+from app.models.integration_platform import (
+    IntegrationCapabilityBinding,
+    IntegrationInbox,
+)
 from app.models.notification import Notification, NotificationStatus
 from app.models.scheduler import ScheduledTask
 from app.services import settings_spec
@@ -250,23 +252,19 @@ def payment_channel_health(db: Session) -> EnforcementHealth:
         .scalar()
         or 0
     )
-    dead_letters = (
-        db.query(func.count(PaymentWebhookDeadLetter.id))
-        .filter(
-            PaymentWebhookDeadLetter.status.in_(
-                [
-                    PaymentWebhookDeadLetterStatus.received,
-                    PaymentWebhookDeadLetterStatus.failed,
-                    PaymentWebhookDeadLetterStatus.rejected,
-                    # Legacy replay marked rows resolved without proving that
-                    # a Payment was posted. New successful replays delete the
-                    # insurance row; retained ``replayed`` rows remain unsafe
-                    # until they are reprocessed through the fixed owner.
-                    PaymentWebhookDeadLetterStatus.replayed,
-                ]
-            )
+    inbox_failures = (
+        db.query(func.count(IntegrationInbox.id))
+        .join(
+            IntegrationCapabilityBinding,
+            IntegrationCapabilityBinding.id == IntegrationInbox.capability_binding_id,
         )
-        .filter(PaymentWebhookDeadLetter.received_at >= window_cutoff)
+        .filter(
+            IntegrationCapabilityBinding.capability_id == "payments.webhook.v1",
+            IntegrationInbox.state.in_(
+                ["verified", "processing", "retryable", "dead_letter"]
+            ),
+        )
+        .filter(IntegrationInbox.received_at >= window_cutoff)
         .scalar()
         or 0
     )
@@ -301,8 +299,8 @@ def payment_channel_health(db: Session) -> EnforcementHealth:
     reasons: list[str] = []
     if require_active_gateway and int(active_gateway_count) <= 0:
         reasons.append("no_active_online_payment_gateway")
-    if int(dead_letters) > max_dead_letters:
-        reasons.append("payment_webhook_dead_letters")
+    if int(inbox_failures) > max_dead_letters:
+        reasons.append("payment_inbox_failures")
     if int(stale_pending_topups) > max_stale_pending:
         reasons.append("stale_pending_topups")
     if int(recent_successes) < min_recent_successes:
@@ -313,7 +311,7 @@ def payment_channel_health(db: Session) -> EnforcementHealth:
         reasons=reasons,
         details={
             "active_gateway_count": int(active_gateway_count),
-            "dead_letters": int(dead_letters),
+            "integration_inbox_failures": int(inbox_failures),
             "stale_pending_topups": int(stale_pending_topups),
             "recent_successes": int(recent_successes),
             "max_dead_letters": max_dead_letters,

@@ -1706,44 +1706,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.billing,
-        key="paystack_secret_key",
-        env_var="PAYSTACK_SECRET_KEY",
-        value_type=SettingValueType.string,
-        default="",
-        is_secret=True,
-    ),
-    SettingSpec(
-        domain=SettingDomain.billing,
-        key="paystack_public_key",
-        env_var="PAYSTACK_PUBLIC_KEY",
-        value_type=SettingValueType.string,
-        default="",
-    ),
-    SettingSpec(
-        domain=SettingDomain.billing,
-        key="flutterwave_secret_key",
-        env_var="FLUTTERWAVE_SECRET_KEY",
-        value_type=SettingValueType.string,
-        default="",
-        is_secret=True,
-    ),
-    SettingSpec(
-        domain=SettingDomain.billing,
-        key="flutterwave_public_key",
-        env_var="FLUTTERWAVE_PUBLIC_KEY",
-        value_type=SettingValueType.string,
-        default="",
-    ),
-    SettingSpec(
-        domain=SettingDomain.billing,
-        key="flutterwave_secret_hash",
-        env_var="FLUTTERWAVE_SECRET_HASH",
-        value_type=SettingValueType.string,
-        default="",
-        is_secret=True,
-    ),
-    SettingSpec(
-        domain=SettingDomain.billing,
         key="default_bank_account_type",
         env_var="BILLING_DEFAULT_BANK_ACCOUNT_TYPE",
         value_type=SettingValueType.string,
@@ -2031,16 +1993,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
         min_value=1,
         max_value=30,
         label="Top-up Reconciliation Max Age Days",
-    ),
-    SettingSpec(
-        domain=SettingDomain.billing,
-        key="payment_gateway_timeout_seconds",
-        env_var="BILLING_PAYMENT_GATEWAY_TIMEOUT_SECONDS",
-        value_type=SettingValueType.integer,
-        default=30,
-        min_value=1,
-        max_value=120,
-        label="Payment Gateway Timeout Seconds",
     ),
     SettingSpec(
         domain=SettingDomain.billing,
@@ -3471,71 +3423,11 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.comms,
-        key="meta_webhook_verify_token",
-        env_var="META_WEBHOOK_VERIFY_TOKEN",
-        value_type=SettingValueType.string,
-        default=None,
-        is_secret=True,
-    ),
-    SettingSpec(
-        domain=SettingDomain.comms,
         key="meta_graph_api_version",
         env_var="META_GRAPH_API_VERSION",
         value_type=SettingValueType.string,
         default="v21.0",
         label="Meta Graph API Version",
-    ),
-    SettingSpec(
-        domain=SettingDomain.comms,
-        key="whatsapp_provider",
-        env_var="WHATSAPP_PROVIDER",
-        value_type=SettingValueType.string,
-        default="meta_cloud_api",
-        allowed={"meta_cloud_api", "twilio", "messagebird"},
-    ),
-    SettingSpec(
-        domain=SettingDomain.comms,
-        key="whatsapp_api_key",
-        env_var="WHATSAPP_API_KEY",
-        value_type=SettingValueType.string,
-        default="",
-        is_secret=True,
-    ),
-    SettingSpec(
-        domain=SettingDomain.comms,
-        key="whatsapp_api_secret",
-        env_var="WHATSAPP_API_SECRET",
-        value_type=SettingValueType.string,
-        default="",
-        is_secret=True,
-    ),
-    SettingSpec(
-        domain=SettingDomain.comms,
-        key="whatsapp_phone_number",
-        env_var="WHATSAPP_PHONE_NUMBER",
-        value_type=SettingValueType.string,
-        default="",
-    ),
-    SettingSpec(
-        domain=SettingDomain.comms,
-        key="whatsapp_waba_id",
-        env_var="WHATSAPP_WABA_ID",
-        value_type=SettingValueType.string,
-        default="",
-    ),
-    SettingSpec(
-        domain=SettingDomain.comms,
-        key="whatsapp_webhook_url",
-        env_var="WHATSAPP_WEBHOOK_URL",
-        value_type=SettingValueType.string,
-        default="",
-    ),
-    SettingSpec(
-        domain=SettingDomain.comms,
-        key="whatsapp_message_templates",
-        env_var="WHATSAPP_MESSAGE_TEMPLATES_JSON",
-        value_type=SettingValueType.json,
-        default=[],
     ),
     # ============== Auth Domain: Customer/Reseller/Vendor Portal Auth ==============
     SettingSpec(
@@ -3666,14 +3558,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
         min_value=5,
     ),
     # ============== Comms Domain: External API Timeouts ==============
-    SettingSpec(
-        domain=SettingDomain.comms,
-        key="whatsapp_api_timeout_seconds",
-        env_var="WHATSAPP_API_TIMEOUT_SECONDS",
-        value_type=SettingValueType.integer,
-        default=10,
-        min_value=1,
-    ),
     SettingSpec(
         domain=SettingDomain.comms,
         key="nextcloud_talk_timeout_seconds",
@@ -4020,23 +3904,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=False,
         label="Quotes: native write path",
     ),
-    # sync-window flag: while CRM remains the
-    # writer for projects/quotes/referrals (backfill done, write flip not
-    # yet), ON makes CRM webhooks ALSO apply thin status deltas to the
-    # NATIVE tables and enables the crm_phase3_native_delta beat (the
-    # backfill importer's watermark mode run in-process against the CRM
-    # DB), so the flip-day delta stays minutes. One flag for all verticals
-    # because the delta importer is cross-vertical by FK order — a
-    # per-vertical flag would misrepresent what actually runs. Default
-    # OFF; deleted with the whole adapter at the contract.
-    SettingSpec(
-        domain=SettingDomain.projects,
-        key="crm_phase3_native_sync_enabled",
-        env_var="CRM_PHASE3_NATIVE_SYNC_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=False,
-        label="sync CRM changes into native tables (sync window)",
-    ),
     # read-flip flags: OFF =
     # the read surfaces (/me/*, web customer portal, reseller views) keep
     # serving the CRM mirrors; ON = they serve the native services
@@ -4333,7 +4200,6 @@ _RETIRED_FEATURE_ALIAS_SPECS = frozenset(
         (SettingDomain.network, "wireguard_log_cleanup_enabled"),
         (SettingDomain.network, "wireguard_token_cleanup_enabled"),
         (SettingDomain.projects, "quotes_native_write_enabled"),
-        (SettingDomain.projects, "crm_phase3_native_sync_enabled"),
         (SettingDomain.projects, "projects_native_read_enabled"),
         (SettingDomain.projects, "quotes_native_read_enabled"),
     }

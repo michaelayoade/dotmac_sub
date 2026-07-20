@@ -127,12 +127,12 @@ def subscribers_section(
 
 # ── ③ Year-End Section F/G (dotmac_erp) ─────────────────────────────────────
 def _erp_client(db: Session):
-    """A configured ERP client, or ``None`` when ERP is not configured."""
-    from app.services.dotmac_erp.client import build_erp_client
+    """An enabled ERP capability client, or ``None`` when unavailable."""
+    from app.services.integrations.erp_capability import capability_client
 
     try:
-        return build_erp_client(db)
-    except ValueError:
+        return capability_client(db)
+    except Exception:
         return None
 
 

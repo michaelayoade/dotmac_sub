@@ -15,11 +15,14 @@ from __future__ import annotations
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.config import settings
 from app.models.subscriber import Subscriber
 from app.services.common import coerce_uuid
-from app.services.crm_client import CRMClientError, get_crm_client
+from app.services.crm_client import CRMClientError
 from app.services.crm_portal import resolve_crm_subscriber_id
+from app.services.integrations.connectors.dotmac_crm import (
+    CRM_PORTAL_SESSION_CAPABILITY,
+)
+from app.services.integrations.crm_capability import active_config, capability_client
 
 # Least-privilege scopes a subscriber portal token carries. Today only the
 # Refer & Earn vertical; widen as portal verticals (projects, work orders,
@@ -27,9 +30,13 @@ from app.services.crm_portal import resolve_crm_subscriber_id
 SUBSCRIBER_PORTAL_SCOPES = ["referrals:read", "referrals:write"]
 
 
-def _portal_api_base() -> str:
+def _portal_api_base(db: Session) -> str:
     """Absolute base URL the client uses to call the CRM Portal API directly."""
-    return f"{settings.crm_base_url.rstrip('/')}/api/v1/portal"
+    config = active_config(db, CRM_PORTAL_SESSION_CAPABILITY)
+    configured = str(config.get("public_portal_api_base") or "").strip()
+    if configured:
+        return configured.rstrip("/")
+    return f"{str(config.get('base_url') or '').rstrip('/')}/api/v1/portal"
 
 
 def broker_customer_portal_session(db: Session, subscriber_id: str) -> dict:
@@ -48,7 +55,7 @@ def broker_customer_portal_session(db: Session, subscriber_id: str) -> dict:
         )
 
     try:
-        data = get_crm_client().create_portal_session(
+        data = capability_client(db).create_portal_session(
             crm_subscriber_id=crm_subscriber_id,
             actor="subscriber",
             scopes=SUBSCRIBER_PORTAL_SCOPES,
@@ -70,5 +77,5 @@ def broker_customer_portal_session(db: Session, subscriber_id: str) -> dict:
     return {
         "portal_token": token,
         "expires_at": int(expires_at),
-        "api_base": _portal_api_base(),
+        "api_base": _portal_api_base(db),
     }

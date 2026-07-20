@@ -198,20 +198,24 @@ def test_receive_whatsapp_links_reseller_contact_without_subscriber(db_session):
 def test_receive_whatsapp_webhook_normalizes_and_deduplicates(db_session):
     first = team_inbox_channel_receive.receive_whatsapp_webhook(
         db_session,
-        provider="twilio",
+        provider="meta_cloud_api",
         payload={
-            "From": "whatsapp:08012345678",
-            "Body": "Hello",
-            "MessageSid": "sid-1",
+            "message": {
+                "from": "2348012345678",
+                "text": "Hello",
+                "id": "wamid-1",
+            },
         },
     )
     second = team_inbox_channel_receive.receive_whatsapp_webhook(
         db_session,
-        provider="twilio",
+        provider="meta_cloud_api",
         payload={
-            "From": "whatsapp:08012345678",
-            "Body": "Hello again",
-            "MessageSid": "sid-1",
+            "message": {
+                "from": "2348012345678",
+                "text": "Hello again",
+                "id": "wamid-1",
+            },
         },
     )
     db_session.commit()

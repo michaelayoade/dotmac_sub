@@ -173,9 +173,9 @@ class FieldExpenseRequests:
         request.status = "submitted"
         request.submitted_at = datetime.now(UTC)
         _mark_sub_authoritative(request.work_order_mirror)
+        _maybe_enqueue_erp_sync(db, request)
         db.commit()
         db.refresh(request)
-        _maybe_enqueue_erp_sync(db, request)
         return serialize_expense_request(request)
 
     @staticmethod
@@ -346,46 +346,25 @@ def _mark_sub_authoritative(row: WorkOrder) -> None:
     _mark_source_authoritative(row, "expense_requests")
 
 
-def _erp_sync_enabled(db: Session) -> bool:
-    """Master ERP-sync kill-switch (integration domain, default OFF).
-
-    The switch that keeps the expense-claim flow INERT until cutover: when off,
-    submit does not enqueue an ERP outbox row at all, so no claim can accumulate
-    (or, at cutover, double-post against CRM's separate id-space). Ownership of
-    the ``expense_claim`` flow (``sync_flow_ownership``, seeded ``crm``) is the
-    second, per-flow gate enforced inside outbox delivery.
-    """
-    from app.models.domain_settings import SettingDomain
-    from app.services import settings_spec
-
-    return bool(
-        settings_spec.resolve_value(
-            db, SettingDomain.integration, "dotmac_erp_sync_enabled"
-        )
-    )
-
-
 def _maybe_enqueue_erp_sync(db: Session, request: FieldExpenseRequest) -> None:
-    """Enqueue the ERP expense-claim outbox intent on submit (best-effort).
+    """Add the ERP intent atomically when Sub owns the expense flow."""
+    from app.models.field_erp_sync import FieldErpSyncFlow, flow_owned_by_sub
+    from app.services.integrations.connectors.dotmac_erp import ERP_OUTBOX_CAPABILITY
+    from app.services.integrations.erp_capability import capability_enabled
 
-    Gated by ``dotmac_erp_sync_enabled`` so the flow is inert pre-cutover. Never
-    raises into the submit path: a queueing hiccup must not fail a technician's
-    submit — the row simply is not enqueued (and no ERP write happens).
-    """
-    try:
-        if not _erp_sync_enabled(db):
-            return
-        from app.services.dotmac_erp.expense_sync import enqueue_expense_claim
-
-        enqueue_expense_claim(db, request)
-        db.commit()
-    except Exception:
-        db.rollback()
-        logger.warning(
-            "field expense %s: ERP outbox enqueue failed (submit still succeeded)",
-            request.id,
-            exc_info=True,
+    if not flow_owned_by_sub(db, FieldErpSyncFlow.expense_claim):
+        return
+    if not capability_enabled(db, ERP_OUTBOX_CAPABILITY):
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "ERP expense transport is not enabled; submission cannot be "
+                "recorded without its outbox intent"
+            ),
         )
+    from app.services.dotmac_erp.expense_sync import enqueue_expense_claim
+
+    enqueue_expense_claim(db, request)
 
 
 field_expense_requests = FieldExpenseRequests()

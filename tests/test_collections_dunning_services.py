@@ -1418,7 +1418,7 @@ def test_billing_enforcement_health_keeps_notification_gate_optional(
         "payment_channel_health",
         lambda _db: guards.EnforcementHealth(
             ok=False,
-            reasons=["payment_webhook_dead_letters"],
+            reasons=["payment_inbox_failures"],
             details={"dead_letters": 1},
         ),
     )
@@ -1426,7 +1426,7 @@ def test_billing_enforcement_health_keeps_notification_gate_optional(
     health = guards.billing_enforcement_health(db_session)
 
     assert health.ok is False
-    assert health.reasons == ["payment_webhook_dead_letters"]
+    assert health.reasons == ["payment_inbox_failures"]
     assert "notification_recent_failed" not in health.details
     assert health.details["payment_dead_letters"] == 1
 

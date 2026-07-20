@@ -49,23 +49,6 @@
                         </select>
                     </div>
 
-                    <div>
-                        <label for="connector_config_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Connector</label>
-                        <select name="connector_config_id" id="connector_config_id"
-                            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                            <option value="" {% if form is not defined or not form.connector_config_id %}selected{% endif %}>No connector</option>
-                            {% for connector in connectors %}
-                            <option value="{{ connector.id }}"
-                                {% if form is defined and form.connector_config_id == connector.id|string %}selected{% endif %}>
-                                {{ connector.name }} ({{ connector.connector_type.value if connector.connector_type else 'custom' }})
-                            </option>
-                            {% endfor %}
-                        </select>
-                        {% if not connectors %}
-                        <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">No active connectors available yet.</p>
-                        {% endif %}
-                    </div>
-
                     <div class="sm:col-span-2">
                         <label for="notes" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Notes</label>
                         <textarea name="notes" id="notes" rows="3"

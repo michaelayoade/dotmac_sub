@@ -91,7 +91,7 @@ def test_enqueue_celery_task_uses_headers_and_logs(monkeypatch, caplog):
     caplog.set_level("INFO")
 
     result = celery_app_module.enqueue_celery_task(
-        "app.tasks.webhooks.deliver_webhook",
+        "app.tasks.integration_delivery.deliver_integration_event",
         args=["delivery-1"],
         correlation_id="webhook_event:event-1",
         source="event_webhook_handler",

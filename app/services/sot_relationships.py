@@ -974,10 +974,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.api_billing_webhooks",
                 owns=(
                     "verified payment webhook projection",
-                    "inbound payment dead-letter lifecycle",
-                    "payment dead-letter replay",
+                    "billing consequence submission from verified receipts",
                 ),
-                depends_on=("financial.payment_provider_events",),
+                depends_on=(
+                    "integration.inbox",
+                    "financial.payment_provider_events",
+                ),
             ),
             SOTService(
                 name="financial.payment_reconciliation",
@@ -2472,21 +2474,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=("event persistence", "handler attempt tracking"),
                 depends_on=("events.dispatcher",),
             ),
-            SOTService(
-                name="events.webhook_deliveries",
-                module="app.services.webhook_deliveries",
-                owns=("webhook delivery rows", "webhook queueing"),
-                depends_on=("events.dispatcher",),
-            ),
         ),
         entrypoints=(
             "app.services.events.handlers.*",
-            "app.tasks.webhooks",
+            "app.tasks.integration_delivery",
             "app.web.admin.integrations",
         ),
         rule=(
-            "Handlers orchestrate; persistence, retry, and delivery bookkeeping "
-            "live in event/webhook services."
+            "Handlers orchestrate; event persistence stays in events.store and "
+            "external delivery is requested from integration.delivery."
         ),
     ),
     DomainSOT(
@@ -2761,6 +2757,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.work_order_commands",
                 owns=(
                     "native work-order creation and header commands",
+                    "native work-order project binding",
+                    "work-order as-built evidence requirement",
                     "work-order assignment decisions and projection",
                     "work-order assignment-queue transitions",
                 ),
@@ -2776,7 +2774,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "projection atomically, records exact actor audit evidence, "
                     "and treats equivalent retries as replays. CRM mirror ingest "
                     "remains a provenance importer; field execution statuses remain "
-                    "owned by operations.field_completion."
+                    "owned by operations.field_completion. Native project-binding "
+                    "and evidence-policy rejections are transport-neutral "
+                    "WorkOrderCommandError values mapped only by the app boundary."
                 ),
             ),
             SOTService(
@@ -2853,18 +2853,29 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 name="operations.vendor_project_lifecycle",
                 module="app.services.vendor_portal_operations",
                 owns=(
-                    "vendor start/complete installation-project transitions",
-                    "durable vendor lifecycle actor/time/event evidence",
+                    "vendor start/complete and staff verify/rework "
+                    "installation-project transitions",
+                    "durable vendor lifecycle actor/time/reason/event evidence",
                     "typed vendor project lifecycle outbox events",
                     "vendor installation-project quote lifecycle",
                     "quote submission eligibility and impact snapshot",
-                    "as-built evidence lifecycle and impact snapshot",
+                    "as-built submission/review lifecycle and impact snapshots",
+                    "durable as-built review actor/time/reason/event evidence",
                 ),
-                depends_on=("events.dispatcher", "operations.project_lifecycle"),
+                depends_on=(
+                    "events.dispatcher",
+                    "operations.project_lifecycle",
+                    "operations.work_order_commands",
+                ),
                 notes=(
                     "This is the sole writer for approved -> in_progress -> "
-                    "completed vendor work transitions and owns the related quote "
+                    "completed -> verified vendor work transitions and completed -> "
+                    "in_progress rework decisions, and owns the related quote "
                     "and as-built workflow in the same implementation module. It "
+                    "consumes the default-enabled work-order evidence policy and "
+                    "requires the latest project as-built to be accepted when any "
+                    "active linked work order requires it. The exact policy and "
+                    "evidence snapshot is retained with verification evidence. It "
                     "raises transport-neutral domain errors; adapters translate "
                     "them for HTTP delivery."
                 ),
@@ -2898,6 +2909,36 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "Web adapters only request a preview or confirm its signed "
                     "proposal. Domain owners recheck under lock and commit the "
                     "mutation with its idempotency result."
+                ),
+            ),
+            SOTService(
+                name="operations.vendor_project_review_confirmation",
+                module="app.services.vendor_project_review_proposals",
+                owns=(
+                    "short-lived signed staff project-review proposal",
+                    "staff project-review stale-preview verification",
+                    "staff project-review idempotency and replay result",
+                ),
+                depends_on=("operations.vendor_project_lifecycle",),
+                notes=(
+                    "This supporting service cannot decide project state. It binds "
+                    "an authenticated staff actor to the lifecycle owner's preview "
+                    "and invokes that owner once after lock-time revalidation."
+                ),
+            ),
+            SOTService(
+                name="operations.vendor_as_built_review_confirmation",
+                module="app.services.vendor_as_built_review_proposals",
+                owns=(
+                    "short-lived signed staff as-built review proposal",
+                    "staff as-built review stale-preview verification",
+                    "staff as-built review idempotency and replay result",
+                ),
+                depends_on=("operations.vendor_project_lifecycle",),
+                notes=(
+                    "This supporting service carries no evidence or project "
+                    "decision policy. It binds staff to the vendor operations "
+                    "owner's preview and invokes that owner after revalidation."
                 ),
             ),
         ),
@@ -3430,25 +3471,107 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             SOTService(
                 name="integration.registry",
                 module="app.services.integrations.registry",
-                owns=("integration connector registry", "connector capabilities"),
+                owns=(
+                    "deployed integration connector catalogue",
+                    "current connector capability metadata",
+                ),
+                notes=(
+                    "The live manifest, installation, capability, and isolation "
+                    "contract is docs/designs/INTEGRATION_PLATFORM_SOT.md. "
+                    "Definitions are deployed code artifacts and the manifest "
+                    "registry is the executable connector contract."
+                ),
+            ),
+            SOTService(
+                name="integration.installations",
+                module="app.services.integrations.installations",
+                owns=(
+                    "version-pinned integration installation lifecycle",
+                    "immutable integration configuration revisions",
+                    "integration capability grants and bindings",
+                ),
+                depends_on=("integration.registry", "secrets.reference_store"),
+                notes=(
+                    "This is the sole owner of integration_installations, "
+                    "integration_config_revisions, and integration_capability_"
+                    "bindings. CRM, ERP, WhatsApp, payment, and webhook callers "
+                    "resolve configuration only through versioned bindings."
+                ),
+            ),
+            SOTService(
+                name="integration.runtime",
+                module="app.services.integrations.runtime_execution",
+                owns=(
+                    "version-pinned connector runner selection",
+                    "connector operation envelope construction",
+                    "bounded secret materialization for connector execution",
+                ),
+                depends_on=(
+                    "integration.registry",
+                    "integration.installations",
+                    "secrets.reference_store",
+                ),
+                notes=(
+                    "Runtime code selects an explicitly registered runner and "
+                    "passes it a pinned envelope. Runners receive no Sub "
+                    "database session and return observations or receipts; "
+                    "domain owners decide every consequence."
+                ),
+            ),
+            SOTService(
+                name="integration.delivery",
+                module="app.services.integrations.delivery",
+                owns=(
+                    "integration event subscription projection",
+                    "deduplicated integration delivery lifecycle",
+                    "outbound capability delivery evidence",
+                ),
+                depends_on=(
+                    "events.store",
+                    "integration.installations",
+                    "integration.runtime",
+                ),
+                notes=(
+                    "Every outbound endpoint is an installation-bound typed "
+                    "capability. Delivery identity, retry, replay, and terminal "
+                    "failure state have one canonical writer."
+                ),
+            ),
+            SOTService(
+                name="integration.inbox",
+                module="app.services.integrations.inbox",
+                owns=(
+                    "verified provider event receipt identity",
+                    "integration inbox deduplication lifecycle",
+                    "inbound consequence processing evidence",
+                ),
+                depends_on=("integration.installations", "integration.runtime"),
+                notes=(
+                    "Provider-specific routes verify signatures before writing "
+                    "a receipt. The inbox records facts and processing state; "
+                    "the Team Inbox, financial, and other domain owners alone "
+                    "decide and persist consequences."
+                ),
             ),
             SOTService(
                 name="integration.jobs",
                 module="app.services.integration",
                 owns=("integration targets", "integration jobs", "integration runs"),
                 depends_on=("integration.registry",),
+                notes=(
+                    "Jobs bind directly to versioned connector capabilities; "
+                    "adapter/action transport selection is not a runtime input."
+                ),
             ),
             SOTService(
                 name="integration.sync",
                 module="app.services.integration_sync",
                 owns=("integration sync orchestration", "sync run lifecycle"),
-                depends_on=("integration.jobs",),
-            ),
-            SOTService(
-                name="integration.hooks",
-                module="app.services.integration_hooks",
-                owns=("integration hook dispatch", "hook subscriptions"),
-                depends_on=("events.dispatcher", "integration.registry"),
+                depends_on=("integration.jobs", "integration.runtime"),
+                notes=(
+                    "CRM observation jobs resolve their version-pinned bindings "
+                    "and execute only through the registered CRM runner."
+                ),
             ),
             SOTService(
                 name="integration.vendor_purchase_invoice_erp_projection",
@@ -3486,11 +3609,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             "app.api.*_webhooks",
             "app.tasks.integrations",
             "app.tasks.dotmac_erp_outbox",
-            "app.services.events.handlers.integration_hook",
+            "app.tasks.integration_delivery",
         ),
         rule=(
-            "Integration routes and webhooks validate and enqueue; registry, job, "
-            "sync, and hook services own connector behavior and delivery flow."
+            "Integration routes and webhooks validate and enqueue through typed "
+            "capabilities; connectors never become business-state writers."
         ),
     ),
     DomainSOT(

@@ -63,7 +63,7 @@ def test_reconcile_upserts_and_marks_synced(db_session):
     client = MagicMock()
     client.get_portal_work_orders.return_value = _crm_resp()
     with (
-        patch("app.services.work_orders_mirror.get_crm_client", return_value=client),
+        patch("app.services.work_orders_mirror.capability_client", return_value=client),
         patch(
             "app.services.work_orders_mirror.resolve_crm_subscriber_id",
             return_value="crm-1",
@@ -97,7 +97,7 @@ def test_read_counts_upcoming_and_excludes_terminal(db_session):
     client = MagicMock()
     client.get_portal_work_orders.return_value = _crm_resp()
     with (
-        patch("app.services.work_orders_mirror.get_crm_client", return_value=client),
+        patch("app.services.work_orders_mirror.capability_client", return_value=client),
         patch(
             "app.services.work_orders_mirror.resolve_crm_subscriber_id",
             return_value="crm-1",
@@ -300,7 +300,7 @@ def test_cold_read_stays_synchronous_and_does_not_enqueue(db_session):
     client = MagicMock()
     client.get_portal_work_orders.return_value = _crm_resp()
     with (
-        patch("app.services.work_orders_mirror.get_crm_client", return_value=client),
+        patch("app.services.work_orders_mirror.capability_client", return_value=client),
         patch(
             "app.services.work_orders_mirror.resolve_crm_subscriber_id",
             return_value="crm-1",
@@ -370,7 +370,7 @@ def test_upsert_protects_native_field_activity_from_crm_clobber(db_session):
 
     with (
         patch(
-            "app.services.work_orders_mirror.get_crm_client",
+            "app.services.work_orders_mirror.capability_client",
             return_value=MagicMock(
                 get_portal_work_orders=MagicMock(
                     return_value={

@@ -6,11 +6,28 @@ import pytest
 from app.models.billing import (
     Invoice,
     InvoiceStatus,
+    LedgerEntry,
+    LedgerEntryType,
+    LedgerSource,
     Payment,
     PaymentAllocation,
     PaymentProvider,
     PaymentProviderType,
+    ServiceEntitlement,
     TopupIntent,
+)
+from app.models.catalog import (
+    AccessType,
+    BillingCycle,
+    BillingMode,
+    CatalogOffer,
+    OfferPrice,
+    OfferStatus,
+    PriceBasis,
+    PriceType,
+    ServiceType,
+    Subscription,
+    SubscriptionStatus,
 )
 from app.models.subscriber import SubscriberStatus
 from app.schemas.billing import InvoiceCreate, PaymentSyncRead
@@ -127,6 +144,74 @@ def test_confirmed_deposit_is_credit_only_and_grants_no_service(db_session, subs
     assert result.payment.settlement.prepaid_ledger_entry_id is None
     assert get_account_credit_balance(db_session, str(subscriber.id)) == Decimal(
         "10000.00"
+    )
+
+
+def test_confirmed_deposit_skips_eligible_prepaid_renewal(db_session, subscriber):
+    offer = CatalogOffer(
+        name="Deposit Credit Prepaid Plan",
+        service_type=ServiceType.residential,
+        access_type=AccessType.fiber,
+        price_basis=PriceBasis.flat,
+        billing_mode=BillingMode.prepaid,
+        billing_cycle=BillingCycle.monthly,
+        status=OfferStatus.active,
+        is_active=True,
+    )
+    db_session.add(offer)
+    db_session.flush()
+    next_billing_at = datetime(2026, 8, 1)
+    subscription = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=offer.id,
+        status=SubscriptionStatus.active,
+        billing_mode=BillingMode.prepaid,
+        billing_cycle=BillingCycle.monthly,
+        next_billing_at=next_billing_at,
+        unit_price=Decimal("1000.00"),
+    )
+    db_session.add_all(
+        [
+            subscription,
+            OfferPrice(
+                offer_id=offer.id,
+                price_type=PriceType.recurring,
+                amount=Decimal("1000.00"),
+                currency="NGN",
+                billing_cycle=BillingCycle.monthly,
+                is_active=True,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    provider = _provider(db_session)
+    intent = _intent(db_session, subscriber, provider, amount="1000.00")
+    result = AccountCreditDeposits.settle_verified(
+        db_session,
+        intent_id=intent.id,
+        transaction=_transaction(intent, external_id="gateway-prepaid-deposit"),
+    )
+
+    db_session.refresh(subscription)
+    assert result.payment.settlement is not None
+    assert result.payment.settlement.unallocated_amount == Decimal("1000.00")
+    assert result.payment.settlement.prepaid_amount == Decimal("0.00")
+    assert result.payment.settlement.prepaid_ledger_entry_id is None
+    assert get_account_credit_balance(db_session, str(subscriber.id)) == Decimal(
+        "1000.00"
+    )
+    assert subscription.next_billing_at == next_billing_at
+    assert db_session.query(ServiceEntitlement).count() == 0
+    assert (
+        db_session.query(LedgerEntry)
+        .filter(
+            LedgerEntry.payment_id == result.payment.id,
+            LedgerEntry.entry_type == LedgerEntryType.debit,
+            LedgerEntry.source == LedgerSource.invoice,
+        )
+        .count()
+        == 0
     )
 
 

@@ -709,11 +709,9 @@ def test_integrations_connector_lifecycle_require_permissions():
     )
     for path in (
         "/integrations/connectors",
-        "/integrations/register",
         "/integrations/installed/{connector_id}/uninstall",
         "/integrations/targets",
         "/integrations/jobs",
-        "/integrations/hooks/{hook_id}/test",
     ):
         assert _route_has_permission(
             admin_integrations.router, path, "POST", "system:settings:write"

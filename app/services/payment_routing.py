@@ -11,6 +11,13 @@ from sqlalchemy.orm import Session
 from app.models.billing import PaymentProvider, PaymentProviderType, TopupIntent
 from app.models.domain_settings import SettingDomain
 from app.services import settings_spec
+from app.services.integrations import installations
+from app.services.integrations.connectors.payment_gateway import (
+    PAYMENT_INTENT_CAPABILITY,
+    PAYMENT_RECONCILE_CAPABILITY,
+    PAYMENT_REFUND_CAPABILITY,
+    PAYMENT_WEBHOOK_CAPABILITY,
+)
 
 SUPPORTED_PROVIDER_TYPES: tuple[PaymentProviderType, ...] = (
     PaymentProviderType.paystack,
@@ -86,19 +93,26 @@ def get_routing_policy(db: Session) -> PaymentRoutingPolicy:
     )
 
 
-def provider_credentials(
-    db: Session, provider_type: PaymentProviderType
-) -> dict[str, str]:
-    if provider_type == PaymentProviderType.paystack:
-        return {
-            "secret_key": _string_setting(db, "paystack_secret_key", ""),
-            "public_key": _string_setting(db, "paystack_public_key", ""),
-        }
-    return {
-        "secret_key": _string_setting(db, "flutterwave_secret_key", ""),
-        "public_key": _string_setting(db, "flutterwave_public_key", ""),
-        "secret_hash": _string_setting(db, "flutterwave_secret_hash", ""),
-    }
+_REQUIRED_PROVIDER_CAPABILITIES = (
+    PAYMENT_INTENT_CAPABILITY,
+    PAYMENT_WEBHOOK_CAPABILITY,
+    PAYMENT_RECONCILE_CAPABILITY,
+    PAYMENT_REFUND_CAPABILITY,
+)
+
+
+def _missing_capabilities(db: Session, provider_type: PaymentProviderType) -> list[str]:
+    missing: list[str] = []
+    for capability_id in _REQUIRED_PROVIDER_CAPABILITIES:
+        try:
+            installations.require_enabled_capability_binding(
+                db,
+                connector_key=provider_type.value,
+                capability_id=capability_id,
+            )
+        except installations.InstallationError:
+            missing.append(capability_id)
+    return missing
 
 
 def provider_health(db: Session) -> list[dict[str, Any]]:
@@ -112,8 +126,8 @@ def provider_health(db: Session) -> list[dict[str, Any]]:
             ).all()
         )
         active = [provider for provider in providers if provider.is_active]
-        credentials = provider_credentials(db, provider_type)
-        has_required_credentials = all(credentials.values())
+        missing_capabilities = _missing_capabilities(db, provider_type)
+        capability_ready = not missing_capabilities
         if len(active) > 1:
             health = "ambiguous"
             health_label = "Multiple Active Providers"
@@ -123,9 +137,9 @@ def provider_health(db: Session) -> list[dict[str, Any]]:
         elif not active:
             health = "inactive"
             health_label = "Inactive"
-        elif not has_required_credentials:
+        elif not capability_ready:
             health = "misconfigured"
-            health_label = "Missing Credentials"
+            health_label = "Integration Not Ready"
         else:
             health = "healthy"
             health_label = "Healthy"
@@ -141,7 +155,8 @@ def provider_health(db: Session) -> list[dict[str, Any]]:
                 "provider_id": str(provider.id) if provider else None,
                 "configured": bool(providers),
                 "active": len(active) == 1,
-                "has_required_credentials": has_required_credentials,
+                "capability_ready": capability_ready,
+                "missing_capabilities": missing_capabilities,
                 "health": health,
                 "health_label": health_label,
             }
@@ -203,41 +218,3 @@ def provider_for_intent(
         if asserted != provider_type:
             raise ValueError("Payment provider does not match the original checkout")
     return provider_type
-
-
-def backfill_legacy_provider_routes(db: Session) -> list[PaymentProviderType]:
-    """Materialize gateways that legacy checkout exposed without provider rows.
-
-    An existing row, including an inactive one, is authoritative and is never
-    reactivated here. Only a provider with complete credentials and no row at
-    all is created, preserving the pre-SOT implicit checkout behavior once.
-    """
-    created: list[PaymentProviderType] = []
-    for provider_type in SUPPORTED_PROVIDER_TYPES:
-        existing = db.scalars(
-            select(PaymentProvider.id).where(
-                PaymentProvider.provider_type == provider_type
-            )
-        ).first()
-        if existing or not all(provider_credentials(db, provider_type).values()):
-            continue
-        base_name = f"{provider_type.value.title()} Online Gateway"
-        name = base_name
-        suffix = 2
-        while db.scalars(
-            select(PaymentProvider.id).where(PaymentProvider.name == name)
-        ).first():
-            name = f"{base_name} {suffix}"
-            suffix += 1
-        db.add(
-            PaymentProvider(
-                name=name,
-                provider_type=provider_type,
-                is_active=True,
-                notes="Backfilled from configured gateway credentials",
-            )
-        )
-        created.append(provider_type)
-    if created:
-        db.commit()
-    return created

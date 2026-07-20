@@ -15,7 +15,7 @@ class WebhooksPage(BasePage):
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
 
-    def goto(self, path: str = "/admin/system/webhooks") -> None:
+    def goto(self, path: str = "/admin/integrations/webhooks") -> None:
         """Navigate to the webhooks list."""
         dashboard = AdminDashboardPage(self.page, self.base_url)
         try:

@@ -11,24 +11,25 @@ import uuid
 from contextlib import contextmanager
 from unittest.mock import patch
 
+import pytest
 from fastapi import HTTPException
 
 from app.api.crm_webhooks import receive_crm_work_order_event
-from app.config import settings
 from app.models.subscriber import Subscriber
 from app.models.work_order import WorkOrder
+from tests.integration_platform_helpers import enable_crm_inbound
 
 SECRET = "test-webhook-secret"
 
 
 @contextmanager
 def _with_secret(value: str):
-    original = settings.crm_webhook_secret
-    object.__setattr__(settings, "crm_webhook_secret", value)
-    try:
-        yield
-    finally:
-        object.__setattr__(settings, "crm_webhook_secret", original)
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _crm_inbound_installation(db_session, monkeypatch):
+    enable_crm_inbound(db_session, monkeypatch, signing_secret=SECRET)
 
 
 class _FakeRequest:
@@ -38,6 +39,9 @@ class _FakeRequest:
 
     async def body(self) -> bytes:
         return self._raw
+
+    async def json(self):
+        return json.loads(self._raw)
 
 
 def _sign(body: bytes, secret: str = SECRET) -> str:
@@ -126,7 +130,7 @@ def test_event_noop_when_pull_disabled(monkeypatch, db_session):
     assert code == 200
     assert resp == {
         "status": "ignored",
-        "reason": "work_order_pull_disabled",
+        "reason": "observation_disabled",
         "event": "work_order.created",
     }
     push.assert_not_called()
@@ -171,11 +175,12 @@ def test_branch_gated_by_canonical_control(monkeypatch, db_session):
     with _with_secret(SECRET), patch("app.services.push.send_push"):
         code, resp = _post(db_session, body)
     assert code == 200
-    assert resp["reason"] == "work_order_pull_disabled"
+    assert resp["reason"] == "observation_disabled"
 
     control_registry.update_canonical_feature_controls(
         db_session, payload={"crm.work_order_pull": True}
     )
+    body["work_order_id"] = "wo-row-enabled"
     with _with_secret(SECRET), patch("app.services.push.send_push"):
         code, resp = _post(db_session, body)
     assert code == 200

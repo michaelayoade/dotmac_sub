@@ -18,7 +18,8 @@ Dry-run by default: no Sub writes. Reconcile is skipped because it writes the
 authoritative store, and notes are only counted. Run ``--live`` once and rerun
 safely if verification requires it.
 
-Uses the app's own DB session + CRM client — run on a host with app config.
+Uses the app's own DB session + installed ``dotmac.crm`` capabilities — run
+on a host where the CRM integration installation is enabled.
 
 Usage:
     python -m scripts.migration.backfill_crm_work_orders             # dry-run
@@ -268,13 +269,13 @@ def main() -> int:
     args = parser.parse_args()
 
     from app.db import SessionLocal
-    from app.services.crm_client import get_crm_client
+    from app.services.integrations.crm_capability import capability_client
 
     db = SessionLocal()
     try:
         stats = run(
             db,
-            get_crm_client(),
+            capability_client(db),
             dry_run=not args.live,
             reconcile=not args.skip_reconcile,
             notes=not args.skip_notes,

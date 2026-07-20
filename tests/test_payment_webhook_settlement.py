@@ -15,7 +15,6 @@ from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import httpx
 import pytest
 
 from app.models.billing import (
@@ -27,23 +26,34 @@ from app.models.billing import (
     PaymentProviderEventStatus,
     PaymentProviderType,
     PaymentStatus,
-    PaymentWebhookDeadLetter,
-    PaymentWebhookDeadLetterStatus,
     TopupIntent,
 )
 from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.integration_platform import IntegrationInbox
 from app.models.subscription_engine import SettingValueType
 from app.schemas.billing import InvoiceCreate, PaymentCreate
 from app.services import billing as billing_service
 from app.services.api_billing_webhooks import (
     process_flutterwave_webhook,
     process_paystack_webhook,
-    replay_payment_webhook_dead_letter,
 )
 from app.services.billing_enforcement_guards import payment_channel_health
+from app.services.integrations.payment_capability import PaymentCapabilityError
 from app.services.payment_reconciliation import reconcile_pending_topups
 from app.services.settings_cache import SettingsCache
 from app.services.settings_spec import get_spec
+from tests.integration_platform_helpers import enable_payment_provider
+
+
+@pytest.fixture(autouse=True)
+def _payment_capabilities(db_session, monkeypatch):
+    monkeypatch.setenv("PAYSTACK_TEST_SECRET", "sk_test_webhook_secret")
+    monkeypatch.setenv("PAYSTACK_TEST_PUBLIC", "pk_test_webhook")
+    monkeypatch.setenv("FLUTTERWAVE_TEST_SECRET", "flw-test-secret")
+    monkeypatch.setenv("FLUTTERWAVE_TEST_PUBLIC", "flw-public")
+    monkeypatch.setenv("FLUTTERWAVE_TEST_WEBHOOK", "flutterwave-webhook-secret")
+    enable_payment_provider(db_session, "paystack")
+    enable_payment_provider(db_session, "flutterwave")
 
 
 def _make_provider(db, provider_type=PaymentProviderType.paystack, name="Paystack"):
@@ -108,37 +118,16 @@ def _flutterwave_body(
 
 
 def _post_paystack(db, body: bytes):
-    with patch(
-        "app.services.api_billing_webhooks.verify_paystack_signature",
-        return_value=True,
-    ):
-        return process_paystack_webhook(db=db, body=body, signature="sig")
+    signature = hmac.new(b"sk_test_webhook_secret", body, hashlib.sha512).hexdigest()
+    return process_paystack_webhook(db=db, body=body, signature=signature)
 
 
 def _post_flutterwave(db, body: bytes):
-    with patch(
-        "app.services.api_billing_webhooks.verify_flutterwave_signature",
-        return_value=True,
-    ):
-        return process_flutterwave_webhook(db=db, body=body, signature="sig")
-
-
-def _seed_dead_letter(db, *, body: bytes, status=PaymentWebhookDeadLetterStatus.failed):
-    payload = json.loads(body)
-    data = payload["data"]
-    row = PaymentWebhookDeadLetter(
-        provider_type="paystack",
-        event_type=payload["event"],
-        external_id=str(data["id"]),
-        idempotency_key=f"paystack-{data['reference']}",
-        status=status,
-        payload=payload,
-        error="original ingest failed",
+    return process_flutterwave_webhook(
+        db=db,
+        body=body,
+        signature="flutterwave-webhook-secret",
     )
-    db.add(row)
-    db.commit()
-    db.refresh(row)
-    return row
 
 
 def test_paystack_webhook_settles_invoice_end_to_end(db_session, subscriber):
@@ -311,7 +300,7 @@ def test_paystack_webhook_replay_creates_one_payment(db_session, subscriber):
     assert len(events) == 1
 
 
-def test_live_success_without_settlement_owner_keeps_insurance_row(db_session):
+def test_live_success_without_settlement_owner_keeps_inbox_failure(db_session):
     _make_provider(db_session)
     body = _paystack_body(
         reference="DMAC-WH-UNLINKED",
@@ -326,124 +315,14 @@ def test_live_success_without_settlement_owner_keeps_insurance_row(db_session):
     event = db_session.query(PaymentProviderEvent).filter_by(external_id="990019").one()
     assert event.status == PaymentProviderEventStatus.failed
     assert event.payment_id is None
-    parked = (
-        db_session.query(PaymentWebhookDeadLetter)
-        .filter_by(idempotency_key="paystack-DMAC-WH-UNLINKED")
+    receipt = (
+        db_session.query(IntegrationInbox)
+        .filter_by(provider_event_id="paystack-DMAC-WH-UNLINKED")
         .one()
     )
-    assert parked.status == PaymentWebhookDeadLetterStatus.failed
-    assert "did not post or link a payment" in (parked.error or "")
-    assert "payment_webhook_dead_letters" in payment_channel_health(db_session).reasons
-
-
-def test_dead_letter_replay_posts_paystack_money_and_deletes_insurance_row(
-    db_session, subscriber
-):
-    provider = _make_provider(db_session)
-    invoice = _make_invoice(
-        db_session,
-        subscriber.id,
-        amount="3000.00",
-        invoice_number="INV-DL-REPLAY-1",
-    )
-    body = _paystack_body(
-        reference="DMAC-DL-REPLAY-1",
-        tx_id="990020",
-        amount_kobo=300000,
-        metadata={"invoice_id": str(invoice.id)},
-    )
-    row = _seed_dead_letter(db_session, body=body)
-    row_id = row.id
-
-    result = replay_payment_webhook_dead_letter(db_session, str(row.id))
-
-    assert result.status == PaymentWebhookDeadLetterStatus.replayed
-    assert result.retry_count == 1
-    assert db_session.get(PaymentWebhookDeadLetter, row_id) is None
-    payment = db_session.query(Payment).filter_by(external_id="990020").one()
-    assert payment.provider_id == provider.id
-    assert payment.amount == Decimal("3000.00")
-    assert payment.status == PaymentStatus.succeeded
-    db_session.refresh(invoice)
-    assert invoice.status == InvoiceStatus.paid
-    assert invoice.balance_due == Decimal("0.00")
-
-
-def test_replay_repairs_legacy_idempotency_event_without_payment(
-    db_session, subscriber
-):
-    provider = _make_provider(db_session)
-    invoice = _make_invoice(
-        db_session,
-        subscriber.id,
-        amount="2500.00",
-        invoice_number="INV-DL-REPLAY-LEGACY",
-    )
-    body = _paystack_body(
-        reference="DMAC-DL-REPLAY-LEGACY",
-        tx_id="990021",
-        amount_kobo=250000,
-        metadata={"invoice_id": str(invoice.id)},
-    )
-    payload = json.loads(body)
-    event = PaymentProviderEvent(
-        provider_id=provider.id,
-        event_type="charge.success",
-        external_id="990021",
-        idempotency_key="paystack-DMAC-DL-REPLAY-LEGACY",
-        payload=payload,
-        status=PaymentProviderEventStatus.failed,
-        error="Payment not found for event",
-    )
-    db_session.add(event)
-    row = _seed_dead_letter(
-        db_session,
-        body=body,
-        status=PaymentWebhookDeadLetterStatus.replayed,
-    )
-    event_id = event.id
-    row_id = row.id
-
-    before = payment_channel_health(db_session)
-    assert "payment_webhook_dead_letters" in before.reasons
-
-    result = replay_payment_webhook_dead_letter(db_session, str(row.id))
-
-    assert result.status == PaymentWebhookDeadLetterStatus.replayed
-    assert db_session.get(PaymentWebhookDeadLetter, row_id) is None
-    repaired_event = db_session.get(PaymentProviderEvent, event_id)
-    assert repaired_event is not None
-    assert repaired_event.payment_id is not None
-    assert repaired_event.status == PaymentProviderEventStatus.processed
-    assert db_session.query(Payment).filter_by(external_id="990021").count() == 1
-    db_session.refresh(invoice)
-    assert invoice.status == InvoiceStatus.paid
-    after = payment_channel_health(db_session)
-    assert "payment_webhook_dead_letters" not in after.reasons
-
-
-def test_replay_keeps_alarm_when_successful_charge_cannot_link_money(
-    db_session,
-):
-    _make_provider(db_session)
-    body = _paystack_body(
-        reference="DMAC-DL-UNLINKED",
-        tx_id="990022",
-        amount_kobo=100000,
-        metadata={},
-    )
-    row = _seed_dead_letter(db_session, body=body)
-    row_id = row.id
-
-    with pytest.raises(RuntimeError, match="did not post or link a payment"):
-        replay_payment_webhook_dead_letter(db_session, str(row.id))
-
-    parked = db_session.get(PaymentWebhookDeadLetter, row_id)
-    assert parked is not None
-    assert parked.status == PaymentWebhookDeadLetterStatus.failed
-    assert parked.retry_count == 1
-    assert "did not post or link a payment" in (parked.error or "")
-    assert "payment_webhook_dead_letters" in payment_channel_health(db_session).reasons
+    assert receipt.state == "retryable"
+    assert "did not post or link a payment" in (receipt.error_detail or "")
+    assert "payment_inbox_failures" in payment_channel_health(db_session).reasons
 
 
 def test_webhook_does_not_double_credit_verify_path_payment(db_session, subscriber):
@@ -597,7 +476,6 @@ def test_flutterwave_failed_charge_completed_moves_no_money(db_session, subscrib
 
 def test_paystack_signature_actually_verified(db_session, monkeypatch):
     """Real HMAC-SHA512 check: valid signature passes the gate, tampered fails."""
-    monkeypatch.setenv("PAYSTACK_SECRET_KEY", "sk_test_webhook_secret")
     body = _paystack_body(
         reference="DMAC-SIG-1", tx_id="770001", amount_kobo=1000, metadata={}
     )
@@ -608,7 +486,7 @@ def test_paystack_signature_actually_verified(db_session, monkeypatch):
 
     good = process_paystack_webhook(db=db_session, body=body, signature=good_sig)
     # Signature gate passed; no provider row is configured in this test, so the
-    # event is parked for retry rather than rejected as unsigned.
+    # canonical receipt is retained for retry rather than rejected as unsigned.
     assert good.status_code == 503
 
 
@@ -781,12 +659,8 @@ def test_reconciliation_uses_configured_sweep_windows(db_session, subscriber):
     verify_mock.assert_not_called()
 
 
-def _http_error(status_code: int, reference: str) -> httpx.HTTPStatusError:
-    request = httpx.Request(
-        "GET", f"https://api.paystack.co/transaction/verify/{reference}"
-    )
-    response = httpx.Response(status_code, request=request)
-    return httpx.HTTPStatusError(f"{status_code}", request=request, response=response)
+def _capability_http_error(status_code: int) -> PaymentCapabilityError:
+    return PaymentCapabilityError(f"provider_http_{status_code}")
 
 
 def test_reconciliation_expires_intent_on_gateway_not_found(db_session, subscriber):
@@ -800,7 +674,7 @@ def test_reconciliation_expires_intent_on_gateway_not_found(db_session, subscrib
 
     with patch(
         "app.services.payment_reconciliation.payment_gateway_adapter.verify",
-        side_effect=_http_error(400, "DMAC-RECON-404"),
+        side_effect=_capability_http_error(400),
     ):
         result = reconcile_pending_topups(db_session)
 
@@ -820,7 +694,7 @@ def test_reconciliation_keeps_5xx_as_retryable_error(db_session, subscriber):
 
     with patch(
         "app.services.payment_reconciliation.payment_gateway_adapter.verify",
-        side_effect=_http_error(503, "DMAC-RECON-503"),
+        side_effect=_capability_http_error(503),
     ):
         result = reconcile_pending_topups(db_session)
 

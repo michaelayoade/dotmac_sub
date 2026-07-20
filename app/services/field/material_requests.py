@@ -524,25 +524,6 @@ def _mark_sub_authoritative(row: WorkOrder) -> None:
     _mark_source_authoritative(row, "material_requests")
 
 
-def _erp_sync_enabled(db: Session) -> bool:
-    """Master ERP-sync kill-switch (integration domain, default OFF).
-
-    The switch that keeps the material-request flow INERT until cutover: when off,
-    approve does not enqueue an ERP outbox row at all, so nothing can accumulate
-    (or, at cutover, double-post against CRM's separate id-space). Ownership of
-    the ``material_request`` flow (``sync_flow_ownership``, seeded ``crm``) is the
-    second, per-flow gate enforced inside outbox delivery.
-    """
-    from app.models.domain_settings import SettingDomain
-    from app.services import settings_spec
-
-    return bool(
-        settings_spec.resolve_value(
-            db, SettingDomain.integration, "dotmac_erp_sync_enabled"
-        )
-    )
-
-
 def _maybe_enqueue_erp_sync(db: Session, request: FieldMaterialRequest) -> None:
     """Add the ERP intent to the caller's approval transaction after cutover.
 
@@ -552,12 +533,15 @@ def _maybe_enqueue_erp_sync(db: Session, request: FieldMaterialRequest) -> None:
     """
     if not flow_owned_by_sub(db, FieldErpSyncFlow.material_request):
         return
-    if not _erp_sync_enabled(db):
+    from app.services.integrations.connectors.dotmac_erp import ERP_OUTBOX_CAPABILITY
+    from app.services.integrations.erp_capability import capability_enabled
+
+    if not capability_enabled(db, ERP_OUTBOX_CAPABILITY):
         raise HTTPException(
             status_code=503,
             detail=(
-                "ERP material support is the active owner but ERP sync is disabled; "
-                "approval cannot be recorded without its outbox intent"
+                "ERP material transport is not enabled; approval cannot be "
+                "recorded without its outbox intent"
             ),
         )
 

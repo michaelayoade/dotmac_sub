@@ -66,8 +66,8 @@ Classifications used below:
 |---|---|---|---|
 | Provisioning / network operations | `NetworkOperation` (`app/models/network_operation.py`) + `app/services/network_operations.py` (tracked-operation lifecycle, `tracked_operation`/`run_tracked_action`); vendor adapters under `app/services/adapters/` and `app/services/network/` | adapt | A homegrown provider-job contract; the kernel provider-job interface becomes an adapter over it. Vendor/OLT/ONT semantics stay product-owned forever |
 | Events / outbox / jobs | `EventStore` + `app/services/events/dispatcher.py` (persist-then-dispatch with retries); explicit ERP outbox `app/services/dotmac_erp/outbox.py`; task idempotency (`IdempotencyKey`), heartbeats (`TaskExecution`), Postgres advisory locks | **reuse** | Matches the kernel command/outbox/job contract shape nearly 1:1 — the ERP outbox is the template, the event store the generalization target. DB-backed beat (`DbScheduler`) stays product-owned |
-| Outbound webhooks | `app/models/webhook.py` + `app/tasks/webhooks.py` (HMAC-SHA256 signing) | reuse | |
-| Payment gateway inbound | `services/paystack.py`, `services/flutterwave.py` → unified `services/api_billing_webhooks.py` (signature → dead-letter → idempotency → settlement) | adapt | Clean single path; kernel payment-provider interface wraps the two gateway modules |
+| Outbound webhooks | `integration.delivery` + `webhook.http` `events.deliver.v1` binding | **reuse** | Canonical subscription, HMAC signing, delivery, retry, dead-letter, and replay owner; superseded webhook tables/tasks are removed |
+| Payment gateway inbound | Paystack/Flutterwave typed capabilities + `integration.inbox` → `services/api_billing_webhooks.py` consequence adapter | **reuse** | Signature-verified receipt identity and replay are platform-owned; billing alone decides settlement and money state |
 | Files | `StoredFile` + `app/services/object_storage.py` (S3-compatible) | reuse | Direct fit for the kernel storage provider interface |
 | Notifications | Policy layers (`notification_channel_policy`, event policies, suppression) over transports (email/SMS/WhatsApp) | adapt | Policy stays product-owned; transports are provider-interface candidates. Rule already enforced: domain services request an outcome, never construct rows or pick channels |
 | Search | DB typeahead only (`services/typeahead.py`) | product-owned | No index; no kernel contract needed |
@@ -79,8 +79,8 @@ Classifications used below:
 
 | Concern | Current authority | Class | Notes |
 |---|---|---|---|
-| ERP sync | `app/services/dotmac_erp/*` + `field_erp_sync` outbox + `repair_purchase_invoice_sync` task | migrate-later | The known money-correctness bug surface (dead webhook, double-cash). The dedicated `repair_*` task means drift is acknowledged. Bug fix is the forcing function; contract convergence follows it |
-| CRM mirrors + native sync | `services/crm_native_sync.py` + `project_mirror`/`quote_mirror`/`work_order_mirror` | **retire** | Self-declared transitional dual-write with a documented retirement point (Phase 3 contract). Webhook transport itself: adapt |
+| ERP sync | `dotmac.erp` versioned capabilities + `field_erp_sync` outbox + reconcilers | **reuse** | Transport operations use one version-pinned installation; financial and operations owners decide every consequence |
+| CRM observations and mirrors | `dotmac.crm` versioned capabilities + `integration.inbox` + domain mirror reconcilers | **reuse** | The transitional native-sync dual writer and CRM-specific delivery store are removed; Sub is authoritative for support and operational state |
 | Field/customer mobile APIs | `app/api/field/*`, `/api/v1` subscriber surface | product-owned | Sub is authoritative; apps are API-only clients per the app-independence standard |
 | Splynx legacy | `models/splynx_*.py` | retire | No live tasks reference them; archive-table drop program already in flight |
 
@@ -129,8 +129,9 @@ gate for. Verified at 7807afcd:
    registered as `access.fup_enforcement_sweep` in the SOT relationships
    registry; `app/tasks/usage.py` keeps only task shells, advisory-lock
    plumbing, task names, and queue chaining.
-6. **`crm_native_sync` dual-write** — intentional and transitional, with a documented
-   retirement point; hold it to that date.
+6. **CRM dual-write — RESOLVED.** `crm_native_sync` and its task are removed.
+   Verified CRM events enter `integration.inbox`; domain reconcilers are the
+   only writers of Sub mirrors and operational consequences.
 
 ## Phase 1 next steps (separate PRs, after this ledger is accepted)
 
