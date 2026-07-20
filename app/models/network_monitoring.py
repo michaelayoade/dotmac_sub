@@ -18,7 +18,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -1115,6 +1115,11 @@ class DeviceProjection(Base):
     subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), index=True
     )
+
+    # Per-class operational facts (display-only), denormalised by the
+    # reconciler: ONT signal, OLT PON rollup, core site/role, NAS health,
+    # router RouterOS version. Rendered by the drawer/ledger; not filtered.
+    class_facts: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     # Freshness of this projected row (set on every reconcile pass).
     refreshed_at: Mapped[datetime] = mapped_column(
