@@ -116,6 +116,29 @@ def test_active_migrations_do_not_extend_retired_integration_types() -> None:
     )
 
 
+def test_deployed_legacy_constraint_cleanup_is_idempotent() -> None:
+    cleanup_statements = {
+        node.value
+        for revision in (
+            "374_integration_capability_sync.py",
+            "377_integration_platform_cutover.py",
+        )
+        for node in ast.walk(
+            ast.parse(_read(ACTIVE_MIGRATIONS / revision), filename=revision)
+        )
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+
+    for table_name, constraint_name in (
+        ("integration_targets", "integration_targets_connector_config_id_fkey"),
+        ("payment_providers", "payment_providers_connector_config_id_fkey"),
+    ):
+        assert (
+            f"ALTER TABLE {table_name} DROP CONSTRAINT IF EXISTS {constraint_name}"
+            in cleanup_statements
+        )
+
+
 def test_integration_sot_names_the_live_cutover_owners() -> None:
     assert (
         sot_relationships.service_names_for_domain("integration_control_plane")

@@ -54,10 +54,9 @@ def upgrade() -> None:
 
     # Provider rows retain business routing/provenance only. Connection and
     # secret ownership moved to version-pinned integration installations.
-    op.drop_constraint(
-        "payment_providers_connector_config_id_fkey",
-        "payment_providers",
-        type_="foreignkey",
+    op.execute(
+        "ALTER TABLE payment_providers DROP CONSTRAINT IF EXISTS "
+        "payment_providers_connector_config_id_fkey"
     )
     op.drop_column("payment_providers", "connector_config_id")
     op.drop_column("payment_providers", "webhook_secret_ref")

@@ -50,10 +50,9 @@ def upgrade() -> None:
     )
     op.drop_column("integration_jobs", "adapter_key")
     op.drop_column("integration_jobs", "action")
-    op.drop_constraint(
-        "integration_targets_connector_config_id_fkey",
-        "integration_targets",
-        type_="foreignkey",
+    op.execute(
+        "ALTER TABLE integration_targets DROP CONSTRAINT IF EXISTS "
+        "integration_targets_connector_config_id_fkey"
     )
     op.drop_column("integration_targets", "connector_config_id")
 
