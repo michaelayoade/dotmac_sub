@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from fastapi import HTTPException, status
@@ -11,9 +11,14 @@ from sqlalchemy import or_, text
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType
-from app.models.subscriber import Subscriber, SubscriberCategory, SubscriberStatus
+from app.models.subscriber import (
+    Gender,
+    Subscriber,
+    SubscriberCategory,
+    SubscriberStatus,
+)
 from app.schemas.audit import AuditEventCreate
-from app.schemas.subscriber import SubscriberCreate
+from app.schemas.subscriber import SubscriberCreate, SubscriberUpdate
 from app.services import audit as audit_service
 from app.services import subscriber as subscriber_service
 from app.services.customer_identity_normalization import (
@@ -283,6 +288,33 @@ def _enum_value(value: Any) -> str | None:
     return getattr(value, "value", None) if value is not None else None
 
 
+def _crm_identity_fields(
+    payload: dict[str, Any],
+) -> tuple[date | None, Gender | None]:
+    """Validate authoritative profile values sent by the CRM.
+
+    Only top-level fields are authoritative. CRM metadata is retained verbatim
+    for backwards compatibility, but must not be able to overwrite the
+    Selfcare profile projection. Missing, null, and blank fields intentionally
+    produce ``None`` so an existing value is preserved.
+    """
+    values: dict[str, Any] = {}
+    for field in ("date_of_birth", "gender"):
+        value = payload.get(field)
+        if value is not None and _text(value):
+            values[field] = value
+    if not values:
+        return None, None
+    try:
+        validated = SubscriberUpdate.model_validate(values)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid CRM customer date_of_birth or gender.",
+        ) from exc
+    return validated.date_of_birth, validated.gender
+
+
 def _update_existing_customer(
     db: Session,
     subscriber: Subscriber,
@@ -290,6 +322,7 @@ def _update_existing_customer(
     metadata: dict[str, Any],
 ) -> Subscriber:
     changes: dict[str, dict[str, str | None]] = {}
+    date_of_birth, gender = _crm_identity_fields(payload)
     first_name, last_name, display_name = _name_parts(payload)
     if first_name:
         _track_change(changes, "first_name", subscriber.first_name, first_name)
@@ -323,6 +356,22 @@ def _update_existing_customer(
         category_value.value,
     )
     subscriber.category = category_value
+    if date_of_birth is not None:
+        _track_change(
+            changes,
+            "date_of_birth",
+            subscriber.date_of_birth,
+            date_of_birth,
+        )
+        subscriber.date_of_birth = date_of_birth
+    if gender is not None:
+        _track_change(
+            changes,
+            "gender",
+            _enum_value(subscriber.gender),
+            gender.value,
+        )
+        subscriber.gender = gender
     merged = dict(subscriber.metadata_ or {})
     merged.update(metadata)
     merged["crm_reported_status"] = status_value.value
@@ -342,6 +391,7 @@ def _create_customer_from_crm(
     db: Session, payload: dict[str, Any], metadata: dict[str, Any]
 ) -> Subscriber:
     first_name, last_name, display_name = _name_parts(payload)
+    date_of_birth, gender = _crm_identity_fields(payload)
     if not first_name or not last_name:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -363,6 +413,8 @@ def _create_customer_from_crm(
         category=_category(
             payload.get("subscriber_category") or metadata.get("subscriber_category")
         ),
+        date_of_birth=date_of_birth,
+        gender=gender or Gender.unknown,
         metadata_=metadata,
         **_address_fields(payload),
     )
