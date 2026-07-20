@@ -26,8 +26,9 @@ from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
 from app.models.work_order import WorkOrder
 from app.services.dotmac_erp import expense_sync, outbox
-from app.services.field import expense_requests as expense_requests_module
 from app.services.field.expense_requests import field_expense_requests
+from app.services.integrations.connectors.dotmac_erp import ERP_OUTBOX_CAPABILITY
+from tests.integration_platform_helpers import enable_erp_capability
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
@@ -129,7 +130,7 @@ def _items(**overrides):
 
 
 def _make_submitted_request(db, *, crm_work_order_id="wo-exp") -> FieldExpenseRequest:
-    """Create + submit a request via the real service, ERP sync disabled (default)."""
+    """Create and submit a request through the real domain service."""
     crm_person_id = f"crm-tech-{uuid4().hex[:8]}"
     user = _user(db)
     _profile(db, user, crm_person_id=crm_person_id)
@@ -232,7 +233,7 @@ def test_eligibility_requires_submitted_items_and_email(db_session):
 
 
 # ---------------------------------------------------------------------------
-# Enqueue on submit — gated by dotmac_erp_sync_enabled
+# Enqueue on submit — gated by ownership and the typed capability
 # ---------------------------------------------------------------------------
 
 
@@ -244,14 +245,14 @@ def _outbox_rows(db, request) -> list[FieldErpSyncEvent]:
     )
 
 
-def test_submit_does_not_enqueue_when_flag_off(db_session):
-    # Default: dotmac_erp_sync_enabled resolves False → flow inert, no outbox row.
+def test_submit_does_not_enqueue_before_ownership_cutover(db_session):
     request = _make_submitted_request(db_session)
     assert _outbox_rows(db_session, request) == []
 
 
-def test_submit_enqueues_when_flag_on(db_session, monkeypatch):
-    monkeypatch.setattr(expense_requests_module, "_erp_sync_enabled", lambda db: True)
+def test_submit_enqueues_with_owner_and_enabled_capability(db_session):
+    _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.expense_claim.value})
+    enable_erp_capability(db_session, ERP_OUTBOX_CAPABILITY)
     request = _make_submitted_request(db_session)
 
     rows = _outbox_rows(db_session, request)
@@ -263,8 +264,9 @@ def test_submit_enqueues_when_flag_on(db_session, monkeypatch):
     assert row.payload["omni_id"] == str(request.id)
 
 
-def test_resubmit_reuses_the_same_outbox_row(db_session, monkeypatch):
-    monkeypatch.setattr(expense_requests_module, "_erp_sync_enabled", lambda db: True)
+def test_resubmit_reuses_the_same_outbox_row(db_session):
+    _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.expense_claim.value})
+    enable_erp_capability(db_session, ERP_OUTBOX_CAPABILITY)
     request = _make_submitted_request(db_session)
     # Re-enqueue directly with the same (stable) key → idempotent, no duplicate.
     first = expense_sync.enqueue_expense_claim(db_session, request)
@@ -278,9 +280,9 @@ def test_resubmit_reuses_the_same_outbox_row(db_session, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_delivery_accepted_writes_erp_fields_back(db_session, monkeypatch):
-    monkeypatch.setattr(expense_requests_module, "_erp_sync_enabled", lambda db: True)
+def test_delivery_accepted_writes_erp_fields_back(db_session):
     _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.expense_claim.value})
+    enable_erp_capability(db_session, ERP_OUTBOX_CAPABILITY)
     request = _make_submitted_request(db_session)
     client = _FakeERPClient(
         post_outcomes=[
@@ -305,9 +307,9 @@ def test_delivery_accepted_writes_erp_fields_back(db_session, monkeypatch):
     assert client.posts[0]["path"] == "/api/v1/sync/sub/expense-claims"
 
 
-def test_delivery_approved_maps_terminal_status(db_session, monkeypatch):
-    monkeypatch.setattr(expense_requests_module, "_erp_sync_enabled", lambda db: True)
+def test_delivery_approved_maps_terminal_status(db_session):
     _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.expense_claim.value})
+    enable_erp_capability(db_session, ERP_OUTBOX_CAPABILITY)
     request = _make_submitted_request(db_session)
     client = _FakeERPClient(
         post_outcomes=[
@@ -323,9 +325,9 @@ def test_delivery_approved_maps_terminal_status(db_session, monkeypatch):
     assert request.approved_at is not None
 
 
-def test_delivery_rejected_records_reason(db_session, monkeypatch):
-    monkeypatch.setattr(expense_requests_module, "_erp_sync_enabled", lambda db: True)
+def test_delivery_rejected_records_reason(db_session):
     _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.expense_claim.value})
+    enable_erp_capability(db_session, ERP_OUTBOX_CAPABILITY)
     request = _make_submitted_request(db_session)
     client = _FakeERPClient(
         post_outcomes=[{"status": "rejected", "rejection_reason": "over budget"}]
@@ -347,11 +349,11 @@ def test_delivery_rejected_records_reason(db_session, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_delivery_refused_when_flow_owned_by_crm(db_session, monkeypatch):
-    monkeypatch.setattr(expense_requests_module, "_erp_sync_enabled", lambda db: True)
+def test_delivery_refused_when_flow_owned_by_crm(db_session):
     # expense_claim left at the seeded default (crm) — must NOT be sent.
     _seed_ownership(db_session)
     request = _make_submitted_request(db_session)
+    expense_sync.enqueue_expense_claim(db_session, request)
     client = _FakeERPClient(post_outcomes=[{"claim_id": "SHOULD-NOT-HAPPEN"}])
 
     result = outbox.deliver_pending(db_session, client=client)
