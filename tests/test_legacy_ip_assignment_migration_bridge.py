@@ -85,7 +85,14 @@ def test_legacy_branch_merge_is_ancestor_of_current_head() -> None:
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == [current.revision]
+    # Keep the graph single-headed while allowing later migrations to extend
+    # beyond the current RBAC cutover without rewriting this bridge test.
+    heads = script.get_heads()
+    assert len(heads) == 1
+    ancestry = {
+        rev.revision for rev in script.walk_revisions(base="base", head=heads[0])
+    }
+    assert current.revision in ancestry
     legacy = script.get_revision("153_ip_assignments_subscription_owner")
     assert legacy is not None
     assert "368_merge_legacy_ip_assignments_branch" in {
