@@ -13,7 +13,7 @@ Provides REST API for:
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_permission
@@ -58,6 +58,7 @@ from app.services.provisioning import (
     ServiceOrders,
     ServiceStateTransitions,
 )
+from app.services.service_order_lifecycle import ServiceOrderLifecycleError
 
 router = APIRouter(prefix="/provisioning", tags=["provisioning"])
 
@@ -142,7 +143,17 @@ def update_order(
     db: Session = Depends(get_db),
 ):
     """Update a service order."""
-    return ServiceOrders.update(db, str(order_id), payload)
+    try:
+        return ServiceOrders.update(db, str(order_id), payload)
+    except ServiceOrderLifecycleError as exc:
+        status_code = {
+            "not_found": 404,
+            "invalid": 422,
+        }.get(exc.kind, 409)
+        raise HTTPException(
+            status_code=status_code,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
 
 
 @router.delete(

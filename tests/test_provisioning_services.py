@@ -120,8 +120,7 @@ def test_canceled_service_order_cannot_be_revived(
     db_session, subscriber_account, subscription
 ):
     """A canceled (terminal) order must not be silently un-canceled (SM-gap #47)."""
-    import pytest
-    from fastapi import HTTPException
+    from app.services.service_order_lifecycle import ServiceOrderLifecycleError
 
     order = provisioning_service.service_orders.create(
         db_session,
@@ -136,13 +135,13 @@ def test_canceled_service_order_cannot_be_revived(
         str(order.id),
         ServiceOrderUpdate(status=ServiceOrderStatus.canceled),
     )
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ServiceOrderLifecycleError) as exc:
         provisioning_service.service_orders.update(
             db_session,
             str(order.id),
             ServiceOrderUpdate(status=ServiceOrderStatus.active),
         )
-    assert exc.value.status_code == 409
+    assert exc.value.code == "invalid_transition"
 
 
 def test_delete_service_order(db_session, subscriber_account, subscription):

@@ -561,6 +561,26 @@ def activate_subscription(
             f"Cannot activate subscription in status {subscription.status.value}"
         )
 
+    # Sales-created service contracts are gated by the canonical provisioning
+    # result.  Billing settlement may fund the pending Subscription, but it may
+    # not bypass verified implementation and a successful ServiceOrder.
+    from app.models.provisioning import ServiceOrder, ServiceOrderStatus
+
+    sales_service_orders = list(
+        db.scalars(
+            select(ServiceOrder).where(
+                ServiceOrder.subscription_id == subscription.id,
+                ServiceOrder.sales_order_line_id.is_not(None),
+            )
+        ).all()
+    )
+    if sales_service_orders and any(
+        order.status != ServiceOrderStatus.active for order in sales_service_orders
+    ):
+        raise ValueError(
+            "Sales subscription requires successful service-order provisioning"
+        )
+
     prev_status = subscription.status
     subscription.status = SubscriptionStatus.active
     if start_at and not subscription.start_at:
@@ -569,6 +589,19 @@ def activate_subscription(
         subscription.start_at = datetime.now(UTC)
 
     db.flush()
+
+    subscriber = subscription.subscriber
+    if subscriber is not None and subscriber.party_id is not None:
+        from app.models.party import PartyRoleStatus, PartyRoleType
+        from app.services import party as party_service
+
+        party_service.ensure_role(
+            db,
+            party_id=subscriber.party_id,
+            role_type=PartyRoleType.subscriber,
+            status=PartyRoleStatus.active,
+            source="account_lifecycle.activate_subscription",
+        )
 
     if emit:
         emit_event(

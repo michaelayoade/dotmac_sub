@@ -65,21 +65,28 @@ class ProvisioningHandler:
             return
         if not order:
             return
-        # Only advance an in-flight order; never override a terminal/manual
-        # status (active/canceled/failed already set, or a draft not yet run).
-        in_flight = {
-            ServiceOrderStatus.submitted,
-            ServiceOrderStatus.scheduled,
-            ServiceOrderStatus.provisioning,
-        }
-        if order.status in in_flight:
-            order.status = target_status
-            db.flush()
+        from app.services import service_order_lifecycle
+
+        try:
+            service_order_lifecycle.record_provisioning_result(
+                db,
+                service_order_id=order.id,
+                succeeded=target_status == ServiceOrderStatus.active,
+                actor_id="provisioning.event_handler",
+                reason=event.payload.get("error_message"),
+            )
             logger.info(
                 "Service order %s advanced to %s on run %s",
                 service_order_id,
                 target_status.value,
                 event.payload.get("provisioning_run_id"),
+            )
+        except service_order_lifecycle.ServiceOrderLifecycleError as exc:
+            logger.warning(
+                "Service order %s rejected provisioning result %s: %s",
+                service_order_id,
+                target_status.value,
+                exc,
             )
 
     def _handle_subscription_resumed(self, db: Session, event: Event) -> None:
@@ -132,8 +139,6 @@ class ProvisioningHandler:
         self._sync_radius_on_activation(db, str(subscription_id))
         # Step 3: Push NAS provisioning commands
         self._push_nas_provisioning(db, str(subscription_id))
-        # Step 4: Mark related service orders as active (completed)
-        self._complete_service_orders(db, str(subscription_id))
 
     def _sync_radius_on_activation(self, db: Session, subscription_id: str) -> None:
         """Reconcile RADIUS state for the activated subscription."""
@@ -223,41 +228,6 @@ class ProvisioningHandler:
         except Exception as exc:
             logger.warning(
                 "NAS provisioning failed for subscription %s: %s",
-                subscription_id,
-                exc,
-            )
-
-    def _complete_service_orders(self, db: Session, subscription_id: str) -> None:
-        """Mark pending service orders as active when subscription activates."""
-        try:
-            from app.models.provisioning import ServiceOrder, ServiceOrderStatus
-
-            orders = (
-                db.query(ServiceOrder)
-                .filter(
-                    ServiceOrder.subscription_id == coerce_uuid(subscription_id),
-                    ServiceOrder.status.in_(
-                        [
-                            ServiceOrderStatus.submitted,
-                            ServiceOrderStatus.scheduled,
-                            ServiceOrderStatus.provisioning,
-                        ]
-                    ),
-                )
-                .all()
-            )
-            for order in orders:
-                order.status = ServiceOrderStatus.active
-            if orders:
-                db.flush()
-                logger.info(
-                    "Completed %d service order(s) for subscription %s",
-                    len(orders),
-                    subscription_id,
-                )
-        except Exception as exc:
-            logger.warning(
-                "Failed to complete service orders for subscription %s: %s",
                 subscription_id,
                 exc,
             )

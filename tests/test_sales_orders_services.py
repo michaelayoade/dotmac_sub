@@ -297,6 +297,34 @@ def test_paid_order_pushes_subscription_then_payment(db_session, billing_calls):
     assert names == ["record_external_payment"]
 
 
+def test_partial_order_records_money_without_creating_service(
+    db_session, billing_calls
+):
+    subscriber = _make_subscriber(db_session)
+    order = sales_order_service.sales_orders.create(
+        db_session,
+        SalesOrderCreate(subscriber_id=subscriber.id, total=Decimal("100.00")),
+    )
+    sales_order_service.sales_order_lines.create(
+        db_session,
+        SalesOrderLineCreate(
+            sales_order_id=order.id,
+            description="Monthly plan",
+            metadata_={"sub_offer_id": str(uuid.uuid4())},
+        ),
+    )
+
+    sales_order_service.sales_orders.update(
+        db_session,
+        str(order.id),
+        SalesOrderUpdate(amount_paid=Decimal("40.00")),
+    )
+
+    assert [name for name, _kwargs in billing_calls] == ["record_external_payment"]
+    assert db_session.query(Subscription).count() == 0
+    assert db_session.query(ServiceOrder).count() == 0
+
+
 def test_closed_sales_line_stages_one_bound_provisioning_order(
     db_session, catalog_offer
 ):
@@ -341,7 +369,12 @@ def test_closed_sales_line_stages_one_bound_provisioning_order(
     )
     assert len(service_orders) == 1
     assert service_orders[0].subscription_id == subscription.id
-    assert service_orders[0].status == ServiceOrderStatus.submitted
+    assert service_orders[0].status == ServiceOrderStatus.draft
+    assert service_orders[0].project_id is not None
+    assert service_orders[0].installation_project_id is not None
+    assert service_orders[0].idempotency_key == (
+        f"sales-order-line:{line.id}:new_install"
+    )
     assert service_orders[0].execution_context["catalog_offer_id"] == str(
         catalog_offer.id
     )
@@ -371,11 +404,12 @@ def test_closed_sales_line_stages_one_bound_provisioning_order(
     from app.services import network as network_service
     from app.services.network.ont_desired_config import desired_config
 
-    credential = (
+    credential_count = (
         db_session.query(AccessCredential)
         .filter(AccessCredential.subscription_id == subscription.id)
-        .one()
+        .count()
     )
+    assert credential_count == 1
     olt = OLTDevice(name="Order staged OLT", is_active=True)
     db_session.add(olt)
     db_session.flush()
@@ -397,10 +431,10 @@ def test_closed_sales_line_stages_one_bound_provisioning_order(
     )
 
     db_session.refresh(ont)
-    assert desired_config(ont)["wan"]["mode"] == "pppoe"
-    assert desired_config(ont)["wan"]["pppoe_username"] == credential.username
-    assert "static_ip" not in desired_config(ont)["wan"]
-    assert ont.sync_status == OntSyncStatus.out_of_sync
+    # The sales owner stages intent but does not write the ONT control plane.
+    # Provisioning consumes this only after implementation verification.
+    assert desired_config(ont) == {}
+    assert ont.sync_status == OntSyncStatus.synced
 
 
 def test_sales_ip_addon_allocates_subscription_scoped_route(
@@ -515,8 +549,8 @@ def test_installation_invoice_created_once_for_project(db_session, billing_calls
     order = sales_order_service.sales_orders.create(
         db_session, SalesOrderCreate(subscriber_id=subscriber.id)
     )
-    # A sales-order line create triggers the invoice hook, but without a
-    # project row there is nothing to invoice against yet.
+    # SalesOrder creation establishes the structural implementation project,
+    # so the installation line can invoice against it immediately.
     sales_order_service.sales_order_lines.create(
         db_session,
         SalesOrderLineCreate(
@@ -526,20 +560,8 @@ def test_installation_invoice_created_once_for_project(db_session, billing_calls
             unit_price=Decimal("80000.00"),
         ),
     )
-    assert billing_calls == []
-
-    project = Project(
-        name="Fiber Optics Installation - Bola Ade",
-        subscriber_id=subscriber.id,
-        metadata_={"sales_order_id": str(order.id)},
-    )
-    db_session.add(project)
-    db_session.commit()
-
-    sales_order_service.ensure_installation_invoice_for_sales_order(
-        db_session, order.id
-    )
     assert len(billing_calls) == 1
+    project = db_session.query(Project).filter(Project.sales_order_id == order.id).one()
     name, kwargs = billing_calls[0]
     assert name == "create_installation_invoice"
     assert kwargs["subscriber_id"] == str(subscriber.id)
@@ -575,18 +597,9 @@ def test_installation_amount_falls_back_to_quote_lines(db_session, billing_calls
         ),
     )
     order = sales_order_service.sales_orders.create(
-        db_session, SalesOrderCreate(subscriber_id=subscriber.id)
+        db_session,
+        SalesOrderCreate(subscriber_id=subscriber.id, quote_id=quote.id),
     )
-    project = Project(
-        name="Install",
-        subscriber_id=subscriber.id,
-        metadata_={
-            "sales_order_id": str(order.id),
-            "quote_id": str(quote.id),
-        },
-    )
-    db_session.add(project)
-    db_session.commit()
 
     billing_calls.clear()
     sales_order_service.ensure_installation_invoice_for_sales_order(

@@ -1968,6 +1968,10 @@ def create_subscription(
                 unit_price=price_override,
                 billing_cycle=contracted_cycle,
             ),
+            # The sales-fulfillment coordinator creates the structurally linked
+            # ServiceOrder.  The generic subscription helper must not create a
+            # second, context-free order for the same service.
+            create_service_order=False,
         )
     except HTTPException:
         # enforce_single_active_subscription treats pending as active and rejects

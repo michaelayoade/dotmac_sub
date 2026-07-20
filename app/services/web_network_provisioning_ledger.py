@@ -16,6 +16,8 @@ the provisioning action owners.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlalchemy.orm import Session
 
 from app.services.provisioning_managers import (
@@ -43,7 +45,7 @@ FACETS: tuple[tuple[str, str], ...] = (
 _VALID = {key for key, _ in FACETS}
 
 
-def _dt(value: object) -> str:
+def _dt(value: datetime | None) -> str:
     return value.strftime("%b %d, %H:%M") if value else "—"
 
 
@@ -104,7 +106,9 @@ def _task_rows(db: Session) -> tuple[list, list]:
             "assigned": t.assigned_to or "—",
             "created": _dt(t.created_at),
         }
-        for t in provisioning_tasks.list(db, None, None, "created_at", "desc", _LIMIT, 0)
+        for t in provisioning_tasks.list(
+            db, None, None, "created_at", "desc", _LIMIT, 0
+        )
     ]
     return columns, rows
 

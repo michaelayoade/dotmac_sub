@@ -107,7 +107,9 @@ def noc_queue_data(db: Session) -> dict:
 
     # 3. Open threshold alarms
     alarm_data = web_network_monitoring.alarms_page_data(db, severity=None, status=None)
-    for alarm in alarm_data.get("alarms", []):
+    alarm_rows = alarm_data.get("alarms", [])
+    alarms = alarm_rows if isinstance(alarm_rows, list) else []
+    for alarm in alarms:
         presentation = alarm_severity_presentation(getattr(alarm, "severity", None))
         measured = getattr(alarm, "measured_value", None)
         items.append(

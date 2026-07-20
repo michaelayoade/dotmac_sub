@@ -4680,6 +4680,212 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=("operations.provisioning_context",),
             ),
             SOTService(
+                name="operations.service_order_lifecycle",
+                module="app.services.service_order_lifecycle",
+                owns=(
+                    "service-order status transition and recovery lifecycle",
+                    "verified-implementation provisioning release",
+                    "successful-provisioning activation consequence",
+                ),
+                depends_on=(
+                    "operations.provisioning_workflow",
+                    "operations.project_lifecycle",
+                    "access.subscription_lifecycle",
+                    "events.dispatcher",
+                ),
+                notes=(
+                    "Routes, managers, billing callbacks, and event handlers do "
+                    "not write ServiceOrder status directly. Domain errors are "
+                    "transport-neutral and HTTP translation stays in adapters."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name=(
+                                "service-order status transition and recovery lifecycle"
+                            ),
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical service-order state",
+                                "service-order transition protocol",
+                                "recorded administrative recovery evidence",
+                            ),
+                            canonical_writer="operations.service_order_lifecycle",
+                        ),
+                        ConcernContract(
+                            name="verified-implementation provisioning release",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical service-order state",
+                                "verified implementation evidence",
+                                "canonical project lifecycle state",
+                            ),
+                            canonical_writer="operations.service_order_lifecycle",
+                        ),
+                        ConcernContract(
+                            name="successful-provisioning activation consequence",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical service-order state",
+                                "canonical provisioning result",
+                                "canonical subscription lifecycle state",
+                            ),
+                            canonical_writer="operations.service_order_lifecycle",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical service-order state",
+                            owner="operations.service_order_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked ServiceOrder identity, status, structural sales, "
+                                "project, installation, and subscription references"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="service-order transition protocol",
+                            owner="operations.service_order_lifecycle",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "versioned ServiceOrderStatus graph and implementation "
+                                "readiness gates"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="recorded administrative recovery evidence",
+                            owner="customer.accounts",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "exact subscriber recovery snapshot, authenticated actor, "
+                                "and named recovery reason"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="verified implementation evidence",
+                            owner="operations.vendor_project_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "append-only vendor verification event id and verified "
+                                "InstallationProject status"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical project lifecycle state",
+                            owner="operations.project_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="locked structurally linked completed Project",
+                        ),
+                        AuthorityInput(
+                            name="canonical provisioning result",
+                            owner="operations.provisioning_workflow",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "durable successful or failed ProvisioningRun outcome for "
+                                "the exact ServiceOrder"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical subscription lifecycle state",
+                            owner="access.subscription_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="the exact linked pending or active Subscription",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "Public transitions own one transaction; nested release and "
+                            "provisioning-result calls flush into their event coordinator's "
+                            "transaction. Recovery tooling calls the same locked writer."
+                        ),
+                        locking="Every existing ServiceOrder is selected FOR UPDATE.",
+                        idempotency=(
+                            "Equivalent status and identical verification or recovery "
+                            "evidence are no-ops; conflicting evidence fails closed."
+                        ),
+                        retries=(
+                            "Outbox consumers and recovery commands replay the exact "
+                            "identifier and evidence through this owner."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "operations.service_order_lifecycle.active_caller_transaction",
+                            "operations.service_order_lifecycle.command_contract_violation",
+                            "operations.service_order_lifecycle.invalid_command_context",
+                            "operations.service_order_lifecycle.nested_owner_command",
+                            "operations.service_order_lifecycle.nested_transaction_completion",
+                            "service_order_not_found",
+                            "invalid_status",
+                            "invalid_transition",
+                            "implementation_not_ready",
+                            "verification_evidence_conflict",
+                            "provisioning_result_required",
+                            "subscription_not_activatable",
+                            "actor_required",
+                            "reason_required",
+                        ),
+                        mapping_owner="HTTP, event, and administrative recovery adapters",
+                        fail_closed_on=(
+                            "missing structural implementation evidence",
+                            "invalid transition",
+                            "conflicting verification evidence",
+                            "non-success provisioning activation",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "service_order.released",
+                            "service_order.assigned",
+                            "service_order.completed",
+                            "service_order.recovered",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 carries exact service, subscription, project, "
+                            "status, actor, reason, and verification identifiers."
+                        ),
+                        replay=(
+                            "ServiceOrder state and EventStore evidence reconstruct each "
+                            "outcome; duplicate consequences re-enter the locked owner."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "provisioning managers, subscription event handlers, and "
+                            "system-recovery tooling with parallel status assignments"
+                        ),
+                        new_owner="operations.service_order_lifecycle",
+                        verification=(
+                            "Transition, implementation, provisioning, activation, "
+                            "recovery, event, and sole-writer architecture tests."
+                        ),
+                        cutover_gate=(
+                            "All runtime and recovery status mutations call the named "
+                            "owner; raw writer detection is green."
+                        ),
+                        fallback_retirement=(
+                            "Direct manager, event-handler, and recovery status writes "
+                            "are removed."
+                        ),
+                    ),
+                    steward="service delivery",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/designs/SALES_TO_SERVICE_LIFECYCLE_SOT.md",
+                    ),
+                    test_refs=(
+                        "tests/test_sales_to_service_lifecycle.py",
+                        "tests/test_provisioning_services.py",
+                        "tests/architecture/test_service_order_status_writers.py",
+                        "tests/architecture/test_service_http_boundary.py",
+                    ),
+                ),
+            ),
+            SOTService(
                 name="operations.work_order_status",
                 module="app.services.field.work_order_status",
                 owns=(
@@ -4997,6 +5203,133 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="operations.installation_scope",
+                module="app.services.installation_projects",
+                owns=(
+                    "idempotent structural InstallationProject root creation",
+                    "Project-to-InstallationProject subscriber alignment",
+                ),
+                depends_on=("operations.project_lifecycle",),
+                notes=(
+                    "This transaction-neutral owner creates only the installation "
+                    "root. Vendor lifecycle decisions remain with "
+                    "operations.vendor_project_lifecycle."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name=(
+                                "idempotent structural InstallationProject root creation"
+                            ),
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical native project state",
+                                "installation scope creation command",
+                            ),
+                            canonical_writer="operations.installation_scope",
+                        ),
+                        ConcernContract(
+                            name="Project-to-InstallationProject subscriber alignment",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical native project state",
+                                "installation scope creation command",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical native project state",
+                            owner="operations.project_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="the exact native Project and its Subscriber binding",
+                        ),
+                        AuthorityInput(
+                            name="installation scope creation command",
+                            owner="sales.orders",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed Project, Subscriber, optional creator, and actor "
+                                "identifiers derived from the exact SalesOrder scope"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.PARTICIPANT,
+                        boundary=(
+                            "The sales fulfillment coordinator owns commit/rollback; "
+                            "this owner stages one InstallationProject and event."
+                        ),
+                        locking=(
+                            "The parent Project is read by exact id and the unique "
+                            "project_id constraint arbitrates concurrent creation."
+                        ),
+                        idempotency=(
+                            "An existing structurally aligned installation scope is "
+                            "returned; a conflicting Subscriber binding fails closed."
+                        ),
+                        retries=(
+                            "The coordinator retries the complete scope command after "
+                            "a uniqueness race."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "actor_required",
+                            "project_not_found",
+                            "subscriber_mismatch",
+                            "existing_scope_mismatch",
+                        ),
+                        mapping_owner="sales.fulfillment",
+                        fail_closed_on=(
+                            "missing parent Project",
+                            "Subscriber mismatch",
+                            "conflicting existing scope",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("installation_scope.created",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 carries exact installation, Project, Subscriber, "
+                            "and actor identifiers."
+                        ),
+                        replay=(
+                            "The unique Project structural binding and event outbox make "
+                            "duplicate creation a no-op."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner="unlinked or metadata-only installation creation",
+                        new_owner="operations.installation_scope",
+                        verification=(
+                            "Structural-link, Subscriber-alignment, idempotency, event, "
+                            "and end-to-end lifecycle tests."
+                        ),
+                        cutover_gate=(
+                            "Sales fulfillment creates installation roots only through "
+                            "this participant."
+                        ),
+                        fallback_retirement=(
+                            "Metadata-only and CRM installation-scope creation paths are "
+                            "not present."
+                        ),
+                    ),
+                    steward="service delivery",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/designs/SALES_TO_SERVICE_LIFECYCLE_SOT.md",
+                    ),
+                    test_refs=(
+                        "tests/test_sales_to_service_lifecycle.py",
+                        "tests/test_sales_orders_services.py",
+                        "tests/test_sot_relationships.py",
+                    ),
+                ),
+            ),
+            SOTService(
                 name="operations.vendor_project_lifecycle",
                 module="app.services.vendor_project_lifecycle",
                 owns=(
@@ -5014,7 +5347,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 notes=(
                     "This participant is the sole writer for approved -> "
                     "in_progress -> completed vendor work transitions. Only the "
-                    "signed vendor-submission coordinator may call its nested writer."
+                    "signed vendor-submission coordinator may call its nested writer. "
+                    "A committed verification event requests downstream fulfillment; "
+                    "the vendor owner does not write sales or provisioning roots."
                 ),
                 contract=ServiceContract(
                     concerns=(
@@ -11466,10 +11801,934 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         domain="sales_referrals",
         services=(
             SOTService(
+                name="sales.capture",
+                module="app.services.sales.capture",
+                owns=(
+                    "provider-neutral Party-first Lead capture command",
+                    "source-interaction idempotency and collision decision",
+                    "verified integration receipt to Lead consequence",
+                ),
+                depends_on=(
+                    "integration.inbox",
+                    "party.registry",
+                    "sales.lead_lifecycle",
+                    "events.dispatcher",
+                ),
+                notes=(
+                    "Provider adapters submit the canonical contract and never "
+                    "write Party, Lead, or attribution state directly."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="provider-neutral Party-first Lead capture command",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "validated lead-capture contract",
+                                "canonical Party identity state",
+                                "canonical Lead lifecycle state",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="source-interaction idempotency and collision decision",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "validated lead-capture contract",
+                                "immutable captured origin evidence",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="verified integration receipt to Lead consequence",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "verified integration receipt",
+                                "validated lead-capture contract",
+                                "canonical Party identity state",
+                                "canonical Lead lifecycle state",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="validated lead-capture contract",
+                            owner="sales.capture",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed capture method, source platform, exact interaction "
+                                "identity, attribution, Party input, and policy version"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="verified integration receipt",
+                            owner="integration.inbox",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked verified IntegrationInbox receipt, capability "
+                                "binding, provider event id, and payload digest"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical Party identity state",
+                            owner="party.registry",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "exact supplied Party or newly created Party, prospect "
+                                "role, and unverified contact observations"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical Lead lifecycle state",
+                            owner="sales.lead_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Party-bound Lead and immutable LeadOriginCapture",
+                        ),
+                        AuthorityInput(
+                            name="immutable captured origin evidence",
+                            owner="sales.lead_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "unique source-platform and source-interaction identity, "
+                                "canonical fingerprint, and append-only origin row"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "Direct capture owns one optional root transaction; verified "
+                            "receipt capture locks receipt, stages Party, Lead, origin, "
+                            "receipt consequence and events, then commits once."
+                        ),
+                        locking=(
+                            "Verified receipts are selected FOR UPDATE; unique interaction "
+                            "identity and origin constraints arbitrate concurrent capture."
+                        ),
+                        idempotency=(
+                            "The same interaction and fingerprint return the original "
+                            "Party/Lead/origin; different content under the identity fails."
+                        ),
+                        retries=(
+                            "A uniqueness loser reloads the canonical origin and applies "
+                            "the same fingerprint replay decision."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "sales.capture.active_caller_transaction",
+                            "sales.capture.command_contract_violation",
+                            "sales.capture.invalid_command_context",
+                            "sales.capture.nested_owner_command",
+                            "sales.capture.nested_transaction_completion",
+                            "actor_required",
+                            "source_interaction_collision",
+                            "captured_lead_party_missing",
+                            "invalid_contact_observation",
+                            "receipt_not_found",
+                            "wrong_capability",
+                            "receipt_identity_mismatch",
+                            "capture_conflict",
+                            "capture_rejected",
+                        ),
+                        mapping_owner="lead capture HTTP and installed connector adapters",
+                        fail_closed_on=(
+                            "unverified or wrong-capability receipt",
+                            "interaction identity mismatch",
+                            "fingerprint collision",
+                            "ambiguous Party context",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("lead.created",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 carries exact Lead, Party, origin, capture method, "
+                            "platform, and source-interaction identifiers without contact PII."
+                        ),
+                        replay=(
+                            "The immutable origin fingerprint and IntegrationInbox "
+                            "consequence reproduce the original capture outcome."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "manual Subscriber-first entry and aspirational CRM bridge "
+                            "capture without an authoritative interaction receipt"
+                        ),
+                        new_owner="sales.capture",
+                        verification=(
+                            "Valid signature, replay, collision, invalid receipt, Party, "
+                            "origin immutability, and connector registry tests."
+                        ),
+                        cutover_gate=(
+                            "Installed provider adapters create verified inbox receipts and "
+                            "invoke this owner; agents use the same typed capture contract."
+                        ),
+                        fallback_retirement=(
+                            "CRM and dotmac_mkt have no capture writer or attribution path."
+                        ),
+                    ),
+                    steward="sales operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/PARTY_CUSTOMER_LIFECYCLE.md",
+                        "docs/designs/SALES_TO_SERVICE_LIFECYCLE_SOT.md",
+                    ),
+                    test_refs=(
+                        "tests/test_lead_capture_webhook.py",
+                        "tests/test_sales_capture_account_conversion.py",
+                        "tests/architecture/test_service_http_boundary.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="sales.account_conversion",
+                module="app.services.sales.account_conversion",
+                owns=(
+                    "exact Lead and Party account conversion",
+                    "customer and pending-subscriber role establishment",
+                ),
+                depends_on=(
+                    "customer.accounts",
+                    "party.registry",
+                    "sales.lead_lifecycle",
+                    "events.dispatcher",
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="exact Lead and Party account conversion",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "canonical attributed Lead state",
+                                "canonical Party identity state",
+                                "reviewed account conversion command",
+                                "canonical customer account state",
+                            ),
+                        ),
+                        ConcernContract(
+                            name=("customer and pending-subscriber role establishment"),
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "canonical Party identity state",
+                                "canonical customer account state",
+                                "reviewed account conversion command",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical attributed Lead state",
+                            owner="sales.lead_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="locked Party-bound Lead and exact Subscriber link",
+                        ),
+                        AuthorityInput(
+                            name="canonical Party identity state",
+                            owner="party.registry",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="exact Lead Party, roles, and Subscriber binding",
+                        ),
+                        AuthorityInput(
+                            name="canonical customer account state",
+                            owner="customer.accounts",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "exact existing Subscriber or newly prepared native "
+                                "Subscriber account"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="reviewed account conversion command",
+                            owner="sales.account_conversion",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed Lead, Party, actor, and exactly one existing or new "
+                                "account target"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "The conversion coordinator locks the Lead, stages account, "
+                            "Party roles/binding, Lead attachment and events, then commits "
+                            "or rolls back once."
+                        ),
+                        locking=(
+                            "The exact Lead and any existing Subscriber target are selected "
+                            "FOR UPDATE before binding."
+                        ),
+                        idempotency=(
+                            "An already attached Lead returns its canonical exact account; "
+                            "different Party/account context fails closed."
+                        ),
+                        retries=(
+                            "The complete reviewed conversion command is retried with the "
+                            "same exact identifiers after transient transaction failure."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "sales.account_conversion.active_caller_transaction",
+                            "sales.account_conversion.command_contract_violation",
+                            "sales.account_conversion.invalid_command_context",
+                            "sales.account_conversion.nested_owner_command",
+                            "sales.account_conversion.nested_transaction_completion",
+                            "actor_required",
+                            "account_target_required",
+                            "lead_not_found",
+                            "party_mismatch",
+                            "existing_account_mismatch",
+                            "subscriber_not_found",
+                            "existing_target_not_allowed",
+                            "conversion_rejected",
+                        ),
+                        mapping_owner="sales account-conversion API adapter",
+                        fail_closed_on=(
+                            "Lead/Party mismatch",
+                            "ambiguous account target",
+                            "existing binding conflict",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "subscriber.created",
+                            "lead.account_converted",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 carries exact Lead, Party, Subscriber, outcome, and "
+                            "actor identifiers without contact observations."
+                        ),
+                        replay=(
+                            "Lead.subscriber_id plus Party/Subscriber bindings reproduce the "
+                            "outcome; identical conversion is a no-op."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "referral-private conversion and Subscriber-first sales paths"
+                        ),
+                        new_owner="sales.account_conversion",
+                        verification=(
+                            "Create, attach, replay, Party mismatch, role, event, rollback, "
+                            "and transport-boundary tests."
+                        ),
+                        cutover_gate=(
+                            "Generic sales capture converts only through this exact "
+                            "Lead/Party command."
+                        ),
+                        fallback_retirement=(
+                            "Contact-based account matching and CRM conversion authority "
+                            "are absent."
+                        ),
+                    ),
+                    steward="sales operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/PARTY_CUSTOMER_LIFECYCLE.md",
+                        "docs/designs/SALES_TO_SERVICE_LIFECYCLE_SOT.md",
+                    ),
+                    test_refs=(
+                        "tests/test_sales_capture_account_conversion.py",
+                        "tests/test_sales_to_service_lifecycle.py",
+                        "tests/architecture/test_service_http_boundary.py",
+                    ),
+                ),
+            ),
+            SOTService(
                 name="sales.orders",
                 module="app.services.sales_orders",
                 owns=("sales order lifecycle",),
-                depends_on=("sales.service", "sales.lead_lifecycle"),
+                depends_on=(
+                    "sales.service",
+                    "sales.lead_lifecycle",
+                    "sales.fulfillment",
+                ),
+            ),
+            SOTService(
+                name="sales.fulfillment",
+                module="app.services.sales_fulfillment",
+                owns=(
+                    "SalesOrder implementation-scope coordination",
+                    "verified implementation release coordination",
+                ),
+                depends_on=(
+                    "control.settings_spec",
+                    "operations.project_lifecycle",
+                    "operations.installation_scope",
+                    "operations.vendor_project_lifecycle",
+                    "operations.service_order_lifecycle",
+                    "events.dispatcher",
+                ),
+                notes=(
+                    "Coordinates exact structural identifiers while each domain "
+                    "owner remains the only writer of its own root."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="SalesOrder implementation-scope coordination",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "canonical SalesOrder implementation contract",
+                                "configured project defaults",
+                                "canonical native project state",
+                                "canonical installation scope",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="verified implementation release coordination",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "canonical vendor verification evidence",
+                                "canonical native project state",
+                                "canonical sales ServiceOrder state",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical SalesOrder implementation contract",
+                            owner="sales.orders",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked active SalesOrder, Quote metadata, exact Lead, "
+                                "Subscriber, line, and funding state"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="configured project defaults",
+                            owner="control.settings_spec",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "projects-domain default sales type, status, priority, "
+                                "numbering, and duration settings"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical native project state",
+                            owner="operations.project_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "unique structurally linked Project and verified completion "
+                                "evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical installation scope",
+                            owner="operations.installation_scope",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="unique Project-bound InstallationProject root",
+                        ),
+                        AuthorityInput(
+                            name="canonical vendor verification evidence",
+                            owner="operations.vendor_project_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "verified InstallationProject plus its exact append-only "
+                                "verification event id"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical sales ServiceOrder state",
+                            owner="operations.service_order_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "all structurally Project-bound ServiceOrders ordered by "
+                                "creation and identity"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "Scope and release commands may own the root transaction or "
+                            "flush into the invoking order/event coordinator; each called "
+                            "domain owner remains transaction-neutral in nested use."
+                        ),
+                        locking=(
+                            "The exact SalesOrder or InstallationProject is selected FOR "
+                            "UPDATE; downstream owners lock their own Project and "
+                            "ServiceOrder roots."
+                        ),
+                        idempotency=(
+                            "Unique SalesOrder-to-Project, Project-to-installation, and "
+                            "verification-event constraints make replay deterministic."
+                        ),
+                        retries=(
+                            "Committed vendor events replay the same installation and event "
+                            "ids; the reconciler invokes the identical coordinator."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "sales.fulfillment.active_caller_transaction",
+                            "sales.fulfillment.command_contract_violation",
+                            "sales.fulfillment.invalid_command_context",
+                            "sales.fulfillment.nested_owner_command",
+                            "sales.fulfillment.nested_transaction_completion",
+                            "actor_required",
+                            "sales_order_not_found",
+                            "sales_order_canceled",
+                            "subscriber_not_found",
+                            "project_type_unconfigured",
+                            "fulfillment_rejected",
+                            "installation_not_found",
+                            "implementation_not_verified",
+                        ),
+                        mapping_owner="sales order and lifecycle event adapters",
+                        fail_closed_on=(
+                            "missing configured project type",
+                            "structural root mismatch",
+                            "unverified implementation",
+                            "conflicting verification evidence",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "project.created",
+                            "installation_scope.created",
+                            "implementation.released",
+                            "service_order.released",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 carries exact SalesOrder, Project, installation, "
+                            "ServiceOrder, Subscriber, and verification identifiers."
+                        ),
+                        replay=(
+                            "Structural unique keys and append-only verification evidence "
+                            "reproduce scope and release without inferred state."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "sales project stubs and structurally separate vendor and "
+                            "provisioning paths"
+                        ),
+                        new_owner="sales.fulfillment",
+                        verification=(
+                            "Scope, replay, funding gate, vendor verification, release, "
+                            "PostgreSQL constraints, and end-to-end lifecycle tests."
+                        ),
+                        cutover_gate=(
+                            "Every non-cancelled SalesOrder has one structural Project and "
+                            "installation scope before sales ServiceOrder creation."
+                        ),
+                        fallback_retirement=(
+                            "Project integration stubs and metadata-only lifecycle joins "
+                            "are not used by new writes."
+                        ),
+                    ),
+                    steward="sales and service delivery",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/PARTY_CUSTOMER_LIFECYCLE.md",
+                        "docs/designs/SALES_TO_SERVICE_LIFECYCLE_SOT.md",
+                    ),
+                    test_refs=(
+                        "tests/test_sales_to_service_lifecycle.py",
+                        "tests/test_sales_orders_services.py",
+                        "tests/test_sales_lifecycle_migration.py",
+                        "tests/architecture/test_service_http_boundary.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="customer.experience_handoff",
+                module="app.services.customer_experience_handoffs",
+                owns=(
+                    "implementation-to-customer-experience readiness decision",
+                    "CX acceptance and needs-attention lifecycle",
+                    "durable CX actor, time, reason, and event evidence",
+                ),
+                depends_on=(
+                    "auth.permission_gate",
+                    "sales.orders",
+                    "sales.fulfillment",
+                    "operations.service_order_lifecycle",
+                    "access.subscription_lifecycle",
+                    "events.dispatcher",
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name=(
+                                "implementation-to-customer-experience readiness "
+                                "decision"
+                            ),
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical sales fulfilment state",
+                                "canonical ServiceOrder completion state",
+                                "canonical subscription access state",
+                                "customer-experience transition protocol",
+                            ),
+                            canonical_writer="customer.experience_handoff",
+                        ),
+                        ConcernContract(
+                            name="CX acceptance and needs-attention lifecycle",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical CX handoff state",
+                                "reviewed CX transition command",
+                                "canonical SalesOrder state",
+                            ),
+                            canonical_writer="customer.experience_handoff",
+                        ),
+                        ConcernContract(
+                            name="durable CX actor, time, reason, and event evidence",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "canonical CX handoff state",
+                                "reviewed CX transition command",
+                            ),
+                            canonical_writer="customer.experience_handoff",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical sales fulfilment state",
+                            owner="sales.fulfillment",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "structurally linked completed Project, verified "
+                                "InstallationProject, and exact verification evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical ServiceOrder completion state",
+                            owner="operations.service_order_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active structurally linked ServiceOrder and committed "
+                                "successful provisioning result"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical subscription access state",
+                            owner="access.subscription_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="the exact linked active Subscription",
+                        ),
+                        AuthorityInput(
+                            name="canonical SalesOrder state",
+                            owner="sales.orders",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="the exact fully paid or fulfilled SalesOrder",
+                        ),
+                        AuthorityInput(
+                            name="canonical CX handoff state",
+                            owner="customer.experience_handoff",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked CustomerExperienceHandoff and append-only "
+                                "CustomerExperienceHandoffEvent history"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="customer-experience transition protocol",
+                            owner="customer.experience_handoff",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "policy version 1 readiness facts and pending, ready, "
+                                "accepted, needs-attention, and canceled state graph"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="reviewed CX transition command",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "authenticated actor type/id, action, and bounded reason "
+                                "from the customer-experience adapter"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "Readiness may flush into the committed service-completion "
+                            "projection transaction; staff acceptance/attention owns one "
+                            "handoff, evidence, SalesOrder consequence, and event transaction."
+                        ),
+                        locking=(
+                            "The exact ServiceOrder or CustomerExperienceHandoff is selected "
+                            "FOR UPDATE; the SalesOrder owner locks its own root."
+                        ),
+                        idempotency=(
+                            "Unique Subscription and ServiceOrder bindings plus terminal "
+                            "status checks make identical readiness/acceptance replay a no-op."
+                        ),
+                        retries=(
+                            "Committed service completion and staff commands replay exact "
+                            "root identifiers through the same owner."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "customer.experience_handoff.active_caller_transaction",
+                            "customer.experience_handoff.command_contract_violation",
+                            "customer.experience_handoff.invalid_command_context",
+                            "customer.experience_handoff.nested_owner_command",
+                            "customer.experience_handoff.nested_transaction_completion",
+                            "service_order_not_found",
+                            "incomplete_handoff_context",
+                            "handoff_context_mismatch",
+                            "actor_required",
+                            "handoff_not_found",
+                            "handoff_not_ready",
+                            "reason_required",
+                            "attention_reason_conflict",
+                            "handoff_terminal",
+                            "invalid_status",
+                        ),
+                        mapping_owner="customer-experience API and event adapters",
+                        fail_closed_on=(
+                            "missing structural lifecycle roots",
+                            "funding or readiness disagreement",
+                            "conflicting handoff binding",
+                            "invalid or terminal transition",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "customer_experience.ready",
+                            "customer_experience.accepted",
+                            "customer_experience.needs_attention",
+                            "sales_order.fulfilled",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 carries exact lifecycle roots, source and target "
+                            "status, policy version, actor, reason, and readiness evidence."
+                        ),
+                        replay=(
+                            "The handoff root and append-only event rows reconstruct status; "
+                            "missing readiness is repaired from authoritative linked facts."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner="prose onboarding checklist without durable acceptance state",
+                        new_owner="customer.experience_handoff",
+                        verification=(
+                            "Readiness, incomplete context, acceptance, attention, evidence "
+                            "immutability, SalesOrder fulfilment, and lifecycle tests."
+                        ),
+                        cutover_gate=(
+                            "A sales-origin active ServiceOrder creates one structurally "
+                            "linked handoff; only reviewed CX acceptance fulfils the order."
+                        ),
+                        fallback_retirement=(
+                            "Template-derived onboarding completion and direct SalesOrder "
+                            "fulfilment writes are absent."
+                        ),
+                    ),
+                    steward="customer experience",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/PARTY_CUSTOMER_LIFECYCLE.md",
+                        "docs/designs/SALES_TO_SERVICE_LIFECYCLE_SOT.md",
+                    ),
+                    test_refs=(
+                        "tests/test_sales_to_service_lifecycle.py",
+                        "tests/test_sales_orders_services.py",
+                        "tests/architecture/test_service_http_boundary.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="sales.lifecycle_reconciliation",
+                module="app.services.sales_lifecycle_reconciliation",
+                owns=("sales-to-service projection drift repair orchestration",),
+                depends_on=(
+                    "sales.fulfillment",
+                    "operations.service_order_lifecycle",
+                    "customer.experience_handoff",
+                ),
+                notes=(
+                    "The reconciler invents no identity, receipt, implementation "
+                    "verification, provisioning result, or customer acceptance."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="sales-to-service projection drift repair orchestration",
+                            role=OwnerRole.RECONCILER,
+                            input_names=(
+                                "canonical SalesOrder delivery state",
+                                "canonical vendor verification evidence",
+                                "canonical ServiceOrder delivery state",
+                                "canonical CX handoff state",
+                            ),
+                            canonical_writer="sales.lifecycle_reconciliation",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical SalesOrder delivery state",
+                            owner="sales.orders",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "all active non-cancelled SalesOrders and their structural "
+                                "Project relationships in deterministic order"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical vendor verification evidence",
+                            owner="operations.vendor_project_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "verified InstallationProjects and latest append-only "
+                                "verification events"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical ServiceOrder delivery state",
+                            owner="operations.service_order_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "structurally linked ServiceOrders, implementation event ids, "
+                                "and active provisioning outcomes"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical CX handoff state",
+                            owner="customer.experience_handoff",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "structurally linked CustomerExperienceHandoff roots and "
+                                "append-only transition evidence"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "Dry-run reads then rolls back; apply invokes canonical owners "
+                            "with commit disabled and commits all selected repairs once."
+                        ),
+                        locking=(
+                            "Each repair owner locks its exact SalesOrder, installation, "
+                            "Project, ServiceOrder, or handoff root before mutation."
+                        ),
+                        idempotency=(
+                            "Only missing structural projections are requested; canonical "
+                            "owner constraints and evidence ids make repeat apply a no-op."
+                        ),
+                        retries=(
+                            "A failed repair rolls back and the operator replays the same "
+                            "deterministic scan from authoritative inputs."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "sales.lifecycle_reconciliation.active_caller_transaction",
+                            "sales.lifecycle_reconciliation.command_contract_violation",
+                            "sales.lifecycle_reconciliation.invalid_command_context",
+                            "sales.lifecycle_reconciliation.nested_owner_command",
+                            "sales.lifecycle_reconciliation.nested_transaction_completion",
+                            "implementation_scope_repair_rejected",
+                            "verified_release_repair_rejected",
+                            "cx_handoff_repair_rejected",
+                        ),
+                        mapping_owner="sales lifecycle reconciliation command adapter",
+                        retryable_codes=(
+                            "implementation_scope_repair_rejected",
+                            "verified_release_repair_rejected",
+                            "cx_handoff_repair_rejected",
+                        ),
+                        fail_closed_on=(
+                            "missing verification evidence",
+                            "structural identity conflict",
+                            "owner-rejected transition",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "project.created",
+                            "installation_scope.created",
+                            "implementation.released",
+                            "service_order.released",
+                            "customer_experience.ready",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "The reconciler emits no bespoke facts; version 1 owner events "
+                            "retain their original schemas and exact identifiers."
+                        ),
+                        replay=(
+                            "Re-running the deterministic scan requests only still-missing "
+                            "projections through their canonical owner."
+                        ),
+                    ),
+                    projections=(
+                        ProjectionContract(
+                            name="sales-to-service lifecycle convergence",
+                            input_names=(
+                                "canonical SalesOrder delivery state",
+                                "canonical vendor verification evidence",
+                                "canonical ServiceOrder delivery state",
+                                "canonical CX handoff state",
+                            ),
+                            writer="sales.lifecycle_reconciliation",
+                            freshness="evaluated from current rows on every operator run",
+                            stale_behavior=(
+                                "report exact missing scopes, releases, evidence, or handoffs "
+                                "without inferring a business fact"
+                            ),
+                            drift_signal=(
+                                "nonzero missing_implementation_scope, "
+                                "verified_implementation_not_released, "
+                                "verified_implementation_missing_evidence, or "
+                                "active_service_orders_without_cx_handoff counts"
+                            ),
+                            rebuild_operation=(
+                                "reconcile_sales_to_service_lifecycle(apply=True)"
+                            ),
+                            repair_owner="sales.lifecycle_reconciliation",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "partial customer lifecycle audit without implementation, "
+                            "provisioning, or CX convergence repair"
+                        ),
+                        new_owner="sales.lifecycle_reconciliation",
+                        verification=(
+                            "Dry-run, owner-backed apply, missing evidence, idempotency, and "
+                            "end-to-end lifecycle tests."
+                        ),
+                        cutover_gate=(
+                            "Every repair delegates to the same production owner and no "
+                            "reconciler invents money, identity, verification, or acceptance."
+                        ),
+                        fallback_retirement=(
+                            "Memo inference, direct row patching, and CRM fallback are absent."
+                        ),
+                    ),
+                    steward="sales and service delivery",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/designs/SALES_TO_SERVICE_LIFECYCLE_SOT.md",
+                    ),
+                    test_refs=(
+                        "tests/test_sales_to_service_lifecycle.py",
+                        "tests/test_sales_lifecycle_migration.py",
+                        "tests/test_sot_relationships.py",
+                    ),
+                ),
             ),
             SOTService(
                 name="sales.selfserve",
@@ -11505,6 +12764,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "PII-free customer lifecycle link convergence report",
                     "Lead origin and downstream alignment debt classification",
                     "Party-first referral capture and conversion debt classification",
+                    "sales-to-service delivery convergence classification",
                 ),
                 depends_on=(
                     "party.registry",
@@ -11512,6 +12772,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "sales.lead_lifecycle",
                     "sales.service",
                     "sales.orders",
+                    "sales.fulfillment",
+                    "operations.service_order_lifecycle",
+                    "customer.experience_handoff",
                     "access.subscription_lifecycle",
                     "support.ticket_lifecycle",
                 ),
@@ -12085,20 +13348,28 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             "app.api.me",
             "app.api.crm_referrals",
             "app.api.crm_webhooks",
+            "app.api.crm_sales",
+            "app.api.lead_capture_webhooks",
+            "app.api.customer_experience",
             "app.web.customer.referrals",
             "app.tasks.referrals",
             "app.services.events.handlers.referral",
+            "app.services.events.handlers.sales_lifecycle_projection",
             "app.services.web_sales",
             "app.services.web_referrals",
             "scripts.migration.audit_customer_lifecycle",
+            "scripts.migration.reconcile_sales_lifecycle",
         ),
         rule=(
             "A prospect enters as a Party-bound Lead with captured origin, not a "
-            "fake Subscriber. Quote, order, subscription, and support owners keep "
-            "their domain state while the account-conversion coordinator validates "
-            "the stable Referral/Party/Lead context and calls each owner. web_sales/"
-            "web_referrals adapters and API/task callers request an outcome; CRM "
-            "and dotmac_mkt have no customer-lifecycle or attribution authority."
+            "fake Subscriber. Exact account conversion precedes Quote; SalesOrder "
+            "structurally owns one Project and installation scope; verified "
+            "implementation requests service-order release after its evidence "
+            "commits; successful provisioning activates service and its committed "
+            "completion requests the CX handoff. Routes, webhooks, jobs, and "
+            "handlers request outcomes from these owners and translate domain "
+            "errors at the boundary. CRM and dotmac_mkt have no customer-lifecycle "
+            "or attribution authority."
         ),
     ),
 )

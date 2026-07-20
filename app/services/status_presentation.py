@@ -951,7 +951,11 @@ def ipv6_prefix_state_presentation(
 _PROVISIONING_RUN_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
     ProvisioningRunStatus.pending.value: ("Pending", StatusTone.info, StatusIcon.info),
     ProvisioningRunStatus.running.value: ("Running", StatusTone.info, StatusIcon.clock),
-    ProvisioningRunStatus.success.value: ("Success", StatusTone.positive, StatusIcon.check),
+    ProvisioningRunStatus.success.value: (
+        "Success",
+        StatusTone.positive,
+        StatusIcon.check,
+    ),
     ProvisioningRunStatus.failed.value: ("Failed", StatusTone.negative, StatusIcon.x),
 }
 

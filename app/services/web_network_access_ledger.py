@@ -26,7 +26,7 @@ FACETS: tuple[tuple[str, str], ...] = (
 _VALID = {key for key, _ in FACETS}
 
 
-def _fmt_bytes(value: object) -> str:
+def _fmt_bytes(value: int | float | str | None) -> str:
     n = float(value or 0)
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if n < 1024:
@@ -35,7 +35,7 @@ def _fmt_bytes(value: object) -> str:
     return f"{n:.1f} PB"
 
 
-def _fmt_duration(seconds: object) -> str:
+def _fmt_duration(seconds: int | float | str | None) -> str:
     total = int(seconds or 0)
     hours, rem = divmod(total, 3600)
     minutes, _ = divmod(rem, 60)

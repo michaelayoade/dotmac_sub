@@ -2,7 +2,18 @@ import enum
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, Enum, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -137,6 +148,13 @@ class ServiceOrderType(enum.Enum):
 
 class ServiceOrder(Base):
     __tablename__ = "service_orders"
+    __table_args__ = (
+        Index("ix_service_orders_idempotency_key", "idempotency_key", unique=True),
+        UniqueConstraint(
+            "implementation_verification_event_id",
+            name="uq_service_orders_implementation_event",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -156,6 +174,29 @@ class ServiceOrder(Base):
         UUID(as_uuid=True),
         ForeignKey("sales_order_lines.id", ondelete="SET NULL"),
         unique=True,
+    )
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "projects.id", name="fk_service_orders_project_id", ondelete="RESTRICT"
+        ),
+        index=True,
+    )
+    installation_project_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "installation_projects.id",
+            name="fk_service_orders_installation_project_id",
+            ondelete="RESTRICT",
+        ),
+        index=True,
+    )
+    idempotency_key: Mapped[str | None] = mapped_column(String(240))
+    implementation_verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    implementation_verification_event_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True)
     )
     status: Mapped[ServiceOrderStatus] = mapped_column(
         Enum(ServiceOrderStatus), default=ServiceOrderStatus.draft
@@ -179,6 +220,8 @@ class ServiceOrder(Base):
     subscription = relationship("Subscription", back_populates="service_orders")
     sales_order = relationship("SalesOrder")
     sales_order_line = relationship("SalesOrderLine")
+    project = relationship("Project")
+    installation_project = relationship("InstallationProject")
     appointments = relationship("InstallAppointment", back_populates="service_order")
     tasks = relationship("ProvisioningTask", back_populates="service_order")
     state_transitions = relationship(

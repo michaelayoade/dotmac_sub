@@ -40,16 +40,13 @@ def test_activated_event_still_reprovisions(db_session, monkeypatch):
         "ensure_ip_assignments_for_subscription",
         lambda db, subscription_id: calls.append(subscription_id),
     )
-    # The activation path does more (radius/NAS/orders); stub those so the test
+    # The activation path does more (radius/NAS); stub those so the test
     # isolates the IP step.
     monkeypatch.setattr(
         ProvisioningHandler, "_sync_radius_on_activation", lambda self, db, sid: None
     )
     monkeypatch.setattr(
         ProvisioningHandler, "_push_nas_provisioning", lambda self, db, sid: None
-    )
-    monkeypatch.setattr(
-        ProvisioningHandler, "_complete_service_orders", lambda self, db, sid: None
     )
     event = Event(
         event_type=EventType.subscription_activated,

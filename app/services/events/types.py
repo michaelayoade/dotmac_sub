@@ -85,6 +85,7 @@ class EventType(enum.Enum):
     service_order_created = "service_order.created"
     service_order_assigned = "service_order.assigned"
     service_order_completed = "service_order.completed"
+    service_order_recovered = "service_order.recovered"
 
     # Operations - vendor installation project lifecycle
     vendor_project_started = "vendor_project.started"
@@ -107,8 +108,17 @@ class EventType(enum.Enum):
     # lead/quote lifecycle was webhook-silent in the CRM's event system;
     # automation consumes these.
     lead_created = "lead.created"
+    lead_account_converted = "lead.account_converted"
     quote_accepted = "quote.accepted"
     sales_order_paid = "sales_order.paid"
+    sales_order_fulfilled = "sales_order.fulfilled"
+    project_created = "project.created"
+    installation_scope_created = "installation_scope.created"
+    implementation_released = "implementation.released"
+    service_order_released = "service_order.released"
+    customer_experience_ready = "customer_experience.ready"
+    customer_experience_accepted = "customer_experience.accepted"
+    customer_experience_needs_attention = "customer_experience.needs_attention"
 
     # Network events (5)
     device_offline = "device.offline"

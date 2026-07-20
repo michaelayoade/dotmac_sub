@@ -16,7 +16,10 @@ from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.comms_campaign import Campaign, CampaignChannel, CampaignRecipient
+from app.models.customer_experience import CustomerExperienceHandoff
 from app.models.party import Party, PartyContactPoint, PartyIdentityStatus
+from app.models.project import Project
+from app.models.provisioning import ServiceOrder, ServiceOrderStatus
 from app.models.referral_native import Referral
 from app.models.sales import (
     Lead,
@@ -28,6 +31,7 @@ from app.models.sales import (
 )
 from app.models.subscriber import Subscriber
 from app.models.support import Ticket
+from app.models.vendor_routes import InstallationProject, InstallationProjectStatus
 
 _REQUIRED_COLUMNS = {
     "parties": {"id", "status"},
@@ -58,6 +62,29 @@ _REQUIRED_COLUMNS = {
     },
     "quotes": {"id", "lead_id", "subscriber_id"},
     "sales_orders": {"id", "quote_id", "subscriber_id"},
+    "projects": {"id", "quote_id", "sales_order_id", "subscriber_id", "status"},
+    "installation_projects": {"id", "project_id", "subscriber_id", "status"},
+    "service_orders": {
+        "id",
+        "subscriber_id",
+        "subscription_id",
+        "sales_order_id",
+        "sales_order_line_id",
+        "project_id",
+        "installation_project_id",
+        "status",
+        "implementation_verification_event_id",
+    },
+    "customer_experience_handoffs": {
+        "id",
+        "subscriber_id",
+        "subscription_id",
+        "sales_order_id",
+        "project_id",
+        "installation_project_id",
+        "service_order_id",
+        "status",
+    },
     "subscriptions": {"id", "subscriber_id", "status"},
     "support_tickets": {
         "lead_id",
@@ -701,6 +728,115 @@ def _ticket_counts(
     return {key: int(counts[key]) for key in keys}
 
 
+def _delivery_counts(
+    *,
+    orders: list[SalesOrder],
+    projects: list[Project],
+    installations: list[InstallationProject],
+    service_orders: list[ServiceOrder],
+    handoffs: list[CustomerExperienceHandoff],
+) -> dict[str, int]:
+    """PII-free convergence from accepted sale through CX acceptance."""
+
+    counts: Counter[str] = Counter()
+    projects_by_id = {row.id: row for row in projects}
+    project_by_order = {
+        row.sales_order_id: row for row in projects if row.sales_order_id is not None
+    }
+    installations_by_id = {row.id: row for row in installations}
+    installation_by_project = {row.project_id: row for row in installations}
+    handoff_by_service_order = {row.service_order_id: row for row in handoffs}
+    for order in orders:
+        if not order.is_active or order.status == "cancelled":
+            continue
+        counts["eligible_sales_orders"] += 1
+        project = project_by_order.get(order.id)
+        if project is None:
+            counts["sales_orders_without_project"] += 1
+            continue
+        if (
+            project.subscriber_id != order.subscriber_id
+            or project.quote_id != order.quote_id
+        ):
+            counts["project_context_mismatch"] += 1
+        installation = installation_by_project.get(project.id)
+        if installation is None:
+            counts["projects_without_installation"] += 1
+        elif installation.subscriber_id != project.subscriber_id:
+            counts["installation_context_mismatch"] += 1
+
+    seen_line_ids: set[UUID] = set()
+    for service_order in service_orders:
+        if service_order.sales_order_line_id is None:
+            continue
+        counts["sales_service_orders"] += 1
+        if service_order.sales_order_line_id in seen_line_ids:
+            counts["duplicate_sales_line_service_orders"] += 1
+        seen_line_ids.add(service_order.sales_order_line_id)
+        project = (
+            projects_by_id.get(service_order.project_id)
+            if service_order.project_id is not None
+            else None
+        )
+        installation = (
+            installations_by_id.get(service_order.installation_project_id)
+            if service_order.installation_project_id is not None
+            else None
+        )
+        if (
+            project is None
+            or installation is None
+            or project.sales_order_id != service_order.sales_order_id
+            or installation.project_id != service_order.project_id
+            or service_order.subscriber_id != project.subscriber_id
+        ):
+            counts["service_order_context_mismatch"] += 1
+        if (
+            installation is not None
+            and installation.status == InstallationProjectStatus.verified.value
+            and service_order.status == ServiceOrderStatus.draft
+        ):
+            counts["verified_implementation_not_released"] += 1
+        if service_order.status == ServiceOrderStatus.active:
+            counts["active_sales_service_orders"] += 1
+            handoff = handoff_by_service_order.get(service_order.id)
+            if handoff is None:
+                counts["active_service_orders_without_cx_handoff"] += 1
+            elif (
+                handoff.subscriber_id != service_order.subscriber_id
+                or handoff.subscription_id != service_order.subscription_id
+                or handoff.sales_order_id != service_order.sales_order_id
+                or handoff.project_id != service_order.project_id
+                or handoff.installation_project_id
+                != service_order.installation_project_id
+            ):
+                counts["cx_handoff_context_mismatch"] += 1
+
+    counts["cx_handoffs"] = len(handoffs)
+    counts["cx_handoffs_accepted"] = sum(row.status == "accepted" for row in handoffs)
+    counts["cx_handoffs_needing_attention"] = sum(
+        row.status == "needs_attention" for row in handoffs
+    )
+    keys = (
+        "eligible_sales_orders",
+        "sales_orders_without_project",
+        "project_context_mismatch",
+        "projects_without_installation",
+        "installation_context_mismatch",
+        "sales_service_orders",
+        "duplicate_sales_line_service_orders",
+        "service_order_context_mismatch",
+        "verified_implementation_not_released",
+        "active_sales_service_orders",
+        "active_service_orders_without_cx_handoff",
+        "cx_handoff_context_mismatch",
+        "cx_handoffs",
+        "cx_handoffs_accepted",
+        "cx_handoffs_needing_attention",
+    )
+    return {key: int(counts[key]) for key in keys}
+
+
 def build_customer_lifecycle_audit(db: Session) -> dict[str, Any]:
     """Return aggregate lifecycle-link coverage without changing database state."""
 
@@ -731,6 +867,10 @@ def build_customer_lifecycle_audit(db: Session) -> dict[str, Any]:
     order_rows = db.query(SalesOrder).all()
     subscription_rows = db.query(Subscription).all()
     ticket_rows = db.query(Ticket).all()
+    project_rows = db.query(Project).all()
+    installation_rows = db.query(InstallationProject).all()
+    service_order_rows = db.query(ServiceOrder).all()
+    handoff_rows = db.query(CustomerExperienceHandoff).all()
     referral_rows = db.query(Referral).filter(Referral.is_active.is_(True)).all()
     parties = {row.id: _value(row.status) for row in party_rows}
     subscribers = {row.id: row.party_id for row in subscriber_rows}
@@ -787,6 +927,13 @@ def build_customer_lifecycle_audit(db: Session) -> dict[str, Any]:
             subscription_rows, subscribers=subscribers
         ),
         "tickets": _ticket_counts(ticket_rows, leads=leads, subscribers=subscribers),
+        "delivery": _delivery_counts(
+            orders=order_rows,
+            projects=project_rows,
+            installations=installation_rows,
+            service_orders=service_order_rows,
+            handoffs=handoff_rows,
+        ),
         "artifact_contract": _artifact_contract(),
     }
 

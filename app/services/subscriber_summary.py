@@ -13,6 +13,7 @@ usage. Connection status here is the cheap DB read over RADIUS accounting.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -149,14 +150,14 @@ def subscriber_summary(db: Session, subscriber_id: str | None) -> dict | None:
         except Exception:  # noqa: BLE001
             sessions = {}
         if sessions:
-            last_seen = max(
-                (
-                    getattr(s, "last_update_at", None)
-                    for s in sessions.values()
-                    if getattr(s, "last_update_at", None)
-                ),
-                default=None,
-            )
+            observed_at = [
+                value
+                for session in sessions.values()
+                if isinstance(
+                    (value := getattr(session, "last_update_at", None)), datetime
+                )
+            ]
+            last_seen = max(observed_at, default=None)
             ip = next(
                 (
                     getattr(s, "framed_ip_address", None)

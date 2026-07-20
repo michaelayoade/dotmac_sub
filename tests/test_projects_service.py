@@ -2,7 +2,8 @@
 
 Covers the ported CRM semantics: fiber-stage seeding + SLA due computation,
 template instantiation (dependencies + date calculation), the task state
-machine, project lifecycle transitions, and the work-order identity guard.
+machine, and project lifecycle transitions. Work-order execution links are
+covered at their canonical command owner boundary.
 """
 
 import uuid

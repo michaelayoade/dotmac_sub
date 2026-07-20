@@ -258,7 +258,7 @@ def derive_nas_operational_status(
 def derive_router_operational_status(router) -> OperationalStatus:
     """Derive a MikroTik router status from the synced ``RouterStatus`` field."""
     admin = _enum_value(getattr(router, "status", None))
-    state = _ROUTER_STATE_MAP.get(admin, DOWN)
+    state = _ROUTER_STATE_MAP.get(admin or "", DOWN)
     reason = f"router_{admin}" if admin else "router_status_unknown"
     return OperationalStatus(state, reason, admin, False, None)
 

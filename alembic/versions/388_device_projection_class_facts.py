@@ -12,8 +12,9 @@ Revises: 387_dashboard_device_metrics_index
 from __future__ import annotations
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 revision = "388_device_projection_class_facts"
 down_revision = "387_dashboard_device_metrics_index"
@@ -22,13 +23,23 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "device_projections",
-        sa.Column(
-            "class_facts", postgresql.JSONB(astext_type=sa.Text()), nullable=True
-        ),
-    )
+    columns = {
+        item["name"]
+        for item in sa.inspect(op.get_bind()).get_columns("device_projections")
+    }
+    if "class_facts" not in columns:
+        op.add_column(
+            "device_projections",
+            sa.Column(
+                "class_facts", postgresql.JSONB(astext_type=sa.Text()), nullable=True
+            ),
+        )
 
 
 def downgrade() -> None:
-    op.drop_column("device_projections", "class_facts")
+    columns = {
+        item["name"]
+        for item in sa.inspect(op.get_bind()).get_columns("device_projections")
+    }
+    if "class_facts" in columns:
+        op.drop_column("device_projections", "class_facts")

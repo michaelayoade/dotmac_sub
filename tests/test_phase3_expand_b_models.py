@@ -52,6 +52,7 @@ from app.models.sales import (
 )
 from app.models.subscriber import Subscriber
 from app.models.work_link import WorkEntityType, WorkLink, WorkLinkType
+from app.models.work_order import WorkOrder
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -547,6 +548,14 @@ def test_full_vertical_chain_persists(db_session):
     )
     db_session.add(task)
     db_session.flush()
+    work_order = WorkOrder(
+        subscriber_id=subscriber.id,
+        project_id=project.id,
+        project_task_id=task.id,
+        title="Survey",
+    )
+    db_session.add(work_order)
+    db_session.flush()
     db_session.add(ProjectTaskAssignee(task_id=task.id, person_id=uuid4()))
     db_session.add(ProjectTaskComment(task_id=task.id, body="Booked", metadata_={}))
     db_session.add(ProjectComment(project_id=project.id, body="Kickoff"))
@@ -556,6 +565,7 @@ def test_full_vertical_chain_persists(db_session):
     assert task.assigned_to_person_ids == [
         assignee.person_id for assignee in task.assignees
     ]
+    assert task.work_orders == [work_order]
 
     code = ReferralCode(subscriber_id=subscriber.id, code="DM7X4KQ2")
     db_session.add(code)

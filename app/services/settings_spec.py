@@ -3813,6 +3813,41 @@ SETTINGS_SPECS: list[SettingSpec] = [
         min_value=10,
         max_value=600,
     ),
+    # ── Projects lifecycle defaults ──
+    SettingSpec(
+        domain=SettingDomain.projects,
+        key="default_project_status",
+        env_var="PROJECTS_DEFAULT_PROJECT_STATUS",
+        value_type=SettingValueType.string,
+        default="active",
+        label="Default project status",
+        allowed={"open", "planned", "active", "on_hold"},
+    ),
+    SettingSpec(
+        domain=SettingDomain.projects,
+        key="default_project_priority",
+        env_var="PROJECTS_DEFAULT_PROJECT_PRIORITY",
+        value_type=SettingValueType.string,
+        default="normal",
+        label="Default project priority",
+        allowed={"lower", "low", "medium", "normal", "high", "urgent"},
+    ),
+    SettingSpec(
+        domain=SettingDomain.projects,
+        key="default_sales_project_type",
+        env_var="PROJECTS_DEFAULT_SALES_PROJECT_TYPE",
+        value_type=SettingValueType.string,
+        default="fiber_optics_installation",
+        label="Default implementation type for sales orders",
+        allowed={
+            "cable_rerun",
+            "fiber_optics_relocation",
+            "air_fiber_relocation",
+            "fiber_optics_installation",
+            "air_fiber_installation",
+            "cross_connect",
+        },
+    ),
     # ── Self-serve installation quotes ──
     # The nine CRM ``selfserve_quote_*`` keys migrated as-is, except the
     # price-book SKU keys which are re-keyed to sub catalog offers

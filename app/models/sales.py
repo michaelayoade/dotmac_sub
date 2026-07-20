@@ -49,6 +49,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
     text,
 )
 from sqlalchemy.dialects.postgresql import UUID
@@ -317,6 +318,10 @@ class LeadOriginCapture(Base):
     __tablename__ = "lead_origin_captures"
     __table_args__ = (
         UniqueConstraint("lead_id", name="uq_lead_origin_captures_lead_id"),
+        UniqueConstraint(
+            "integration_inbox_id",
+            name="uq_lead_origin_captures_integration_inbox",
+        ),
         CheckConstraint(
             "capture_method IN ('ad_lead_form_webhook', 'landing_page', 'portal', "
             "'agent_declared', 'campaign_response', 'referral', "
@@ -373,6 +378,13 @@ class LeadOriginCapture(Base):
             "source_platform",
             "external_campaign_id",
         ),
+        Index(
+            "uq_lead_origin_captures_source_interaction",
+            "source_platform",
+            "source_interaction_id",
+            unique=True,
+            postgresql_where=text("source_interaction_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -383,6 +395,16 @@ class LeadOriginCapture(Base):
         ForeignKey("leads.id", ondelete="CASCADE"),
         nullable=False,
     )
+    integration_inbox_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "integration_inbox.id",
+            name="fk_lead_origin_captures_integration_inbox",
+            ondelete="RESTRICT",
+        ),
+    )
+    source_interaction_id: Mapped[str | None] = mapped_column(String(240))
+    capture_fingerprint: Mapped[str | None] = mapped_column(String(64))
     capture_method: Mapped[str] = mapped_column(String(40), nullable=False)
     source_platform: Mapped[str] = mapped_column(String(40), nullable=False)
     lead_source: Mapped[str] = mapped_column(String(40), nullable=False)
@@ -416,6 +438,21 @@ class LeadOriginCapture(Base):
     lead = relationship("Lead", back_populates="origin_capture")
     campaign = relationship("Campaign")
     campaign_recipient = relationship("CampaignRecipient")
+    integration_inbox = relationship("IntegrationInbox")
+
+
+class LeadOriginCaptureImmutableError(RuntimeError):
+    """Raised when code attempts to rewrite official acquisition evidence."""
+
+
+@event.listens_for(LeadOriginCapture, "before_update")
+def _reject_lead_origin_capture_update(*_args: object) -> None:
+    raise LeadOriginCaptureImmutableError("Lead origin evidence is append-only")
+
+
+@event.listens_for(LeadOriginCapture, "before_delete")
+def _reject_lead_origin_capture_delete(*_args: object) -> None:
+    raise LeadOriginCaptureImmutableError("Lead origin evidence is append-only")
 
 
 class Quote(Base):
@@ -477,6 +514,12 @@ class Quote(Base):
     lead = relationship("Lead", back_populates="quotes")
     line_items = relationship("QuoteLineItem", back_populates="quote")
     sales_order = relationship("SalesOrder", back_populates="quote", uselist=False)
+    project = relationship(
+        "Project",
+        back_populates="quote",
+        uselist=False,
+        foreign_keys="Project.quote_id",
+    )
 
     @hybrid_property
     def sales_order_id(self):
@@ -590,6 +633,12 @@ class SalesOrder(Base):
     subscriber = relationship("Subscriber", foreign_keys=[subscriber_id])
     quote = relationship("Quote", back_populates="sales_order")
     lines = relationship("SalesOrderLine", back_populates="sales_order")
+    project = relationship(
+        "Project",
+        back_populates="sales_order",
+        uselist=False,
+        foreign_keys="Project.sales_order_id",
+    )
 
 
 class SalesOrderLine(Base):
