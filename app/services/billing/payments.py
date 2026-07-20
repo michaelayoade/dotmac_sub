@@ -2585,10 +2585,10 @@ class Payments(ListResponseMixin):
             return existing
 
         key_material = f"{provider_id}:{external}"
-        settlement_key = (
-            "provider-settlement-"
-            + hashlib.sha256(key_material.encode("utf-8")).hexdigest()
-        )
+        settlement_fingerprint = hashlib.sha256(
+            key_material.encode("utf-8")
+        ).hexdigest()
+        settlement_key = f"provider-settlement-{settlement_fingerprint}"
         payment = Payment(
             account_id=account_id,
             provider_id=provider_id,
@@ -2598,7 +2598,7 @@ class Payments(ListResponseMixin):
             status=PaymentStatus.succeeded,
             paid_at=paid_at or datetime.now(UTC),
             auto_allocate_on_settlement=False,
-            creation_preview_fingerprint=settlement_key,
+            creation_preview_fingerprint=settlement_fingerprint,
             external_id=external,
             memo=memo,
         )
@@ -2620,7 +2620,7 @@ class Payments(ListResponseMixin):
                 prepaid_amount=Decimal("0.00"),
                 currency=code,
                 origin=PaymentSettlementOrigin.provider_event,
-                preview_fingerprint=settlement_key,
+                preview_fingerprint=settlement_fingerprint,
                 idempotency_key=settlement_key,
             )
             db.add(settlement)
