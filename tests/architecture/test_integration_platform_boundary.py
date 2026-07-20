@@ -9,6 +9,7 @@ from app.services import sot_relationships
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 ALEMBIC_ENV = PROJECT_ROOT / "alembic/env.py"
+ACTIVE_MIGRATIONS = PROJECT_ROOT / "alembic/versions"
 DESIGN = PROJECT_ROOT / "docs/designs/INTEGRATION_PLATFORM_SOT.md"
 SOT_MAP = PROJECT_ROOT / "docs/SOT_RELATIONSHIP_MAP.md"
 CONNECTOR_ROOT = PROJECT_ROOT / "app/services/integrations/connectors"
@@ -100,6 +101,19 @@ def test_alembic_registry_does_not_import_retired_integration_models() -> None:
     }
 
     assert _alembic_model_module_imports().isdisjoint(retired_model_modules)
+
+
+def test_active_migrations_do_not_extend_retired_integration_types() -> None:
+    offenders = [
+        path.name
+        for path in sorted(ACTIVE_MIGRATIONS.glob("*.py"))
+        if "ALTER TYPE webhookeventtype" in _read(path)
+    ]
+
+    assert not offenders, (
+        "Active migrations must not depend on the retired webhook enum; "
+        f"revision 377 owns cleanup of deployed legacy objects: {offenders}"
+    )
 
 
 def test_integration_sot_names_the_live_cutover_owners() -> None:
