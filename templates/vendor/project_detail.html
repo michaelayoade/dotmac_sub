@@ -102,7 +102,7 @@
     <div class="mb-4 space-y-2 text-sm">{% for line in invoice.line_items %}<div class="flex justify-between border-b border-slate-100 py-2 dark:border-slate-800"><span>{{ line.description }}</span><strong>{{ line.amount }}</strong></div>{% endfor %}<div class="flex justify-between pt-2 text-base"><strong>Total</strong><strong>{{ invoice.currency }} {{ invoice.total }}</strong></div></div>
     <div class="mb-4 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm dark:border-slate-700 dark:bg-slate-800">
       <div class="flex flex-wrap items-center justify-between gap-2">
-        <strong>ERP payment status</strong>
+        <strong>Payment status</strong>
         {% if invoice.payment.status.is_present %}
           <span class="inline-flex items-center gap-1">
             {{ status_presentation_badge(invoice.payment.status.value, size="sm") }}

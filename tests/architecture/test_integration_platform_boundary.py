@@ -41,8 +41,9 @@ CURRENT_INTEGRATION_SERVICES = (
     "integration.inbox",
     "integration.jobs",
     "integration.sync",
-    "integration.vendor_purchase_invoice_erp_projection",
-    "integration.erp_material_support",
+    "integration.backoffice_adapter",
+    "integration.dotmac_erp_payables_adapter",
+    "integration.dotmac_erp_material_support_adapter",
 )
 
 # This is shrink-only compatibility debt. New connector modules must consume
@@ -169,10 +170,20 @@ def test_integration_sot_names_the_live_cutover_owners() -> None:
         "integration.installations",
         "integration.runtime",
     )
+    assert sot_relationships.dependencies_for("integration.backoffice_adapter") == (
+        "integration.installations",
+        "integration.runtime",
+    )
     assert sot_relationships.dependencies_for(
-        "integration.vendor_purchase_invoice_erp_projection"
-    ) == ("operations.vendor_purchase_invoices",)
-    assert sot_relationships.dependencies_for("integration.erp_material_support") == (
+        "integration.dotmac_erp_payables_adapter"
+    ) == (
+        "integration.backoffice_adapter",
+        "operations.vendor_purchase_invoices",
+    )
+    assert sot_relationships.dependencies_for(
+        "integration.dotmac_erp_material_support_adapter"
+    ) == (
+        "integration.backoffice_adapter",
         "operations.material_dependencies",
     )
 
@@ -200,7 +211,7 @@ def test_narrative_sot_names_each_integration_authority_migration() -> None:
         "CRM",
         "Outbound webhooks and hooks",
         "WhatsApp messaging",
-        "ERP",
+        "Backoffice/ERP",
         "Payments",
     ):
         assert f"| {concern} |" in relationships

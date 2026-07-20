@@ -167,34 +167,25 @@ def serialize(invoice: VendorPurchaseInvoice) -> dict:
         "attachment_file_name": attachment.original_filename if attachment else None,
         "attachment_content_type": attachment.content_type if attachment else None,
         "attachment_file_size": attachment.file_size if attachment else None,
-        "erp_purchase_order_id": invoice.erp_purchase_order_id,
-        "erp_purchase_invoice_id": invoice.erp_purchase_invoice_id,
-        "erp_purchase_invoice_creation_status": getattr(
-            invoice, "erp_purchase_invoice_creation_status", None
+        "payables_system": invoice.payables_system,
+        "procurement_order_reference": invoice.procurement_order_reference,
+        "payables_document_reference": invoice.payables_document_reference,
+        "payables_document_status": getattr(invoice, "payables_document_status", None),
+        "payment_status": invoice.payment_status,
+        "payment_total_amount": getattr(invoice, "payment_total_amount", None),
+        "payment_amount_paid": getattr(invoice, "payment_amount_paid", None),
+        "payment_balance_due": getattr(invoice, "payment_balance_due", None),
+        "payment_observed_at": getattr(invoice, "payment_observed_at", None),
+        "payment_source_updated_at": getattr(
+            invoice, "payment_source_updated_at", None
         ),
-        "erp_purchase_invoice_status": invoice.erp_purchase_invoice_status,
-        "erp_purchase_invoice_total_amount": getattr(
-            invoice, "erp_purchase_invoice_total_amount", None
-        ),
-        "erp_purchase_invoice_amount_paid": getattr(
-            invoice, "erp_purchase_invoice_amount_paid", None
-        ),
-        "erp_purchase_invoice_balance_due": getattr(
-            invoice, "erp_purchase_invoice_balance_due", None
-        ),
-        "erp_purchase_invoice_status_observed_at": getattr(
-            invoice, "erp_purchase_invoice_status_observed_at", None
-        ),
-        "erp_purchase_invoice_status_source_updated_at": getattr(
-            invoice, "erp_purchase_invoice_status_source_updated_at", None
-        ),
-        "erp_purchase_invoice_status_error": getattr(
-            invoice, "erp_purchase_invoice_status_error", None
+        "payment_observation_error": getattr(
+            invoice, "payment_observation_error", None
         ),
         "payment": project_vendor_payment_status(invoice),
-        "erp_sync_error": invoice.erp_sync_error,
-        "erp_synced_at": invoice.erp_synced_at,
-        "erp_attachment_synced_at": invoice.erp_attachment_synced_at,
+        "payables_submission_error": invoice.payables_submission_error,
+        "payables_submitted_at": invoice.payables_submitted_at,
+        "payables_attachment_submitted_at": invoice.payables_attachment_submitted_at,
         "is_active": invoice.is_active,
         "created_at": invoice.created_at,
         "updated_at": invoice.updated_at,
@@ -584,22 +575,18 @@ class VendorPurchaseInvoices:
         invoice.reviewed_at = datetime.now(UTC)
         invoice.reviewed_by_system_user_id = coerce_uuid(reviewer_system_user_id)
         invoice.review_notes = (review_notes or "").strip() or None
-        invoice.erp_purchase_order_id = (
-            invoice.project.erp_purchase_order_id or invoice.erp_purchase_order_id
+        invoice.procurement_order_reference = (
+            invoice.project.procurement_order_reference
+            or invoice.procurement_order_reference
         )
-        db.commit()
         try:
-            from app.services.dotmac_erp.purchase_invoice_sync import (
-                enqueue_purchase_invoice,
-            )
+            from app.services.backoffice import enqueue_purchase_invoice
 
-            enqueue_purchase_invoice(db, invoice)
-            db.commit()
+            with db.begin_nested():
+                enqueue_purchase_invoice(db, invoice)
         except Exception as exc:  # enqueue failure is repairable by the sweeper
-            db.rollback()
-            invoice = _get(db, invoice_id)
-            invoice.erp_sync_error = str(exc)[:500]
-            db.commit()
+            invoice.payables_submission_error = str(exc)[:500]
+        db.commit()
         return VendorPurchaseInvoices.get(db, invoice_id)
 
     @staticmethod
