@@ -238,14 +238,14 @@ def test_quarantine_and_retirement_are_terminal_for_execution_config(db_session)
 def test_foundation_migration_is_linear_and_additive() -> None:
     path = (
         Path(__file__).resolve().parents[1]
-        / "alembic/versions/373_integration_platform_foundation.py"
+        / "alembic/versions/376_integration_platform_foundation.py"
     )
     spec = importlib.util.spec_from_file_location("migration_373", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
 
-    assert module.revision == "373_integration_platform_foundation"
+    assert module.revision == "376_integration_platform_foundation"
     assert module.down_revision == "372_vendor_payment_projection"
     source = path.read_text(encoding="utf-8")
     assert "integration_installations" in source
@@ -265,15 +265,15 @@ def test_foundation_migration_is_linear_and_additive() -> None:
 def test_cutover_migration_is_linear_destructive_and_irreversible() -> None:
     path = (
         Path(__file__).resolve().parents[1]
-        / "alembic/versions/377_integration_platform_cutover.py"
+        / "alembic/versions/380_integration_platform_cutover.py"
     )
     spec = importlib.util.spec_from_file_location("migration_376", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
 
-    assert module.revision == "377_integration_platform_cutover"
-    assert module.down_revision == "376_integration_inbox"
+    assert module.revision == "380_integration_platform_cutover"
+    assert module.down_revision == "379_integration_inbox"
     source = path.read_text(encoding="utf-8")
     for retired_table in (
         "webhook_deliveries",

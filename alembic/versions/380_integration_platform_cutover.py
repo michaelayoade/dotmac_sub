@@ -1,7 +1,7 @@
 """Retire superseded integration storage after the typed-platform cutover.
 
-Revision ID: 377_integration_platform_cutover
-Revises: 376_integration_inbox
+Revision ID: 380_integration_platform_cutover
+Revises: 379_integration_inbox
 
 This is intentionally an irreversible authority cutover. Installations,
 capability bindings, the integration inbox, and integration deliveries are the
@@ -12,8 +12,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "377_integration_platform_cutover"
-down_revision = "376_integration_inbox"
+revision = "380_integration_platform_cutover"
+down_revision = "379_integration_inbox"
 branch_labels = None
 depends_on = None
 

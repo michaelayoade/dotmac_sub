@@ -3,7 +3,7 @@
 This migration establishes the replacement control plane directly. It does not
 store compatibility pointers to the retired connector configuration system.
 
-Revision ID: 373_integration_platform_foundation
+Revision ID: 376_integration_platform_foundation
 Revises: 372_vendor_payment_projection
 """
 
@@ -14,8 +14,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "373_integration_platform_foundation"
-down_revision = "372_vendor_payment_projection"
+revision = "376_integration_platform_foundation"
+down_revision = "375_work_order_evidence_policy"
 branch_labels = None
 depends_on = None
 

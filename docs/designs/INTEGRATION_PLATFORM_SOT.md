@@ -3,7 +3,7 @@
 Status: implemented source-of-truth architecture, 2026-07-20. The first-party
 CRM, ERP, direct Meta WhatsApp, Paystack, Flutterwave, and HTTP webhook paths
 have completed cutover. Their former direct transports and duplicate delivery
-stores are retired by migration `377_integration_platform_cutover`.
+stores are retired by migration `380_integration_platform_cutover`.
 
 ## Decision
 
@@ -385,7 +385,7 @@ interactive traffic uses typed service ports.
 | ERP | Direct ERP client construction | `dotmac.erp` versioned capabilities | Outbox, inventory, operations, expense, purchasing, and regulatory calls use the runtime |
 | Payments | Direct Paystack and Flutterwave services plus a payment-specific webhook dead-letter store | Billing-owned decisions using typed payment capabilities and `integration.inbox` | Intent, signature verification, reconciliation, refund, and replay evidence use one binding |
 
-Migration `377_integration_platform_cutover` removes the retired tables,
+Migration `380_integration_platform_cutover` removes the retired tables,
 columns, settings, and enums. Its downgrade is intentionally unavailable: the
 old paths are not a rollback mechanism. Rollback means correcting or disabling
 the current installation/binding while authoritative Sub state and durable

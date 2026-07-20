@@ -1,7 +1,7 @@
 """Add verified inbound integration receipt lifecycle.
 
-Revision ID: 376_integration_inbox
-Revises: 375_integration_delivery
+Revision ID: 379_integration_inbox
+Revises: 378_integration_delivery
 """
 
 import sqlalchemy as sa
@@ -9,8 +9,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "376_integration_inbox"
-down_revision = "375_integration_delivery"
+revision = "379_integration_inbox"
+down_revision = "378_integration_delivery"
 branch_labels = None
 depends_on = None
 
