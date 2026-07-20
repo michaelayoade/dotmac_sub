@@ -39,7 +39,7 @@ commit 7 app/tasks/tr069.py
 commit 7 app/tasks/uisp_control.py
 commit 1 app/tasks/uisp_ip_backfill.py
 commit 1 app/tasks/unmatched_radio.py
-commit 7 app/tasks/usage.py
+commit 3 app/tasks/usage.py
 commit 1 app/tasks/vacation_holds.py
 commit 3 app/tasks/webhooks.py
 commit 2 app/web/admin/catalog.py
@@ -103,7 +103,7 @@ rollback 11 app/tasks/tr069.py
 rollback 3 app/tasks/uisp_control.py
 rollback 4 app/tasks/uisp_ip_backfill.py
 rollback 1 app/tasks/unmatched_radio.py
-rollback 2 app/tasks/usage.py
+rollback 1 app/tasks/usage.py
 rollback 1 app/tasks/vacation_holds.py
 rollback 2 app/tasks/work_orders.py
 rollback 2 app/web/admin/billing_accounts.py

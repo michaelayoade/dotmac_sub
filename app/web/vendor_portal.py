@@ -1,9 +1,12 @@
 """Browser workspace for native vendor operations in Sub."""
 
 import json
+from collections.abc import Callable
 from decimal import Decimal
+from typing import TypeVar
+from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -20,21 +23,53 @@ from app.schemas.vendor_purchase_invoice import (
 )
 from app.services import vendor_submission_proposals
 from app.services.common import coerce_uuid
+from app.services.db_session_adapter import db_session_adapter
 from app.services.field.vendor_auth import vendor_context
+from app.services.owner_commands import CommandContext
 from app.services.vendor_portal_operations import vendor_portal_operations
 from app.services.vendor_purchase_invoices import vendor_purchase_invoices
 from app.services.vendor_routes_api import build_project_route_geojson
+from app.services.vendor_submission_proposals import (
+    ConfirmVendorSubmissionCommand,
+    VendorSubmissionError,
+)
 from app.web.auth.dependencies import require_web_auth
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/vendor", tags=["web-vendor-portal"])
+ResultT = TypeVar("ResultT")
+
+
+def _submission_http_error(exc: VendorSubmissionError) -> HTTPException:
+    suffix = exc.code.rsplit(".", 1)[-1]
+    status_code = {
+        "unsupported_submission_type": 400,
+        "invalid_proposal": 400,
+        "invalid_payload": 400,
+        "proposal_context_mismatch": 403,
+        "lifecycle_not_assigned": 403,
+        "lifecycle_not_found": 404,
+        "expired_proposal": 409,
+        "confirmation_in_progress": 409,
+        "stale_proposal": 409,
+        "missing_result_evidence": 409,
+        "lifecycle_invalid_transition": 409,
+        "lifecycle_unsupported_action": 400,
+        "lifecycle_actor_required": 400,
+    }.get(suffix, 500)
+    return HTTPException(status_code=status_code, detail=exc.message)
+
+
+def _submission_call(operation: Callable[[], ResultT]) -> ResultT:
+    try:
+        return operation()
+    except VendorSubmissionError as exc:
+        raise _submission_http_error(exc) from exc
 
 
 def _context(auth: dict, db: Session) -> dict:
     context = vendor_context(db, auth)
     if not context.get("native_vendor_id"):
-        from fastapi import HTTPException
-
         raise HTTPException(
             status_code=409,
             detail="Vendor account is not linked to the native vendor domain",
@@ -153,12 +188,14 @@ def vendor_start_project(
     db: Session = Depends(get_db),
 ):
     context = _context(auth, db)
-    proposal = vendor_submission_proposals.issue_project_lifecycle(
-        db,
-        project_id=project_id,
-        action="start",
-        vendor_id=str(context["native_vendor_id"]),
-        user_id=str(auth["principal_id"]),
+    proposal = _submission_call(
+        lambda: vendor_submission_proposals.issue_project_lifecycle(
+            db,
+            project_id=project_id,
+            action="start",
+            vendor_id=str(context["native_vendor_id"]),
+            user_id=str(auth["principal_id"]),
+        )
     )
     return templates.TemplateResponse(
         "vendor/submission_confirm.html",
@@ -178,12 +215,14 @@ def vendor_complete_project(
     db: Session = Depends(get_db),
 ):
     context = _context(auth, db)
-    proposal = vendor_submission_proposals.issue_project_lifecycle(
-        db,
-        project_id=project_id,
-        action="complete",
-        vendor_id=str(context["native_vendor_id"]),
-        user_id=str(auth["principal_id"]),
+    proposal = _submission_call(
+        lambda: vendor_submission_proposals.issue_project_lifecycle(
+            db,
+            project_id=project_id,
+            action="complete",
+            vendor_id=str(context["native_vendor_id"]),
+            user_id=str(auth["principal_id"]),
+        )
     )
     return templates.TemplateResponse(
         "vendor/submission_confirm.html",
@@ -230,11 +269,13 @@ def vendor_submit_quote(
     db: Session = Depends(get_db),
 ):
     context = _context(auth, db)
-    proposal = vendor_submission_proposals.issue_quote_submission(
-        db,
-        quote_id=quote_id,
-        vendor_id=str(context["native_vendor_id"]),
-        user_id=str(auth["principal_id"]),
+    proposal = _submission_call(
+        lambda: vendor_submission_proposals.issue_quote_submission(
+            db,
+            quote_id=quote_id,
+            vendor_id=str(context["native_vendor_id"]),
+            user_id=str(auth["principal_id"]),
+        )
     )
     return templates.TemplateResponse(
         "vendor/submission_confirm.html",
@@ -257,16 +298,18 @@ def vendor_submit_as_built(
     db: Session = Depends(get_db),
 ):
     context = _context(auth, db)
-    proposal = vendor_submission_proposals.issue_as_built_submission(
-        db,
-        payload=VendorAsBuiltCreate(
-            project_id=coerce_uuid(project_id),
-            geojson=json.loads(geojson),
-            actual_length_meters=actual_length_meters,
-            variation_reason=variation_reason,
-        ),
-        vendor_id=str(context["native_vendor_id"]),
-        user_id=str(auth["principal_id"]),
+    proposal = _submission_call(
+        lambda: vendor_submission_proposals.issue_as_built_submission(
+            db,
+            payload=VendorAsBuiltCreate(
+                project_id=coerce_uuid(project_id),
+                geojson=json.loads(geojson),
+                actual_length_meters=actual_length_meters,
+                variation_reason=variation_reason,
+            ),
+            vendor_id=str(context["native_vendor_id"]),
+            user_id=str(auth["principal_id"]),
+        )
     )
     return templates.TemplateResponse(
         "vendor/submission_confirm.html",
@@ -355,11 +398,13 @@ def vendor_submit_invoice(
     db: Session = Depends(get_db),
 ):
     context = _context(auth, db)
-    proposal = vendor_submission_proposals.issue_purchase_invoice_submission(
-        db,
-        invoice_id=invoice_id,
-        vendor_id=str(context["native_vendor_id"]),
-        user_id=str(auth["principal_id"]),
+    proposal = _submission_call(
+        lambda: vendor_submission_proposals.issue_purchase_invoice_submission(
+            db,
+            invoice_id=invoice_id,
+            vendor_id=str(context["native_vendor_id"]),
+            user_id=str(auth["principal_id"]),
+        )
     )
     return templates.TemplateResponse(
         "vendor/submission_confirm.html",
@@ -379,12 +424,25 @@ def vendor_confirm_submission(
     db: Session = Depends(get_db),
 ):
     context = _context(auth, db)
-    result = vendor_submission_proposals.confirm_submission(
-        db,
-        confirmation_token=confirmation_token,
-        vendor_id=str(context["native_vendor_id"]),
-        user_id=str(auth["principal_id"]),
-        project_id=project_id,
+    db_session_adapter.release_read_transaction(db)
+    command_id = uuid4()
+    result = _submission_call(
+        lambda: vendor_submission_proposals.confirm_submission(
+            db,
+            ConfirmVendorSubmissionCommand(
+                context=CommandContext(
+                    command_id=command_id,
+                    correlation_id=command_id,
+                    actor=str(auth["principal_id"]),
+                    scope=str(context["native_vendor_id"]),
+                    reason="vendor_submission_confirmation",
+                ),
+                confirmation_token=confirmation_token,
+                vendor_id=str(context["native_vendor_id"]),
+                user_id=str(auth["principal_id"]),
+                project_id=project_id,
+            ),
+        )
     )
     labels = {
         "quote": "Quote submitted",

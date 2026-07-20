@@ -3425,6 +3425,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "vendor submission idempotency and replay result",
                 ),
                 depends_on=(
+                    "auth.permission_gate",
+                    "auth.token_signing",
+                    "events.dispatcher",
                     "operations.vendor_project_lifecycle",
                     "operations.vendor_purchase_invoices",
                 ),
@@ -3432,6 +3435,192 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "Web adapters only request a preview or confirm its signed "
                     "proposal. Domain owners recheck under lock and commit the "
                     "mutation with its idempotency result."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="short-lived signed vendor submission proposal",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "authenticated vendor principal context",
+                                "vendor project submission preview",
+                                "vendor purchase-invoice submission preview",
+                                "capability signing envelope",
+                                "vendor confirmation protocol invariants",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="vendor submission stale-preview verification",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "authenticated vendor principal context",
+                                "vendor project submission preview",
+                                "vendor purchase-invoice submission preview",
+                                "capability signing envelope",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="vendor submission idempotency and replay result",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "authenticated vendor principal context",
+                                "vendor project submission preview",
+                                "vendor purchase-invoice submission preview",
+                                "capability signing envelope",
+                                "canonical vendor submission replay record",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="authenticated vendor principal context",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "authenticated vendor, vendor-user, scope, reason, "
+                                "command, and correlation identifiers"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="vendor project submission preview",
+                            owner="operations.vendor_project_lifecycle",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "locked quote, as-built, or project-lifecycle impact "
+                                "and state fingerprint"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="vendor purchase-invoice submission preview",
+                            owner="operations.vendor_purchase_invoices",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "locked purchase-invoice financial impact and state "
+                                "fingerprint"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="capability signing envelope",
+                            owner="auth.token_signing",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="configured context-signing key and algorithm",
+                        ),
+                        AuthorityInput(
+                            name="vendor confirmation protocol invariants",
+                            owner="operations.vendor_submission_confirmation",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "versioned purpose, issuer, claim allowlist, maximum "
+                                "token size, ten-minute lifetime, and submission scopes"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical vendor submission replay record",
+                            owner="operations.vendor_submission_confirmation",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "IdempotencyKey row keyed by signed proposal jti and "
+                                "submission scope"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        boundary=(
+                            "A typed confirmation command enters one verified owner "
+                            "transaction. Locked stale verification, replay reservation, "
+                            "domain mutation, result evidence, and event commit together."
+                        ),
+                        locking=(
+                            "The delegated domain preview locks the exact project, "
+                            "quote, or invoice aggregate before the coordinator reserves "
+                            "the signed proposal jti."
+                        ),
+                        idempotency=(
+                            "The signed proposal jti and submission scope identify one "
+                            "stable result. Exact replay returns that result without "
+                            "rerunning the mutation."
+                        ),
+                        retries=(
+                            "Expired, malformed, context-mismatched, or stale proposals "
+                            "are terminal. Database concurrency failures retry the whole "
+                            "owner command; delivery retries use the stable result."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "operations.vendor_submission_confirmation.unsupported_submission_type",
+                            "operations.vendor_submission_confirmation.invalid_proposal",
+                            "operations.vendor_submission_confirmation.expired_proposal",
+                            "operations.vendor_submission_confirmation.proposal_context_mismatch",
+                            "operations.vendor_submission_confirmation.confirmation_in_progress",
+                            "operations.vendor_submission_confirmation.invalid_payload",
+                            "operations.vendor_submission_confirmation.stale_proposal",
+                            "operations.vendor_submission_confirmation.missing_result_evidence",
+                            "operations.vendor_submission_confirmation.lifecycle_not_found",
+                            "operations.vendor_submission_confirmation.lifecycle_not_assigned",
+                            "operations.vendor_submission_confirmation.lifecycle_unsupported_action",
+                            "operations.vendor_submission_confirmation.lifecycle_actor_required",
+                            "operations.vendor_submission_confirmation.lifecycle_invalid_transition",
+                            "operations.vendor_submission_confirmation.invalid_command_context",
+                            "operations.vendor_submission_confirmation.command_contract_violation",
+                            "operations.vendor_submission_confirmation.nested_owner_command",
+                            "operations.vendor_submission_confirmation.active_caller_transaction",
+                            "operations.vendor_submission_confirmation.nested_transaction_completion",
+                        ),
+                        mapping_owner="app.web.vendor_portal",
+                        fail_closed_on=(
+                            "invalid or expired signed proposal",
+                            "vendor, user, project, or target mismatch",
+                            "state fingerprint drift",
+                            "ambiguous concurrent confirmation",
+                            "missing stable result evidence",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("vendor_submission.confirmed",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 is additive and contains submission, project, "
+                            "stable result, command, and correlation identifiers only."
+                        ),
+                        replay=(
+                            "The idempotency row is authoritative for command replay; "
+                            "domain records and lifecycle events rebuild the outcome."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "app.services.vendor_submission_proposals direct HTTP errors, "
+                            "helper rollback, and service-owned commit"
+                        ),
+                        new_owner="operations.vendor_submission_confirmation",
+                        verification=(
+                            "Proposal scope, expiry, stale-state, replay, rollback, event, "
+                            "web mapping, and architecture boundary tests."
+                        ),
+                        cutover_gate=(
+                            "Vendor confirmation routes pass a typed command on a clean "
+                            "session and all mutation branches return stable result evidence."
+                        ),
+                        fallback_retirement=(
+                            "Transport-coded errors, direct commit/rollback, and mutation "
+                            "before locked stale verification are removed."
+                        ),
+                    ),
+                    steward="vendor operations",
+                    design_refs=(
+                        "docs/designs/UI_PROJECTION_CONTRACTS.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/adr/0002-owner-command-transaction-boundary.md",
+                    ),
+                    test_refs=(
+                        "tests/test_vendor_submission_proposals.py",
+                        "tests/architecture/test_vendor_submission_confirmation_boundary.py",
+                        "tests/test_vendor_lifecycle.py",
+                    ),
                 ),
             ),
         ),
