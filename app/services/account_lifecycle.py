@@ -255,10 +255,13 @@ def suspend_subscription(
 
     If the subscription is already suspended, the lock is still created
     for audit purposes but no ``subscription_suspended`` event is emitted.
-    The ``enforcement_lock_created`` event is always emitted.
+    A newly created lock emits ``enforcement_lock_created``. Reusing an
+    existing lock does not emit a second creation event.
 
     If an active lock with the same reason already exists for this
-    subscription, the existing lock is returned (idempotent).
+    subscription, the existing lock is reused. Any drift in the subscription
+    or parent-account status is still repaired; lock-row idempotency must not
+    leave a service active while its enforcement lock is active.
 
     Args:
         db: Database session.
@@ -303,13 +306,40 @@ def suspend_subscription(
             and existing.access_mode != AccessRestrictionMode.hard_reject
         ):
             existing.access_mode = AccessRestrictionMode.hard_reject
-            db.flush()
+        status_changed = False
+        if not was_already_suspended:
+            subscription.status = SubscriptionStatus.suspended
+            status_changed = True
+        db.flush()
+
+        if emit and status_changed:
+            emit_event(
+                db,
+                EventType.subscription_suspended,
+                {
+                    "subscription_id": str(subscription.id),
+                    "reason": reason.value,
+                    "access_mode": existing.access_mode.value,
+                    "source": source,
+                    "from_status": prev_status.value if prev_status else None,
+                    "to_status": SubscriptionStatus.suspended.value,
+                    "offer_name": subscription.offer.name
+                    if subscription.offer
+                    else None,
+                },
+                subscription_id=subscription.id,
+                account_id=subscription.subscriber_id,
+            )
+
+        compute_account_status(db, str(subscription.subscriber_id))
         logger.info(
-            "Duplicate lock skipped: subscription=%s reason=%s source=%s existing=%s",
+            "Existing lock reused: subscription=%s reason=%s source=%s "
+            "existing=%s status_repaired=%s",
             subscription_id,
             reason.value,
             source,
             existing.id,
+            status_changed,
         )
         return existing
 

@@ -12,7 +12,11 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
-from app.models.enforcement_lock import EnforcementReason
+from app.models.enforcement_lock import (
+    AccessRestrictionMode,
+    EnforcementLock,
+    EnforcementReason,
+)
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services.account_lifecycle import (
     ALLOWED_RESTORERS,
@@ -819,6 +823,107 @@ class TestDuplicateLockPrevention:
         )
 
         assert lock1.id == lock2.id  # Same lock returned
+
+    def test_existing_lock_repairs_active_subscription_and_parent(self, db_session):
+        """Lock idempotency must not preserve active service-state drift."""
+        subscriber = _make_subscriber(db_session)
+        offer = _make_offer(db_session)
+        subscription = _make_subscription(db_session, subscriber, offer)
+        existing = EnforcementLock(
+            subscription_id=subscription.id,
+            subscriber_id=subscriber.id,
+            reason=EnforcementReason.prepaid,
+            access_mode=AccessRestrictionMode.captive,
+            source="legacy-drift",
+            is_active=True,
+        )
+        db_session.add(existing)
+        db_session.flush()
+
+        lock = suspend_subscription(
+            db_session,
+            str(subscription.id),
+            reason=EnforcementReason.prepaid,
+            source="prepaid_balance_sweep",
+            access_mode=AccessRestrictionMode.hard_reject,
+            emit=False,
+        )
+
+        assert lock.id == existing.id
+        assert lock.access_mode == AccessRestrictionMode.hard_reject
+        assert subscription.status == SubscriptionStatus.suspended
+        assert subscriber.status == SubscriberStatus.suspended
+        assert (
+            db_session.query(EnforcementLock)
+            .filter(EnforcementLock.subscription_id == subscription.id)
+            .count()
+            == 1
+        )
+
+        repeated = suspend_subscription(
+            db_session,
+            str(subscription.id),
+            reason=EnforcementReason.prepaid,
+            source="prepaid_balance_sweep",
+            access_mode=AccessRestrictionMode.hard_reject,
+            emit=False,
+        )
+
+        assert repeated.id == existing.id
+        assert subscription.status == SubscriptionStatus.suspended
+        assert subscriber.status == SubscriberStatus.suspended
+        assert (
+            db_session.query(EnforcementLock)
+            .filter(EnforcementLock.subscription_id == subscription.id)
+            .count()
+            == 1
+        )
+
+    def test_existing_lock_status_repair_emits_suspension_once(
+        self, db_session, monkeypatch
+    ):
+        """A repaired status emits its consequence, but never a duplicate lock."""
+        emitted: list[EventType] = []
+
+        def record_event(_db, event_type, _payload, **_kwargs):  # noqa: ANN001
+            emitted.append(event_type)
+            return None
+
+        monkeypatch.setattr("app.services.account_lifecycle.emit_event", record_event)
+        subscriber = _make_subscriber(db_session)
+        offer = _make_offer(db_session)
+        subscription = _make_subscription(db_session, subscriber, offer)
+        existing = EnforcementLock(
+            subscription_id=subscription.id,
+            subscriber_id=subscriber.id,
+            reason=EnforcementReason.prepaid,
+            access_mode=AccessRestrictionMode.hard_reject,
+            source="legacy-drift",
+            is_active=True,
+        )
+        db_session.add(existing)
+        db_session.flush()
+
+        suspend_subscription(
+            db_session,
+            str(subscription.id),
+            reason=EnforcementReason.prepaid,
+            source="prepaid_balance_sweep",
+            emit=True,
+        )
+
+        assert emitted == [EventType.subscription_suspended]
+
+        emitted.clear()
+        suspend_subscription(
+            db_session,
+            str(subscription.id),
+            reason=EnforcementReason.prepaid,
+            source="prepaid_balance_sweep",
+            emit=True,
+        )
+
+        assert emitted == []
 
 
 class TestRestoreWithReasonFilter:
