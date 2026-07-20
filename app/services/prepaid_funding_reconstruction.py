@@ -92,9 +92,7 @@ class ReconstructionPreview:
             "blocker_manifest_sha256": self.manifest.blocker_manifest_sha256,
             "candidate_cohort_sha256": self.manifest.candidate_cohort_sha256,
             "account_count": len(self.manifest.rows),
-            "quarantined_account_count": len(
-                self.manifest.quarantined_account_ids
-            ),
+            "quarantined_account_count": len(self.manifest.quarantined_account_ids),
             "total_amount": f"{self.total_amount:.2f}",
             "create_count": self.create_count,
             "replace_count": self.replace_count,

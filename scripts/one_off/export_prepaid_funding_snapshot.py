@@ -143,16 +143,12 @@ class FundingSnapshotExport:
     def funding_payload(
         self, *, allow_quarantined_subset: bool = False
     ) -> dict[str, Any]:
-        if not self.ready and not (
-            allow_quarantined_subset and self.subset_ready
-        ):
+        if not self.ready and not (allow_quarantined_subset and self.subset_ready):
             raise ValueError(
                 "funding reconstruction is blocked by incomplete provenance"
             )
         blocker_manifest = self.blocker_manifest_payload()
-        account_ids = (
-            self.candidate_ids if self.ready else self.enforceable_ids
-        )
+        account_ids = self.candidate_ids if self.ready else self.enforceable_ids
         return {
             "schema": RECONSTRUCTION_MANIFEST_SCHEMA,
             "source": self.source,
@@ -180,9 +176,7 @@ class FundingSnapshotExport:
         allow_quarantined_subset: bool = False,
     ) -> dict[str, Any]:
         return sign_prepaid_funding_manifest(
-            self.funding_payload(
-                allow_quarantined_subset=allow_quarantined_subset
-            ),
+            self.funding_payload(allow_quarantined_subset=allow_quarantined_subset),
             private_key_pem=private_key_pem,
             signed_at=signed_at,
         )

@@ -940,9 +940,10 @@ def test_pre_handoff_subscription_without_source_service_fails_closed(
     finally:
         metadata.drop_all(db_session.get_bind())
 
-    assert "pre_handoff_service_without_source_evidence" in replay.incomplete[
-        str(subscriber.id)
-    ]
+    assert (
+        "pre_handoff_service_without_source_evidence"
+        in replay.incomplete[str(subscriber.id)]
+    )
 
 
 def test_funding_export_replays_customer_position_adjustment(db_session, subscriber):

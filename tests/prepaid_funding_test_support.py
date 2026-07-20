@@ -74,14 +74,10 @@ def sealed_reconstruction_payload(
         str(account_id): Decimal(str(amount)) for account_id, amount in balances.items()
     }
     normalized_quarantine = {
-        str(account_id): (
-            (reasons,) if isinstance(reasons, str) else tuple(reasons)
-        )
+        str(account_id): ((reasons,) if isinstance(reasons, str) else tuple(reasons))
         for account_id, reasons in (quarantined or {}).items()
     }
-    account_ids = sorted(
-        set(normalized_balances) | set(normalized_quarantine), key=str
-    )
+    account_ids = sorted(set(normalized_balances) | set(normalized_quarantine), key=str)
     cohort_hash = candidate_cohort_sha256(account_ids)
     blocker_manifest = {
         "schema": "dotmac.prepaid_funding_blockers.v1",

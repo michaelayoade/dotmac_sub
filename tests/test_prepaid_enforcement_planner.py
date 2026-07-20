@@ -125,9 +125,8 @@ def test_funding_cohort_excludes_postpaid_timer_repair_input(
     db_session.commit()
 
     assert subscriber_account.id in candidate_prepaid_account_ids(db_session)
-    assert (
-        subscriber_account.id
-        not in candidate_prepaid_funding_account_ids(db_session)
+    assert subscriber_account.id not in candidate_prepaid_funding_account_ids(
+        db_session
     )
     item = plan_prepaid_enforcement(
         db_session,
@@ -154,9 +153,8 @@ def test_funding_cohort_excludes_service_less_prepaid_timer_repair_input(
     db_session.commit()
 
     assert subscriber_account.id in candidate_prepaid_account_ids(db_session)
-    assert (
-        subscriber_account.id
-        not in candidate_prepaid_funding_account_ids(db_session)
+    assert subscriber_account.id not in candidate_prepaid_funding_account_ids(
+        db_session
     )
     item = plan_prepaid_enforcement(
         db_session,
