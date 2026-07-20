@@ -176,6 +176,8 @@ def test_subscription_detail_uses_canonical_preview_and_execute_endpoints():
     assert "new Date(this.effectiveAt).toISOString()" in source
     assert "'Idempotency-Key': this.idempotencyKey" in source
     assert "requestId !== this.previewRequestId" in source
+    assert "openLifecycle('disable')" in source
+    assert "('suspended', 'blocked', 'stopped', 'disabled')" in source
 
 
 def test_subscription_detail_does_not_use_legacy_single_action_paths():

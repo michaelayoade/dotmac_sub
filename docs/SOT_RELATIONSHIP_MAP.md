@@ -2616,7 +2616,15 @@ Service intent:
    idempotent execution and structured single/batch outcomes. It delegates the
    resulting mutations to account lifecycle, catalog, billing, scheduler, and
    RADIUS owners. Admin routes and bulk adapters submit commands to this owner;
-   they do not update subscription status or offers directly.
+   they do not update subscription status or offers directly. Admin subscription
+   creation first stages the record as `pending`; selecting Active, Suspended,
+   Disabled, or Canceled applies the corresponding post-create lifecycle command.
+   Disabled is a reversible administrative pause: billing and network access stop,
+   while credentials, IP assignments, add-ons, and service configuration remain.
+   Restore returns that same service to Active and shifts its next billing date
+   by the recorded pause duration, preventing catch-up billing for the disabled
+   period. Canceled is terminal and releases or ends those operational service
+   resources while retaining audit history.
 6. `service_intent.subscription_nas_assignment`: owns commercial-service NAS
    assignment.
 7. `service_intent.subscription_billing_cadence`: owns the subscription's

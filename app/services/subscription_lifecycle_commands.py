@@ -409,6 +409,7 @@ def _dispatch_command(
     target_status = {
         SubscriptionCommandKind.activate: SubscriptionStatus.active,
         SubscriptionCommandKind.restore: SubscriptionStatus.active,
+        SubscriptionCommandKind.disable: SubscriptionStatus.disabled,
         SubscriptionCommandKind.cancel: SubscriptionStatus.canceled,
         SubscriptionCommandKind.expire: SubscriptionStatus.expired,
     }.get(command.kind)

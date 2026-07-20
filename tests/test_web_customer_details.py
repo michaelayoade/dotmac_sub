@@ -273,7 +273,7 @@ def test_person_detail_exposes_pppoe_access_login(db_session, subscriber):
     }
 
 
-def test_person_detail_hides_disabled_service_network_access(
+def test_person_detail_preserves_disabled_service_network_access(
     db_session, subscriber, subscription
 ):
     subscriber.user_type = UserType.customer
@@ -284,7 +284,10 @@ def test_person_detail_hides_disabled_service_network_access(
 
     context = build_person_detail_snapshot(db_session, str(subscriber.id))
 
-    assert context["network_access_cards"] == []
+    assert len(context["network_access_cards"]) == 1
+    assert context["network_access_cards"][0]["status"] == "disabled"
+    assert context["network_access_cards"][0]["login"] == "disabled-login"
+    assert context["network_access_cards"][0]["ipv4_address"] == "10.70.0.25"
 
 
 def test_person_detail_projects_subscription_status_for_network_access(

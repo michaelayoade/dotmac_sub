@@ -62,6 +62,7 @@ class SubscriptionLifecycleHeadConflict(SubscriptionLifecycleError):
 class SubscriptionCommandKind(str, enum.Enum):
     activate = "activate"
     suspend = "suspend"
+    disable = "disable"
     restore = "restore"
     renew = "renew"
     cancel = "cancel"
@@ -438,10 +439,14 @@ def _eligibility_reasons(
             SubscriptionStatus.suspended,
             SubscriptionStatus.stopped,
         },
+        SubscriptionCommandKind.disable: set(SubscriptionStatus)
+        - set(TERMINAL_SERVICE_STATUSES)
+        - {SubscriptionStatus.disabled},
         SubscriptionCommandKind.restore: {
             SubscriptionStatus.blocked,
             SubscriptionStatus.suspended,
             SubscriptionStatus.stopped,
+            SubscriptionStatus.disabled,
         },
         SubscriptionCommandKind.renew: {
             SubscriptionStatus.active,
@@ -591,6 +596,7 @@ def _billing_impact(
     action = {
         SubscriptionCommandKind.activate: "start_or_resume_collection",
         SubscriptionCommandKind.suspend: "continue_collection_while_held",
+        SubscriptionCommandKind.disable: "stop_collection",
         SubscriptionCommandKind.restore: "collection_unchanged",
         SubscriptionCommandKind.cancel: "stop_collection",
         SubscriptionCommandKind.expire: "stop_collection",
@@ -664,6 +670,7 @@ def _proposed_status(
     return {
         SubscriptionCommandKind.activate: SubscriptionStatus.active,
         SubscriptionCommandKind.suspend: SubscriptionStatus.suspended,
+        SubscriptionCommandKind.disable: SubscriptionStatus.disabled,
         SubscriptionCommandKind.restore: SubscriptionStatus.active,
         SubscriptionCommandKind.cancel: SubscriptionStatus.canceled,
         SubscriptionCommandKind.expire: SubscriptionStatus.expired,
@@ -675,6 +682,7 @@ def _session_action(kind: SubscriptionCommandKind) -> SubscriptionSessionAction:
         SubscriptionCommandKind.activate: SubscriptionSessionAction.authorize,
         SubscriptionCommandKind.restore: SubscriptionSessionAction.authorize,
         SubscriptionCommandKind.suspend: SubscriptionSessionAction.disconnect,
+        SubscriptionCommandKind.disable: SubscriptionSessionAction.disconnect,
         SubscriptionCommandKind.cancel: SubscriptionSessionAction.deprovision,
         SubscriptionCommandKind.expire: SubscriptionSessionAction.deprovision,
         SubscriptionCommandKind.change_plan: SubscriptionSessionAction.reauthorize,

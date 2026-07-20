@@ -924,6 +924,7 @@ _RESELLER_RESTORABLE_STATUSES = {
     SubscriptionStatus.suspended,
     SubscriptionStatus.blocked,
     SubscriptionStatus.stopped,
+    SubscriptionStatus.disabled,
 }
 _RESELLER_DEACTIVATABLE_STATUSES = {
     SubscriptionStatus.active,
@@ -932,7 +933,6 @@ _RESELLER_DEACTIVATABLE_STATUSES = {
     SubscriptionStatus.stopped,
 }
 _RESELLER_TERMINAL_STATUSES = {
-    SubscriptionStatus.disabled,
     SubscriptionStatus.canceled,
     SubscriptionStatus.expired,
     SubscriptionStatus.hidden,
