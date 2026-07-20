@@ -39,14 +39,19 @@ def _grant_keys(connection, table, holder_column: str, holder_id: str) -> set[st
 def test_reports_permission_migrations_form_the_single_head_chain():
     granular = _load("reports_granular_chain", "370_reports_granular_permissions.py")
     retire = _load("reports_retire_chain", "371_retire_coarse_reports_permissions.py")
-    current = _load(
+    payment_projection = _load(
         "vendor_payment_projection_chain",
         "372_vendor_purchase_invoice_payment_projection.py",
+    )
+    current = _load(
+        "replaceable_backoffice_boundary_chain",
+        "373_replaceable_backoffice_boundary.py",
     )
 
     assert granular.down_revision == "369_vendor_lifecycle_evidence"
     assert retire.down_revision == granular.revision
-    assert current.down_revision == retire.revision
+    assert payment_projection.down_revision == retire.revision
+    assert current.down_revision == payment_projection.revision
 
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
