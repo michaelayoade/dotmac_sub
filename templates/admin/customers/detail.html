@@ -72,6 +72,19 @@
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/></svg>
                 Account
             </button>
+            <button @click="activeTab = 'subscriptions'; serviceSubTab = 'subscriptions'"
+                    :class="activeTab === 'subscriptions' ? 'border-accent-500 text-accent-700 dark:text-accent-300' : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300 dark:text-slate-400 dark:hover:text-slate-300'"
+                    class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
+                Service
+                <span class="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-400">{{ stats.total_subscriptions | default(0) }}</span>
+            </button>
+            <button @click="activeTab = 'network'"
+                    :class="activeTab === 'network' ? 'border-accent-500 text-accent-700 dark:text-accent-300' : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300 dark:text-slate-400 dark:hover:text-slate-300'"
+                    class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.142 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"/></svg>
+                Network
+            </button>
             <button @click="activeTab = 'billing'"
                     :class="activeTab === 'billing' ? 'border-accent-500 text-accent-700 dark:text-accent-300' : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300 dark:text-slate-400 dark:hover:text-slate-300'"
                     class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition">
@@ -81,13 +94,6 @@
                 <span class="status-tone status-tone-warning ml-1 rounded-full px-2 py-0.5 text-xs font-semibold">Due</span>
                 {% endif %}
             </button>
-            <button @click="activeTab = 'subscriptions'; serviceSubTab = 'subscriptions'"
-                    :class="activeTab === 'subscriptions' ? 'border-accent-500 text-accent-700 dark:text-accent-300' : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300 dark:text-slate-400 dark:hover:text-slate-300'"
-                    class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
-                Service
-                <span class="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-400">{{ stats.total_subscriptions | default(0) }}</span>
-            </button>
             <button @click="activeTab = 'support'"
                     :class="activeTab === 'support' ? 'border-accent-500 text-accent-700 dark:text-accent-300' : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300 dark:text-slate-400 dark:hover:text-slate-300'"
                     class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition">
@@ -96,12 +102,6 @@
                 {% if relationship_summary.open_tickets %}
                 <span class="status-tone status-tone-warning ml-1 rounded-full px-2 py-0.5 text-xs font-semibold" title="Open tickets">{{ relationship_summary.open_tickets }}</span>
                 {% endif %}
-            </button>
-            <button @click="activeTab = 'network'"
-                    :class="activeTab === 'network' ? 'border-accent-500 text-accent-700 dark:text-accent-300' : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300 dark:text-slate-400 dark:hover:text-slate-300'"
-                    class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.142 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"/></svg>
-                Network
             </button>
             <button @click="activeTab = 'timeline'"
                     :class="activeTab === 'timeline' ? 'border-accent-500 text-accent-700 dark:text-accent-300' : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300 dark:text-slate-400 dark:hover:text-slate-300'"
