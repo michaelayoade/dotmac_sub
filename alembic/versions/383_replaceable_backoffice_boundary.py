@@ -1,6 +1,6 @@
 """Make back-office projections provider-neutral.
 
-Revision ID: 381_replaceable_backoffice
+Revision ID: 383_replaceable_backoffice
 Revises: 380_integration_platform_cutover
 """
 
@@ -10,8 +10,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "381_replaceable_backoffice"
-down_revision = "380_integration_platform_cutover"
+revision = "383_replaceable_backoffice"
+down_revision = "382_ticket_work_order_handoff"
 branch_labels = None
 depends_on = None
 

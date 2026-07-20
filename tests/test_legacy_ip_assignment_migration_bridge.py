@@ -73,8 +73,8 @@ def test_legacy_branch_merge_is_ancestor_of_current_head() -> None:
     )
     assert work_order_evidence.down_revision == as_built_review.revision
     current = _load_migration(
-        "381_replaceable_backoffice_boundary.py",
-        "migration_381_replaceable_backoffice_boundary",
+        "383_replaceable_backoffice_boundary.py",
+        "migration_383_replaceable_backoffice_boundary",
     )
     assert current.down_revision == "380_integration_platform_cutover"
 
