@@ -1,10 +1,15 @@
+from types import SimpleNamespace
+
 from app.services import infrastructure_health
 
 
 def test_skipped_health_checks_parses_known_names(monkeypatch):
-    monkeypatch.setenv(
-        "INFRASTRUCTURE_HEALTH_SKIP_CHECKS",
-        "genieacs, celery, radius-db, unknown",
+    monkeypatch.setattr(
+        infrastructure_health,
+        "settings",
+        SimpleNamespace(
+            infrastructure_health_skip_checks=("genieacs, celery, radius-db, unknown")
+        ),
     )
 
     assert infrastructure_health._skipped_health_checks() == {
@@ -15,7 +20,11 @@ def test_skipped_health_checks_parses_known_names(monkeypatch):
 
 
 def test_check_all_services_marks_skipped_probe_not_configured(monkeypatch):
-    monkeypatch.setenv("INFRASTRUCTURE_HEALTH_SKIP_CHECKS", "genieacs")
+    monkeypatch.setattr(
+        infrastructure_health,
+        "settings",
+        SimpleNamespace(infrastructure_health_skip_checks="genieacs"),
+    )
     called: list[str] = []
 
     def fake(name):
