@@ -18,6 +18,22 @@ from app.services.fup import (
 from app.services.owner_commands import CommandContext
 
 
+def execute_owner_command_for_test(
+    db: Session,
+    *,
+    operation,
+    **_kwargs,
+):
+    """Exercise a staged owner operation with the production commit contract."""
+    try:
+        result = operation()
+    except Exception:
+        db.rollback()
+        raise
+    db.commit()
+    return result
+
+
 def fup_command_context(scope: str, reason: str = "test_fup_command") -> CommandContext:
     command_id = uuid4()
     return CommandContext(

@@ -1,4 +1,5 @@
 import logging
+from uuid import uuid4
 
 from app.celery_app import celery_app
 from app.schemas.usage import UsageRatingRunRequest
@@ -149,14 +150,28 @@ def evaluate_fup_rules(
                     "enforced": 0,
                     "submonthly_no_data": 0,
                     "reset": 0,
-                    "notifications": 0,
+                    "notified": 0,
+                    "throttle_unconfigured": 0,
+                    "targeted": int(subscription_ids is not None),
                     "skipped_locked": 1,
                 }
         try:
-            return fup_enforcement.run_fup_evaluation(
-                subscription_ids=subscription_ids,
-                source=source,
-            )
+            owner_db = SessionLocal()
+            try:
+                return fup_enforcement.run_fup_evaluation(
+                    owner_db,
+                    fup_enforcement.RunFupSweepRequest(
+                        correlation_id=uuid4(),
+                        subscription_ids=(
+                            tuple(subscription_ids)
+                            if subscription_ids is not None
+                            else None
+                        ),
+                        source=source,
+                    ),
+                )
+            finally:
+                owner_db.close()
         finally:
             if is_pg:
                 lock_db.execute(
@@ -177,41 +192,11 @@ def lift_expired_fup_enforcement() -> dict[str, int]:
     ``list_pending_reset`` and lifts each state independently, so reset survives
     a billing-queue outage. Idempotent — an already-cleared state is a no-op.
     """
-    from datetime import UTC, datetime
-
-    from app.services.enforcement import lift_fup_enforcement
-    from app.services.fup_state import fup_state
-
-    session = SessionLocal()
-    lifted = 0
-    errors = 0
+    owner_db = SessionLocal()
     try:
-        now = datetime.now(UTC)
-        pending = fup_state.list_pending_reset(session, now)
-        for state in pending:
-            try:
-                result = lift_fup_enforcement(
-                    session,
-                    str(state.subscription_id),
-                    evaluated_at=now,
-                )
-                if result.get("lifted"):
-                    lifted += 1
-                session.commit()
-            except Exception as exc:
-                session.rollback()
-                errors += 1
-                logger.error(
-                    "Failed safety-net FUP lift for subscription %s: %s",
-                    state.subscription_id,
-                    exc,
-                )
-        logger.info(
-            "FUP reset safety-net: %d pending, %d lifted, %d errors",
-            len(pending),
-            lifted,
-            errors,
+        return fup_enforcement.run_expired_fup_lift(
+            owner_db,
+            fup_enforcement.RunExpiredFupLiftRequest(correlation_id=uuid4()),
         )
-        return {"pending": len(pending), "lifted": lifted, "errors": errors}
     finally:
-        session.close()
+        owner_db.close()

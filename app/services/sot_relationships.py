@@ -6668,7 +6668,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "FUP customer notification fan-out",
                 ),
                 depends_on=(
+                    "access.fup_rule_engine",
+                    "access.fup_runtime_state",
+                    "access.fup_usage_windows",
                     "access.session_enforcement",
+                    "access.subscription_lifecycle",
+                    "communications.notification_service",
                     "control.settings_spec",
                     "events.dispatcher",
                 ),
@@ -6676,6 +6681,222 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "Celery tasks keep only the advisory-lock plumbing, task "
                     "names, and queue chaining; the sweep owns every "
                     "enforce/warn/reset/repeat-upsell decision."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="FUP sweep enforce/warn/reset decisions",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "canonical subscription offer state",
+                                "canonical FUP rule decisions",
+                                "period-scoped FUP usage observations",
+                                "canonical FUP runtime state",
+                                "FUP enforcement control settings",
+                                "FUP sweep command protocol",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="FUP enforcement transition and cooldown hysteresis",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical FUP rule decisions",
+                                "canonical FUP runtime state",
+                                "FUP sweep command protocol",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="FUP repeat-upsell nudge policy",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical FUP rule decisions",
+                                "canonical FUP notification history",
+                                "period-scoped FUP usage observations",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="FUP customer notification fan-out",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "resolved FUP enforcement decision",
+                                "FUP communication channel policy",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical subscription offer state",
+                            owner="access.subscription_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked Subscription identity, subscriber, offer, and "
+                                "lifecycle state"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical FUP rule decisions",
+                            owner="access.fup_rule_engine",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "ordered rule evaluation including action, threshold, "
+                                "window, usage authority, reset, and cooldown evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="period-scoped FUP usage observations",
+                            owner="access.fup_usage_windows",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "metering-owned current QuotaBucket plus daily, weekly, "
+                                "and monthly usage-window evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical FUP runtime state",
+                            owner="access.fup_runtime_state",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked per-subscription action, active rule, cooldown, "
+                                "and cap-reset state"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="FUP enforcement control settings",
+                            owner="control.settings_spec",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "usage warning enablement and thresholds plus canonical "
+                                "throttle RADIUS profile configuration"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical FUP notification history",
+                            owner="communications.notification_service",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "prior fup_throttled, fup_blocked, and repeat-upsell "
+                                "notification evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="FUP communication channel policy",
+                            owner="communications.notification_service",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "customer eligibility, recipient, template, channel, and "
+                                "suppression policy"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="resolved FUP enforcement decision",
+                            owner="access.fup_enforcement_sweep",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "enforce, warn, reset, notify, or repeat-upsell consequence "
+                                "selected for one locked subscription"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="FUP sweep command protocol",
+                            owner="access.fup_enforcement_sweep",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed per-subscription command, source, actor, evaluation "
+                                "time, command, and correlation evidence"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        boundary=(
+                            "Discovery is read-only; each candidate enters one verified "
+                            "per-subscription coordinator transaction containing decision, "
+                            "locked runtime evidence, any participant write, event, and "
+                            "communication intent."
+                        ),
+                        locking=(
+                            "Each command locks Subscription and existing FupState before "
+                            "evaluating transition, cooldown, warning, or reset state."
+                        ),
+                        idempotency=(
+                            "State/status comparisons suppress repeat transitions; cooldown "
+                            "and notification history bound reassertion and upsell frequency; "
+                            "expired lifts are idempotent."
+                        ),
+                        retries=(
+                            "One failed subscription rolls back independently and can retry "
+                            "with its correlation evidence; earlier subscription commands "
+                            "remain committed."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "access.fup_enforcement_sweep.invalid_source",
+                            "access.fup_enforcement_sweep.subscription_not_found",
+                            "access.fup_enforcement_sweep.invalid_command_context",
+                            "access.fup_enforcement_sweep.command_contract_violation",
+                            "access.fup_enforcement_sweep.nested_owner_command",
+                            "access.fup_enforcement_sweep.active_caller_transaction",
+                            "access.fup_enforcement_sweep.nested_transaction_completion",
+                        ),
+                        mapping_owner="app.tasks.usage",
+                        retryable_codes=(),
+                        fail_closed_on=(
+                            "missing locked subscription or conflicting runtime state",
+                            "missing authoritative usage bucket or non-authoritative window",
+                            "missing throttle profile for a reduce-speed decision",
+                            "active caller transaction or manifest mismatch",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("usage.exhausted",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 is additive and carries subscription, offer, rule, "
+                            "action, usage, threshold, and cap-reset evidence."
+                        ),
+                        replay=(
+                            "FupPolicy/FupRule, metered usage, FupState, enforcement locks, "
+                            "and notification intents reconstruct decisions and outcomes."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "one service-managed loop with implicit session lifecycle, "
+                            "quota creation, direct commits, split notification commits, "
+                            "and reset decisions in the Celery task"
+                        ),
+                        new_owner="access.fup_enforcement_sweep",
+                        verification=(
+                            "Per-subscription command, clean discovery, no quota write, "
+                            "hysteresis, missing-profile, notification, reset, rollback, "
+                            "task-adapter, and architecture tests."
+                        ),
+                        cutover_gate=(
+                            "Tasks retain only advisory-lock/session plumbing and invoke "
+                            "typed sweep requests; all decisions enter owner commands."
+                        ),
+                        fallback_retirement=(
+                            "Direct service/task commits, helper rollbacks, quota-bucket "
+                            "creation, split notification commits, and task-side reset loops "
+                            "are removed."
+                        ),
+                    ),
+                    steward="network access",
+                    design_refs=(
+                        "docs/designs/FUP_CONSUMPTION_WINDOWS.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/adr/0002-owner-command-transaction-boundary.md",
+                    ),
+                    test_refs=(
+                        "tests/test_fup_evaluate_commits.py",
+                        "tests/test_fup_enforcement_hardening.py",
+                        "tests/test_fup_hysteresis.py",
+                        "tests/test_fup_notifications.py",
+                        "tests/architecture/test_fup_enforcement_boundary.py",
+                    ),
                 ),
             ),
         ),

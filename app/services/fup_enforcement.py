@@ -1,16 +1,110 @@
-"""FUP enforcement sweep — the single decision owner for enforce/warn/reset/repeat-upsell decisions; Celery tasks and routes are thin adapters."""
+"""FUP enforcement decisions and per-subscription command coordination."""
+
+from __future__ import annotations
 
 import logging
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Any, TypeVar
+from uuid import UUID
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from app.models.fup_state import FupState
+from app.models.catalog import Subscription, SubscriptionStatus
+from app.models.domain_settings import SettingDomain
+from app.models.fup import FupPolicy
+from app.models.fup_state import FupActionStatus, FupState
+from app.models.usage import QuotaBucket
+from app.services import control_registry, settings_spec
 from app.services import fup_state as fup_state_service
 from app.services.db_session_adapter import db_session_adapter
+from app.services.domain_errors import DomainError
+from app.services.events import EventType, emit_event
 from app.services.fup_state import ApplyFupRuntimeState
+from app.services.owner_commands import (
+    CommandContext,
+    OwnerCommandDefinition,
+    execute_owner_command,
+)
 
 logger = logging.getLogger(__name__)
-SessionLocal = db_session_adapter.create_session
+ResultT = TypeVar("ResultT")
+
+
+class FupEnforcementError(DomainError):
+    """Stable failures from the FUP enforcement coordinator."""
+
+
+def _error(suffix: str, message: str) -> FupEnforcementError:
+    return FupEnforcementError(
+        code=f"access.fup_enforcement_sweep.{suffix}",
+        message=message,
+    )
+
+
+def _definition(name: str) -> OwnerCommandDefinition:
+    return OwnerCommandDefinition(
+        owner="access.fup_enforcement_sweep",
+        concern="FUP sweep enforce/warn/reset decisions",
+        name=name,
+    )
+
+
+def _execute(
+    db: Session,
+    *,
+    context: CommandContext,
+    name: str,
+    operation: Callable[[], ResultT],
+) -> ResultT:
+    return execute_owner_command(
+        db,
+        definition=_definition(name),
+        context=context,
+        operation=operation,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class RunFupSweepRequest:
+    correlation_id: UUID
+    source: str = "scheduled_full_sweep"
+    subscription_ids: tuple[str, ...] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RunExpiredFupLiftRequest:
+    correlation_id: UUID
+    source: str = "scheduled_expired_lift"
+
+
+@dataclass(frozen=True, slots=True)
+class EvaluateFupSubscriptionCommand:
+    context: CommandContext
+    subscription_id: UUID
+    evaluated_at: datetime
+    warning_enabled: bool
+    warning_ratio: float
+    throttle_profile_configured: bool
+
+
+@dataclass(frozen=True, slots=True)
+class LiftExpiredFupSubscriptionCommand:
+    context: CommandContext
+    subscription_id: UUID
+    evaluated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class FupSubscriptionOutcome:
+    processed: int = 1
+    enforced: int = 0
+    reset: int = 0
+    notified: int = 0
+    submonthly_no_data: int = 0
+    throttle_unconfigured: int = 0
 
 
 def stage_fup_runtime_state(
@@ -26,18 +120,10 @@ def _fup_should_enforce(
     prior_status: str,
     target_status: str,
     cooldown_minutes: int,
-    state,
-    now,
+    state: FupState | None,
+    now: datetime,
 ) -> bool:
-    """Transition-driven FUP enforcement to stop per-tick RADIUS churn.
-
-    Enforce when *entering* the throttled/blocked state; once already in it,
-    re-assert only after ``cooldown_minutes`` has elapsed (0 = never re-assert).
-    Previously the task re-emitted ``usage_exhausted`` and re-applied the RADIUS
-    profile / SSH address-list on every single tick.
-    """
-    from datetime import UTC
-
+    """Enforce on transition, or reassert only after a positive cooldown."""
     if prior_status != target_status:
         return True
     if cooldown_minutes and state is not None and state.last_evaluated_at is not None:
@@ -48,402 +134,426 @@ def _fup_should_enforce(
     return False
 
 
-def run_fup_evaluation(
+def _validate_source(source: str) -> str:
+    normalized = source.strip()
+    if not normalized or len(normalized) > 120:
+        raise _error("invalid_source", "FUP sweep source is invalid.")
+    return normalized
+
+
+def _command_context(
     *,
-    subscription_ids: list[str] | None = None,
-    source: str = "scheduled_full_sweep",
-) -> dict[str, int]:
-    """Evaluate FUP rules for all active subscriptions and apply enforcement.
+    correlation_id: UUID,
+    subscription_id: UUID,
+    source: str,
+) -> CommandContext:
+    return CommandContext.system(
+        actor="system:fup_enforcement",
+        scope=str(subscription_id),
+        reason=source,
+        correlation_id=correlation_id,
+    )
 
-    Runs periodically to check usage against FUP thresholds and apply
-    throttle/block/notify actions. Also handles time-based profile switching
-    (e.g., night boost) and FUP state resets at period boundaries.
 
-    CONCURRENCY INVARIANT: sweeps must not run concurrently (duplicate
-    enforcement/notifications, racing per-subscription commits). That
-    serialization is owned by the Celery task wrapper
-    (app.tasks.usage.evaluate_fup_rules) via pg advisory lock 778_003 —
-    it is deliberately NOT re-acquired here. Do not call this function from
-    a new entry point without going through the task, or without providing
-    equivalent serialization.
-    """
-    import uuid
-    from datetime import UTC, datetime
+def _release_read_transaction(db: Session) -> None:
+    # Mock-only unit adapters are not SQLAlchemy sessions. Production always
+    # closes the discovery read before entering the first owner command.
+    if isinstance(db, Session):
+        db_session_adapter.release_read_transaction(db)
 
-    from sqlalchemy import or_
 
-    from app.models.catalog import Subscription, SubscriptionStatus
-    from app.models.domain_settings import SettingDomain
-    from app.models.fup import FupPolicy
-    from app.models.fup_state import FupActionStatus, FupState
-    from app.services import control_registry, settings_spec
-    from app.services.events import emit_event
-    from app.services.events.types import EventType
-    from app.services.fup import evaluate_rules
+def _candidate_subscription_ids(
+    db: Session,
+    subscription_ids: tuple[str, ...] | None,
+    *,
+    source: str,
+) -> list[UUID]:
+    subscription_uuid_filter: list[UUID] | None = None
+    if subscription_ids is not None:
+        subscription_uuid_filter = []
+        for raw_id in subscription_ids:
+            try:
+                subscription_uuid_filter.append(UUID(str(raw_id)))
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Skipping invalid FUP subscription id %r from %s",
+                    raw_id,
+                    source,
+                )
+        if not subscription_uuid_filter:
+            return []
+
+    enforced_states = (
+        FupActionStatus.notified,
+        FupActionStatus.throttled,
+        FupActionStatus.blocked,
+    )
+    query = (
+        db.query(Subscription)
+        .join(FupPolicy, FupPolicy.offer_id == Subscription.offer_id)
+        .outerjoin(FupState, FupState.subscription_id == Subscription.id)
+        .filter(
+            or_(
+                Subscription.status == SubscriptionStatus.active,
+                FupState.action_status.in_(enforced_states),
+            )
+        )
+        .filter(FupPolicy.is_active.is_(True))
+    )
+    if subscription_uuid_filter is not None:
+        query = query.filter(Subscription.id.in_(subscription_uuid_filter))
+    return [row.id for row in query.all()]
+
+
+def _subscription_for_evaluation(db: Session, subscription_id: UUID) -> Subscription:
+    subscription = (
+        db.query(Subscription)
+        .filter(Subscription.id == subscription_id)
+        .with_for_update(of=Subscription)
+        .one_or_none()
+    )
+    if subscription is None:
+        raise _error("subscription_not_found", "Subscription was not found.")
+    return subscription
+
+
+def _current_quota_bucket(
+    db: Session,
+    subscription_id: UUID,
+    evaluated_at: datetime,
+) -> QuotaBucket | None:
+    """Read the metering-owned bucket; enforcement never creates usage facts."""
+    return (
+        db.query(QuotaBucket)
+        .filter(QuotaBucket.subscription_id == subscription_id)
+        .filter(QuotaBucket.period_start <= evaluated_at)
+        .filter(QuotaBucket.period_end > evaluated_at)
+        .order_by(QuotaBucket.period_start.desc())
+        .first()
+    )
+
+
+def _sweep_policy(db: Session) -> tuple[bool, float, bool]:
     from app.services.usage import _parse_warning_thresholds
 
-    session = SessionLocal()
-    try:
-        now = datetime.now(UTC)
-        processed = 0
-        enforced = 0
-        submonthly_no_data = 0
-        throttle_unconfigured = 0
-        reset = 0
-        # Customer notifications to emit AFTER the enforcement commit, so a
-        # notification failure can't roll back enforcement state. Each entry:
-        # {subscriber_id, kind, rule_name, threshold_gb, used_gb}.
-        pending_notifs: list[dict] = []
-
-        # "Approaching" warnings use the canonical ``usage.warnings`` control
-        # plus configurable thresholds (e.g. "0.8,0.9"). We warn at the lowest
-        # configured threshold.
-        warn_enabled = control_registry.is_enabled(session, "usage.warnings")
-        _thr_raw = settings_spec.resolve_value(
-            session, SettingDomain.usage, "usage_warning_thresholds"
+    warning_enabled = control_registry.is_enabled(db, "usage.warnings")
+    raw_thresholds = settings_spec.resolve_value(
+        db, SettingDomain.usage, "usage_warning_thresholds"
+    )
+    parsed = _parse_warning_thresholds(
+        str(raw_thresholds) if raw_thresholds is not None else None
+    )
+    warning_ratio = float(parsed[0]) if parsed else 0.8
+    throttle_profile_configured = bool(
+        settings_spec.resolve_value(
+            db,
+            SettingDomain.usage,
+            "fup_throttle_radius_profile_id",
         )
-        _parsed = _parse_warning_thresholds(
-            str(_thr_raw) if _thr_raw is not None else None
-        )
-        warn_ratio = float(_parsed[0]) if _parsed else 0.8
+    )
+    return warning_enabled, warning_ratio, throttle_profile_configured
 
-        # When the FUP "reduce_speed" action has no throttle RADIUS profile
-        # configured, the enforcement handler can't actually throttle. Read the
-        # profile once so the loop can skip that notification and surface the
-        # misconfiguration instead.
-        throttle_profile_configured = bool(
-            settings_spec.resolve_value(
-                session, SettingDomain.usage, "fup_throttle_radius_profile_id"
+
+def _emit_enforcement_event(
+    db: Session,
+    subscription: Subscription,
+    rule_result: dict,
+    *,
+    current_usage: float,
+    cap_resets_at: object,
+) -> None:
+    emit_event(
+        db,
+        EventType.usage_exhausted,
+        {
+            "schema_version": 1,
+            "subscription_id": str(subscription.id),
+            "offer_id": str(subscription.offer_id),
+            "rule_id": rule_result.get("rule_id"),
+            "action": rule_result.get("action"),
+            "current_usage_gb": current_usage,
+            "threshold_gb": rule_result.get("threshold_gb"),
+            "cap_resets_at": cap_resets_at,
+        },
+        subscription_id=subscription.id,
+        account_id=subscription.subscriber_id,
+    )
+
+
+def _evaluate_subscription(
+    db: Session,
+    command: EvaluateFupSubscriptionCommand,
+) -> FupSubscriptionOutcome:
+    from app.services.fup import evaluate_rules
+    from app.services.fup_usage import build_usage_by_period
+
+    subscription = _subscription_for_evaluation(db, command.subscription_id)
+    state = fup_state_service.fup_state.get_for_update(db, subscription.id)
+    if state and state.cap_resets_at and command.evaluated_at >= state.cap_resets_at:
+        from app.services.enforcement import lift_fup_enforcement
+
+        result = lift_fup_enforcement(
+            db,
+            str(subscription.id),
+            evaluated_at=command.evaluated_at,
+        )
+        return FupSubscriptionOutcome(reset=int(bool(result.get("lifted"))))
+
+    bucket = _current_quota_bucket(db, subscription.id, command.evaluated_at)
+    if bucket is None:
+        return FupSubscriptionOutcome()
+    current_usage = float(bucket.used_gb or 0)
+    usage_by_period = build_usage_by_period(
+        db,
+        subscription,
+        str(subscription.offer_id),
+        command.evaluated_at,
+        current_usage,
+    )
+    prior_status = state.action_status.value if state else "none"
+    results = evaluate_rules(
+        db,
+        str(subscription.offer_id),
+        current_usage_gb=current_usage,
+        current_time=command.evaluated_at,
+        usage_by_period=usage_by_period,
+    )
+    no_data_count = sum(1 for row in results if row.get("usage_source") == "no_data")
+    for row in results:
+        if row.get("usage_source") == "no_data":
+            logger.warning(
+                "FUP %s window for sub %s rule %s had no usage data; not enforced",
+                row.get("consumption_period"),
+                subscription.id,
+                row.get("rule_id"),
             )
-        )
 
-        enforced_states = (
-            FupActionStatus.notified,
-            FupActionStatus.throttled,
-            FupActionStatus.blocked,
-        )
-        subscription_uuid_filter = None
-        if subscription_ids is not None:
-            subscription_uuid_filter = []
-            for raw_id in subscription_ids:
-                try:
-                    subscription_uuid_filter.append(uuid.UUID(str(raw_id)))
-                except (TypeError, ValueError):
-                    logger.warning(
-                        "Skipping invalid FUP subscription id %r from %s",
-                        raw_id,
-                        source,
+    pending_notifications: list[dict] = []
+    enforced = 0
+    throttle_unconfigured = 0
+    triggered = [row for row in results if row.get("triggered")]
+    if triggered:
+        for rule_result in reversed(triggered):
+            cap_resets_at = rule_result.get("window_end") or (
+                bucket.period_end.isoformat() if bucket.period_end else None
+            )
+            if rule_result.get("usage_source") == "no_data":
+                continue
+            action = rule_result.get("action")
+            if action == "block":
+                if _fup_should_enforce(
+                    prior_status=prior_status,
+                    target_status="blocked",
+                    cooldown_minutes=rule_result.get("cooldown_minutes") or 0,
+                    state=state,
+                    now=command.evaluated_at,
+                ):
+                    _emit_enforcement_event(
+                        db,
+                        subscription,
+                        rule_result,
+                        current_usage=current_usage,
+                        cap_resets_at=cap_resets_at,
                     )
-
-        # Find active subscriptions with FUP policies, plus subscriptions
-        # already under FUP control. The latter matters for cap-boundary
-        # auto-lift: a blocked subscription is suspended, so an active-only
-        # scan would never clear it after the reset window.
-        subscriptions_query = (
-            session.query(Subscription)
-            .join(FupPolicy, FupPolicy.offer_id == Subscription.offer_id)
-            .outerjoin(FupState, FupState.subscription_id == Subscription.id)
-            .filter(
-                or_(
-                    Subscription.status == SubscriptionStatus.active,
-                    FupState.action_status.in_(enforced_states),
+                    enforced += 1
+                if prior_status != "blocked":
+                    pending_notifications.append(
+                        {
+                            "subscriber_id": subscription.subscriber_id,
+                            "kind": "blocked",
+                            "rule_name": rule_result.get("name"),
+                            "threshold_gb": rule_result.get("threshold_gb"),
+                            "used_gb": current_usage,
+                            "cap_resets_at": cap_resets_at,
+                        }
+                    )
+                _maybe_queue_repeat_upsell(
+                    db,
+                    subscription,
+                    bucket,
+                    rule_result,
+                    pending_notifications,
                 )
-            )
-            .filter(FupPolicy.is_active.is_(True))
-        )
-        if subscription_uuid_filter is not None:
-            if not subscription_uuid_filter:
-                return {
-                    "processed": 0,
-                    "enforced": 0,
-                    "reset": 0,
-                    "notified": 0,
-                    "submonthly_no_data": 0,
-                    "throttle_unconfigured": 0,
-                    "targeted": 1,
-                }
-            subscriptions_query = subscriptions_query.filter(
-                Subscription.id.in_(subscription_uuid_filter)
-            )
-        subscriptions = subscriptions_query.all()
-
-        for sub in subscriptions:
-            processed += 1
-
-            # Check if FUP state needs reset (period boundary crossed)
-            state = fup_state_service.fup_state.get(session, str(sub.id))
-            if state and state.cap_resets_at and now >= state.cap_resets_at:
-                # Lift the actual enforcement (RADIUS profile / address-list
-                # block / suspension), not just the state row — otherwise the
-                # subscriber stays throttled/blocked forever past the reset.
-                from app.services.enforcement import lift_fup_enforcement
-
-                lift_fup_enforcement(session, str(sub.id), evaluated_at=now)
-                reset += 1
-                logger.info("Lifted FUP enforcement for subscription %s", sub.id)
-                session.commit()
-                continue
-
-            # Get current usage from quota bucket
-            from app.services.usage import _resolve_or_create_quota_bucket
-
-            bucket = _resolve_or_create_quota_bucket(session, sub, now)
-            if not bucket:
-                session.commit()
-                continue
-
-            current_usage = float(bucket.used_gb or 0)
-
-            # Per-period usage so daily/weekly rules measure their own window.
-            # A monthly-only offer yields {"monthly": current_usage} — identical
-            # to the legacy path (no extra queries, no async bridge).
-            from app.services.fup_usage import build_usage_by_period
-
-            usage_by_period = build_usage_by_period(
-                session, sub, str(sub.offer_id), now, current_usage
-            )
-
-            # Status persisted from a prior run — used to notify the customer
-            # only on a *transition* into throttled/blocked (not every tick).
-            prior_status = state.action_status.value if state else "none"
-
-            # Evaluate rules
-            results = evaluate_rules(
-                session,
-                str(sub.offer_id),
-                current_usage_gb=current_usage,
-                current_time=now,
-                usage_by_period=usage_by_period,
-            )
-
-            # Safeguard tripwire (#21): a sub-monthly rule whose window had no
-            # usage data (metrics store down / no samples) reads 0 and silently
-            # under-enforces — a real over-user would NOT be throttled. Surface
-            # it so the gap is visible rather than invisible.
-            for r in results:
-                if r.get("usage_source") == "no_data":
-                    submonthly_no_data += 1
+                break
+            if action == "reduce_speed":
+                if not command.throttle_profile_configured:
+                    throttle_unconfigured += 1
                     logger.warning(
-                        "FUP %s window for sub %s rule %s had no usage data — "
-                        "not enforced this run (metrics store down or no samples)",
-                        r.get("consumption_period"),
-                        sub.id,
-                        r.get("rule_id"),
+                        "FUP reduce_speed triggered for sub %s rule %s but no "
+                        "canonical throttle profile is configured",
+                        subscription.id,
+                        rule_result.get("rule_id"),
                     )
-
-            triggered = [r for r in results if r.get("triggered")]
-
-            if triggered:
-                # Find the highest-severity triggered rule
-                for rule_result in reversed(triggered):
-                    # Cap auto-lifts at the end of THIS rule's consumption window
-                    # (daily -> next local midnight, weekly -> next Monday,
-                    # monthly -> the billing-period end). Falls back to the quota
-                    # period boundary when no window is attached.
-                    cap_resets_at = rule_result.get("window_end") or (
-                        bucket.period_end.isoformat() if bucket.period_end else None
+                    break
+                if _fup_should_enforce(
+                    prior_status=prior_status,
+                    target_status="throttled",
+                    cooldown_minutes=rule_result.get("cooldown_minutes") or 0,
+                    state=state,
+                    now=command.evaluated_at,
+                ):
+                    _emit_enforcement_event(
+                        db,
+                        subscription,
+                        rule_result,
+                        current_usage=current_usage,
+                        cap_resets_at=cap_resets_at,
                     )
+                    enforced += 1
+                if prior_status != "throttled":
+                    pending_notifications.append(
+                        {
+                            "subscriber_id": subscription.subscriber_id,
+                            "kind": "throttled",
+                            "rule_name": rule_result.get("name"),
+                            "threshold_gb": rule_result.get("threshold_gb"),
+                            "used_gb": current_usage,
+                            "cap_resets_at": cap_resets_at,
+                        }
+                    )
+                _maybe_queue_repeat_upsell(
+                    db,
+                    subscription,
+                    bucket,
+                    rule_result,
+                    pending_notifications,
+                )
+                break
+            if action == "notify" and prior_status == "none":
+                rule_id = rule_result.get("rule_id")
+                stage_fup_runtime_state(
+                    db,
+                    ApplyFupRuntimeState(
+                        subscription_id=subscription.id,
+                        offer_id=subscription.offer_id,
+                        rule_id=UUID(str(rule_id)) if rule_id else None,
+                        action_status=FupActionStatus.notified,
+                        evaluated_at=command.evaluated_at,
+                        notes="FUP notification threshold reached",
+                    ),
+                )
+                pending_notifications.append(
+                    {
+                        "subscriber_id": subscription.subscriber_id,
+                        "kind": "notified",
+                        "rule_name": rule_result.get("name"),
+                        "threshold_gb": rule_result.get("threshold_gb"),
+                        "used_gb": current_usage,
+                    }
+                )
+                break
+    elif prior_status == "none" and command.warning_enabled:
+        ratios = [
+            (current_usage / row["threshold_gb"], row)
+            for row in results
+            if row.get("threshold_gb")
+        ]
+        if ratios:
+            ratio, nearest_rule = max(ratios, key=lambda item: item[0])
+            if command.warning_ratio <= ratio < 1.0:
+                rule_id = nearest_rule.get("rule_id")
+                stage_fup_runtime_state(
+                    db,
+                    ApplyFupRuntimeState(
+                        subscription_id=subscription.id,
+                        offer_id=subscription.offer_id,
+                        rule_id=UUID(str(rule_id)) if rule_id else None,
+                        action_status=FupActionStatus.notified,
+                        evaluated_at=command.evaluated_at,
+                        notes="approaching fup limit",
+                    ),
+                )
+                pending_notifications.append(
+                    {
+                        "subscriber_id": subscription.subscriber_id,
+                        "kind": "approaching",
+                        "rule_name": nearest_rule.get("name"),
+                        "threshold_gb": nearest_rule.get("threshold_gb"),
+                        "used_gb": current_usage,
+                    }
+                )
 
-                    # Defense-in-depth (#21): never enforce a sub-monthly rule on
-                    # a blind reading (already reads 0, but make the intent
-                    # explicit and cover a 0-GB threshold).
-                    if rule_result.get("usage_source") == "no_data":
-                        continue
+    notified = _emit_fup_notifications(db, pending_notifications)
+    return FupSubscriptionOutcome(
+        enforced=enforced,
+        notified=notified,
+        submonthly_no_data=no_data_count,
+        throttle_unconfigured=throttle_unconfigured,
+    )
 
-                    # Observability: structured record of every sub-monthly
-                    # enforcement decision for ops review before/after rollout.
-                    if rule_result.get("consumption_period") != "monthly":
-                        logger.info(
-                            "fup_submonthly_enforce sub=%s rule=%s period=%s "
-                            "used_gb=%s threshold_gb=%s source=%s authoritative=%s "
-                            "window=%s..%s action=%s",
-                            sub.id,
-                            rule_result.get("rule_id"),
-                            rule_result.get("consumption_period"),
-                            rule_result.get("current_usage_gb"),
-                            rule_result.get("threshold_gb"),
-                            rule_result.get("usage_source"),
-                            rule_result.get("is_authoritative"),
-                            rule_result.get("window_start"),
-                            rule_result.get("window_end"),
-                            rule_result.get("action"),
-                        )
 
-                    if rule_result.get("action") == "block":
-                        if _fup_should_enforce(
-                            prior_status=prior_status,
-                            target_status="blocked",
-                            cooldown_minutes=rule_result.get("cooldown_minutes") or 0,
-                            state=state,
-                            now=now,
-                        ):
-                            emit_event(
-                                session,
-                                EventType.usage_exhausted,
-                                {
-                                    "subscription_id": str(sub.id),
-                                    "offer_id": str(sub.offer_id),
-                                    "rule_id": rule_result.get("rule_id"),
-                                    "action": rule_result.get("action"),
-                                    "current_usage_gb": current_usage,
-                                    "threshold_gb": rule_result.get("threshold_gb"),
-                                    "cap_resets_at": cap_resets_at,
-                                },
-                                subscription_id=sub.id,
-                                account_id=sub.subscriber_id,
-                            )
-                            enforced += 1
-                        if prior_status != "blocked":
-                            pending_notifs.append(
-                                {
-                                    "subscriber_id": sub.subscriber_id,
-                                    "kind": "blocked",
-                                    "rule_name": rule_result.get("name"),
-                                    "threshold_gb": rule_result.get("threshold_gb"),
-                                    "used_gb": current_usage,
-                                    "cap_resets_at": cap_resets_at,
-                                }
-                            )
-                        _maybe_queue_repeat_upsell(
-                            session, sub, bucket, rule_result, pending_notifs
-                        )
-                        break
-                    elif rule_result.get("action") == "reduce_speed":
-                        # No throttle profile → the handler can't actually reduce
-                        # speed. Skip the no-op enforcement AND the customer
-                        # notification (don't claim a throttle that didn't happen);
-                        # count it so the misconfiguration is visible to ops.
-                        if not throttle_profile_configured:
-                            throttle_unconfigured += 1
-                            logger.warning(
-                                "FUP reduce_speed triggered for sub %s rule %s but "
-                                "no throttle profile configured "
-                                "(usage.fup_throttle_radius_profile_id) — not "
-                                "enforced and customer NOT notified",
-                                sub.id,
-                                rule_result.get("rule_id"),
-                            )
-                            break
-                        if _fup_should_enforce(
-                            prior_status=prior_status,
-                            target_status="throttled",
-                            cooldown_minutes=rule_result.get("cooldown_minutes") or 0,
-                            state=state,
-                            now=now,
-                        ):
-                            emit_event(
-                                session,
-                                EventType.usage_exhausted,
-                                {
-                                    "subscription_id": str(sub.id),
-                                    "offer_id": str(sub.offer_id),
-                                    "rule_id": rule_result.get("rule_id"),
-                                    "action": rule_result.get("action"),
-                                    "current_usage_gb": current_usage,
-                                    "threshold_gb": rule_result.get("threshold_gb"),
-                                    "cap_resets_at": cap_resets_at,
-                                },
-                                subscription_id=sub.id,
-                                account_id=sub.subscriber_id,
-                            )
-                            enforced += 1
-                        if prior_status != "throttled":
-                            pending_notifs.append(
-                                {
-                                    "subscriber_id": sub.subscriber_id,
-                                    "kind": "throttled",
-                                    "rule_name": rule_result.get("name"),
-                                    "threshold_gb": rule_result.get("threshold_gb"),
-                                    "used_gb": current_usage,
-                                    "cap_resets_at": cap_resets_at,
-                                }
-                            )
-                        _maybe_queue_repeat_upsell(
-                            session, sub, bucket, rule_result, pending_notifs
-                        )
-                        break
-            elif prior_status == "none" and warn_enabled:
-                # Not yet enforced — warn once when usage crosses the configured
-                # warning ratio of the nearest threshold. Mark the state
-                # 'notified' so we don't repeat it every tick; the
-                # period-boundary reset above clears it.
-                ratios = [
-                    (current_usage / r["threshold_gb"], r)
-                    for r in results
-                    if r.get("threshold_gb")
-                ]
-                if ratios:
-                    ratio, r = max(ratios, key=lambda x: x[0])
-                    if warn_ratio <= ratio < 1.0:
-                        stage_fup_runtime_state(
-                            session,
-                            ApplyFupRuntimeState(
-                                subscription_id=sub.id,
-                                offer_id=sub.offer_id,
-                                rule_id=(
-                                    uuid.UUID(str(r["rule_id"]))
-                                    if r.get("rule_id")
-                                    else None
-                                ),
-                                action_status=FupActionStatus.notified,
-                                evaluated_at=now,
-                                notes="approaching fup limit",
-                            ),
-                        )
-                        pending_notifs.append(
-                            {
-                                "subscriber_id": sub.subscriber_id,
-                                "kind": "approaching",
-                                "rule_name": r.get("name"),
-                                "threshold_gb": r.get("threshold_gb"),
-                                "used_gb": current_usage,
-                            }
-                        )
+def evaluate_fup_subscription(
+    db: Session,
+    command: EvaluateFupSubscriptionCommand,
+) -> FupSubscriptionOutcome:
+    return _execute(
+        db,
+        context=command.context,
+        name="evaluate_fup_subscription",
+        operation=lambda: _evaluate_subscription(db, command),
+    )
 
-            # Commit each subscription on its own so this periodic sweep never
-            # holds a single transaction open across the whole subscription list.
-            # Previously the one commit below ran only after the entire loop, so a
-            # large active-subscriber set produced multi-minute "idle in
-            # transaction" connections — pinning a pool slot and blocking
-            # autovacuum. Per-subscription commits also make a mid-sweep failure
-            # preserve already-enforced subscriptions (the sweep is idempotent).
-            session.commit()
 
-        session.commit()
-        # Notifications are sent after the enforcement commit so a delivery
-        # failure never rolls back enforcement state.
-        notified = _emit_fup_notifications(session, pending_notifs)
-        logger.info(
-            "FUP evaluation (%s): %d processed, %d enforced, %d reset, "
-            "%d notified, %d sub-monthly no-data, %d throttle-unconfigured",
-            source,
-            processed,
-            enforced,
-            reset,
-            notified,
-            submonthly_no_data,
-            throttle_unconfigured,
+def run_fup_evaluation(
+    db: Session,
+    request: RunFupSweepRequest,
+) -> dict[str, int]:
+    """Discover candidates, then commit one complete owner command per subscription."""
+    source = _validate_source(request.source)
+    totals = FupSubscriptionOutcome(processed=0)
+    now = datetime.now(UTC)
+    warning_enabled, warning_ratio, throttle_configured = _sweep_policy(db)
+    candidate_ids = _candidate_subscription_ids(
+        db,
+        request.subscription_ids,
+        source=source,
+    )
+    _release_read_transaction(db)
+    for subscription_id in candidate_ids:
+        outcome = evaluate_fup_subscription(
+            db,
+            EvaluateFupSubscriptionCommand(
+                context=_command_context(
+                    correlation_id=request.correlation_id,
+                    subscription_id=subscription_id,
+                    source=source,
+                ),
+                subscription_id=subscription_id,
+                evaluated_at=now,
+                warning_enabled=warning_enabled,
+                warning_ratio=warning_ratio,
+                throttle_profile_configured=throttle_configured,
+            ),
         )
-        return {
-            "processed": processed,
-            "enforced": enforced,
-            "reset": reset,
-            "notified": notified,
-            "submonthly_no_data": submonthly_no_data,
-            "throttle_unconfigured": throttle_unconfigured,
-            "targeted": int(subscription_ids is not None),
-        }
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        session.close()
+        totals = FupSubscriptionOutcome(
+            processed=totals.processed + outcome.processed,
+            enforced=totals.enforced + outcome.enforced,
+            reset=totals.reset + outcome.reset,
+            notified=totals.notified + outcome.notified,
+            submonthly_no_data=totals.submonthly_no_data + outcome.submonthly_no_data,
+            throttle_unconfigured=(
+                totals.throttle_unconfigured + outcome.throttle_unconfigured
+            ),
+        )
+    result = {
+        "processed": totals.processed,
+        "enforced": totals.enforced,
+        "reset": totals.reset,
+        "notified": totals.notified,
+        "submonthly_no_data": totals.submonthly_no_data,
+        "throttle_unconfigured": totals.throttle_unconfigured,
+        "targeted": int(request.subscription_ids is not None),
+    }
+    logger.info("FUP evaluation complete source=%s result=%s", source, result)
+    return result
 
 
-def _hit_fup_in_window(session, subscriber_id, start, end) -> bool:
-    """Did this subscriber get a throttled/blocked notification in [start, end)?
-    Enforcement notifications fire once per transition, so one per cycle —
-    making them a usable cross-cycle FUP-hit history without a new table."""
+def _hit_fup_in_window(
+    session: Session,
+    subscriber_id: object,
+    start: datetime,
+    end: datetime,
+) -> bool:
     from app.models.notification import Notification
 
     return (
@@ -457,81 +567,74 @@ def _hit_fup_in_window(session, subscriber_id, start, end) -> bool:
     )
 
 
-def _maybe_queue_repeat_upsell(session, sub, bucket, rule_result, pending_notifs):
-    """Habitual-maxing nudge: enforced this cycle AND in >=1 of the previous
-    two cycles (>=2 of the last 3) -> suggest a bigger plan, once per cycle.
+def _maybe_queue_repeat_upsell(
+    session: Session,
+    subscription: Subscription,
+    bucket: QuotaBucket,
+    rule_result: dict,
+    pending_notifications: list[dict],
+) -> None:
+    from app.models.notification import Notification
 
-    Best-effort: a failure here must never affect enforcement itself."""
-    try:
-        from app.models.notification import Notification
-
-        if bucket is None or not bucket.period_start or not bucket.period_end:
-            return
-        period_len = bucket.period_end - bucket.period_start
-        if period_len.total_seconds() <= 0:
-            return
-
-        # Once per cycle.
-        already = (
-            session.query(Notification.id)
-            .filter(Notification.subscriber_id == sub.subscriber_id)
-            .filter(Notification.event_type == "fup_repeat_upsell")
-            .filter(Notification.created_at >= bucket.period_start)
-            .first()
+    if not bucket.period_start or not bucket.period_end:
+        return
+    period_len = bucket.period_end - bucket.period_start
+    if period_len.total_seconds() <= 0:
+        return
+    already = (
+        session.query(Notification.id)
+        .filter(Notification.subscriber_id == subscription.subscriber_id)
+        .filter(Notification.event_type == "fup_repeat_upsell")
+        .filter(Notification.created_at >= bucket.period_start)
+        .first()
+    )
+    if already is not None:
+        return
+    prior_hits = sum(
+        1
+        for cycle in (1, 2)
+        if _hit_fup_in_window(
+            session,
+            subscription.subscriber_id,
+            bucket.period_start - period_len * cycle,
+            bucket.period_start - period_len * (cycle - 1),
         )
-        if already is not None:
-            return
-
-        prior_hits = sum(
-            1
-            for k in (1, 2)
-            if _hit_fup_in_window(
-                session,
-                sub.subscriber_id,
-                bucket.period_start - period_len * k,
-                bucket.period_start - period_len * (k - 1),
-            )
-        )
-        if prior_hits < 1:
-            return
-
-        pending_notifs.append(
-            {
-                "subscriber_id": sub.subscriber_id,
-                "kind": "repeat_upsell",
-                "rule_name": rule_result.get("name"),
-                "threshold_gb": rule_result.get("threshold_gb"),
-                "used_gb": None,
-                "cycles": prior_hits + 1,
-            }
-        )
-    except Exception:
-        logger.warning("repeat-upsell check failed", exc_info=True)
+    )
+    if prior_hits < 1:
+        return
+    pending_notifications.append(
+        {
+            "subscriber_id": subscription.subscriber_id,
+            "kind": "repeat_upsell",
+            "rule_name": rule_result.get("name"),
+            "threshold_gb": rule_result.get("threshold_gb"),
+            "used_gb": None,
+            "cycles": prior_hits + 1,
+        }
+    )
 
 
-def _fup_reset_phrase(cap_resets_at) -> str:
-    """' on <date>' when a reset time is known, else ''. The FUP allowance resets
-    at its window boundary (currently the calendar-month/quota-period end), which
-    is NOT necessarily the subscriber's billing 'cycle' anchor — so the copy must
-    not claim 'your next cycle'."""
+def _fup_reset_phrase(cap_resets_at: Any) -> str:
     if not cap_resets_at:
         return ""
-    from datetime import datetime
-
     try:
-        if isinstance(cap_resets_at, str):
-            value = datetime.fromisoformat(cap_resets_at)
-        else:
-            value = cap_resets_at
+        value = (
+            datetime.fromisoformat(cap_resets_at)
+            if isinstance(cap_resets_at, str)
+            else cap_resets_at
+        )
         return f" on {value.date().isoformat()}"
     except (ValueError, TypeError, AttributeError):
         return ""
 
 
 def _build_fup_notification(
-    kind: str, rule_name, threshold_gb, used_gb, cap_resets_at=None
-):
-    """(subject, body) for a customer FUP notification."""
+    kind: str,
+    rule_name: Any,
+    threshold_gb: Any,
+    used_gb: Any,
+    cap_resets_at: Any = None,
+) -> tuple[str, str]:
     plan = rule_name or "your plan"
     when = _fup_reset_phrase(cap_resets_at)
     if kind == "blocked":
@@ -555,7 +658,11 @@ def _build_fup_notification(
             "in a row. A bigger plan gives you more full-speed data every "
             "cycle — see your upgrade options in the app.",
         )
-    # approaching
+    if kind == "notified":
+        return (
+            "Data limit reached",
+            f"You've reached the fair-usage notification threshold on {plan}.",
+        )
     try:
         pct = int(round((used_gb / threshold_gb) * 100)) if threshold_gb else 80
     except (TypeError, ZeroDivisionError):
@@ -566,54 +673,124 @@ def _build_fup_notification(
     )
 
 
-# Default channels per event kind. The shared notification channel policy can
-# override these by event code (fup_blocked) or category (fup).
 _FUP_NOTIFICATION_DEFAULT_CHANNELS = {
     "approaching": ("push",),
+    "notified": ("push", "email"),
     "throttled": ("push", "email"),
     "blocked": ("push", "email"),
     "repeat_upsell": ("push", "email"),
 }
 
 
-def _emit_fup_notifications(session, pending: list[dict]) -> int:
-    """Create customer notifications for queued FUP events, on the channels that
-    fit each event (push always; email for enforcement). Best-effort: a failure
-    on one notification or channel never affects the others or enforcement.
-    Returns the number of (event) notifications for which at least one channel
-    was created."""
+def _emit_fup_notifications(session: Session, pending: list[dict]) -> int:
+    """Stage policy-selected communication intents in the owner transaction."""
     if not pending:
         return 0
     from app.models.subscriber import Subscriber
     from app.services.notification import notifications as notifications_svc
 
     sent = 0
-    for n in pending:
-        try:
-            subscriber = session.get(Subscriber, n["subscriber_id"])
-            subject, body = _build_fup_notification(
-                n["kind"],
-                n.get("rule_name"),
-                n.get("threshold_gb"),
-                n.get("used_gb"),
-                n.get("cap_resets_at"),
-            )
-            event_type = f"fup_{n['kind']}"
-            created = notifications_svc.queue_customer_notifications_for_policy(
-                session,
-                subscriber=subscriber,
-                template_code=event_type,
-                event_type=event_type,
-                category="fup",
-                default_channels=_FUP_NOTIFICATION_DEFAULT_CHANNELS.get(
-                    n["kind"],
-                    ("push",),
-                ),
-                subject=subject,
-                body=body,
-            )
-            if created:
-                sent += 1
-        except Exception:
-            logger.warning("Failed to emit FUP notification", exc_info=True)
+    for item in pending:
+        subscriber = session.get(Subscriber, item["subscriber_id"])
+        subject, body = _build_fup_notification(
+            item["kind"],
+            item.get("rule_name"),
+            item.get("threshold_gb"),
+            item.get("used_gb"),
+            item.get("cap_resets_at"),
+        )
+        event_type = f"fup_{item['kind']}"
+        created = notifications_svc.queue_customer_notifications_for_policy(
+            session,
+            subscriber=subscriber,
+            template_code=event_type,
+            event_type=event_type,
+            category="fup",
+            default_channels=_FUP_NOTIFICATION_DEFAULT_CHANNELS[item["kind"]],
+            subject=subject,
+            body=body,
+            commit=False,
+        )
+        if created:
+            sent += 1
     return sent
+
+
+def _lift_expired_subscription(
+    db: Session,
+    command: LiftExpiredFupSubscriptionCommand,
+) -> bool:
+    from app.services.enforcement import lift_fup_enforcement
+
+    result = lift_fup_enforcement(
+        db,
+        str(command.subscription_id),
+        evaluated_at=command.evaluated_at,
+    )
+    return bool(result.get("lifted"))
+
+
+def lift_expired_fup_subscription(
+    db: Session,
+    command: LiftExpiredFupSubscriptionCommand,
+) -> bool:
+    return _execute(
+        db,
+        context=command.context,
+        name="lift_expired_fup_subscription",
+        operation=lambda: _lift_expired_subscription(db, command),
+    )
+
+
+def run_expired_fup_lift(
+    db: Session,
+    request: RunExpiredFupLiftRequest,
+) -> dict[str, int]:
+    """Repair overdue enforcement with one isolated owner command per state."""
+    source = _validate_source(request.source)
+    now = datetime.now(UTC)
+    pending_ids = [
+        state.subscription_id
+        for state in fup_state_service.fup_state.list_pending_reset(db, now)
+    ]
+    _release_read_transaction(db)
+    lifted = 0
+    errors = 0
+    for subscription_id in pending_ids:
+        try:
+            if lift_expired_fup_subscription(
+                db,
+                LiftExpiredFupSubscriptionCommand(
+                    context=_command_context(
+                        correlation_id=request.correlation_id,
+                        subscription_id=subscription_id,
+                        source=source,
+                    ),
+                    subscription_id=subscription_id,
+                    evaluated_at=now,
+                ),
+            ):
+                lifted += 1
+        except Exception as exc:
+            errors += 1
+            logger.error(
+                "Failed FUP lift subscription=%s error=%s",
+                subscription_id,
+                exc,
+            )
+    return {"pending": len(pending_ids), "lifted": lifted, "errors": errors}
+
+
+__all__ = [
+    "EvaluateFupSubscriptionCommand",
+    "FupEnforcementError",
+    "FupSubscriptionOutcome",
+    "LiftExpiredFupSubscriptionCommand",
+    "RunExpiredFupLiftRequest",
+    "RunFupSweepRequest",
+    "evaluate_fup_subscription",
+    "lift_expired_fup_subscription",
+    "run_expired_fup_lift",
+    "run_fup_evaluation",
+    "stage_fup_runtime_state",
+]

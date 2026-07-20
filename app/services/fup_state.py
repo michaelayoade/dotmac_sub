@@ -152,6 +152,13 @@ class FupStateManager:
         )
 
     @staticmethod
+    def get_for_update(db: Session, subscription_id: UUID | str) -> FupState | None:
+        """Lock the subscription and its existing state for an owner decision."""
+        resolved_id = _uuid(subscription_id, field="subscription_id")
+        _locked_subscription(db, resolved_id)
+        return _locked_state(db, resolved_id)
+
+    @staticmethod
     def apply_action(db: Session, command: ApplyFupRuntimeState) -> FupState:
         """Stage one locked runtime-state transition in the caller transaction."""
         subscription = _locked_subscription(db, command.subscription_id)
