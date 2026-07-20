@@ -24,14 +24,18 @@ from app.schemas.vendor_purchase_invoice import (
 from app.services import vendor_submission_proposals
 from app.services.common import coerce_uuid
 from app.services.db_session_adapter import db_session_adapter
+from app.services.domain_errors import DomainError
 from app.services.field.vendor_auth import vendor_context
 from app.services.owner_commands import CommandContext
-from app.services.vendor_portal_operations import vendor_portal_operations
+from app.services.vendor_portal_operations import (
+    AddVendorQuoteLineCommand,
+    CreateVendorQuoteCommand,
+    vendor_portal_operations,
+)
 from app.services.vendor_purchase_invoices import vendor_purchase_invoices
 from app.services.vendor_routes_api import build_project_route_geojson
 from app.services.vendor_submission_proposals import (
     ConfirmVendorSubmissionCommand,
-    VendorSubmissionError,
 )
 from app.web.auth.dependencies import require_web_auth
 
@@ -40,7 +44,7 @@ router = APIRouter(prefix="/vendor", tags=["web-vendor-portal"])
 ResultT = TypeVar("ResultT")
 
 
-def _submission_http_error(exc: VendorSubmissionError) -> HTTPException:
+def _submission_http_error(exc: DomainError) -> HTTPException:
     suffix = exc.code.rsplit(".", 1)[-1]
     status_code = {
         "unsupported_submission_type": 400,
@@ -56,6 +60,17 @@ def _submission_http_error(exc: VendorSubmissionError) -> HTTPException:
         "lifecycle_invalid_transition": 409,
         "lifecycle_unsupported_action": 400,
         "lifecycle_actor_required": 400,
+        "project_not_found": 404,
+        "quote_not_found": 404,
+        "quote_line_not_found": 404,
+        "project_not_assigned": 403,
+        "bidding_closed": 409,
+        "quote_not_editable": 409,
+        "quote_not_submittable": 409,
+        "quote_not_reviewable": 409,
+        "quote_line_required": 422,
+        "as_built_evidence_required": 422,
+        "invalid_as_built_route": 422,
     }.get(suffix, 500)
     return HTTPException(status_code=status_code, detail=exc.message)
 
@@ -63,8 +78,19 @@ def _submission_http_error(exc: VendorSubmissionError) -> HTTPException:
 def _submission_call(operation: Callable[[], ResultT]) -> ResultT:
     try:
         return operation()
-    except VendorSubmissionError as exc:
+    except DomainError as exc:
         raise _submission_http_error(exc) from exc
+
+
+def _command_context(auth: dict, *, vendor_id: str, reason: str) -> CommandContext:
+    command_id = uuid4()
+    return CommandContext(
+        command_id=command_id,
+        correlation_id=command_id,
+        actor=str(auth["principal_id"]),
+        scope=vendor_id,
+        reason=reason,
+    )
 
 
 def _context(auth: dict, db: Session) -> dict:
@@ -169,13 +195,26 @@ def vendor_create_quote(
     db: Session = Depends(get_db),
 ):
     context = _context(auth, db)
-    vendor_portal_operations.create_quote(
-        db,
-        VendorQuoteCreate(
-            project_id=coerce_uuid(project_id), vat_rate_percent=vat_rate_percent
-        ),
-        vendor_id=str(context["native_vendor_id"]),
-        user_id=str(auth["principal_id"]),
+    vendor_id = str(context["native_vendor_id"])
+    command_context = _command_context(
+        auth,
+        vendor_id=vendor_id,
+        reason="vendor_quote_creation",
+    )
+    db_session_adapter.release_read_transaction(db)
+    _submission_call(
+        lambda: vendor_portal_operations.create_quote(
+            db,
+            CreateVendorQuoteCommand(
+                context=command_context,
+                payload=VendorQuoteCreate(
+                    project_id=coerce_uuid(project_id),
+                    vat_rate_percent=vat_rate_percent,
+                ),
+                vendor_id=vendor_id,
+                user_id=str(auth["principal_id"]),
+            ),
+        )
     )
     return _redirect(project_id, "Quote created")
 
@@ -246,16 +285,28 @@ def vendor_add_quote_line(
     db: Session = Depends(get_db),
 ):
     context = _context(auth, db)
-    vendor_portal_operations.add_quote_line(
-        db,
-        quote_id,
-        VendorQuoteLineCreate(
-            item_type=item_type,
-            description=description,
-            quantity=quantity,
-            unit_price=unit_price,
-        ),
-        str(context["native_vendor_id"]),
+    vendor_id = str(context["native_vendor_id"])
+    command_context = _command_context(
+        auth,
+        vendor_id=vendor_id,
+        reason="vendor_quote_line_creation",
+    )
+    db_session_adapter.release_read_transaction(db)
+    _submission_call(
+        lambda: vendor_portal_operations.add_quote_line(
+            db,
+            AddVendorQuoteLineCommand(
+                context=command_context,
+                quote_id=quote_id,
+                payload=VendorQuoteLineCreate(
+                    item_type=item_type,
+                    description=description,
+                    quantity=quantity,
+                    unit_price=unit_price,
+                ),
+                vendor_id=vendor_id,
+            ),
+        )
     )
     return _redirect(project_id, "Quote line added")
 
@@ -425,18 +476,16 @@ def vendor_confirm_submission(
 ):
     context = _context(auth, db)
     db_session_adapter.release_read_transaction(db)
-    command_id = uuid4()
+    command_context = _command_context(
+        auth,
+        vendor_id=str(context["native_vendor_id"]),
+        reason="vendor_submission_confirmation",
+    )
     result = _submission_call(
         lambda: vendor_submission_proposals.confirm_submission(
             db,
             ConfirmVendorSubmissionCommand(
-                context=CommandContext(
-                    command_id=command_id,
-                    correlation_id=command_id,
-                    actor=str(auth["principal_id"]),
-                    scope=str(context["native_vendor_id"]),
-                    reason="vendor_submission_confirmation",
-                ),
+                context=command_context,
                 confirmation_token=confirmation_token,
                 vendor_id=str(context["native_vendor_id"]),
                 user_id=str(auth["principal_id"]),

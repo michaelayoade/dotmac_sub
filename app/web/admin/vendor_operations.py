@@ -1,13 +1,21 @@
 """Admin review workspace for vendor quotes and purchase invoices."""
 
-from fastapi import APIRouter, Depends, Form, Request
+from uuid import uuid4
+
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services.auth_dependencies import require_any_permission
-from app.services.vendor_portal_operations import vendor_portal_operations
+from app.services.db_session_adapter import db_session_adapter
+from app.services.domain_errors import DomainError
+from app.services.owner_commands import CommandContext
+from app.services.vendor_portal_operations import (
+    ReviewVendorQuoteCommand,
+    vendor_portal_operations,
+)
 from app.services.vendor_purchase_invoices import vendor_purchase_invoices
 
 templates = Jinja2Templates(directory="templates")
@@ -31,6 +39,23 @@ def _ctx(request: Request, db: Session) -> dict:
 def _actor(request: Request) -> str:
     auth = getattr(request.state, "auth", {}) or {}
     return str(auth.get("principal_id") or auth.get("person_id") or "")
+
+
+def _review_context(request: Request, *, quote_id: str) -> CommandContext:
+    command_id = uuid4()
+    return CommandContext(
+        command_id=command_id,
+        correlation_id=command_id,
+        actor=_actor(request),
+        scope=quote_id,
+        reason="vendor_quote_review",
+    )
+
+
+def _quote_error(exc: DomainError) -> HTTPException:
+    suffix = exc.code.rsplit(".", 1)[-1]
+    status_code = 404 if suffix.endswith("not_found") else 409
+    return HTTPException(status_code=status_code, detail=exc.message)
 
 
 @router.get("", response_class=HTMLResponse)
@@ -59,13 +84,21 @@ def approve_vendor_quote(
     _auth: dict = Depends(_write),
     db: Session = Depends(get_db),
 ):
-    vendor_portal_operations.review_quote(
-        db,
-        quote_id,
-        reviewer_id=_actor(request),
-        approve=True,
-        notes=review_notes,
-    )
+    context = _review_context(request, quote_id=quote_id)
+    db_session_adapter.release_read_transaction(db)
+    try:
+        vendor_portal_operations.review_quote(
+            db,
+            ReviewVendorQuoteCommand(
+                context=context,
+                quote_id=quote_id,
+                reviewer_id=_actor(request),
+                approve=True,
+                notes=review_notes,
+            ),
+        )
+    except DomainError as exc:
+        raise _quote_error(exc) from exc
     return RedirectResponse("/admin/vendors/operations", status_code=303)
 
 
@@ -77,13 +110,21 @@ def request_vendor_quote_revision(
     _auth: dict = Depends(_write),
     db: Session = Depends(get_db),
 ):
-    vendor_portal_operations.review_quote(
-        db,
-        quote_id,
-        reviewer_id=_actor(request),
-        approve=False,
-        notes=review_notes,
-    )
+    context = _review_context(request, quote_id=quote_id)
+    db_session_adapter.release_read_transaction(db)
+    try:
+        vendor_portal_operations.review_quote(
+            db,
+            ReviewVendorQuoteCommand(
+                context=context,
+                quote_id=quote_id,
+                reviewer_id=_actor(request),
+                approve=False,
+                notes=review_notes,
+            ),
+        )
+    except DomainError as exc:
+        raise _quote_error(exc) from exc
     return RedirectResponse("/admin/vendors/operations", status_code=303)
 
 

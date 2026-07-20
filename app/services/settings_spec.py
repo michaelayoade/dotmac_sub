@@ -4099,6 +4099,16 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=False,
         label="Quotes: native read path",
     ),
+    SettingSpec(
+        domain=SettingDomain.projects,
+        key="vendor_quote_validity_days",
+        env_var=None,
+        value_type=SettingValueType.integer,
+        default=30,
+        min_value=1,
+        max_value=365,
+        label="Vendor quote validity (days)",
+    ),
     # --- AI provider transport (docs/designs/AI_SOT.md, ai.gateway) ----------
     # Every value defaults OFF/empty: the transport is inert until an operator
     # configures a provider. ai_enabled is the stored master switch, resolved

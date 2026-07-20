@@ -301,7 +301,7 @@ def test_confirmation_failure_rolls_back_reservation_and_domain_mutation(
         user_id=str(user.id),
     )
 
-    def fail_after_mutation(db, quote_id, vendor_id, *, commit):
+    def fail_after_mutation(db, command):
         target = db.query(ProjectQuote).filter(ProjectQuote.id == quote.id).one()
         target.status = ProjectQuoteStatus.submitted.value
         db.flush()
@@ -309,7 +309,7 @@ def test_confirmation_failure_rolls_back_reservation_and_domain_mutation(
 
     monkeypatch.setattr(
         vendor_submission_proposals.vendor_portal_operations,
-        "submit_quote",
+        "stage_quote_submission",
         fail_after_mutation,
     )
 

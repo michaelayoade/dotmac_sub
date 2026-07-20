@@ -3554,19 +3554,360 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.vendor_portal_operations",
                 owns=(
                     "vendor project workspace read and action projections",
-                    "vendor installation-project quote lifecycle",
+                    "vendor project workspace mutation coordination",
                     "quote submission eligibility and impact snapshot",
-                    "proposed vendor route-revision lifecycle",
-                    "as-built evidence lifecycle and impact snapshot",
+                    "as-built submission eligibility and impact snapshot",
                 ),
                 depends_on=(
+                    "auth.permission_gate",
+                    "control.settings_spec",
                     "operations.project_lifecycle",
+                    "operations.vendor_project_records",
                     "operations.vendor_project_lifecycle",
                 ),
                 notes=(
-                    "This workspace owns quote, route-revision, and as-built state. "
-                    "Installation-project lifecycle state and evidence were extracted "
-                    "to their dedicated participant owner."
+                    "This service owns vendor workspace queries, impact policy, and "
+                    "typed public-command coordination. Canonical quote, route, and "
+                    "as-built writers participate in its transaction or the signed "
+                    "submission coordinator's transaction."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="vendor project workspace read and action projections",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical installation-project lifecycle state",
+                                "canonical vendor project records",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="vendor project workspace mutation coordination",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "authenticated vendor workspace command context",
+                                "canonical installation-project lifecycle state",
+                                "canonical vendor project records",
+                                "vendor quote currency and validity policy",
+                                "vendor workspace mutation protocol",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="quote submission eligibility and impact snapshot",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical installation-project lifecycle state",
+                                "canonical vendor project records",
+                                "vendor workspace mutation protocol",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="as-built submission eligibility and impact snapshot",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical installation-project lifecycle state",
+                                "canonical vendor project records",
+                                "vendor workspace mutation protocol",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="authenticated vendor workspace command context",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "authenticated principal, vendor scope, reason, command, "
+                                "and correlation identifiers"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical installation-project lifecycle state",
+                            owner="operations.project_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active InstallationProject assignment, bidding window, "
+                                "status, native project, and approved quote references"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical vendor project records",
+                            owner="operations.vendor_project_records",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "ProjectQuote, ProjectQuoteLineItem, "
+                                "ProposedRouteRevision, AsBuiltRoute, and "
+                                "AsBuiltLineItem rows"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="vendor quote currency and validity policy",
+                            owner="control.settings_spec",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "billing.default_currency and "
+                                "projects.vendor_quote_validity_days"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="vendor workspace mutation protocol",
+                            owner="operations.vendor_project_workspace",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "editable, submittable, reviewable, assignment, route, "
+                                "and as-built evidence invariants"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        boundary=(
+                            "Each typed public workspace command enters one verified "
+                            "coordinator transaction and invokes record-writer staging."
+                        ),
+                        locking=(
+                            "Commands lock the InstallationProject, ProjectQuote, or "
+                            "ProposedRouteRevision aggregate before eligibility and write."
+                        ),
+                        idempotency=(
+                            "Project quote creation replays to the existing editable "
+                            "quote; state transitions require the exact source state and "
+                            "command identifiers are retained in event evidence."
+                        ),
+                        retries=(
+                            "Policy rejections are terminal. Database concurrency failures "
+                            "retry the complete typed command with the original context."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "operations.vendor_project_workspace.project_not_found",
+                            "operations.vendor_project_workspace.quote_not_found",
+                            "operations.vendor_project_workspace.quote_line_not_found",
+                            "operations.vendor_project_workspace.route_revision_not_found",
+                            "operations.vendor_project_workspace.project_not_assigned",
+                            "operations.vendor_project_workspace.bidding_closed",
+                            "operations.vendor_project_workspace.quote_not_editable",
+                            "operations.vendor_project_workspace.quote_not_submittable",
+                            "operations.vendor_project_workspace.quote_not_reviewable",
+                            "operations.vendor_project_workspace.quote_line_required",
+                            "operations.vendor_project_workspace.route_revision_not_draft",
+                            "operations.vendor_project_workspace.as_built_evidence_required",
+                            "operations.vendor_project_workspace.invalid_as_built_route",
+                            "operations.vendor_project_workspace.invalid_write_evidence",
+                            "operations.vendor_project_workspace.invalid_command_context",
+                            "operations.vendor_project_workspace.command_contract_violation",
+                            "operations.vendor_project_workspace.nested_owner_command",
+                            "operations.vendor_project_workspace.active_caller_transaction",
+                            "operations.vendor_project_workspace.nested_transaction_completion",
+                        ),
+                        mapping_owner=(
+                            "app.api.vendor_portal, app.api.field.manager, "
+                            "app.web.vendor_portal, and "
+                            "app.web.admin.vendor_operations"
+                        ),
+                        fail_closed_on=(
+                            "missing or mismatched vendor project records",
+                            "assignment or source-state mismatch",
+                            "missing quote lines or as-built evidence",
+                            "active caller transaction or manifest mismatch",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "vendor API and web adapters calling transport-coded "
+                            "service methods with helper-owned commits"
+                        ),
+                        new_owner="operations.vendor_project_workspace",
+                        verification=(
+                            "Typed command, preview, adapter mapping, transaction, "
+                            "participant caller, and architecture boundary tests."
+                        ),
+                        cutover_gate=(
+                            "Every public mutation adapter passes a typed command on a "
+                            "clean session and direct quote/as-built submit APIs return "
+                            "signed proposals."
+                        ),
+                        fallback_retirement=(
+                            "Service HTTP exceptions, direct commits, optional commit "
+                            "flags, untyped mutation methods, and direct submission "
+                            "adapter paths are removed."
+                        ),
+                    ),
+                    steward="vendor operations",
+                    design_refs=(
+                        "docs/designs/UI_PROJECTION_CONTRACTS.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/adr/0002-owner-command-transaction-boundary.md",
+                    ),
+                    test_refs=(
+                        "tests/test_vendor_project_workspace.py",
+                        "tests/test_vendor_submission_proposals.py",
+                        "tests/architecture/test_vendor_project_workspace_boundary.py",
+                        "tests/test_vendor_action_eligibility.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="operations.vendor_project_records",
+                module="app.services.vendor_project_records",
+                owns=(
+                    "vendor installation-project quote lifecycle",
+                    "proposed vendor route-revision lifecycle",
+                    "as-built evidence lifecycle",
+                ),
+                depends_on=(
+                    "events.dispatcher",
+                    "operations.project_lifecycle",
+                ),
+                notes=(
+                    "Canonical record writers are non-public participants of the "
+                    "workspace and signed-submission coordinators."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="vendor installation-project quote lifecycle",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "validated vendor project record transition",
+                                "canonical installation-project lifecycle state",
+                            ),
+                            canonical_writer="operations.vendor_project_records",
+                        ),
+                        ConcernContract(
+                            name="proposed vendor route-revision lifecycle",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "validated vendor project record transition",
+                                "canonical installation-project lifecycle state",
+                            ),
+                            canonical_writer="operations.vendor_project_records",
+                        ),
+                        ConcernContract(
+                            name="as-built evidence lifecycle",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "validated vendor project record transition",
+                                "canonical installation-project lifecycle state",
+                            ),
+                            canonical_writer="operations.vendor_project_records",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="validated vendor project record transition",
+                            owner="operations.vendor_project_workspace",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed workspace command or signed-confirmation command "
+                                "after owner policy and principal validation"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical installation-project lifecycle state",
+                            owner="operations.project_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked active InstallationProject assignment, status, "
+                                "and native project references"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.PARTICIPANT,
+                        boundary=(
+                            "The workspace or signed-submission coordinator owns the root "
+                            "transaction; record writers stage rows and events and flush."
+                        ),
+                        locking=(
+                            "All writers lock the parent InstallationProject, ProjectQuote, "
+                            "or ProposedRouteRevision before changing child or status rows."
+                        ),
+                        idempotency=(
+                            "Source-state checks make transitions no-op or terminal on "
+                            "replay; signed submissions additionally use the coordinator jti."
+                        ),
+                        retries=(
+                            "The named coordinator retries the complete command; record "
+                            "participants never retry or complete transactions."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "operations.vendor_project_workspace.project_not_found",
+                            "operations.vendor_project_workspace.quote_not_found",
+                            "operations.vendor_project_workspace.quote_line_not_found",
+                            "operations.vendor_project_workspace.route_revision_not_found",
+                            "operations.vendor_project_workspace.project_not_assigned",
+                            "operations.vendor_project_workspace.bidding_closed",
+                            "operations.vendor_project_workspace.quote_not_editable",
+                            "operations.vendor_project_workspace.quote_not_submittable",
+                            "operations.vendor_project_workspace.quote_not_reviewable",
+                            "operations.vendor_project_workspace.quote_line_required",
+                            "operations.vendor_project_workspace.route_revision_not_draft",
+                            "operations.vendor_project_workspace.as_built_evidence_required",
+                            "operations.vendor_project_workspace.invalid_as_built_route",
+                            "operations.vendor_project_workspace.invalid_write_evidence",
+                        ),
+                        mapping_owner=(
+                            "operations.vendor_project_workspace and "
+                            "operations.vendor_submission_confirmation"
+                        ),
+                        fail_closed_on=(
+                            "missing or mismatched record",
+                            "assignment or state conflict",
+                            "invalid route or missing submission evidence",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "vendor_quote.changed",
+                            "vendor_route_revision.changed",
+                            "vendor_as_built.submitted",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 is additive and carries action, aggregate, "
+                            "project, vendor, command, and correlation identifiers."
+                        ),
+                        replay=(
+                            "Canonical quote, route-revision, and as-built rows rebuild "
+                            "the current record state; events retain transition evidence."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "app.services.vendor_portal_operations methods that committed "
+                            "or conditionally flushed their own writes"
+                        ),
+                        new_owner="operations.vendor_project_records",
+                        verification=(
+                            "Single-writer, lock, event, no-commit, coordinator caller, "
+                            "and rollback tests."
+                        ),
+                        cutover_gate=(
+                            "Only typed workspace commands and signed confirmation call "
+                            "record staging paths."
+                        ),
+                        fallback_retirement=(
+                            "Direct adapter calls to staging methods and all helper-level "
+                            "transaction completion are removed."
+                        ),
+                    ),
+                    steward="vendor operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/adr/0002-owner-command-transaction-boundary.md",
+                    ),
+                    test_refs=(
+                        "tests/test_vendor_project_workspace.py",
+                        "tests/test_vendor_submission_proposals.py",
+                        "tests/architecture/test_vendor_project_workspace_boundary.py",
+                    ),
                 ),
             ),
             SOTService(
@@ -3591,6 +3932,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "auth.token_signing",
                     "events.dispatcher",
                     "operations.vendor_project_lifecycle",
+                    "operations.vendor_project_records",
                     "operations.vendor_project_workspace",
                     "operations.vendor_purchase_invoices",
                 ),

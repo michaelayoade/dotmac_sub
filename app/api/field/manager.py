@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, Header, Query
+from uuid import uuid4
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
@@ -23,11 +25,17 @@ from app.schemas.vendor_purchase_invoice import (
     VendorPurchaseInvoiceReview,
 )
 from app.services.auth_dependencies import require_any_permission, require_permission
+from app.services.db_session_adapter import db_session_adapter
+from app.services.domain_errors import DomainError
 from app.services.field.equipment_custody import field_equipment_custody
 from app.services.field.expense_requests import field_expense_requests
 from app.services.field.manager import field_manager
 from app.services.field.material_requests import field_material_requests
-from app.services.vendor_portal_operations import vendor_portal_operations
+from app.services.owner_commands import CommandContext
+from app.services.vendor_portal_operations import (
+    ReviewVendorQuoteCommand,
+    vendor_portal_operations,
+)
 from app.services.vendor_purchase_invoices import vendor_purchase_invoices
 
 router = APIRouter(prefix="/manager", tags=["field-manager"])
@@ -68,6 +76,22 @@ _asset_custody_write = require_any_permission(
 )
 _purchase_invoice_read = require_any_permission("inventory:read", "finance:ap:read")
 _purchase_invoice_write = require_any_permission("inventory:write", "finance:ap:write")
+
+
+def _vendor_review_context(auth: dict, *, quote_id: str) -> CommandContext:
+    command_id = uuid4()
+    return CommandContext(
+        command_id=command_id,
+        correlation_id=command_id,
+        actor=str(auth["principal_id"]),
+        scope=quote_id,
+        reason="field_manager_vendor_quote_review",
+    )
+
+
+def _vendor_quote_error(exc: DomainError) -> HTTPException:
+    status_code = 404 if exc.code.endswith("not_found") else 409
+    return HTTPException(status_code=status_code, detail=exc.message)
 
 
 @router.get("/me", response_model=FieldManagerMeResponse)
@@ -395,13 +419,21 @@ def field_manager_approve_vendor_quote(
     auth: dict = Depends(_purchase_invoice_write),
     db: Session = Depends(get_db),
 ):
-    return vendor_portal_operations.review_quote(
-        db,
-        quote_id,
-        reviewer_id=str(auth["principal_id"]),
-        approve=True,
-        notes=payload.review_notes,
-    )
+    context = _vendor_review_context(auth, quote_id=quote_id)
+    db_session_adapter.release_read_transaction(db)
+    try:
+        return vendor_portal_operations.review_quote(
+            db,
+            ReviewVendorQuoteCommand(
+                context=context,
+                quote_id=quote_id,
+                reviewer_id=str(auth["principal_id"]),
+                approve=True,
+                notes=payload.review_notes,
+            ),
+        )
+    except DomainError as exc:
+        raise _vendor_quote_error(exc) from exc
 
 
 @router.post("/vendor-quotes/{quote_id}/request-revision")
@@ -411,10 +443,18 @@ def field_manager_request_vendor_quote_revision(
     auth: dict = Depends(_purchase_invoice_write),
     db: Session = Depends(get_db),
 ):
-    return vendor_portal_operations.review_quote(
-        db,
-        quote_id,
-        reviewer_id=str(auth["principal_id"]),
-        approve=False,
-        notes=payload.review_notes,
-    )
+    context = _vendor_review_context(auth, quote_id=quote_id)
+    db_session_adapter.release_read_transaction(db)
+    try:
+        return vendor_portal_operations.review_quote(
+            db,
+            ReviewVendorQuoteCommand(
+                context=context,
+                quote_id=quote_id,
+                reviewer_id=str(auth["principal_id"]),
+                approve=False,
+                notes=payload.review_notes,
+            ),
+        )
+    except DomainError as exc:
+        raise _vendor_quote_error(exc) from exc

@@ -28,7 +28,11 @@ from app.services.owner_commands import (
     OwnerCommandDefinition,
     execute_owner_command,
 )
-from app.services.vendor_portal_operations import vendor_portal_operations
+from app.services.vendor_portal_operations import (
+    StageVendorAsBuiltSubmission,
+    StageVendorQuoteSubmission,
+    vendor_portal_operations,
+)
 from app.services.vendor_project_lifecycle import (
     PreviewVendorProjectLifecycle,
     StageVendorProjectTransition,
@@ -380,8 +384,13 @@ def confirm_submission(
         session.flush()
 
         if submission_type == "quote":
-            result = vendor_portal_operations.submit_quote(
-                session, target_id, command.vendor_id, commit=False
+            result = vendor_portal_operations.stage_quote_submission(
+                session,
+                StageVendorQuoteSubmission(
+                    context=command.context,
+                    quote_id=target_id,
+                    vendor_id=command.vendor_id,
+                ),
             )
         elif submission_type == "purchase_invoice":
             result = vendor_purchase_invoices.submit(
@@ -396,12 +405,14 @@ def confirm_submission(
                     "invalid_payload",
                     "Confirmation proposal payload is invalid.",
                 )
-            result = vendor_portal_operations.submit_as_built(
+            result = vendor_portal_operations.stage_as_built_submission(
                 session,
-                as_built_payload,
-                command.vendor_id,
-                command.user_id,
-                commit=False,
+                StageVendorAsBuiltSubmission(
+                    context=command.context,
+                    payload=as_built_payload,
+                    vendor_id=command.vendor_id,
+                    user_id=command.user_id,
+                ),
             )
         else:
             action = "start" if submission_type == "project_start" else "complete"

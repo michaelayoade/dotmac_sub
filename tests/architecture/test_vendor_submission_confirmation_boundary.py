@@ -82,7 +82,9 @@ def test_confirmation_locks_then_rechecks_replay_before_staleness() -> None:
     assert operation.index("IdempotencyKey(scope=scope, key=key)") > operation.index(
         "hmac.compare_digest("
     )
-    assert operation.count("commit=False") == 3
+    assert operation.count("commit=False") == 1
+    assert "stage_quote_submission(" in operation
+    assert "stage_as_built_submission(" in operation
     assert "stage_project_transition(" in operation
 
 
@@ -91,9 +93,10 @@ def test_web_route_is_a_typed_error_mapping_adapter() -> None:
     confirmation_route = source[source.index("def vendor_confirm_submission(") :]
 
     assert "ConfirmVendorSubmissionCommand(" in confirmation_route
-    assert "CommandContext(" in confirmation_route
+    assert "_command_context(" in confirmation_route
+    assert "CommandContext(" in source
     assert "db_session_adapter.release_read_transaction(db)" in confirmation_route
     assert "_submission_call(" in confirmation_route
-    assert "VendorSubmissionError" in source
+    assert "DomainError" in source
     assert ".commit(" not in confirmation_route
     assert ".rollback(" not in confirmation_route
