@@ -1,9 +1,7 @@
-"""Realtime workqueue updates.
+"""Realtime workqueue invalidations.
 
-Reuses sub's existing WebSocket transport (``app.websocket.manager``): a Redis
-pub/sub fan-out whose routing key is a *topic* (team-inbox happens to use
-conversation ids as topics; the workqueue uses ``workqueue:*`` channels). No new
-transport, no new infrastructure.
+Publishes through Sub's transport-neutral real-time platform; WebSocket and SSE
+adapters consume the same topics and neither becomes workqueue state authority.
 
 Channels, mirroring CRM:
 * ``workqueue:user:{person_id}``           — items assigned to (or snoozed by) one person
@@ -19,6 +17,8 @@ from datetime import UTC, datetime
 from typing import Literal
 from uuid import UUID
 
+from app.services import realtime_platform
+from app.services.realtime_platform import EventType
 from app.services.workqueue.scope import WorkqueueScope
 from app.services.workqueue.types import ItemKind, WorkqueueAudience
 
@@ -55,11 +55,7 @@ def channels_for_scope(scope: WorkqueueScope) -> list[str]:
 
 
 def _publish(channel: str, payload: dict) -> None:
-    """Publish one event on the existing inbox WebSocket transport."""
-    from app.websocket.events import EventType
-    from app.websocket.realtime import publish_topic_event
-
-    publish_topic_event(
+    realtime_platform.publish_topic_event(
         channel, event_type=EventType.WORKQUEUE_CHANGED, payload=payload
     )
 
