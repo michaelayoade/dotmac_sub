@@ -44,3 +44,22 @@ def test_manifest_is_normalized() -> None:
         "openapi_contract_surface.json is not normalized — regenerate it with "
         "scripts/update_openapi_contract.py instead of editing by hand"
     )
+
+
+def test_openapi_operation_ids_are_unique() -> None:
+    """One operation id must identify exactly one HTTP method/path operation."""
+    schema = lib.build_full_app().openapi()
+    locations: dict[str, list[str]] = {}
+    for path, path_item in schema.get("paths", {}).items():
+        for method, operation in path_item.items():
+            if not isinstance(operation, dict) or "operationId" not in operation:
+                continue
+            operation_id = operation["operationId"]
+            locations.setdefault(operation_id, []).append(f"{method.upper()} {path}")
+
+    duplicates = {
+        operation_id: routes
+        for operation_id, routes in locations.items()
+        if len(routes) > 1
+    }
+    assert duplicates == {}

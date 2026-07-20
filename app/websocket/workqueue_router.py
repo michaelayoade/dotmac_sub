@@ -21,12 +21,7 @@ from app.services.workqueue import (
 )
 from app.services.workqueue.events import channels_for_scope
 from app.websocket.auth import authenticate_staff_websocket
-from app.websocket.events import (
-    EventType,
-    InboundMessage,
-    InboundMessageType,
-    WebSocketEvent,
-)
+from app.websocket.events import InboundMessage, InboundMessageType
 from app.websocket.manager import get_connection_manager
 
 logger = get_logger(__name__)
@@ -66,15 +61,11 @@ async def workqueue_websocket(websocket: WebSocket):
 
     user_id = auth["principal_id"]
     manager = get_connection_manager()
-    await manager.register_connection(user_id, websocket)
-    for channel in channels:
-        manager.subscribe_topic(user_id, channel)
-
-    await websocket.send_json(
-        WebSocketEvent(
-            event=EventType.CONNECTION_ACK,
-            data={"user_id": user_id, "channels": channels},
-        ).model_dump(mode="json")
+    await manager.register_connection(
+        user_id,
+        websocket,
+        topics=(*channels, "audience:staff"),
+        ready_data={"channels": channels},
     )
 
     try:
@@ -86,8 +77,6 @@ async def workqueue_websocket(websocket: WebSocket):
     except Exception as exc:
         logger.warning("workqueue_ws_error user_id=%s error=%s", user_id, exc)
     finally:
-        for channel in channels:
-            manager.unsubscribe_topic(user_id, channel)
         await manager.unregister_connection(user_id, websocket)
 
 

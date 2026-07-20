@@ -2291,21 +2291,33 @@ session writer.
 
 Dependency order:
 
-1. `runtime.db_sessions`: owns background DB session lifecycle and advisory lock
+1. `runtime.realtime_projection` (`app.services.realtime_platform`) owns the
+   versioned real-time envelope, Redis topic naming, best-effort publication,
+   and the shared WebSocket/SSE reconnect contract. It projects only
+   already-committed domain state. Redis pub/sub is at-most-once and has no
+   replay; clients refetch canonical read models on connect, reconnect, or a
+   `realtime.reset` event. `app.services.realtime_subscriptions` authorizes
+   client-selected conversation and operation topics, while the workqueue
+   scope owner derives workqueue topics server-side. WebSocket and SSE handlers
+   are transport adapters, never domain decision owners. The complete contract
+   is `docs/REALTIME_PLATFORM.md`.
+2. `runtime.db_sessions`: owns background DB session lifecycle and advisory lock
    safety.
-2. `runtime.task_idempotency`: owns duplicate suppression and stale task
+3. `runtime.task_idempotency`: owns duplicate suppression and stale task
    execution rows.
-3. `runtime.task_heartbeat`: owns task success/skip heartbeat signals.
-4. `runtime.infrastructure_polling`: owns shared native reachability observations
+4. `runtime.task_heartbeat`: owns task success/skip heartbeat signals.
+5. `runtime.infrastructure_polling`: owns shared native reachability observations
    and the generic network-device pollability predicate. Domain-specific
    collectors such as Huawei ONT runtime status depend on these polling
    mechanics while owning their own observation and eligibility contracts.
-5. `runtime.infrastructure_health`: owns dependency health checks for
+6. `runtime.infrastructure_health`: owns dependency health checks for
    Postgres, Redis, VictoriaMetrics, Celery, and related infrastructure.
 
-Rule: tasks should use shared DB-session, lock, idempotency, and heartbeat
-helpers. Infrastructure pollers write observations only; network/device SOT
-services interpret state for customer impact, alerts, and SLA.
+Rule: real-time transports project state only; durable cross-team consumption
+uses the event store/outbox. Tasks should use shared DB-session, lock,
+idempotency, and heartbeat helpers. Infrastructure pollers write observations
+only; network/device SOT services interpret state for customer impact, alerts,
+and SLA.
 
 ## Provisioning Operations
 

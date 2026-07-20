@@ -14,7 +14,8 @@ from app.models.service_team import (
     ServiceTeamType,
 )
 from app.models.support import Ticket
-from app.services import workqueue
+from app.services import realtime_platform, workqueue
+from app.services.realtime_platform import EventType
 from app.services.workqueue import ItemKind, WorkqueuePrincipal, get_workqueue_scope
 from app.services.workqueue.events import (
     channels_for_scope,
@@ -24,8 +25,6 @@ from app.services.workqueue.events import (
     team_channel,
     user_channel,
 )
-from app.websocket import realtime as ws_realtime
-from app.websocket.events import EventType
 
 NOW = datetime(2026, 7, 12, 12, 0, tzinfo=UTC)
 
@@ -38,7 +37,7 @@ def published(monkeypatch):
     def _capture(topic, *, event_type, payload):
         sent.append((topic, event_type, payload))
 
-    monkeypatch.setattr(ws_realtime, "publish_topic_event", _capture)
+    monkeypatch.setattr(realtime_platform, "publish_topic_event", _capture)
     return sent
 
 
@@ -151,7 +150,7 @@ def test_a_dead_transport_never_breaks_the_write(monkeypatch):
     def _boom(topic, *, event_type, payload):
         raise RuntimeError("redis is down")
 
-    monkeypatch.setattr(ws_realtime, "publish_topic_event", _boom)
+    monkeypatch.setattr(realtime_platform, "publish_topic_event", _boom)
 
     emit_change(
         item_kind=ItemKind.ticket,
@@ -189,7 +188,7 @@ def test_snoozing_and_unsnoozing_push_to_the_owners_channel(db_session, publishe
 
 def test_publishing_without_a_running_loop_is_safe():
     """The sync bridge is callable from ordinary service code."""
-    ws_realtime.publish_topic_event(
+    realtime_platform.publish_topic_event(
         user_channel(uuid4()),
         event_type=EventType.WORKQUEUE_CHANGED,
         payload={"type": "workqueue.changed"},
