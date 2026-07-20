@@ -776,8 +776,7 @@ class TestBuildBeatSchedule:
 
         mock_job = MagicMock()
         mock_job.id = "crm-job-123"
-        mock_job.adapter_key = "crm"
-        mock_job.action = "pull_tickets"
+        mock_job.capability_binding.capability_id = "crm.ticket_observation.v1"
         mock_job.interval_minutes = 15
 
         with patch.object(scheduler_config, "SessionLocal", return_value=mock_session):
