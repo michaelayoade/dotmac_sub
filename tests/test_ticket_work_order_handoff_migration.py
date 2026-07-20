@@ -26,7 +26,7 @@ def test_ticket_work_order_handoff_migration_is_irreversible_authority_cutover()
     source = MIGRATION.read_text()
 
     assert module.revision == "382_ticket_work_order_handoff"
-    assert module.down_revision == "380_integration_platform_cutover"
+    assert module.down_revision == "381_operational_sla_policy_events"
     assert "origin_ticket_id" in source
     assert "ForeignKey" not in source  # Alembic uses an explicit named FK operation.
     assert "fk_work_order_origin_ticket_id_support_tickets" in source
