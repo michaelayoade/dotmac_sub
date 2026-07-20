@@ -2293,14 +2293,20 @@ Dependency order:
 3. `operations.work_order_status`: declares persisted work-order values and the
    canonical open, assignable, and terminal sets.
 4. `operations.work_order_commands`: owns native work-order creation and header
-   commands, assignment decisions/projection, and assignment-queue transitions.
+   commands, the native `work_order.project_id` binding, the default-enabled
+   `requires_as_built_evidence` policy, assignment decisions/projection, and
+   assignment-queue transitions.
    Dispatch API/web and field-manager handlers are authorization/transport
    adapters around this owner. Assignment preview is read-only; execution locks
    the work order, atomically updates the queue and assignee projection, records
    exact previous/result actor audit evidence, and treats an equivalent retry as
    a replay. Direct header assignment fields and direct field-execution status
    changes are rejected. CRM ingest remains a provenance importer and does not
-   become native command authority.
+   become native command authority; it may resolve an exact retained CRM
+   project UUID into an otherwise-empty native link, but never replaces a
+   native binding. Native project-binding and evidence-policy
+   rejections use transport-neutral `WorkOrderCommandError`; only
+   `app.errors` maps them to HTTP responses.
 5. `operations.work_orders`: exposes work-order read models and customer links.
    The `work_order` table is Sub's authoritative work-order storage
    (WORK_ORDER_IDENTITY_SOT): identity is the Sub-generated `public_id`;
@@ -2326,19 +2332,24 @@ Dependency order:
 8. `operations.project_lifecycle`: owns native project field/status mutations,
    project SLA synchronization, and lifecycle event/notification requests.
 9. `operations.vendor_project_lifecycle` (`app.services.vendor_portal_operations`)
-   is the only writer for vendor start/complete transitions on
-   `installation_projects`: `approved -> in_progress -> completed`. It locks
+   is the only writer for vendor and staff work transitions on
+   `installation_projects`: vendor `approved -> in_progress -> completed`, staff
+   `completed -> verified`, and staff rework `completed -> in_progress`. It locks
    the project, rechecks the assigned vendor and current state, and atomically
    appends `installation_project_lifecycle_events` evidence carrying the
    authenticated actor type/id, transition time, previous/result state, vendor,
-   and durable event id. The same transaction stages the typed outbox events
-   `vendor_project.started` or `vendor_project.completed`. Cross-team consumers
+   optional review/rework reason, and durable event id. The same transaction
+   stages typed outbox events `vendor_project.started`, `vendor_project.completed`,
+   `vendor_project.verified`, or `vendor_project.rework_requested`. Cross-team consumers
    may read that timeline or consume those events; they do not infer actor/time
    from `updated_at` and do not write project status directly. Vendor routes,
    confirmation handlers, templates, and future delivery integrations are thin
-   adapters around this owner. The owner raises transport-neutral
-   `VendorProjectLifecycleError` rejections; the confirmation/delivery adapter
-   alone maps them to HTTP responses. The same named owner also owns the
+   adapters around this owner. Project verification is an operational decision:
+   invoice approval and ERP payment observations do not gate it and are not
+   modified by it. The owner raises transport-neutral
+   `VendorPortalOperationError` rejections; the application HTTP error handler
+   alone maps them to responses. An architecture test prevents this owner from
+   importing FastAPI or Starlette. The same named owner also owns the
    installation-project quote and as-built evidence lifecycles, including the
    read-only impact snapshot used before submit; one implementation module is
    therefore declared under one owner name. The vendor project-detail map reads
@@ -2346,7 +2357,23 @@ Dependency order:
    `app.services.vendor_routes_api.build_project_route_geojson`; its capture
    controls render only from the owner's `as_built_action` projection and
    serialize the existing `VendorAsBuiltCreate.geojson` contract rather than
-   writing route evidence from the template.
+   writing route evidence from the template. The same owner controls as-built
+   submission versions and staff review transitions from `submitted` or
+   `under_review` to `accepted` or `rejected`. Each decision updates the current
+   review projection and atomically appends `as_built_route_review_events`
+   evidence plus `vendor_as_built.accepted` or `vendor_as_built.rejected`.
+   Rejection requires a reason. An evidence decision never implicitly verifies
+   or reworks the project, approves an invoice, or infers ERP payment.
+   For `completed -> verified`, this owner consumes—but never writes—the active
+   linked work orders' `requires_as_built_evidence` policy. The policy defaults
+   to enabled, including when no active work order is linked; any active linked
+   work order requiring evidence means the latest project as-built submission
+   must be `accepted`. A newer pending or rejected submission supersedes an
+   older accepted submission for this decision. Verification stores the exact
+   work-order policy rows and accepted-evidence identity in the append-only
+   lifecycle event `decision_context` and typed outbox payload. The optional
+   vendor-supplied `work_order_ref` remains observational and is never used to
+   decide verification eligibility.
 10. `operations.vendor_purchase_invoices` owns vendor purchase-invoice state,
    financial totals, submit eligibility, and the financial impact snapshot.
    ERP owns accounts-payable settlement. Its dedicated
@@ -2369,6 +2396,20 @@ Dependency order:
    The proposal carries no decision authority: each domain owner locks and
    rechecks its current facts, and the mutation plus idempotency result commit
    once. Vendor web routes only request preview or confirmation.
+12. `operations.vendor_project_review_confirmation` (implemented by
+   `app.services.vendor_project_review_proposals`) owns signed staff review
+   proposals, stale-preview comparison, and exact-replay idempotency for verify
+   and rework commands. It carries no project decision policy: it asks
+   `operations.vendor_project_lifecycle` for both preview and lock-time
+   revalidation, then records the confirmation result in the same transaction.
+   Admin routes and templates are thin adapters and require `inventory:write`.
+13. `operations.vendor_as_built_review_confirmation` (implemented by
+   `app.services.vendor_as_built_review_proposals`) owns the signed, stale-safe,
+   exactly idempotent confirmation around an as-built accept/reject decision.
+   The proposal is not decision authority: lock-time eligibility and the
+   transition remain with `operations.vendor_project_lifecycle`. Staff actions
+   require `inventory:write`; vendors receive the resulting status and review
+   reason through the project projection.
 
 Rule: provisioning callers should resolve customer/network context once through
 the operations context service before running workflow steps. Step executors may

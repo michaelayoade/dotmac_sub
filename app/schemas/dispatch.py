@@ -226,6 +226,8 @@ class WorkOrderHeaderBase(BaseModel):
 
     title: str = Field(min_length=1, max_length=200)
     subscriber_id: UUID
+    project_id: UUID | None = None
+    requires_as_built_evidence: bool = True
     description: str | None = None
     status: str = Field(default="draft", max_length=20)
     priority: str | None = Field(default="normal", max_length=20)
@@ -276,6 +278,8 @@ class WorkOrderHeaderUpdate(BaseModel):
 
     title: str | None = Field(default=None, min_length=1, max_length=200)
     subscriber_id: UUID | None = None
+    project_id: UUID | None = None
+    requires_as_built_evidence: bool | None = None
     description: str | None = None
     status: str | None = Field(default=None, max_length=20)
     priority: str | None = Field(default=None, max_length=20)

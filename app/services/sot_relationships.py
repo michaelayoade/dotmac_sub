@@ -2719,6 +2719,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.work_order_commands",
                 owns=(
                     "native work-order creation and header commands",
+                    "native work-order project binding",
+                    "work-order as-built evidence requirement",
                     "work-order assignment decisions and projection",
                     "work-order assignment-queue transitions",
                 ),
@@ -2734,7 +2736,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "projection atomically, records exact actor audit evidence, "
                     "and treats equivalent retries as replays. CRM mirror ingest "
                     "remains a provenance importer; field execution statuses remain "
-                    "owned by operations.field_completion."
+                    "owned by operations.field_completion. Native project-binding "
+                    "and evidence-policy rejections are transport-neutral "
+                    "WorkOrderCommandError values mapped only by the app boundary."
                 ),
             ),
             SOTService(
@@ -2811,18 +2815,29 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 name="operations.vendor_project_lifecycle",
                 module="app.services.vendor_portal_operations",
                 owns=(
-                    "vendor start/complete installation-project transitions",
-                    "durable vendor lifecycle actor/time/event evidence",
+                    "vendor start/complete and staff verify/rework "
+                    "installation-project transitions",
+                    "durable vendor lifecycle actor/time/reason/event evidence",
                     "typed vendor project lifecycle outbox events",
                     "vendor installation-project quote lifecycle",
                     "quote submission eligibility and impact snapshot",
-                    "as-built evidence lifecycle and impact snapshot",
+                    "as-built submission/review lifecycle and impact snapshots",
+                    "durable as-built review actor/time/reason/event evidence",
                 ),
-                depends_on=("events.dispatcher", "operations.project_lifecycle"),
+                depends_on=(
+                    "events.dispatcher",
+                    "operations.project_lifecycle",
+                    "operations.work_order_commands",
+                ),
                 notes=(
                     "This is the sole writer for approved -> in_progress -> "
-                    "completed vendor work transitions and owns the related quote "
+                    "completed -> verified vendor work transitions and completed -> "
+                    "in_progress rework decisions, and owns the related quote "
                     "and as-built workflow in the same implementation module. It "
+                    "consumes the default-enabled work-order evidence policy and "
+                    "requires the latest project as-built to be accepted when any "
+                    "active linked work order requires it. The exact policy and "
+                    "evidence snapshot is retained with verification evidence. It "
                     "raises transport-neutral domain errors; adapters translate "
                     "them for HTTP delivery."
                 ),
@@ -2856,6 +2871,36 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "Web adapters only request a preview or confirm its signed "
                     "proposal. Domain owners recheck under lock and commit the "
                     "mutation with its idempotency result."
+                ),
+            ),
+            SOTService(
+                name="operations.vendor_project_review_confirmation",
+                module="app.services.vendor_project_review_proposals",
+                owns=(
+                    "short-lived signed staff project-review proposal",
+                    "staff project-review stale-preview verification",
+                    "staff project-review idempotency and replay result",
+                ),
+                depends_on=("operations.vendor_project_lifecycle",),
+                notes=(
+                    "This supporting service cannot decide project state. It binds "
+                    "an authenticated staff actor to the lifecycle owner's preview "
+                    "and invokes that owner once after lock-time revalidation."
+                ),
+            ),
+            SOTService(
+                name="operations.vendor_as_built_review_confirmation",
+                module="app.services.vendor_as_built_review_proposals",
+                owns=(
+                    "short-lived signed staff as-built review proposal",
+                    "staff as-built review stale-preview verification",
+                    "staff as-built review idempotency and replay result",
+                ),
+                depends_on=("operations.vendor_project_lifecycle",),
+                notes=(
+                    "This supporting service carries no evidence or project "
+                    "decision policy. It binds staff to the vendor operations "
+                    "owner's preview and invokes that owner after revalidation."
                 ),
             ),
         ),
