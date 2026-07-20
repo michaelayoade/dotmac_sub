@@ -26,11 +26,18 @@ adapter files. The executable registry contains 28 domains and 233 service
 entries. Its one exact duplicate concern claim has been split into distinct
 observation-evidence and customer-resolution concerns.
 
-Typed manifest migration now has 34 fully contracted services and 213 indexed
+Typed manifest migration now has 37 fully contracted services and 213 indexed
 legacy services in a shrink-only baseline. New registry services cannot
 be added without role-qualified concerns, authoritative inputs, transaction and
 error semantics, migration state, stewardship, checked-in evidence, and any
 applicable event or projection/repair contract.
+
+The current-main reconciliation contracts the new material-dependency,
+ERP-material-support, and vendor-invoice ERP projection owners without growing
+the legacy baseline. ERP payment reconciliation depends on the canonical invoice
+record owner; vendor reads consume its timestamped observation. This direction
+keeps transport, observation, and business-decision authority explicit and
+prevents a dependency cycle through UI presentation services.
 
 The architecture suite now has a measured four-worker development gate:
 115 seconds versus 241 seconds serial on the foundation worktree (52% faster).

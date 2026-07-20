@@ -4575,6 +4575,232 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="operations.material_dependencies",
+                module="app.services.field.material_requests",
+                owns=(
+                    "service-work-order material need and operational approval",
+                    "ERP material-outcome projection into the service workflow",
+                    "work-order material allocation after ERP-confirmed issue",
+                ),
+                depends_on=(
+                    "control.settings_spec",
+                    "events.dispatcher",
+                    "operations.work_orders",
+                    "operations.work_order_status",
+                ),
+                notes=(
+                    "ERP owns warehouse, stock, serial, and issue decisions. "
+                    "This owner records the service dependency and applies an "
+                    "idempotent ERP outcome; it never posts inventory. Local "
+                    "issue/fulfil transitions are compatibility-only and fail "
+                    "closed after the material flow is cut over to Sub."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name=(
+                                "service-work-order material need and operational "
+                                "approval"
+                            ),
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical service work-order state",
+                                "material dependency transition protocol",
+                                "material-support cutover controls",
+                            ),
+                            canonical_writer="operations.material_dependencies",
+                        ),
+                        ConcernContract(
+                            name=(
+                                "ERP material-outcome projection into the service "
+                                "workflow"
+                            ),
+                            role=OwnerRole.RECONCILER,
+                            input_names=(
+                                "canonical material dependency state",
+                                "ERP material-support outcome observation",
+                                "material dependency transition protocol",
+                            ),
+                            canonical_writer="operations.material_dependencies",
+                        ),
+                        ConcernContract(
+                            name=(
+                                "work-order material allocation after ERP-confirmed "
+                                "issue"
+                            ),
+                            role=OwnerRole.PROJECTION_WRITER,
+                            input_names=(
+                                "canonical material dependency state",
+                                "ERP material-support outcome observation",
+                            ),
+                            canonical_writer="operations.material_dependencies",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical service work-order state",
+                            owner="operations.work_orders",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active WorkOrder identity, field assignment, and "
+                                "service-workflow linkage"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical material dependency state",
+                            owner="operations.material_dependencies",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "FieldMaterialRequest, request items, and active "
+                                "FieldWorkOrderMaterial allocation rows"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="material dependency transition protocol",
+                            owner="operations.work_order_status",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "draft, submission, approval, refusal, issued, and "
+                                "fulfilled transition invariants"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="material-support cutover controls",
+                            owner="control.settings_spec",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "dotmac_erp_sync_enabled and material_request flow "
+                                "ownership gates"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="ERP material-support outcome observation",
+                            owner="external:dotmac_erp",
+                            kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                            source=(
+                                "ERP material-request identity and normalized issue or "
+                                "refusal status received by the integration transport"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "Each material command owns the request, workflow, allocation, "
+                            "event evidence, and ERP outbox transaction; reconciled ERP "
+                            "outcomes commit one locked request at a time."
+                        ),
+                        locking=(
+                            "Commands resolve one active request and its work-order "
+                            "aggregate; reconciliation rejects a changed ERP identity and "
+                            "applies equivalent outcomes as no-ops."
+                        ),
+                        idempotency=(
+                            "Stable request identity plus normalized ERP identity/status "
+                            "makes repeated delivery and scheduled reconciliation converge."
+                        ),
+                        retries=(
+                            "Transport failures retry outside the owner transaction; "
+                            "policy or identity conflicts require corrected source state."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "operations.material_dependencies.invalid_transition",
+                            "operations.material_dependencies.request_not_found",
+                            "operations.material_dependencies.erp_identity_conflict",
+                            "operations.material_dependencies.sync_unavailable",
+                            "operations.material_dependencies.invalid_command_context",
+                            "operations.material_dependencies.command_contract_violation",
+                            "operations.material_dependencies.nested_owner_command",
+                            "operations.material_dependencies.active_caller_transaction",
+                            "operations.material_dependencies.nested_transaction_completion",
+                        ),
+                        mapping_owner=(
+                            "field material API/web adapters and "
+                            "integration.erp_material_support"
+                        ),
+                        retryable_codes=(
+                            "operations.material_dependencies.sync_unavailable",
+                        ),
+                        fail_closed_on=(
+                            "invalid request or work-order scope",
+                            "changed ERP request identity",
+                            "active ERP ownership with disabled delivery",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("field_material_request.changed",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 is additive and identifies the request, work order, "
+                            "transition, actor or ERP source, and occurrence time."
+                        ),
+                        replay=(
+                            "Canonical material-request, item, allocation, ERP mirror, and "
+                            "manager-event evidence rebuild the current workflow state."
+                        ),
+                    ),
+                    projections=(
+                        ProjectionContract(
+                            name="ERP-confirmed work-order material allocation",
+                            input_names=(
+                                "canonical material dependency state",
+                                "ERP material-support outcome observation",
+                            ),
+                            writer="operations.material_dependencies",
+                            freshness=(
+                                "Current after each accepted delivery response or scheduled "
+                                "ERP status reconciliation."
+                            ),
+                            stale_behavior=(
+                                "Keep the service dependency pending; never infer issue or "
+                                "allocate stock locally after cutover."
+                            ),
+                            drift_signal=(
+                                "An approved ERP-linked request remains without a terminal "
+                                "outcome or its allocation disagrees with request items."
+                            ),
+                            rebuild_operation=(
+                                "Refresh the ERP request status and reapply the idempotent "
+                                "backoffice outcome."
+                            ),
+                            repair_owner="operations.material_dependencies",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.CUTOVER_READY,
+                        old_owner=(
+                            "CRM material fulfilment and local issue/fulfil actions that "
+                            "could decide warehouse outcomes independently of ERP"
+                        ),
+                        new_owner="operations.material_dependencies",
+                        verification=(
+                            "Approval/outbox atomicity, cutover gate, fail-closed local "
+                            "fulfilment, idempotent outcome, allocation, and retry tests."
+                        ),
+                        cutover_gate=(
+                            "The material_request flow is assigned to Sub and ERP sync is "
+                            "enabled before approval can create ERP support work."
+                        ),
+                        fallback_retirement=(
+                            "Remove compatibility issue/fulfil actions after the Sub-owned "
+                            "flow is verified and CRM delivery is retired."
+                        ),
+                    ),
+                    steward="field operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
+                    ),
+                    test_refs=(
+                        "tests/test_field_material_requests.py",
+                        "tests/test_dotmac_erp_material_sync.py",
+                    ),
+                ),
+            ),
+            SOTService(
                 name="operations.project_lifecycle",
                 module="app.services.projects",
                 owns=(
@@ -5121,18 +5347,23 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "vendor purchase-invoice read and action projections",
                     "vendor purchase-invoice mutation coordination",
                     "purchase-invoice submission eligibility and financial preview",
+                    "vendor-facing ERP payment observation projection",
                 ),
                 depends_on=(
                     "auth.permission_gate",
                     "control.settings_spec",
+                    "integration.vendor_purchase_invoice_erp_projection",
                     "operations.vendor_project_lifecycle",
                     "operations.vendor_purchase_invoice_records",
+                    "ui.projection_contracts",
                 ),
                 notes=(
                     "This service owns purchase-invoice queries, action policy, and "
                     "typed public-command coordination. Canonical invoice writers "
                     "participate in its transaction or the signed confirmation "
-                    "coordinator's transaction."
+                    "coordinator's transaction. Vendor-facing payment state is "
+                    "rendered only from the timestamped ERP observation and shared "
+                    "UI projection vocabulary."
                 ),
                 contract=ServiceContract(
                     concerns=(
@@ -5165,6 +5396,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "canonical vendor purchase-invoice records",
                                 "canonical installation-project lifecycle state",
                                 "purchase-invoice mutation protocol",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="vendor-facing ERP payment observation projection",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical vendor purchase-invoice records",
+                                "timestamped ERP accounts-payable observation",
+                                "UI payment-state projection vocabulary",
                             ),
                         ),
                     ),
@@ -5209,6 +5449,26 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             source=(
                                 "editable, submittable, reviewable, attachment, invoice "
                                 "number, and amount invariants"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="timestamped ERP accounts-payable observation",
+                            owner=(
+                                "integration.vendor_purchase_invoice_erp_projection"
+                            ),
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "validated ERP status, total, paid, balance, source "
+                                "timestamp, observation timestamp, and refresh error"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="UI payment-state projection vocabulary",
+                            owner="ui.projection_contracts",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "StateValue availability and freshness plus canonical "
+                                "ERP supplier-invoice status presentation"
                             ),
                         ),
                     ),
@@ -5273,7 +5533,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         new_owner="operations.vendor_purchase_invoices",
                         verification=(
                             "Typed-command, currency-setting, signed-submit, transaction, "
-                            "adapter, participant, event, and rollback tests."
+                            "adapter, participant, event, rollback, and vendor payment "
+                            "visibility tests."
                         ),
                         cutover_gate=(
                             "Every public mutation adapter passes a typed command on a "
@@ -5282,7 +5543,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         fallback_retirement=(
                             "Service HTTP exceptions, direct commit/rollback, generic "
                             "setattr, direct submit, and split approval/enqueue paths are "
-                            "removed."
+                            "removed; ERP creation responses no longer imply settlement "
+                            "state."
                         ),
                     ),
                     steward="vendor operations",
@@ -5292,6 +5554,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     ),
                     test_refs=(
                         "tests/test_phase5_vendor_purchase_invoices.py",
+                        "tests/test_vendor_payment_visibility.py",
                         "tests/test_vendor_submission_proposals.py",
                         "tests/architecture/test_vendor_purchase_invoice_boundary.py",
                     ),
@@ -8565,11 +8828,441 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=("integration hook dispatch", "hook subscriptions"),
                 depends_on=("events.dispatcher", "integration.registry"),
             ),
+            SOTService(
+                name="integration.vendor_purchase_invoice_erp_projection",
+                module="app.services.dotmac_erp.purchase_invoice_sync",
+                owns=(
+                    "vendor purchase-invoice ERP origination projection",
+                    "vendor purchase-invoice ERP attachment projection",
+                    "timestamped ERP accounts-payable status observation",
+                ),
+                depends_on=(
+                    "control.settings_spec",
+                    "events.dispatcher",
+                    "operations.vendor_purchase_invoice_records",
+                ),
+                notes=(
+                    "ERP owns AP settlement. This reconciler is the only writer "
+                    "of Sub's refreshed ERP status and amount observation fields; "
+                    "the creation response remains origination evidence only."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="vendor purchase-invoice ERP origination projection",
+                            role=OwnerRole.PROJECTION_WRITER,
+                            input_names=(
+                                "canonical vendor purchase-invoice records",
+                                "ERP purchase-invoice origination response",
+                                "ERP purchase-invoice flow controls",
+                            ),
+                            canonical_writer=(
+                                "integration.vendor_purchase_invoice_erp_projection"
+                            ),
+                        ),
+                        ConcernContract(
+                            name="vendor purchase-invoice ERP attachment projection",
+                            role=OwnerRole.PROJECTION_WRITER,
+                            input_names=(
+                                "canonical vendor purchase-invoice records",
+                                "ERP purchase-invoice attachment response",
+                                "ERP purchase-invoice flow controls",
+                            ),
+                            canonical_writer=(
+                                "integration.vendor_purchase_invoice_erp_projection"
+                            ),
+                        ),
+                        ConcernContract(
+                            name=(
+                                "timestamped ERP accounts-payable status observation"
+                            ),
+                            role=OwnerRole.RECONCILER,
+                            input_names=(
+                                "canonical vendor purchase-invoice records",
+                                "ERP accounts-payable status observation",
+                                "ERP purchase-invoice flow controls",
+                            ),
+                            canonical_writer=(
+                                "integration.vendor_purchase_invoice_erp_projection"
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical vendor purchase-invoice records",
+                            owner="operations.vendor_purchase_invoice_records",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active VendorPurchaseInvoice, ERP purchase-order link, "
+                                "approved lines, attachment, currency, and ERP invoice link"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="ERP purchase-invoice origination response",
+                            owner="external:dotmac_erp",
+                            kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                            source=(
+                                "ERP purchase-invoice identity and creation status returned "
+                                "for one source invoice"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="ERP purchase-invoice attachment response",
+                            owner="external:dotmac_erp",
+                            kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                            source=(
+                                "accepted attachment upload for one immutable ERP invoice "
+                                "identity and content-addressed source attachment"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="ERP accounts-payable status observation",
+                            owner="external:dotmac_erp",
+                            kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                            source=(
+                                "source and ERP invoice identities, currency, status, total, "
+                                "paid, balance, and source update timestamp"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="ERP purchase-invoice flow controls",
+                            owner="control.settings_spec",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "ERP sync enablement, purchase_invoice ownership, bounded "
+                                "batch size, and scheduler cadence"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "Outbox origination writes participate in the approved invoice "
+                            "transaction; repair and status reconciliation commit one "
+                            "revalidated invoice projection per ERP result."
+                        ),
+                        locking=(
+                            "Status reconciliation snapshots identifiers before transport, "
+                            "then locks the active invoice and rechecks ERP identity and "
+                            "currency before writing."
+                        ),
+                        idempotency=(
+                            "Stable invoice and attachment keys deduplicate origination; "
+                            "equivalent status observations converge while refreshing only "
+                            "their observation timestamp."
+                        ),
+                        retries=(
+                            "Each failed invoice rolls back independently, records a bounded "
+                            "refresh error, and is repairable by a later scheduled pass."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            (
+                                "integration.vendor_purchase_invoice_erp_projection."
+                                "invalid_observation"
+                            ),
+                            (
+                                "integration.vendor_purchase_invoice_erp_projection."
+                                "identity_mismatch"
+                            ),
+                            (
+                                "integration.vendor_purchase_invoice_erp_projection."
+                                "amount_mismatch"
+                            ),
+                            (
+                                "integration.vendor_purchase_invoice_erp_projection."
+                                "transport_unavailable"
+                            ),
+                            (
+                                "integration.vendor_purchase_invoice_erp_projection."
+                                "invalid_command_context"
+                            ),
+                            (
+                                "integration.vendor_purchase_invoice_erp_projection."
+                                "command_contract_violation"
+                            ),
+                            (
+                                "integration.vendor_purchase_invoice_erp_projection."
+                                "nested_owner_command"
+                            ),
+                            (
+                                "integration.vendor_purchase_invoice_erp_projection."
+                                "active_caller_transaction"
+                            ),
+                            (
+                                "integration.vendor_purchase_invoice_erp_projection."
+                                "nested_transaction_completion"
+                            ),
+                        ),
+                        mapping_owner=(
+                            "app.tasks.dotmac_erp_outbox and vendor payment read adapters"
+                        ),
+                        retryable_codes=(
+                            (
+                                "integration.vendor_purchase_invoice_erp_projection."
+                                "transport_unavailable"
+                            ),
+                        ),
+                        fail_closed_on=(
+                            "source or ERP invoice identity mismatch",
+                            "currency or amount reconciliation mismatch",
+                            "missing or stale canonical invoice link",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "vendor_purchase_invoice.erp_projection_refreshed",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 is additive and identifies the source invoice, ERP "
+                            "invoice, projection kind, observation time, and changed fields."
+                        ),
+                        replay=(
+                            "Canonical invoice and attachment rows plus FieldErpSyncEvent "
+                            "origination evidence rebuild links; scheduled ERP observation "
+                            "repairs settlement projection drift."
+                        ),
+                    ),
+                    projections=(
+                        ProjectionContract(
+                            name="vendor purchase-invoice ERP projection",
+                            input_names=(
+                                "canonical vendor purchase-invoice records",
+                                "ERP purchase-invoice origination response",
+                                "ERP purchase-invoice attachment response",
+                                "ERP accounts-payable status observation",
+                            ),
+                            writer=(
+                                "integration.vendor_purchase_invoice_erp_projection"
+                            ),
+                            freshness=(
+                                "Origination and attachment links are durable; AP status is "
+                                "fresh for fifteen minutes from observed_at."
+                            ),
+                            stale_behavior=(
+                                "Retain the last valid observation with explicit stale or "
+                                "unavailable presentation; never infer paid from creation."
+                            ),
+                            drift_signal=(
+                                "A linked invoice lacks a recent valid observation, reports "
+                                "a refresh error, or has an unsynchronized attachment."
+                            ),
+                            rebuild_operation=(
+                                "Run purchase-invoice repair and status reconciliation from "
+                                "the canonical invoice and its stable ERP identities."
+                            ),
+                            repair_owner=(
+                                "integration.vendor_purchase_invoice_erp_projection"
+                            ),
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.CUT_OVER,
+                        old_owner=(
+                            "ERP creation-response status and vendor UI paths that treated "
+                            "origination evidence as accounts-payable settlement state"
+                        ),
+                        new_owner=(
+                            "integration.vendor_purchase_invoice_erp_projection"
+                        ),
+                        verification=(
+                            "Identity, currency, amount, rollback, stale, last-good, creation "
+                            "separation, scheduler, and vendor visibility tests."
+                        ),
+                        cutover_gate=(
+                            "The additive payment projection migration is applied and the "
+                            "ERP status endpoint returns the validated source contract."
+                        ),
+                        fallback_retirement=(
+                            "ERP creation status remains origination evidence only; vendor "
+                            "payment reads no longer use it as a settlement fallback."
+                        ),
+                    ),
+                    steward="vendor finance integrations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
+                    ),
+                    test_refs=(
+                        "tests/test_vendor_payment_visibility.py",
+                        "tests/test_dotmac_erp_outbox.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="integration.erp_material_support",
+                module="app.services.dotmac_erp.material_sync",
+                owns=(
+                    "Sub-to-ERP material-support payload mapping",
+                    "stable material-support idempotency key",
+                    "ERP material-outcome observation and reconciliation",
+                ),
+                depends_on=(
+                    "control.settings_spec",
+                    "operations.material_dependencies",
+                ),
+                notes=(
+                    "Transport and observation only. ERP decides the backoffice "
+                    "outcome; operations.material_dependencies alone projects "
+                    "that outcome into Sub service-workflow state."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="Sub-to-ERP material-support payload mapping",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "approved canonical material dependency",
+                                "ERP material-support transport contract",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="stable material-support idempotency key",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "approved canonical material dependency",
+                                "ERP material-support transport contract",
+                            ),
+                        ),
+                        ConcernContract(
+                            name=(
+                                "ERP material-outcome observation and reconciliation"
+                            ),
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "canonical material dependency projection target",
+                                "ERP material-support outcome response",
+                                "ERP material-support transport contract",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="approved canonical material dependency",
+                            owner="operations.material_dependencies",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "approved FieldMaterialRequest, request items, technician, "
+                                "warehouse, and serialized-unit evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical material dependency projection target",
+                            owner="operations.material_dependencies",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active FieldMaterialRequest and work-order allocation "
+                                "aggregate revalidated before outcome application"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="ERP material-support outcome response",
+                            owner="external:dotmac_erp",
+                            kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                            source=(
+                                "ERP material request identity and normalized stock issue, "
+                                "fulfilment, cancellation, or refusal status"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="ERP material-support transport contract",
+                            owner="control.settings_spec",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "material_request flow ownership, ERP sync enablement, ISSUE "
+                                "payload schema, bounded batch size, and retry cadence"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        boundary=(
+                            "Approval enqueues through the material owner transaction; each "
+                            "accepted delivery or scheduled poll asks that owner to project "
+                            "one ERP outcome before the surrounding row commit."
+                        ),
+                        locking=(
+                            "The material owner resolves the active request and rejects a "
+                            "changed ERP identity before applying workflow consequences."
+                        ),
+                        idempotency=(
+                            "mr-{request_id}-approve-v1 deduplicates transport and repeated "
+                            "normalized ERP outcomes are no-op owner requests."
+                        ),
+                        retries=(
+                            "The outbox retries transport with the stable key; scheduled "
+                            "reconciliation isolates failures per request and repairs later."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "integration.erp_material_support.invalid_payload",
+                            "integration.erp_material_support.ineligible_request",
+                            "integration.erp_material_support.transport_unavailable",
+                            "integration.erp_material_support.invalid_outcome",
+                            "integration.erp_material_support.invalid_command_context",
+                            "integration.erp_material_support.command_contract_violation",
+                            "integration.erp_material_support.nested_owner_command",
+                            "integration.erp_material_support.active_caller_transaction",
+                            (
+                                "integration.erp_material_support."
+                                "nested_transaction_completion"
+                            ),
+                        ),
+                        mapping_owner=(
+                            "app.tasks.dotmac_erp_outbox and "
+                            "operations.material_dependencies"
+                        ),
+                        retryable_codes=(
+                            "integration.erp_material_support.transport_unavailable",
+                        ),
+                        fail_closed_on=(
+                            "flow not owned by Sub",
+                            "disabled ERP synchronization after cutover",
+                            "missing warehouse, technician, item, or serial evidence",
+                            "changed ERP material-request identity",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.CUTOVER_READY,
+                        old_owner=(
+                            "CRM material-request ERP mapper, delivery path, and local "
+                            "material fulfilment workflow"
+                        ),
+                        new_owner="integration.erp_material_support",
+                        verification=(
+                            "Payload parity, stable-key, flow gate, approval atomicity, "
+                            "outbox response, reconciliation, and failure-isolation tests."
+                        ),
+                        cutover_gate=(
+                            "Assign material_request flow ownership to Sub only after ERP "
+                            "payload acceptance and shadow outcome comparison are verified."
+                        ),
+                        fallback_retirement=(
+                            "Retire CRM delivery and the local issue/fulfil compatibility "
+                            "path after the Sub-owned reconciler is operationally verified."
+                        ),
+                    ),
+                    steward="field operations integrations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
+                    ),
+                    test_refs=(
+                        "tests/test_dotmac_erp_material_sync.py",
+                        "tests/test_field_material_requests.py",
+                    ),
+                ),
+            ),
         ),
         entrypoints=(
             "app.web.admin.integrations",
             "app.api.*_webhooks",
             "app.tasks.integrations",
+            "app.tasks.dotmac_erp_outbox",
             "app.services.events.handlers.integration_hook",
         ),
         rule=(
@@ -9280,6 +9973,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "RADIUS access-session observation labels, semantic tones, and icon keys",
                     "support-ticket status labels, semantic tones, and icon keys",
                     "field work-order status labels, semantic tones, and icon keys",
+                    "ERP supplier-invoice status labels, semantic tones, and icon keys",
                     "status presentation fallback semantics",
                 ),
                 depends_on=(
@@ -9290,6 +9984,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "network.outage_lifecycle",
                     "support.ticket_lifecycle",
                     "operations.work_order_status",
+                    "integration.vendor_purchase_invoice_erp_projection",
                 ),
                 notes=(
                     "Domain services own lifecycle or derived operational state. "

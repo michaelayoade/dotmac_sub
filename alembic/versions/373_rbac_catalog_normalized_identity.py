@@ -1,7 +1,7 @@
 """Enforce case-normalized RBAC catalog identities.
 
-Revision ID: 372_rbac_catalog_normalized_identity
-Revises: 371_retire_coarse_reports_permissions
+Revision ID: 373_rbac_catalog_normalized_identity
+Revises: 372_vendor_payment_projection
 Create Date: 2026-07-19
 
 The preflight fails closed on existing case/whitespace collisions. It does not
@@ -14,8 +14,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "372_rbac_catalog_normalized_identity"
-down_revision = "371_retire_coarse_reports_permissions"
+revision = "373_rbac_catalog_normalized_identity"
+down_revision = "372_vendor_payment_projection"
 branch_labels = None
 depends_on = None
 

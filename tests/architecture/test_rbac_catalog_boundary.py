@@ -17,7 +17,7 @@ ROLE_FORM = PROJECT_ROOT / "app" / "services" / "web_system_role_forms.py"
 SEED = PROJECT_ROOT / "scripts" / "seed" / "seed_rbac.py"
 TEST_SEED = PROJECT_ROOT / "scripts" / "seed" / "seed_test_fixtures.py"
 MIGRATION = (
-    PROJECT_ROOT / "alembic" / "versions" / "372_rbac_catalog_normalized_identity.py"
+    PROJECT_ROOT / "alembic" / "versions" / "373_rbac_catalog_normalized_identity.py"
 )
 
 
@@ -133,7 +133,7 @@ def test_model_and_migration_enforce_normalized_catalog_identity() -> None:
     }
 
     source = MIGRATION.read_text(encoding="utf-8")
-    assert 'down_revision = "371_retire_coarse_reports_permissions"' in source
+    assert 'down_revision = "372_vendor_payment_projection"' in source
     assert "HAVING count(*) > 1" in source
     assert "lower(btrim(name))" in source
     assert "lower(btrim(key))" in source

@@ -47,16 +47,21 @@ def test_legacy_branch_merge_is_ancestor_of_current_head() -> None:
         "migration_369_vendor_project_lifecycle_evidence",
     )
     assert vendor_evidence.down_revision == migration.revision
-    reports_retirement = _load_migration(
+    reports_retire = _load_migration(
         "371_retire_coarse_reports_permissions.py",
         "migration_371_retire_coarse_reports_permissions",
     )
-    assert reports_retirement.down_revision == "370_reports_granular_permissions"
-    current = _load_migration(
-        "372_rbac_catalog_normalized_identity.py",
-        "migration_372_rbac_catalog_normalized_identity",
+    assert reports_retire.down_revision == "370_reports_granular_permissions"
+    vendor_payment = _load_migration(
+        "372_vendor_purchase_invoice_payment_projection.py",
+        "migration_372_vendor_purchase_invoice_payment_projection",
     )
-    assert current.down_revision == reports_retirement.revision
+    assert vendor_payment.down_revision == reports_retire.revision
+    current = _load_migration(
+        "373_rbac_catalog_normalized_identity.py",
+        "migration_373_rbac_catalog_normalized_identity",
+    )
+    assert current.down_revision == vendor_payment.revision
 
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))

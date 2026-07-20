@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+from unittest.mock import MagicMock
 from uuid import uuid4
 
 import httpx
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 import app.models  # noqa: F401 — registers every model on Base.metadata
 from app.models.field_erp_sync import (
@@ -142,6 +144,35 @@ def test_enqueue_is_idempotent_on_key(db_session):
     rows = db_session.query(FieldErpSyncEvent).filter_by(idempotency_key=key).all()
     assert len(rows) == 1
     assert first.status == FieldErpSyncStatus.pending.value
+
+
+def test_enqueue_unique_race_preserves_the_source_transaction():
+    db = MagicMock()
+    winner = MagicMock(spec=FieldErpSyncEvent)
+    first = db.query.return_value.filter.return_value.first
+    first.side_effect = [None, winner]
+    db.flush.side_effect = IntegrityError("insert", {}, Exception("duplicate"))
+
+    result = _enqueue(db)
+
+    assert result is winner
+    db.begin_nested.assert_called_once_with()
+    db.rollback.assert_not_called()
+
+
+def test_material_writeback_failure_is_not_swallowed(monkeypatch):
+    from app.services.dotmac_erp import material_sync
+
+    row = MagicMock(spec=FieldErpSyncEvent)
+    row.flow = FieldErpSyncFlow.material_request.value
+
+    def fail_writeback(*args, **kwargs):
+        raise RuntimeError("projection failed")
+
+    monkeypatch.setattr(material_sync, "apply_erp_response", fail_writeback)
+
+    with pytest.raises(RuntimeError, match="projection failed"):
+        outbox._dispatch_flow_writeback(MagicMock(), row)
 
 
 # ---------------------------------------------------------------------------
@@ -426,6 +457,10 @@ def test_outbox_task_registered_with_celery():
     from app.celery_app import celery_app
 
     assert "app.tasks.dotmac_erp_outbox.deliver_erp_sync_events" in celery_app.tasks
+    assert (
+        "app.tasks.dotmac_erp_outbox.refresh_purchase_invoice_statuses"
+        in celery_app.tasks
+    )
 
 
 # ---------------------------------------------------------------------------

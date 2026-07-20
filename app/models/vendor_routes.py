@@ -496,7 +496,24 @@ class VendorPurchaseInvoice(Base):
     )
     erp_purchase_order_id: Mapped[str | None] = mapped_column(String(100), index=True)
     erp_purchase_invoice_id: Mapped[str | None] = mapped_column(String(100), index=True)
+    erp_purchase_invoice_creation_status: Mapped[str | None] = mapped_column(String(40))
     erp_purchase_invoice_status: Mapped[str | None] = mapped_column(String(40))
+    erp_purchase_invoice_total_amount: Mapped[Decimal | None] = mapped_column(
+        Numeric(20, 6)
+    )
+    erp_purchase_invoice_amount_paid: Mapped[Decimal | None] = mapped_column(
+        Numeric(20, 6)
+    )
+    erp_purchase_invoice_balance_due: Mapped[Decimal | None] = mapped_column(
+        Numeric(20, 6)
+    )
+    erp_purchase_invoice_status_observed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    erp_purchase_invoice_status_source_updated_at: Mapped[datetime | None] = (
+        mapped_column(DateTime(timezone=True))
+    )
+    erp_purchase_invoice_status_error: Mapped[str | None] = mapped_column(String(500))
     erp_sync_error: Mapped[str | None] = mapped_column(String(500))
     erp_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     erp_attachment_synced_at: Mapped[datetime | None] = mapped_column(
