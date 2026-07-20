@@ -7,7 +7,6 @@ access.radius_state
 access.radius_target_registry
 access.session_enforcement
 access.subscription_lifecycle
-access.walled_garden_policy
 ai.generation
 ai.insights
 app_sessions.auth

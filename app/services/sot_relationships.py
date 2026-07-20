@@ -6639,6 +6639,174 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=(
                     "access.subscription_lifecycle",
                     "control.settings_spec",
+                    "customer.accounts",
+                    "customer.identity_scope",
+                ),
+                notes=(
+                    "Hard reject is the fail-closed default. Captive access "
+                    "requires explicit account opt-in, eligible direct-house "
+                    "residential scope, ready network settings, and no more-"
+                    "restrictive active lock."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="captive account eligibility",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical subscriber access identity",
+                                "canonical reseller scope",
+                                "captive restriction protocol",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="captive network readiness",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical captive network settings",
+                                "captive restriction protocol",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="effective hard-reject/captive restriction",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical subscriber access identity",
+                                "canonical reseller scope",
+                                "canonical captive network settings",
+                                "canonical enforcement locks",
+                                "captive restriction protocol",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="most-restrictive-active-lock resolution",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical subscription lifecycle state",
+                                "canonical enforcement locks",
+                                "captive restriction protocol",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical subscriber access identity",
+                            owner="customer.accounts",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "Subscriber user type, active and lifecycle state, "
+                                "explicit category evidence, and captive opt-in"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical reseller scope",
+                            owner="customer.identity_scope",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active Reseller relationship with explicit direct-house "
+                                "classification"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical captive network settings",
+                            owner="control.settings_spec",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed radius.captive_redirect_enabled, captive_portal_ip, "
+                                "and captive_portal_url values"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical subscription lifecycle state",
+                            owner="access.subscription_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Subscription identity, account, and lifecycle status",
+                        ),
+                        AuthorityInput(
+                            name="canonical enforcement locks",
+                            owner="access.subscription_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active per-subscription EnforcementLock access modes"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="captive restriction protocol",
+                            owner="access.walled_garden_policy",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed reason vocabulary, eligibility statuses, HTTPS "
+                                "portal requirement, and most-restrictive-wins ordering"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary=(
+                            "Caller creates and closes the session; the policy reads "
+                            "canonical account, lock, and setting evidence without writes "
+                            "or transaction completion."
+                        ),
+                        locking=(
+                            "No row lock; callers requiring a command decision lock source "
+                            "state before invoking the policy. Read projections reflect the "
+                            "visible active-lock snapshot."
+                        ),
+                        idempotency=(
+                            "The same requested mode and visible account, reseller, lock, "
+                            "and network-setting snapshot produce the same typed decision."
+                        ),
+                        retries=(
+                            "Transient reads may be retried. Missing, stale, invalid, or "
+                            "ambiguous captive evidence deterministically resolves to hard "
+                            "reject and needs no retry."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(),
+                        mapping_owner=(
+                            "financial, lifecycle, event, RADIUS, and status adapters"
+                        ),
+                        fail_closed_on=(
+                            "missing explicit residential or direct-house evidence",
+                            "inactive or ineligible account scope",
+                            "disabled or invalid captive network settings",
+                            "terminal subscription state or ambiguous active locks",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "raw captive account flags and caller-local restriction "
+                            "interpretation"
+                        ),
+                        new_owner="access.walled_garden_policy",
+                        verification=(
+                            "Eligibility, opt-in, network readiness, terminal status, "
+                            "most-restrictive-lock, RADIUS projection, and architecture "
+                            "tests."
+                        ),
+                        cutover_gate=(
+                            "Financial, event, RADIUS, connectivity, and service-status "
+                            "callers consume the canonical typed decision."
+                        ),
+                        fallback_retirement=(
+                            "Raw opt-in authority, caller-local captive readiness, and "
+                            "permissive missing-evidence fallbacks are removed."
+                        ),
+                    ),
+                    steward="network access",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/audits/BILLING_SOT_AUDIT_2026-07-12.md",
+                        "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
+                    ),
+                    test_refs=(
+                        "tests/test_walled_garden_policy.py",
+                        "tests/test_radius_shadow_handler_integration.py",
+                        "tests/architecture/test_grace_walled_garden_ownership.py",
+                        "tests/architecture/test_walled_garden_policy_boundary.py",
+                    ),
                 ),
             ),
             SOTService(

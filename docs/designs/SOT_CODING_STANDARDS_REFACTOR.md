@@ -26,7 +26,7 @@ adapter files. The executable registry contains 28 domains and 233 service
 entries. Its one exact duplicate concern claim has been split into distinct
 observation-evidence and customer-resolution concerns.
 
-Typed manifest migration now has 28 fully contracted services and 218 indexed
+Typed manifest migration now has 29 fully contracted services and 217 indexed
 legacy services in a shrink-only baseline. New registry services cannot
 be added without role-qualified concerns, authoritative inputs, transaction and
 error semantics, migration state, stewardship, checked-in evidence, and any
@@ -148,6 +148,12 @@ duplicate `access.control_resolution` registry identity is removed, and
 impact, invoice eligibility, prepaid enforcement, funding, and RADIUS callers
 now consume one typed decision implementation. Currency validation raises a
 stable domain error; no caller compares amounts under a local currency default.
+
+The completed captive-restriction slice is `access.walled_garden_policy`.
+Eligibility, explicit opt-in, network readiness, terminal lifecycle state, and
+active-lock precedence now produce one typed reason outcome. Hard reject remains
+the deterministic result for missing, invalid, stale, or conflicting evidence;
+financial, event, RADIUS, connectivity, and status callers share that policy.
 
 The current completed access slice is `auth.system_user_assignments`. It is the
 only application writer for system-user role and direct-permission grants. Local
