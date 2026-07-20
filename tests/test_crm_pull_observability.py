@@ -5,29 +5,44 @@ from __future__ import annotations
 from uuid import uuid4
 
 from app.models.integration import IntegrationRecord, IntegrationRun
-from app.schemas.connector import ConnectorConfigCreate
 from app.schemas.integration import IntegrationJobCreate, IntegrationTargetCreate
-from app.services import connector as connector_service
 from app.services import integration as integration_service
 from app.services.integration_sync import run_scheduled_pull
+from app.services.integrations import installations
+from app.services.integrations.runtime import ValidationResult
 from tests.test_crm_ticket_pull import FakeCrmClient, _crm_ticket
 
 
 def _crm_job(db):
-    connector = connector_service.connector_configs.create(
+    installation = installations.create_draft(
         db,
-        ConnectorConfigCreate(
-            name=f"CRM-{uuid4().hex[:6]}",
-            connector_type="custom",
-            auth_type="none",
-        ),
+        connector_key="dotmac.crm",
+        name=f"CRM {uuid4().hex[:6]}",
+        environment="test",
+    )
+    installations.create_config_revision(
+        db,
+        installation_id=installation.id,
+        config={"base_url": "https://crm.example.test", "timeout_seconds": 45},
+        secret_refs={"service_credentials": "env://CRM_TEST_TOKEN"},
+    )
+    binding = installations.bind_capability(
+        db,
+        installation_id=installation.id,
+        capability_id="crm.ticket_observation.v1",
+        policy={"default": True},
+    )
+    installations.validate_static(db, installation_id=installation.id)
+    installations.enable_after_connection_validation(
+        db,
+        installation_id=installation.id,
+        connection_result=ValidationResult(valid=True),
     )
     target = integration_service.integration_targets.create(
         db,
         IntegrationTargetCreate(
             name=f"CRM Target {uuid4().hex[:6]}",
             target_type="custom",
-            connector_config_id=connector.id,
         ),
     )
     return integration_service.integration_jobs.create(
@@ -37,8 +52,7 @@ def _crm_job(db):
             name=f"CRM Ticket Pull {uuid4().hex[:6]}",
             job_type="sync",
             schedule_type="manual",
-            adapter_key="crm",
-            action="pull_tickets",
+            capability_binding_id=binding.id,
         ),
     )
 
@@ -106,7 +120,7 @@ def test_scheduled_pull_incremental_trigger_label(db_session, subscriber):
     assert latest.trigger == "scheduled"
 
 
-def test_scheduled_pull_without_job_still_runs(db_session, subscriber):
+def test_scheduled_pull_without_job_fails_closed(db_session, subscriber):
     subscriber.splynx_customer_id = 24296
     db_session.commit()
     client = FakeCrmClient(
@@ -115,7 +129,10 @@ def test_scheduled_pull_without_job_still_runs(db_session, subscriber):
         comments={},
     )
 
-    metrics = run_scheduled_pull(db_session, client=client, full=True)
+    import pytest
 
-    assert metrics["created"] == 1
+    from app.services.integration_sync import SyncAdapterError
+
+    with pytest.raises(SyncAdapterError, match="no active CRM"):
+        run_scheduled_pull(db_session, client=client, full=True)
     assert db_session.query(IntegrationRun).count() == 0

@@ -10,24 +10,25 @@ import threading
 import uuid
 from contextlib import contextmanager
 
+import pytest
 from fastapi import HTTPException
 
 from app.api.crm_webhooks import receive_crm_project_event
-from app.config import settings
 from app.models.project_mirror import ProjectMirror
 from app.models.subscriber import Subscriber
+from tests.integration_platform_helpers import enable_crm_inbound
 
 SECRET = "test-webhook-secret"
 
 
 @contextmanager
 def _with_secret(value: str):
-    original = settings.crm_webhook_secret
-    object.__setattr__(settings, "crm_webhook_secret", value)
-    try:
-        yield
-    finally:
-        object.__setattr__(settings, "crm_webhook_secret", original)
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _crm_inbound_installation(db_session, monkeypatch):
+    enable_crm_inbound(db_session, monkeypatch, signing_secret=SECRET)
 
 
 class _FakeRequest:
@@ -37,6 +38,9 @@ class _FakeRequest:
 
     async def body(self) -> bytes:
         return self._raw
+
+    async def json(self):
+        return json.loads(self._raw)
 
 
 def _sign(body: bytes, secret: str = SECRET) -> str:

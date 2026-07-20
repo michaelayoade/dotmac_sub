@@ -3,17 +3,15 @@ merge (blocker-4 semantics on a real JSONB column) → local terminal precedence
 
 The CRM transport is faked (FakeCrmClient); tickets, comments, tokens, the
 metadata merge, and the status guards are the real services on a real
-database. ``crm_ticket_native_writes_enabled`` is flipped ON for the native
-decision steps — the post-cutover posture where sub owns ticket writes.
+database. Sub is authoritative for the native decision steps; CRM provenance
+does not create a second write owner.
 """
 
 from __future__ import annotations
 
-import dataclasses
 from uuid import uuid4
 
 from app.models.support import Ticket, TicketComment
-from app.services import support as support_service
 from app.services.crm_ticket_pull import pull_tickets
 from app.services.support import (
     Tickets,
@@ -60,9 +58,7 @@ def _crm_fixture(subscriber_external_id: str):
     return client, ticket_payload, crm_ticket_id
 
 
-def test_ticket_lifecycle_pull_native_decisions_merge(
-    db_session, subscriber, monkeypatch
-):
+def test_ticket_lifecycle_pull_native_decisions_merge(db_session, subscriber):
     subscriber.splynx_customer_id = 201
     db_session.commit()
     client, payload, crm_ticket_id = _crm_fixture("201")
@@ -75,14 +71,7 @@ def test_ticket_lifecycle_pull_native_decisions_merge(
     assert ticket.metadata_["crm_ticket_id"] == crm_ticket_id
     assert ticket.subscriber_id == subscriber.id
 
-    # 2. Native decisions on the pulled ticket (post-cutover write posture).
-    monkeypatch.setattr(
-        support_service,
-        "settings",
-        dataclasses.replace(
-            support_service.settings, crm_ticket_native_writes_enabled=True
-        ),
-    )
+    # 2. Native decisions on the pulled ticket (Sub-owned write posture).
     ticket, token = Tickets.request_resolution_confirmation(
         db_session, str(ticket.id), actor_id=None
     )

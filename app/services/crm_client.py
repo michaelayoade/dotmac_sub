@@ -22,10 +22,8 @@ import httpx
 from dotmac_integration import IntegrationHttpClient
 from sqlalchemy.orm import Session
 
-from app.config import settings
 from app.models.domain_settings import SettingDomain
 from app.observability import get_request_id
-from app.services.secrets import resolve_secret
 from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
@@ -263,7 +261,7 @@ class CRMClient:
         if username or password:
             logger.warning(
                 "CRMClient staff credentials are retired and ignored; "
-                "configure CRM_SERVICE_TOKEN"
+                "configure the integration installation service credential"
             )
         self.service_token = (service_token or "").strip()
         self.timeout = timeout
@@ -344,7 +342,7 @@ class CRMClient:
             raise CRMClientError("CRM is not configured")
         if not self.service_token:
             raise CRMClientError(
-                "CRM service token is not configured (set CRM_SERVICE_TOKEN); "
+                "CRM service credential is not configured on the installation; "
                 "the staff-credential login fallback has been retired"
             )
         return {"X-API-Key": self.service_token}
@@ -906,22 +904,3 @@ class CRMClient:
 
 
 # ── Singleton ────────────────────────────────────────────────────────────
-
-_crm_client: CRMClient | None = None
-
-
-def get_crm_client(db: Session | None = None) -> CRMClient:
-    """Get a CRM client, DB-scoped when runtime settings are available."""
-    if db is not None:
-        return CRMClient(
-            base_url=settings.crm_base_url,
-            service_token=resolve_secret(settings.crm_service_token),
-            settings_db=db,
-        )
-    global _crm_client
-    if _crm_client is None:
-        _crm_client = CRMClient(
-            base_url=settings.crm_base_url,
-            service_token=resolve_secret(settings.crm_service_token),
-        )
-    return _crm_client

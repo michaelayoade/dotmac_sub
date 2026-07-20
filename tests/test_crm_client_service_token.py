@@ -1,10 +1,4 @@
-"""Auth-unification phase 2b: the CRM client prefers a static service ApiKey.
-
-When ``service_token`` (settings.crm_service_token / CRM_SERVICE_TOKEN) is set,
-requests authenticate with ``X-API-Key`` and the staff username/password
-session->JWT login is never performed. Unset, the staff login still runs, so the
-cut-over is a pure config flip.
-"""
+"""DB-free CRM HTTP substrate authentication behavior."""
 
 from unittest.mock import MagicMock, patch
 
@@ -80,16 +74,7 @@ def test_auth_headers_requires_base_url():
         client._auth_headers()
 
 
-def test_factory_resolves_secret_references(monkeypatch):
-    """Integration credentials may be OpenBao/env refs, not plaintext (S5)."""
-    from app.config import settings
+def test_global_settings_factory_is_removed():
     from app.services import crm_client as mod
 
-    monkeypatch.setenv("CRM_TOKEN_FOR_TEST", "resolved-svc-key")
-    original = settings.crm_service_token
-    object.__setattr__(settings, "crm_service_token", "env://CRM_TOKEN_FOR_TEST")
-    try:
-        client = mod.get_crm_client(db=object())
-        assert client.service_token == "resolved-svc-key"
-    finally:
-        object.__setattr__(settings, "crm_service_token", original)
+    assert not hasattr(mod, "get_crm_client")
