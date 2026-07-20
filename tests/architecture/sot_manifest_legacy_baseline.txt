@@ -1,7 +1,6 @@
 # Registered services that are indexed but do not yet have a complete typed
 # ServiceContract. This is migration debt, not an ownership exemption. New
 # entries are forbidden and this sorted baseline must only shrink.
-access.control_resolution
 access.radius_projection
 access.radius_reject
 access.radius_state
@@ -49,7 +48,6 @@ customer.usage_summary
 events.dispatcher
 events.store
 events.webhook_deliveries
-financial.access_resolution
 financial.account_credit_applications
 financial.account_credit_deposits
 financial.addon_purchases

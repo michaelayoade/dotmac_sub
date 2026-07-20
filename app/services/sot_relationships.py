@@ -1412,6 +1412,183 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "financial.billing_profile",
                     "financial.prepaid_threshold",
                     "customer.financial_position",
+                    "access.subscription_lifecycle",
+                    "access.walled_garden_policy",
+                    "control.settings_spec",
+                ),
+                notes=(
+                    "One read-only policy owner resolves customer-impact, billing, "
+                    "prepaid funding, and RADIUS answers from the same account and "
+                    "subscription evidence. The former access.control_resolution "
+                    "registry alias and customer_service_state implementation are "
+                    "retired."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="billable service classification",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical subscriber account state",
+                                "canonical subscription lifecycle state",
+                                "canonical billing profile",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="RADIUS access decision",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical subscriber account state",
+                                "canonical subscription lifecycle state",
+                                "canonical access restriction intent",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="financial suspension/restoration eligibility",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical subscriber account state",
+                                "canonical subscription lifecycle state",
+                                "canonical billing profile",
+                                "currency-bound customer financial position",
+                                "canonical prepaid threshold",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="currency-bound prepaid funding decision",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "currency-bound customer financial position",
+                                "canonical prepaid threshold",
+                                "prepaid enforcement currency setting",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical subscriber account state",
+                            owner="customer.accounts",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "Subscriber identity, lifecycle, active, billing-enabled, "
+                                "and billing-mode fields"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical subscription lifecycle state",
+                            owner="access.subscription_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "Subscription identity, status, account, and billing mode"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical access restriction intent",
+                            owner="access.walled_garden_policy",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "effective hard-reject or captive restriction resolved "
+                                "from canonical enforcement locks and readiness"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical billing profile",
+                            owner="financial.billing_profile",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "resolved prepaid/postpaid mode and automation safety"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="currency-bound customer financial position",
+                            owner="customer.financial_position",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "native prepaid funding position in the requested "
+                                "currency"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical prepaid threshold",
+                            owner="financial.prepaid_threshold",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "currency-matched minimum balance and unfunded renewal "
+                                "requirement"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="prepaid enforcement currency setting",
+                            owner="control.settings_spec",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="typed billing.prepaid_enforcement_currency value",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary=(
+                            "Caller creates and closes the session. Resolution reads "
+                            "canonical rows and settings, or resolves an already-loaded "
+                            "typed subscription, without writes or transaction completion."
+                        ),
+                        locking=(
+                            "No row lock; each decision reflects the authoritative input "
+                            "snapshot visible to the caller transaction."
+                        ),
+                        idempotency=(
+                            "The same account, subscription, restriction, currency, and "
+                            "visible financial snapshot produce the same outcome."
+                        ),
+                        retries=(
+                            "Callers may retry transient reads. Invalid currency evidence "
+                            "is terminal until the canonical setting or request is fixed."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=("financial.access_resolution.invalid_currency",),
+                        mapping_owner=(
+                            "billing, lifecycle, RADIUS, reporting, and task adapters"
+                        ),
+                        fail_closed_on=(
+                            "missing or invalid prepaid enforcement currency",
+                            "missing, inactive, blocked, or ambiguous account state",
+                            "currency mismatch in funding inputs",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "duplicate access.control_resolution registry alias plus "
+                            "customer_service_state billing/RADIUS implementation"
+                        ),
+                        new_owner="financial.access_resolution",
+                        verification=(
+                            "Billing, prepaid, lifecycle, RADIUS, SQL-filter parity, "
+                            "invalid-currency, and architecture tests."
+                        ),
+                        cutover_gate=(
+                            "All application decision and cohort callers import the "
+                            "canonical owner; customer_service_state retains only outage "
+                            "and support observations."
+                        ),
+                        fallback_retirement=(
+                            "The duplicate registry service, re-export facade, untyped "
+                            "account identifier, ValueError, and second decision "
+                            "implementation are removed."
+                        ),
+                    ),
+                    steward="billing and network access",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/audits/BILLING_SOT_AUDIT_2026-07-12.md",
+                        "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
+                    ),
+                    test_refs=(
+                        "tests/test_access_resolution.py",
+                        "tests/test_customer_service_state.py",
+                        "tests/test_prepaid_threshold_resolver.py",
+                        "tests/architecture/test_access_resolution_boundary.py",
+                    ),
                 ),
             ),
             SOTService(
@@ -6318,15 +6495,6 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
-                name="access.control_resolution",
-                module="app.services.access_resolution",
-                owns=(
-                    "access-state command resolution",
-                    "billable-service access eligibility",
-                ),
-                depends_on=("financial.billing_profile",),
-            ),
-            SOTService(
                 name="access.event_policy",
                 module="app.services.enforcement_event_policy",
                 owns=(
@@ -6478,7 +6646,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.radius_access_state",
                 owns=("desired RADIUS state mapping", "RADIUS group/profile actions"),
                 depends_on=(
-                    "access.control_resolution",
+                    "financial.access_resolution",
                     "access.walled_garden_policy",
                 ),
             ),

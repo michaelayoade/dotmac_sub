@@ -507,6 +507,11 @@ This is the *same failure mode* as the `prepaid_monthly_invoicing_enabled` bug f
 `access.control_resolution` is likewise not a decision owner — it has four read-side callers
 and **zero** billing/dunning/prepaid/admin/payment callers.
 
+> Refactor closure (2026-07-20): the duplicate `access.control_resolution`
+> registry alias is removed. `financial.access_resolution` now owns the typed
+> billing, prepaid-funding, and RADIUS decision implementation; the historical
+> finding above is retained as cutover evidence.
+
 Meanwhile **four writers** actually reach the external RADIUS DB: `radius_population.populate()`
 (the resolver-based one, self-declared sole writer), `radius.py::_external_sync_users:1165`
 (its own divergent status→radcheck rules — `blocked` gets no rows; ignores `subscriber.status`

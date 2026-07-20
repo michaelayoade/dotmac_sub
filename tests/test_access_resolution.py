@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import uuid
+from decimal import Decimal
 from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+import pytest
 
 from app.models.catalog import AccessState, BillingMode, SubscriptionStatus
 from app.models.subscriber import SubscriberStatus
+from app.services import access_resolution
 from app.services.access_resolution import resolve_customer_access
 
 
@@ -107,3 +112,28 @@ def test_access_resolution_accepts_canonical_captive_mode():
     assert decision.radius_access_state == AccessState.captive
     assert decision.radius_allowed is True
     assert decision.radius_mode == "captive"
+
+
+def test_invalid_prepaid_currency_raises_stable_domain_error(monkeypatch):
+    monkeypatch.setattr(
+        access_resolution.settings_spec,
+        "resolve_value",
+        lambda *_args: "not-a-currency",
+    )
+
+    with pytest.raises(access_resolution.AccessResolutionError) as captured:
+        access_resolution.resolve_prepaid_enforcement_currency(MagicMock())
+
+    assert captured.value.code == "financial.access_resolution.invalid_currency"
+
+
+def test_prepaid_funding_decision_normalizes_currency():
+    decision = access_resolution.PrepaidFundingDecision(
+        account_id=str(uuid.uuid4()),
+        available_balance=Decimal("10.00"),
+        required_balance=Decimal("5.00"),
+        currency="ngn",
+    )
+
+    assert decision.currency == "NGN"
+    assert decision.funded is True

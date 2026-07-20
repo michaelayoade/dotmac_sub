@@ -435,6 +435,9 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "financial.billing_profile",
         "financial.prepaid_threshold",
         "customer.financial_position",
+        "access.subscription_lifecycle",
+        "access.walled_garden_policy",
+        "control.settings_spec",
     )
     assert sot_relationships.dependencies_for("customer.financial_position") == (
         "financial.ledger",
@@ -672,7 +675,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "runtime.db_sessions",
     )
     assert sot_relationships.dependencies_for("access.radius_state") == (
-        "access.control_resolution",
+        "financial.access_resolution",
         "access.walled_garden_policy",
     )
     assert sot_relationships.dependencies_for("access.radius_projection") == (

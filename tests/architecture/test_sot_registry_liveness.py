@@ -136,7 +136,6 @@ def test_no_module_is_declared_under_unexpected_owner_names() -> None:
 
     duplicates = {module: names for module, names in seen.items() if len(names) > 1}
     known = {
-        "app.services.access_resolution",
         "app.services.catalog.subscriptions",
         "app.services.domain_settings",
         "app.services.enforcement",

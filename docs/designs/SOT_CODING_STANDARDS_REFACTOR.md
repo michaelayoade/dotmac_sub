@@ -26,7 +26,7 @@ adapter files. The executable registry contains 28 domains and 233 service
 entries. Its one exact duplicate concern claim has been split into distinct
 observation-evidence and customer-resolution concerns.
 
-Typed manifest migration now has 27 fully contracted services and 220 indexed
+Typed manifest migration now has 28 fully contracted services and 218 indexed
 legacy services in a shrink-only baseline. New registry services cannot
 be added without role-qualified concerns, authoritative inputs, transaction and
 error semantics, migration state, stewardship, checked-in evidence, and any
@@ -141,6 +141,13 @@ invalid event action evidence, invalid setting values, and missing or malformed
 throttle-profile evidence fail with stable domain errors instead of silently
 falling back or skipping enforcement. Invoice-overdue events remain
 observations, with every consequence owned by financial dunning.
+
+The completed access-resolution slice is `financial.access_resolution`. The
+duplicate `access.control_resolution` registry identity is removed, and
+`customer_service_state` retains only outage/support observations. Customer
+impact, invoice eligibility, prepaid enforcement, funding, and RADIUS callers
+now consume one typed decision implementation. Currency validation raises a
+stable domain error; no caller compares amounts under a local currency default.
 
 The current completed access slice is `auth.system_user_assignments`. It is the
 only application writer for system-user role and direct-permission grants. Local
