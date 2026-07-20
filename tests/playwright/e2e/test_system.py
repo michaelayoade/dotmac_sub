@@ -98,7 +98,7 @@ class TestWebhooks:
         page.goto()
         page.expect_loaded()
         expect(
-            admin_page.get_by_role("heading", name="Webhook Endpoints", exact=True)
+            admin_page.get_by_text("Total Endpoints", exact=True)
             .or_(admin_page.get_by_text("No webhook endpoints configured", exact=True))
             .first
         ).to_be_visible()

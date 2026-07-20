@@ -155,7 +155,6 @@ def test_payment_and_overdue_events_are_independent_fanout_consequences():
         _handler("EnforcementHandler"),
         _handler("NotificationHandler"),
         _handler("WebhookHandler"),
-        _handler("IntegrationHookHandler"),
     ]
 
     for event_type in (EventType.payment_received, EventType.invoice_overdue):
@@ -167,7 +166,6 @@ def test_payment_and_overdue_events_are_independent_fanout_consequences():
 def test_activation_plan_keeps_state_peers_independent_and_stages_outputs():
     handlers = validate_and_order_handlers(
         [
-            _handler("IntegrationHookHandler"),
             _handler("WebhookHandler"),
             _handler("NotificationHandler"),
             _handler("EnforcementHandler"),
@@ -191,7 +189,6 @@ def test_activation_plan_keeps_state_peers_independent_and_stages_outputs():
         "EnforcementHandler",
     }
     assert "NotificationHandler" in by_name["WebhookHandler"].dependencies
-    assert "NotificationHandler" in by_name["IntegrationHookHandler"].dependencies
 
 
 def test_chained_state_failure_does_not_block_independent_state_peer():
@@ -218,18 +215,18 @@ def test_chained_state_failure_does_not_block_independent_state_peer():
 def test_dispatcher_skips_handlers_outside_their_event_scope():
     arrangement = _handler("ArrangementHandler")
     arrangement.handle = MagicMock()
-    integration = _handler("IntegrationHookHandler")
-    integration.handle = MagicMock()
+    unscoped = _handler("UnscopedHandler")
+    unscoped.handle = MagicMock()
     dispatcher = EventDispatcher()
     dispatcher.register_handler(arrangement)
-    dispatcher.register_handler(integration)
+    dispatcher.register_handler(unscoped)
 
     dispatcher.dispatch(
         MagicMock(), Event(event_type=EventType.subscriber_created, payload={})
     )
 
     arrangement.handle.assert_not_called()
-    integration.handle.assert_called_once()
+    unscoped.handle.assert_called_once()
 
 
 def test_retry_runs_failed_predecessor_before_blocked_dependent():
@@ -281,7 +278,7 @@ def test_event_policy_manifest_and_scopes_are_executable():
     handlers = [type(name, (), {})() for name in event_topology_handler_names()]
     validate_event_execution_policy(handlers)
 
-    assert handler_event_types("IntegrationHookHandler") is None
+    assert handler_event_types("WebhookHandler") is None
     assert EventType.payment_received.value in (
         handler_event_types("ArrangementHandler") or frozenset()
     )

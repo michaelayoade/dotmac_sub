@@ -5,7 +5,6 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.logging import get_logger
-from app.models.connector import ConnectorConfig
 from app.models.integration import (
     IntegrationJob,
     IntegrationJobType,
@@ -14,6 +13,11 @@ from app.models.integration import (
     IntegrationScheduleType,
     IntegrationTarget,
     IntegrationTargetType,
+)
+from app.models.integration_platform import (
+    IntegrationBindingState,
+    IntegrationCapabilityBinding,
+    IntegrationInstallationState,
 )
 from app.schemas.integration import (
     IntegrationJobCreate,
@@ -34,15 +38,26 @@ logger = logging.getLogger(__name__)
 logger = get_logger(__name__)
 
 
+def _require_job_binding(
+    db: Session, binding_id, *, active: bool
+) -> IntegrationCapabilityBinding:
+    binding = db.get(IntegrationCapabilityBinding, binding_id)
+    if binding is None:
+        raise HTTPException(status_code=404, detail="Capability binding not found")
+    if active and (
+        binding.state != IntegrationBindingState.enabled.value
+        or binding.installation.state != IntegrationInstallationState.enabled.value
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Active jobs require an enabled installation capability",
+        )
+    return binding
+
+
 class IntegrationTargets(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: IntegrationTargetCreate):
-        if payload.connector_config_id:
-            config = db.get(ConnectorConfig, payload.connector_config_id)
-            if not config:
-                raise HTTPException(
-                    status_code=404, detail="Connector config not found"
-                )
         target = IntegrationTarget(**payload.model_dump())
         db.add(target)
         db.commit()
@@ -119,12 +134,6 @@ class IntegrationTargets(ListResponseMixin):
         if not target:
             raise HTTPException(status_code=404, detail="Integration target not found")
         data = payload.model_dump(exclude_unset=True)
-        if "connector_config_id" in data and data["connector_config_id"]:
-            config = db.get(ConnectorConfig, data["connector_config_id"])
-            if not config:
-                raise HTTPException(
-                    status_code=404, detail="Connector config not found"
-                )
         for key, value in data.items():
             setattr(target, key, value)
         db.commit()
@@ -146,6 +155,9 @@ class IntegrationJobs(ListResponseMixin):
         target = db.get(IntegrationTarget, payload.target_id)
         if not target:
             raise HTTPException(status_code=404, detail="Integration target not found")
+        _require_job_binding(
+            db, payload.capability_binding_id, active=payload.is_active
+        )
         job = IntegrationJob(**payload.model_dump())
         db.add(job)
         db.commit()
@@ -244,6 +256,15 @@ class IntegrationJobs(ListResponseMixin):
                 raise HTTPException(
                     status_code=404, detail="Integration target not found"
                 )
+        binding_id = data.get("capability_binding_id", job.capability_binding_id)
+        active = bool(data.get("is_active", job.is_active))
+        if binding_id is not None:
+            _require_job_binding(db, binding_id, active=active)
+        elif active:
+            raise HTTPException(
+                status_code=409,
+                detail="Active jobs require a capability binding",
+            )
         for key, value in data.items():
             setattr(job, key, value)
         db.commit()
@@ -274,6 +295,11 @@ class IntegrationJobs(ListResponseMixin):
             # copy-pasted EMAIL_POLL message) and fell through to execute.
             logger.info(
                 "integration_job_disabled job_id=%s trigger=%s", job_id, trigger
+            )
+        if job.capability_binding_id is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Integration job has no capability binding",
             )
             raise HTTPException(
                 status_code=409,

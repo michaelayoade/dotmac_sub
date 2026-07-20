@@ -73,7 +73,7 @@ from app.services.customer_notification_policy import (
     quiet_hours_send_at,
     resolve_notification_category,
 )
-from app.services.integrations.connectors import whatsapp as whatsapp_connector
+from app.services.integrations import whatsapp_capability
 from app.services.notification_template_conditions import (
     NotificationTemplateConditionError,
     conditions_match,
@@ -1098,7 +1098,7 @@ def _whatsapp_registry_template(db: Session, template_id: str) -> dict[str, str]
     if not parsed:
         return None
     name, language = parsed
-    config = whatsapp_connector.load_whatsapp_config(db)
+    config = whatsapp_capability.active_config(db)
     for item in config.get("templates") or []:
         item_name = str(item.get("name") or "").strip()
         item_language = str(item.get("language") or "").strip() or "en"
@@ -1137,7 +1137,7 @@ def _notification_template_for_whatsapp(
 def whatsapp_template_details(
     db: Session, *, name: str, language: str | None
 ) -> dict[str, Any]:
-    return whatsapp_connector.fetch_template_details(
+    return whatsapp_capability.fetch_template_details(
         db,
         template_name=name.strip(),
         language=(language or "").strip() or None,

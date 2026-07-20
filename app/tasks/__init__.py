@@ -33,7 +33,6 @@ from app.tasks.catalog import (
 )
 from app.tasks.channel_health import observe_channel_health
 from app.tasks.collections import prepaid_balance_sweep
-from app.tasks.crm_native_sync import pull_crm_phase3_native_delta
 from app.tasks.crm_ticket_pull import (
     pull_crm_tickets,
     sync_crm_ticket,
@@ -67,6 +66,7 @@ from app.tasks.infrastructure_availability import (
     snapshot_infrastructure_availability,
 )
 from app.tasks.infrastructure_polling import run_infrastructure_poll
+from app.tasks.integration_delivery import deliver_integration_event
 from app.tasks.integrations import run_integration_job
 from app.tasks.invoice_pdf import generate_invoice_pdf_export
 from app.tasks.ip_utilization import (
@@ -205,10 +205,6 @@ from app.tasks.usage import (
 )
 from app.tasks.vacation_holds import resume_expired_holds
 from app.tasks.vpn import run_vpn_control_job, run_vpn_health_scan
-from app.tasks.webhooks import (
-    deliver_webhook,
-    retry_failed_deliveries,
-)
 from app.tasks.wireguard import (
     cleanup_connection_logs as cleanup_wireguard_logs,
 )
@@ -229,6 +225,7 @@ __all__ = [
     "run_batch_geocode_job",
     "run_import_job",
     "run_integration_job",
+    "deliver_integration_event",
     "process_due_campaigns",
     "process_due_campaign_steps",
     "send_campaign_batch",
@@ -251,7 +248,6 @@ __all__ = [
     "check_billing_switch_task",
     "pull_crm_tickets",
     "sync_crm_ticket",
-    "pull_crm_phase3_native_delta",
     "auto_confirm_resolved_tickets",
     "retry_failed_inbox_outbound_messages",
     "promote_inbox_message_media_assets",
@@ -300,8 +296,6 @@ __all__ = [
     "sync_device_login",
     "run_vpn_control_job",
     "run_vpn_health_scan",
-    "deliver_webhook",
-    "retry_failed_deliveries",
     "deliver_notification_queue",
     "observe_channel_health",
     "snapshot_mrr",

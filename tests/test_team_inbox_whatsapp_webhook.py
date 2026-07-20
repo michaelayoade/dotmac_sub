@@ -11,10 +11,46 @@ from fastapi import HTTPException
 from starlette.requests import Request
 
 from app.api import inbox_webhooks
+from app.models.integration_platform import IntegrationInbox
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.models.team_inbox import InboxConversation, InboxMessage, InboxMessageDirection
+from app.services.integrations import installations
+from app.services.integrations.runtime import ValidationResult
+from app.services.integrations.whatsapp_capability import (
+    WHATSAPP_RECEIVE_CAPABILITY,
+    WHATSAPP_SEND_CAPABILITY,
+)
 
 META_TEST_SECRET = "meta-secret"  # pragma: allowlist secret
+
+
+@pytest.fixture(autouse=True)
+def _enabled_whatsapp_installation(db_session):
+    installation = installations.create_draft(
+        db_session,
+        connector_key="whatsapp",
+        name="WhatsApp webhook test",
+        environment="test",
+    )
+    installations.create_config_revision(
+        db_session,
+        installation_id=installation.id,
+        config={"provider": "meta_cloud_api", "phone_number": "phone-1"},
+        secret_refs={"service_credentials": "env://WHATSAPP_TEST_TOKEN"},
+    )
+    for capability_id in (WHATSAPP_SEND_CAPABILITY, WHATSAPP_RECEIVE_CAPABILITY):
+        installations.bind_capability(
+            db_session,
+            installation_id=installation.id,
+            capability_id=capability_id,
+            policy={"default": True},
+        )
+    installations.validate_static(db_session, installation_id=installation.id)
+    installations.enable_after_connection_validation(
+        db_session,
+        installation_id=installation.id,
+        connection_result=ValidationResult(valid=True),
+    )
 
 
 def _run_async(coro):
@@ -165,6 +201,18 @@ def test_meta_whatsapp_webhook_creates_native_inbox_message(db_session, monkeypa
     assert conversation.contact_address == "+2348035550114"
     assert message.external_message_id == "wamid.meta-1"
     assert message.body == "My internet is down"
+    receipt = db_session.query(IntegrationInbox).one()
+    assert receipt.state == "processed"
+    assert receipt.consequence_json["processed"] == 1
+
+    replay = _run_async(
+        inbox_webhooks.receive_meta_whatsapp_webhook(
+            _request(body, {"X-Hub-Signature-256": _sign(body)}), db_session
+        )
+    )
+    assert replay == receipt.consequence_json
+    assert db_session.query(InboxMessage).count() == 1
+    assert db_session.query(IntegrationInbox).count() == 1
 
 
 def test_meta_whatsapp_webhook_preserves_media_message(db_session, monkeypatch):

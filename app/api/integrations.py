@@ -1,20 +1,439 @@
-from fastapi import APIRouter, Depends, Query, status
+from collections.abc import Callable
+from typing import Any, TypeVar
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
+from app.api.deps import get_current_user
 from app.db import get_db
+from app.models.integration_platform import IntegrationInstallationState
 from app.schemas.common import ListResponse
 from app.schemas.integration import (
+    IntegrationCapabilityBindingRead,
+    IntegrationCapabilityBindingUpsert,
+    IntegrationConfigRevisionCreate,
+    IntegrationConfigRevisionRead,
+    IntegrationDeliveryRead,
+    IntegrationEventSubscriptionCreate,
+    IntegrationEventSubscriptionRead,
+    IntegrationInboxRead,
+    IntegrationInstallationCreate,
+    IntegrationInstallationRead,
     IntegrationJobCreate,
     IntegrationJobRead,
     IntegrationJobUpdate,
+    IntegrationLifecycleCommand,
     IntegrationRunRead,
     IntegrationTargetCreate,
     IntegrationTargetRead,
     IntegrationTargetUpdate,
 )
 from app.services import integration as integration_service
+from app.services.integrations import delivery as integration_delivery
+from app.services.integrations import inbox as integration_inbox
+from app.services.integrations import installations
+from app.services.integrations.runtime import ValidationResult
+from app.services.integrations.runtime_execution import (
+    RuntimeExecutionError,
+    build_execution_context,
+    validate_connection,
+)
 
 router = APIRouter(prefix="/integrations", tags=["integrations"])
+T = TypeVar("T")
+
+
+def _operator_id(principal: dict[str, Any]) -> str:
+    for key in ("sub", "user_id", "username", "email"):
+        value = principal.get(key)
+        if value:
+            return str(value)[:160]
+    return "authenticated-admin"
+
+
+def _installation_command(db: Session, command: Callable[[], T]) -> T:
+    try:
+        value = command()
+        db.commit()
+        return value
+    except KeyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except installations.InstallationError as exc:
+        db.rollback()
+        code = 404 if "not found" in str(exc) else 400
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
+    except RuntimeExecutionError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _delivery_command(db: Session, command: Callable[[], T]) -> T:
+    try:
+        value = command()
+        db.commit()
+        return value
+    except integration_delivery.DeliveryError as exc:
+        db.rollback()
+        code = 404 if "not found" in str(exc) else 409
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
+
+
+def _inbox_command(db: Session, command: Callable[[], T]) -> T:
+    try:
+        value = command()
+        db.commit()
+        return value
+    except integration_inbox.InboxError as exc:
+        db.rollback()
+        code = 404 if "not found" in str(exc) else 409
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
+
+
+@router.post(
+    "/installations",
+    response_model=IntegrationInstallationRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_integration_installation(
+    payload: IntegrationInstallationCreate,
+    db: Session = Depends(get_db),
+    principal: dict[str, Any] = Depends(get_current_user),
+):
+    return _installation_command(
+        db,
+        lambda: installations.create_draft(
+            db,
+            connector_key=payload.connector_key,
+            name=payload.name,
+            environment=payload.environment,
+            actor=_operator_id(principal),
+        ),
+    )
+
+
+@router.get("/installations", response_model=list[IntegrationInstallationRead])
+def list_integration_installations(
+    connector_key: str | None = None,
+    state_filter: IntegrationInstallationState | None = Query(
+        default=None, alias="state"
+    ),
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    return installations.list_installations(
+        db,
+        connector_key=connector_key,
+        state=state_filter,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get(
+    "/installations/{installation_id}",
+    response_model=IntegrationInstallationRead,
+)
+def get_integration_installation(
+    installation_id: str,
+    db: Session = Depends(get_db),
+):
+    try:
+        return installations.get_installation(db, installation_id)
+    except installations.InstallationError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post(
+    "/installations/{installation_id}/config-revisions",
+    response_model=IntegrationConfigRevisionRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_integration_config_revision(
+    installation_id: str,
+    payload: IntegrationConfigRevisionCreate,
+    db: Session = Depends(get_db),
+    principal: dict[str, Any] = Depends(get_current_user),
+):
+    return _installation_command(
+        db,
+        lambda: installations.create_config_revision(
+            db,
+            installation_id=installation_id,
+            config=payload.config,
+            secret_refs=payload.secret_refs,
+            schema_version=payload.schema_version,
+            actor=_operator_id(principal),
+        ),
+    )
+
+
+@router.put(
+    "/installations/{installation_id}/capabilities/{capability_id}",
+    response_model=IntegrationCapabilityBindingRead,
+)
+def bind_integration_capability(
+    installation_id: str,
+    capability_id: str,
+    payload: IntegrationCapabilityBindingUpsert,
+    db: Session = Depends(get_db),
+    principal: dict[str, Any] = Depends(get_current_user),
+):
+    return _installation_command(
+        db,
+        lambda: installations.bind_capability(
+            db,
+            installation_id=installation_id,
+            capability_id=capability_id,
+            scope=payload.scope,
+            policy=payload.policy,
+            actor=_operator_id(principal),
+        ),
+    )
+
+
+@router.post(
+    "/installations/{installation_id}/validate-static",
+    response_model=ValidationResult,
+)
+def validate_integration_installation_static(
+    installation_id: str,
+    db: Session = Depends(get_db),
+    principal: dict[str, Any] = Depends(get_current_user),
+):
+    return _installation_command(
+        db,
+        lambda: installations.validate_static(
+            db,
+            installation_id=installation_id,
+            actor=_operator_id(principal),
+        ),
+    )
+
+
+@router.post(
+    "/installations/{installation_id}/validate-connection",
+    response_model=ValidationResult,
+)
+def validate_integration_installation_connection(
+    installation_id: str,
+    db: Session = Depends(get_db),
+    principal: dict[str, Any] = Depends(get_current_user),
+):
+    actor = _operator_id(principal)
+
+    def command() -> ValidationResult:
+        static_result = installations.validate_static(
+            db,
+            installation_id=installation_id,
+            actor=actor,
+        )
+        if not static_result.valid:
+            return static_result
+        installation = installations.get_installation(db, installation_id)
+        results = []
+        for binding in installation.capability_bindings:
+            context = build_execution_context(
+                db,
+                capability_binding_id=binding.id,
+                allow_disabled=True,
+            )
+            results.append(validate_connection(context))
+        failed_codes = tuple(
+            code
+            for result in results
+            if not result.valid
+            for code in result.error_codes
+        )
+        if failed_codes:
+            return ValidationResult(valid=False, error_codes=failed_codes)
+        installations.enable_after_connection_validation(
+            db,
+            installation_id=installation.id,
+            connection_result=ValidationResult(valid=True),
+            actor=actor,
+        )
+        return ValidationResult(valid=True)
+
+    return _installation_command(db, command)
+
+
+@router.post(
+    "/installations/{installation_id}/disable",
+    response_model=IntegrationInstallationRead,
+)
+def disable_integration_installation(
+    installation_id: str,
+    payload: IntegrationLifecycleCommand,
+    db: Session = Depends(get_db),
+    principal: dict[str, Any] = Depends(get_current_user),
+):
+    return _installation_command(
+        db,
+        lambda: installations.disable_installation(
+            db,
+            installation_id=installation_id,
+            reason=payload.reason,
+            actor=_operator_id(principal),
+        ),
+    )
+
+
+@router.post(
+    "/installations/{installation_id}/quarantine",
+    response_model=IntegrationInstallationRead,
+)
+def quarantine_integration_installation(
+    installation_id: str,
+    payload: IntegrationLifecycleCommand,
+    db: Session = Depends(get_db),
+    principal: dict[str, Any] = Depends(get_current_user),
+):
+    return _installation_command(
+        db,
+        lambda: installations.quarantine_installation(
+            db,
+            installation_id=installation_id,
+            reason=payload.reason,
+            actor=_operator_id(principal),
+        ),
+    )
+
+
+@router.post(
+    "/installations/{installation_id}/retire",
+    response_model=IntegrationInstallationRead,
+)
+def retire_integration_installation(
+    installation_id: str,
+    payload: IntegrationLifecycleCommand,
+    db: Session = Depends(get_db),
+    principal: dict[str, Any] = Depends(get_current_user),
+):
+    return _installation_command(
+        db,
+        lambda: installations.retire_installation(
+            db,
+            installation_id=installation_id,
+            reason=payload.reason,
+            actor=_operator_id(principal),
+        ),
+    )
+
+
+@router.post(
+    "/event-subscriptions",
+    response_model=IntegrationEventSubscriptionRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_integration_event_subscription(
+    payload: IntegrationEventSubscriptionCreate,
+    db: Session = Depends(get_db),
+    principal: dict[str, Any] = Depends(get_current_user),
+):
+    return _delivery_command(
+        db,
+        lambda: integration_delivery.create_event_subscription(
+            db,
+            capability_binding_id=payload.capability_binding_id,
+            event_type=payload.event_type,
+            filter_json=payload.filter_json,
+            payload_policy_json=payload.payload_policy_json,
+            actor=_operator_id(principal),
+        ),
+    )
+
+
+@router.get("/deliveries", response_model=list[IntegrationDeliveryRead])
+def list_integration_deliveries(
+    state_filter: str | None = Query(default=None, alias="state", max_length=40),
+    capability_binding_id: UUID | None = None,
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    return integration_delivery.list_deliveries(
+        db,
+        state=state_filter,
+        capability_binding_id=capability_binding_id,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.post(
+    "/deliveries/{delivery_id}/replay",
+    response_model=IntegrationDeliveryRead,
+)
+def replay_integration_delivery(
+    delivery_id: UUID,
+    db: Session = Depends(get_db),
+):
+    delivery = _delivery_command(
+        db,
+        lambda: integration_delivery.replay_delivery(
+            db,
+            delivery_id=delivery_id,
+        ),
+    )
+    from app.services.queue_adapter import enqueue_task
+    from app.tasks.integration_delivery import deliver_integration_event
+
+    enqueue_task(
+        deliver_integration_event,
+        args=[str(delivery.id)],
+        correlation_id=f"integration-delivery-replay:{delivery.id}",
+        source="integration.delivery.operator",
+    )
+    return delivery
+
+
+@router.get("/inbox", response_model=list[IntegrationInboxRead])
+def list_integration_inbox(
+    state_filter: str | None = Query(default=None, alias="state", max_length=24),
+    capability_binding_id: UUID | None = None,
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    _principal: dict[str, Any] = Depends(get_current_user),
+):
+    return _inbox_command(
+        db,
+        lambda: integration_inbox.list_receipts(
+            db,
+            state=state_filter,
+            capability_binding_id=capability_binding_id,
+            limit=limit,
+            offset=offset,
+        ),
+    )
+
+
+@router.get("/inbox/{receipt_id}", response_model=IntegrationInboxRead)
+def get_integration_inbox_receipt(
+    receipt_id: UUID,
+    db: Session = Depends(get_db),
+    _principal: dict[str, Any] = Depends(get_current_user),
+):
+    return _inbox_command(
+        db,
+        lambda: integration_inbox.get_receipt(db, receipt_id=receipt_id),
+    )
+
+
+@router.post("/inbox/{receipt_id}/replay", response_model=IntegrationInboxRead)
+def replay_integration_inbox_receipt(
+    receipt_id: UUID,
+    db: Session = Depends(get_db),
+    _principal: dict[str, Any] = Depends(get_current_user),
+):
+    """Authorize a failed receipt for the provider's next idempotent redelivery."""
+    return _inbox_command(
+        db,
+        lambda: integration_inbox.replay_receipt(db, receipt_id=receipt_id),
+    )
 
 
 @router.post(
