@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
 from app.models.audit import AuditActorType
-from app.models.catalog import Subscription
+from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.subscriber import SubscriberCategory
 from app.services import catalog as catalog_service
 from app.services import subscriber as subscriber_service
@@ -46,6 +46,51 @@ from app.services.subscription_lifecycle_schedules import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+_CREATE_LIFECYCLE_COMMANDS = {
+    SubscriptionStatus.active: SubscriptionCommandKind.activate,
+    SubscriptionStatus.suspended: SubscriptionCommandKind.suspend,
+    SubscriptionStatus.disabled: SubscriptionCommandKind.disable,
+    SubscriptionStatus.canceled: SubscriptionCommandKind.cancel,
+}
+
+
+def _apply_requested_create_lifecycle(
+    db: Session,
+    *,
+    created: Subscription,
+    requested_status: SubscriptionStatus,
+    actor_id: str | None,
+) -> str | None:
+    """Apply the selected post-create lifecycle action through its owner."""
+    if requested_status == SubscriptionStatus.pending:
+        return None
+
+    source = f"admin:catalog:{actor_id or 'system'}"
+    reason = f"Selected {requested_status.value} during subscription creation"
+    command_kind = _CREATE_LIFECYCLE_COMMANDS[requested_status]
+    snapshot = resolve_subscription_lifecycle(db, str(created.id))
+    command = SubscriptionLifecycleCommand(
+        subscription_id=str(created.id),
+        kind=command_kind,
+        source=source,
+        reason=reason,
+        expected_head=snapshot.head,
+        idempotency_key=f"admin-create-{command_kind.value}:{created.id}",
+    )
+    outcome = execute_subscription_command(
+        db,
+        command,
+        actor_id=actor_id,
+        actor_type=(AuditActorType.user if actor_id else AuditActorType.system),
+    )
+    if outcome.status not in {
+        SubscriptionCommandOutcomeStatus.applied,
+        SubscriptionCommandOutcomeStatus.skipped,
+    }:
+        return outcome.message
+    return None
 
 
 def preview_lifecycle_command_response(
@@ -474,32 +519,21 @@ def handle_subscription_create_form(
             request,
             actor_id,
         )
-        if form.get("activate_immediately") == "1":
-            snapshot = resolve_subscription_lifecycle(db, str(created.id))
-            command = SubscriptionLifecycleCommand(
-                subscription_id=str(created.id),
-                kind=SubscriptionCommandKind.activate,
-                source=f"admin:catalog:{actor_id or 'system'}",
-                reason="Activate after subscription creation",
-                expected_head=snapshot.head,
-                idempotency_key=f"admin-create-activate:{created.id}",
-            )
-            outcome = execute_subscription_command(
-                db,
-                command,
-                actor_id=actor_id,
-                actor_type=(AuditActorType.user if actor_id else AuditActorType.system),
-            )
-            if outcome.status not in {
-                SubscriptionCommandOutcomeStatus.applied,
-                SubscriptionCommandOutcomeStatus.skipped,
-            }:
-                return {
-                    "redirect_url": (
-                        f"/admin/catalog/subscriptions/{created.id}"
-                        f"?error={quote_plus(outcome.message)}"
-                    )
-                }
+        lifecycle_error = _apply_requested_create_lifecycle(
+            db,
+            created=created,
+            requested_status=SubscriptionStatus(
+                str(subscription.get("requested_status") or "pending")
+            ),
+            actor_id=actor_id,
+        )
+        if lifecycle_error:
+            return {
+                "redirect_url": (
+                    f"/admin/catalog/subscriptions/{created.id}"
+                    f"?error={quote_plus(lifecycle_error)}"
+                )
+            }
         redirect_url = (
             customer_detail_url_for_subscriber_id(db, subscriber_id)
             if subscriber_id

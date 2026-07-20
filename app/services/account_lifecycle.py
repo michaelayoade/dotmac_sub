@@ -35,7 +35,7 @@ Usage::
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from sqlalchemy import select
@@ -107,7 +107,6 @@ SUSPENDED_EQUIVALENT = {
 _TERMINAL = {
     SubscriptionStatus.canceled,
     SubscriptionStatus.expired,
-    SubscriptionStatus.disabled,
     SubscriptionStatus.hidden,
     SubscriptionStatus.archived,
 }
@@ -219,7 +218,7 @@ def assert_legal_subscription_transition(
 ) -> None:
     """Compatibility wrapper for the shared lifecycle transition guard.
 
-    Terminal statuses (canceled/expired/disabled/hidden/archived) are sinks:
+    Terminal statuses (canceled/expired/hidden/archived) are sinks:
     once a subscription enters one, the only legal "transition" is to stay put.
     This is the single rule the raw catalog write path
     (``Subscriptions.update``) must not bypass — without it an admin/web edit
@@ -727,10 +726,10 @@ def disable_subscription(
     source: str,
     emit: bool = True,
 ) -> bool:
-    """Disable a subscription through the canonical terminal transition.
+    """Pause billing and access while preserving service assignments.
 
-    Returns ``False`` when the subscription is already disabled. Other terminal
-    states remain immutable and must not be rewritten as disabled.
+    Returns ``False`` when the subscription is already disabled. Terminal states
+    remain immutable and must not be rewritten as disabled.
     """
     subscription = db.execute(
         select(Subscription).where(Subscription.id == subscription_id).with_for_update()
@@ -746,32 +745,18 @@ def disable_subscription(
 
     resolved_count = resolve_all_locks(db, subscription, "disabled")
     previous_status = subscription.status
-    now = datetime.now(UTC)
     subscription.status = SubscriptionStatus.disabled
-    subscription.end_at = subscription.end_at or now
-    subscription.canceled_at = subscription.canceled_at or now
-    subscription.cancel_reason = reason
-    for sub_addon in db.scalars(
-        select(SubscriptionAddOn).where(
-            SubscriptionAddOn.subscription_id == subscription.id,
-            SubscriptionAddOn.end_at.is_(None),
-        )
-    ).all():
-        sub_addon.end_at = now
     db.flush()
-    _release_service_ips(db, subscription)
     compute_account_status(db, str(subscription.subscriber_id))
 
     if emit:
         emit_event(
             db,
-            EventType.subscription_canceled,
+            EventType.subscription_disabled,
             {
                 "subscription_id": str(subscription.id),
-                "cancel_reason": reason,
                 "reason": reason,
                 "source": source,
-                "action": "disabled",
                 "from_status": previous_status.value,
                 "to_status": SubscriptionStatus.disabled.value,
                 "offer_name": subscription.offer.name if subscription.offer else None,
@@ -786,6 +771,79 @@ def disable_subscription(
         source,
         resolved_count,
     )
+    return True
+
+
+def enable_subscription(
+    db: Session,
+    subscription_id: str,
+    *,
+    reason: str,
+    source: str,
+    emit: bool = True,
+) -> bool:
+    """Return a disabled subscription to active without rebuilding its service."""
+    subscription = db.execute(
+        select(Subscription).where(Subscription.id == subscription_id).with_for_update()
+    ).scalar_one_or_none()
+    if subscription is None:
+        raise ValueError(f"Subscription {subscription_id} not found")
+    if subscription.status != SubscriptionStatus.disabled:
+        return False
+    if reactivation_blocked_by_active_login(db, subscription):
+        compute_account_status(db, str(subscription.subscriber_id))
+        return False
+
+    from app.models.lifecycle import SubscriptionLifecycleEvent
+    from app.services.catalog.subscriptions import (
+        _compute_next_billing_at,
+        _resolve_billing_cycle,
+    )
+
+    resumed_at = datetime.now(UTC)
+    disabled_at = db.scalar(
+        select(SubscriptionLifecycleEvent.created_at)
+        .where(SubscriptionLifecycleEvent.subscription_id == subscription.id)
+        .where(SubscriptionLifecycleEvent.to_status == SubscriptionStatus.disabled)
+        .order_by(SubscriptionLifecycleEvent.created_at.desc())
+        .limit(1)
+    )
+    pause_started_at = disabled_at or subscription.updated_at or resumed_at
+    if pause_started_at.tzinfo is None:
+        pause_started_at = pause_started_at.replace(tzinfo=UTC)
+    paused_for = max(resumed_at - pause_started_at, timedelta(0))
+    cycle = subscription.billing_cycle or _resolve_billing_cycle(
+        db,
+        str(subscription.offer_id),
+        str(subscription.offer_version_id) if subscription.offer_version_id else None,
+    )
+    subscription.status = SubscriptionStatus.active
+    subscription.start_at = subscription.start_at or resumed_at
+    if subscription.next_billing_at:
+        next_billing_at = subscription.next_billing_at
+        if next_billing_at.tzinfo is None:
+            next_billing_at = next_billing_at.replace(tzinfo=UTC)
+        subscription.next_billing_at = next_billing_at + paused_for
+    else:
+        subscription.next_billing_at = _compute_next_billing_at(resumed_at, cycle)
+    db.flush()
+    compute_account_status(db, str(subscription.subscriber_id))
+    if emit:
+        emit_event(
+            db,
+            EventType.subscription_resumed,
+            {
+                "subscription_id": str(subscription.id),
+                "reason": reason,
+                "source": source,
+                "from_status": SubscriptionStatus.disabled.value,
+                "to_status": SubscriptionStatus.active.value,
+                "offer_name": subscription.offer.name if subscription.offer else None,
+            },
+            subscription_id=subscription.id,
+            account_id=subscription.subscriber_id,
+        )
+    logger.info("Subscription %s enabled by %s", subscription_id, source)
     return True
 
 
@@ -810,6 +868,14 @@ def transition_subscription_status(
         if subscription.status == SubscriptionStatus.pending:
             activate_subscription(db, subscription_id, emit=emit)
             return True
+        if subscription.status == SubscriptionStatus.disabled:
+            return enable_subscription(
+                db,
+                subscription_id,
+                reason=reason,
+                source=source,
+                emit=emit,
+            )
         if subscription.status in SUSPENDED_EQUIVALENT:
             return restore_subscription(
                 db,
@@ -870,7 +936,9 @@ def transition_account_status(
         )
         if target_status == SubscriberStatus.active:
             for subscription in subscriptions:
-                if subscription.status in SUSPENDED_EQUIVALENT:
+                if subscription.status in SUSPENDED_EQUIVALENT | {
+                    SubscriptionStatus.disabled
+                }:
                     transition_subscription_status(
                         db,
                         str(subscription.id),
@@ -1045,12 +1113,12 @@ def compute_account_status(db: Session, subscriber_id: str) -> SubscriberStatus:
       3. Any subscription blocked/stopped → blocked
       4. Any subscription pending → new
       5. All remaining subscriptions disabled → disabled
-      6. All terminal (canceled/expired/disabled/hidden/archived) → canceled
+      6. All terminal (canceled/expired/hidden/archived) → canceled
       7. No subscriptions → new
 
     ``delinquent`` is only reachable from the active branch by design: once a
     subscription is suspended/blocked the stronger status wins, and once all
-    are terminal the account is canceled/disabled. This makes the derivation
+    are terminal the account is canceled. This makes the derivation
     the single producer of ``delinquent`` (it was previously written
     out-of-band and silently clobbered here).
 

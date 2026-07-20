@@ -33,6 +33,7 @@ class EventType(enum.Enum):
     subscription_activated = "subscription.activated"
     subscription_suspended = "subscription.suspended"
     subscription_resumed = "subscription.resumed"
+    subscription_disabled = "subscription.disabled"
     subscription_canceled = "subscription.canceled"
     subscription_upgraded = "subscription.upgraded"
     subscription_downgraded = "subscription.downgraded"
@@ -196,6 +197,7 @@ SUBSCRIPTION_LIFECYCLE_MAP = {
     EventType.subscription_activated: "activate",
     EventType.subscription_suspended: "suspend",
     EventType.subscription_resumed: "resume",
+    EventType.subscription_disabled: "other",
     EventType.subscription_canceled: "cancel",
     EventType.subscription_upgraded: "upgrade",
     EventType.subscription_downgraded: "downgrade",

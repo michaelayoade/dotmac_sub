@@ -4,12 +4,14 @@ import uuid
 
 from app.models.catalog import (
     AccessType,
+    AddOn,
     BillingMode,
     CatalogOffer,
     OfferStatus,
     PriceBasis,
     ServiceType,
     Subscription,
+    SubscriptionAddOn,
     SubscriptionStatus,
 )
 from app.models.notification import (
@@ -183,6 +185,17 @@ def test_lifecycle_disable_and_lockless_admin_repair_are_canonical(db_session):
         subscriber,
         status=SubscriptionStatus.suspended,
     )
+    subscription.login = "retained-login"
+    subscription.ipv4_address = "10.90.0.10"
+    add_on = AddOn(name="Retained add-on", is_active=True)
+    db_session.add(add_on)
+    db_session.flush()
+    subscription_add_on = SubscriptionAddOn(
+        subscription_id=subscription.id,
+        add_on_id=add_on.id,
+    )
+    db_session.add(subscription_add_on)
+    db_session.flush()
 
     repaired = transition_subscription_status(
         db_session,
@@ -203,10 +216,30 @@ def test_lifecycle_disable_and_lockless_admin_repair_are_canonical(db_session):
     assert repaired is True
     assert disabled is True
     assert subscription.status == SubscriptionStatus.disabled
-    assert subscription.end_at is not None
-    assert subscription.canceled_at is not None
+    assert subscription.end_at is None
+    assert subscription.canceled_at is None
+    assert subscription.login == "retained-login"
+    assert subscription.ipv4_address == "10.90.0.10"
+    assert subscription_add_on.end_at is None
     assert subscriber.status == SubscriberStatus.disabled
     assert subscriber.is_active is False
+
+    enabled = transition_subscription_status(
+        db_session,
+        str(subscription.id),
+        SubscriptionStatus.active,
+        reason="Administrative reactivation",
+        source="admin:test",
+        emit=False,
+    )
+
+    assert enabled is True
+    assert subscription.status == SubscriptionStatus.active
+    assert subscription.login == "retained-login"
+    assert subscription.ipv4_address == "10.90.0.10"
+    assert subscription_add_on.end_at is None
+    assert subscriber.status == SubscriberStatus.active
+    assert subscriber.is_active is True
 
 
 def test_admin_transition_does_not_bypass_duplicate_login_restore_guard(db_session):

@@ -7,9 +7,10 @@
 {% set offer_label = subscription.offer.name if subscription.offer else 'Subscription' %}
 {% set status_val = subscription.status.value if subscription.status else 'pending' %}
 {% set can_activate = status_val == 'pending' %}
-{% set can_restore = status_val in ('suspended', 'blocked', 'stopped') %}
+{% set can_restore = status_val in ('suspended', 'blocked', 'stopped', 'disabled') %}
 {% set can_suspend = status_val == 'active' %}
-{% set can_cancel = status_val not in ('canceled', 'expired', 'disabled', 'hidden', 'archived') %}
+{% set can_disable = status_val not in ('disabled', 'canceled', 'expired', 'hidden', 'archived') %}
+{% set can_cancel = status_val not in ('canceled', 'expired', 'hidden', 'archived') %}
 {% set can_change_plan = status_val in ('active', 'pending', 'suspended') %}
 {% set provisioning_router = subscription.provisioning_nas_device %}
 {% set assigned_ipv4_list = [] %}
@@ -84,6 +85,13 @@
                             class="flex w-full items-center gap-2 px-4 py-2 text-sm text-primary-600 hover:bg-primary-50 dark:text-primary-400 dark:hover:bg-primary-900/20">
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/></svg>
                         Change Plan
+                    </button>
+                    {% endif %}
+                    {% if can_disable %}
+                    <button type="button" @click="open = false; openLifecycle('disable')"
+                            class="flex w-full items-center gap-2 px-4 py-2 text-sm text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-700">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 5.636a9 9 0 11-12.728 0M12 3v9"/></svg>
+                        Disable Subscription
                     </button>
                     {% endif %}
                     <div class="my-1 border-t border-slate-100 dark:border-slate-700"></div>

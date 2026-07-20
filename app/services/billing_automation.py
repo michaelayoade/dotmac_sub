@@ -808,8 +808,8 @@ def _emit_invoice_reminders(
     )
     for invoice in invoices:
         # Don't remind on balances for accounts whose services are all
-        # terminal (disabled/canceled/expired/…) — a dead service shouldn't
-        # keep pinging the customer.
+        # paused or terminal (disabled/canceled/expired/…) — a service that is
+        # not being billed should not keep receiving collection reminders.
         if invoice.account_id not in collectible_accounts:
             continue
         if not invoice.due_at or (invoice.balance_due or Decimal("0.00")) <= Decimal(
