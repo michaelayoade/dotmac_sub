@@ -792,3 +792,60 @@ _SYSTEM_JOB_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
 def system_job_status_presentation(status: str | None) -> StatusPresentation:
     """Project a system/background job run status without re-deriving it."""
     return _presentation(_status_value(status), _SYSTEM_JOB_PRESENTATIONS)
+
+
+# --- Fiber plant status presentations (inventory owners return raw strings) ---
+_FIBER_STRAND_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    "available": ("Available", StatusTone.positive, StatusIcon.check),
+    "in_use": ("In use", StatusTone.info, StatusIcon.check),
+    "reserved": ("Reserved", StatusTone.warning, StatusIcon.clock),
+    "faulted": ("Faulted", StatusTone.negative, StatusIcon.x),
+    "retired": ("Retired", StatusTone.neutral, StatusIcon.archive),
+}
+
+_FIBER_CHANGE_REQUEST_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    "pending": ("Pending", StatusTone.warning, StatusIcon.clock),
+    "applied": ("Applied", StatusTone.positive, StatusIcon.check),
+    "rejected": ("Rejected", StatusTone.negative, StatusIcon.x),
+}
+
+_FIBER_SUPPORT_LIFECYCLE_PRESENTATIONS: dict[
+    str, tuple[str, StatusTone, StatusIcon]
+] = {
+    "planned": ("Planned", StatusTone.info, StatusIcon.clock),
+    "active": ("Active", StatusTone.positive, StatusIcon.check),
+    "suspended": ("Suspended", StatusTone.warning, StatusIcon.alert),
+    "retired": ("Retired", StatusTone.neutral, StatusIcon.archive),
+}
+
+_FIBER_SUPPORT_INSPECTION_PRESENTATIONS: dict[
+    str, tuple[str, StatusTone, StatusIcon]
+] = {
+    "passed": ("Passed", StatusTone.positive, StatusIcon.check),
+    "due": ("Due", StatusTone.warning, StatusIcon.clock),
+    "conditional": ("Conditional", StatusTone.warning, StatusIcon.alert),
+    "failed": ("Failed", StatusTone.negative, StatusIcon.x),
+    "uninspected": ("Uninspected", StatusTone.neutral, StatusIcon.minus),
+}
+
+
+def fiber_strand_status_presentation(status: object | None) -> StatusPresentation:
+    """Server-owned presentation for a FiberStrand.status (SoT tone contract)."""
+    return _presentation(_status_value(status), _FIBER_STRAND_PRESENTATIONS)
+
+
+def fiber_change_request_status_presentation(
+    status: object | None,
+) -> StatusPresentation:
+    """Server-owned presentation for a FiberChangeRequest.status."""
+    return _presentation(_status_value(status), _FIBER_CHANGE_REQUEST_PRESENTATIONS)
+
+
+def fiber_support_lifecycle_presentation(status: object | None) -> StatusPresentation:
+    """Server-owned presentation for a FiberSupportStructure.lifecycle_status."""
+    return _presentation(_status_value(status), _FIBER_SUPPORT_LIFECYCLE_PRESENTATIONS)
+
+
+def fiber_support_inspection_presentation(status: object | None) -> StatusPresentation:
+    """Server-owned presentation for a FiberSupportStructure.inspection_status."""
+    return _presentation(_status_value(status), _FIBER_SUPPORT_INSPECTION_PRESENTATIONS)
