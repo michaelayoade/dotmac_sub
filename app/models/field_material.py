@@ -133,8 +133,8 @@ class FieldMaterialRequest(Base):
         Index("ix_field_material_requests_status", "status"),
         Index("ix_field_material_requests_requested_by", "requested_by_technician_id"),
         Index(
-            "ix_field_material_requests_erp_material_request_id",
-            "erp_material_request_id",
+            "ix_field_material_requests_support_reference",
+            "support_reference",
         ),
         Index("ix_field_material_requests_client_ref", "client_ref", unique=True),
         CheckConstraint(
@@ -171,12 +171,12 @@ class FieldMaterialRequest(Base):
     notes: Mapped[str | None] = mapped_column(Text)
     source_warehouse_code: Mapped[str | None] = mapped_column(String(100))
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
-    # ERP mirror fields. Written back by the outbox after ERP
-    # accepts the ISSUE, and refreshed by the status reconcile. Mirror the
-    # ``erp_*`` fields FieldExpenseRequest already carries. Nullable + inert until
-    # the material_request flow is cut over to sub.
-    erp_material_request_id: Mapped[str | None] = mapped_column(String(120))
-    erp_material_status: Mapped[str | None] = mapped_column(String(40))
+    # Replaceable back-office support projection. The provider-specific adapter
+    # writes these values; the service-workflow owner only interprets the
+    # provider-neutral outcome.
+    support_system: Mapped[str | None] = mapped_column(String(40))
+    support_reference: Mapped[str | None] = mapped_column(String(120))
+    support_status: Mapped[str | None] = mapped_column(String(40))
     # Idempotency token for create (mobile retry-safety); mirrors expense.
     client_ref: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

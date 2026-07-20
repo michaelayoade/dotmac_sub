@@ -34,6 +34,13 @@ class ServiceTeamMemberRole(enum.Enum):
 
 class ServiceTeam(Base):
     __tablename__ = "service_teams"
+    __table_args__ = (
+        UniqueConstraint(
+            "workforce_system",
+            "workforce_department_reference",
+            name="uq_service_teams_workforce_system_reference",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -44,7 +51,8 @@ class ServiceTeam(Base):
     # Staff identity: can reference internal system users or CRM staff people,
     # so keep it a plain UUID instead of a subscriber FK.
     manager_person_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
-    erp_department: Mapped[str | None] = mapped_column(String(120), unique=True)
+    workforce_system: Mapped[str | None] = mapped_column(String(40))
+    workforce_department_reference: Mapped[str | None] = mapped_column(String(120))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     metadata_: Mapped[dict | None] = mapped_column(
         "metadata", MutableDict.as_mutable(JSON())

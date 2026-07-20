@@ -67,11 +67,16 @@ def test_legacy_branch_merge_is_ancestor_of_current_head() -> None:
         "migration_374_as_built_review_evidence",
     )
     assert as_built_review.down_revision == vendor_review.revision
-    current = _load_migration(
+    work_order_evidence = _load_migration(
         "375_work_order_evidence_policy.py",
         "migration_375_work_order_evidence_policy",
     )
-    assert current.down_revision == as_built_review.revision
+    assert work_order_evidence.down_revision == as_built_review.revision
+    current = _load_migration(
+        "383_replaceable_backoffice_boundary.py",
+        "migration_383_replaceable_backoffice_boundary",
+    )
+    assert current.down_revision == "382_ticket_work_order_handoff"
 
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
