@@ -57,13 +57,22 @@ def alerts_index(
 
 @router.get(
     "/notifications/{notification_id}/open",
-    dependencies=[_ALERT_ACCESS],
 )
 def open_notification(
     notification_id: UUID,
     db: Session = Depends(get_db),
+    auth: dict = _ALERT_ACCESS,
 ):
-    notification = admin_alerts_service.mark_notification_read(db, str(notification_id))
+    system_user_id = (
+        str(auth.get("principal_id"))
+        if auth.get("principal_type") == "system_user"
+        else ""
+    )
+    notification = admin_alerts_service.mark_notification_read(
+        db,
+        str(notification_id),
+        system_user_id=system_user_id,
+    )
     if notification is None:
         return RedirectResponse(url="/admin/alerts", status_code=303)
     return RedirectResponse(

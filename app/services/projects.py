@@ -739,25 +739,48 @@ def notify_project_task_sla_breach(db: Session, clock: SlaClock) -> None:
     if not person_ids:
         return
 
-    users = db.query(SystemUser).filter(SystemUser.id.in_(person_ids)).all()
-    recipients = {
-        user.email.strip()
-        for user in users
-        if isinstance(user.email, str) and user.email.strip()
-    }
-    if not recipients:
+    from app.models.operational_escalation import OperationalEntityType
+    from app.services import operational_escalation
+
+    policies = operational_escalation.matching_policies(
+        db,
+        entity_type=OperationalEntityType.project_task,
+        trigger="project_task.sla_breached",
+        severity=str(task.priority or "") or None,
+    )
+    if not policies:
         return
+    for person_id in person_ids:
+        operational_escalation.add_watcher(
+            db,
+            entity_type=OperationalEntityType.project_task,
+            entity_id=task.id,
+            person_id=person_id,
+            source="project_task_sla",
+            reason="Project delivery lead",
+        )
 
     task_ref = task.number or str(task.id)
     project_ref = project.number or str(project.id)
-    subject = f"SLA breach: {task.title}"
-    body = (
-        f"Task {task_ref} in project {project_ref} breached its SLA timeline.\n"
-        "Action required by PM / Assistant PM / SPC. PM supervisor has been tagged."
+    operational_escalation.emit_sla_event(
+        db,
+        entity_type=OperationalEntityType.project_task,
+        entity_id=task.id,
+        trigger="project_task.sla_breached",
+        severity=str(task.priority or "") or None,
+        metadata={
+            "title": f"Project task SLA breached: {task.title}",
+            "body": (
+                f"Task {task_ref} in project {project_ref} passed its configured "
+                "SLA due time."
+            ),
+            "target_url": f"/admin/projects/{project.id}",
+            "category": "operations",
+            "project_id": str(project.id),
+        },
+        triggered_at=clock.breached_at,
+        policies=policies,
     )
-    for recipient in recipients:
-        _queue_in_app_notification(db, recipient, subject, body)
-        _queue_email_notification(db, recipient, subject, body)
 
 
 def _seed_fiber_installation_tasks(db: Session, project: Project) -> None:

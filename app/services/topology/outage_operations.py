@@ -8,7 +8,6 @@ from app.models.operational_escalation import (
     OperationalEntityType,
     OperationalEscalationEvent,
     OperationalEscalationPolicy,
-    OperationalEscalationStatus,
     OperationalOwner,
     OperationalOwnerRole,
     OperationalParticipantType,
@@ -211,38 +210,51 @@ def plan_outage_escalations(
 ) -> list[OperationalEscalationEvent]:
     """Create escalation events and pending deliveries for matching outage policies."""
 
-    events: list[OperationalEscalationEvent] = []
-    for policy in _matching_outage_policies(session, incident):
-        event = _record_outage_event_once(
-            session,
-            incident,
-            policy=policy,
-            trigger=trigger,
-        )
-        operational_escalation.plan_policy_deliveries(
-            session,
-            event=event,
-            policy=policy,
-        )
-        events.append(event)
-    return events
+    policies = _matching_outage_policies(session, incident, trigger=trigger)
+    result = operational_escalation.emit_sla_event(
+        session,
+        entity_type=OperationalEntityType.outage,
+        entity_id=incident.id,
+        trigger=trigger,
+        severity=incident.severity,
+        affected_customer_count=incident.affected_count,
+        metadata={
+            "status": incident.status,
+            "scope": _scope_label(incident),
+        },
+        policies=policies,
+    )
+    return list(result.events)
 
 
 def _matching_outage_policies(
     session,
     incident: OutageIncident,
+    *,
+    trigger: str | None = None,
 ) -> list[OperationalEscalationPolicy]:
     policies = (
-        session.query(OperationalEscalationPolicy)
-        .filter(OperationalEscalationPolicy.is_active.is_(True))
-        .filter(
-            or_(
-                OperationalEscalationPolicy.entity_type == OperationalEntityType.outage,
-                OperationalEscalationPolicy.entity_type.is_(None),
-            )
+        operational_escalation.matching_policies(
+            session,
+            entity_type=OperationalEntityType.outage,
+            trigger=trigger,
+            severity=incident.severity,
+            affected_customer_count=incident.affected_count,
         )
-        .order_by(OperationalEscalationPolicy.level.asc())
-        .all()
+        if trigger
+        else (
+            session.query(OperationalEscalationPolicy)
+            .filter(OperationalEscalationPolicy.is_active.is_(True))
+            .filter(
+                or_(
+                    OperationalEscalationPolicy.entity_type
+                    == OperationalEntityType.outage,
+                    OperationalEscalationPolicy.entity_type.is_(None),
+                )
+            )
+            .order_by(OperationalEscalationPolicy.level.asc())
+            .all()
+        )
     )
     return [policy for policy in policies if _policy_matches_incident(policy, incident)]
 
@@ -319,44 +331,3 @@ def _customer_watcher_limit(policy: OperationalEscalationPolicy) -> int:
         return max(0, int(raw_limit or 100))
     except (TypeError, ValueError):
         return 100
-
-
-def _record_outage_event_once(
-    session,
-    incident: OutageIncident,
-    *,
-    policy: OperationalEscalationPolicy,
-    trigger: str,
-) -> OperationalEscalationEvent:
-    existing = (
-        session.query(OperationalEscalationEvent)
-        .filter(OperationalEscalationEvent.entity_type == OperationalEntityType.outage)
-        .filter(OperationalEscalationEvent.entity_id == str(incident.id))
-        .filter(OperationalEscalationEvent.policy_id == policy.id)
-        .filter(OperationalEscalationEvent.trigger == trigger)
-        .filter(
-            OperationalEscalationEvent.status.in_(
-                [
-                    OperationalEscalationStatus.open,
-                    OperationalEscalationStatus.acknowledged,
-                ]
-            )
-        )
-        .one_or_none()
-    )
-    if existing is not None:
-        return existing
-    return operational_escalation.record_event(
-        session,
-        entity_type=OperationalEntityType.outage,
-        entity_id=incident.id,
-        policy_id=policy.id,
-        trigger=trigger,
-        level=policy.level,
-        severity=incident.severity,
-        affected_customer_count=incident.affected_count,
-        metadata={
-            "status": incident.status,
-            "scope": _scope_label(incident),
-        },
-    )

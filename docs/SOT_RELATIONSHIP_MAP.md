@@ -311,8 +311,11 @@ detailed security and delivery boundary is
 3. `financial.tax_configuration` owns configurable tax-rate records and their
    active lifecycle. Inclusive, exclusive, or exempt treatment belongs to the
    invoice/credit-note line, not to a second tax-rate vocabulary.
-4. `financial.payment_proofs` owns proof review and creation of the source WHT
-   receivable when a reseller pays net cash against a gross obligation.
+4. `financial.payment_proofs` owns proof review, creation of the source WHT
+   receivable when a reseller pays net cash against a gross obligation, and the
+   decision that a submitted proof requires confirmation. It requests one
+   reviewer work item from `communications.staff_notifications`; it does not
+   select staff recipients or construct inbox/delivery rows.
 5. `financial.tax_accounting` owns tax-report meaning, periods, currency
    separation, issued-output-tax and credit-note adjustment projection, net
    output-tax liability, WHT-receivable projection and lifecycle, its immutable
@@ -1682,8 +1685,29 @@ in forms, or rotate key material directly.
    lifetime, and consequences. The worker must not persist or log rendered
    bearer content or exception text that may contain it.
 6. Notification service owns notification rows and delivery lifecycle.
-7. Staff notification service owns internal/admin notification creation.
-8. `communications.customer_read_state` owns customer notification read/unread
+7. `operations.sla_escalation` owns operational SLA policy lifecycle,
+   event-scoped escalation planning, and escalation acknowledgement/cancellation.
+   Every operational domain emits named facts into this owner. Operators configure
+   entity type, event key, escalation level, unresolved delay, channels, active
+   state, and applicable severity/impact conditions at
+   `/admin/notifications/sla-policies`. Policies cover tickets, work orders,
+   outages, projects and project tasks, inbox conversations, provisioning failures, network
+   devices/sites, subscribers, payment incidents, and payment proofs. A domain
+   service may not embed a fallback SLA duration or channel list. When no active
+   policy matches, the owner invents neither a deadline nor an escalation.
+8. Staff notification service owns internal/admin notification creation,
+   permission-targeted staff audience resolution, and materialization of review
+   requests into the assigned admin notification inbox. For payment proofs it
+   resolves active system users who effectively hold `billing:proof:verify`
+   (including active admin and wildcard grants) and creates one clickable unread
+   inbox item per reviewer. It projects those reviewers as the event audience for
+   `operations.sla_escalation`; only the active UI policy decides whether and when
+   email, WhatsApp, SMS, push, web, Nextcloud Talk, or webhook escalation occurs.
+   The financial owner closes the shared request and cancels pending escalation
+   when it verifies or rejects the proof. Opening an inbox item is scoped to its
+   assigned system user; the target action performs its own domain permission
+   check again.
+9. `communications.customer_read_state` owns customer notification read/unread
    state and unread counts across the web portal and mobile app. Subscriber
    metadata is its bounded persistence mechanism; `/me/notifications` projects
    that state, and `/me/notifications/read` is the self-scoped mutation
@@ -2388,12 +2412,20 @@ reinterpret its presentation.
 
 ## Support Control Plane
 
-1. `support.tickets` owns ticket lifecycle, assignment, comments, SLA events,
-   and satisfaction state.
+1. `support.tickets` owns ticket lifecycle, assignment, comments, and
+   satisfaction state.
+2. `support.ticket_configuration` owns the operator-managed priority and ticket-
+   type SLA targets shown at `/admin/system/ticket-settings`. Ticket types have
+   no fixed code default: zero or no override falls through to the configured
+   priority target.
+3. `support.ticket_sla_clock` owns ticket SLA clocks and breach facts. A breach
+   emits `ticket.sla_breached` to `operations.sla_escalation`; only its active UI
+   policy selects the escalation delay, level, audience channels, and conditions.
 
 Rule: support routes and jobs translate requests and delegate ticket decisions
 to `app.services.support`. Events and notifications are consequences requested
-by that owner, not alternate ticket writers.
+by that owner, not alternate ticket writers. SLA durations and escalation
+channels must not be embedded in support code.
 
 ## Customer Data Completeness
 
