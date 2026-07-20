@@ -2463,6 +2463,26 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         domain="runtime_infrastructure",
         services=(
             SOTService(
+                name="runtime.realtime_projection",
+                module="app.services.realtime_platform",
+                owns=(
+                    "versioned real-time event envelope",
+                    "Redis topic naming and best-effort publication",
+                    "shared WebSocket and SSE delivery semantics",
+                    "reconnect and no-replay refresh contract",
+                ),
+                depends_on=("auth.permission_gate",),
+                notes=(
+                    "Real-time events are non-durable projections after an "
+                    "owning domain commits state. Redis pub/sub is at-most-once; "
+                    "clients refetch canonical read models after reconnect or "
+                    "reset. Client-selected topics are authorized by "
+                    "app.services.realtime_subscriptions; workqueue topics are "
+                    "derived by its scope owner. WebSocket and SSE modules are "
+                    "transport adapters only."
+                ),
+            ),
+            SOTService(
                 name="runtime.db_sessions",
                 module="app.services.db_session_adapter",
                 owns=(
@@ -2506,13 +2526,16 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         entrypoints=(
             "app.tasks.*",
             "app.main",
+            "app.websocket.*",
+            "app.api.workqueue",
             "app.services.scheduler_config",
             "app.web.admin.system",
         ),
         rule=(
-            "Infrastructure tasks use shared DB/session/lock and heartbeat "
-            "helpers; polling writes observations while network/device resolvers "
-            "interpret state."
+            "Real-time delivery projects already-committed state and never "
+            "becomes a decision owner or durable event log. Infrastructure "
+            "tasks use shared DB/session/lock and heartbeat helpers; polling "
+            "writes observations while network/device resolvers interpret state."
         ),
     ),
     DomainSOT(

@@ -169,7 +169,8 @@ def customer_session_info(request: Request, db: Session = Depends(get_db)):
     return web_customer_auth_service.customer_session_info(request, db)
 
 
-@router.api_route("/refresh", methods=["GET", "POST"])
+@router.get("/refresh")
+@router.post("/refresh")
 def customer_refresh(request: Request, db: Session = Depends(get_db)):
     """Refresh the customer session cookie."""
     return web_customer_auth_service.customer_refresh(request, db)

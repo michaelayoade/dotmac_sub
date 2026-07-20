@@ -318,7 +318,11 @@
   function sendTyping() {
     if (state.ws && state.ws.readyState === 1) {
       try {
-        state.ws.send(JSON.stringify({ type: "typing", is_typing: true }));
+        state.ws.send(JSON.stringify({
+          type: "typing",
+          topic: `conversation:${state.conversationId}`,
+          data: { is_typing: true },
+        }));
       } catch (e) {}
     }
   }
@@ -327,7 +331,7 @@
     if (!state.ws || state.ws.readyState !== 1 || !state.conversationId) return;
     state.ws.send(JSON.stringify({
       type: "subscribe",
-      conversation_id: state.conversationId,
+      topic: `conversation:${state.conversationId}`,
     }));
   }
 

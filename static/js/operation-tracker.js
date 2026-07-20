@@ -240,14 +240,14 @@ class OperationTracker {
         const operation = this.operations.get(operationId);
         if (operation) {
             // Unsubscribe from WebSocket channel
-            this._send({ type: 'unsubscribe', conversation_id: operationId });
+            this._send({ type: 'unsubscribe', topic: `operation:${operationId}` });
             this.operations.delete(operationId);
         }
     }
 
     _resubscribeAll() {
         for (const operationId of this.operations.keys()) {
-            this._send({ type: 'subscribe', conversation_id: operationId });
+            this._send({ type: 'subscribe', topic: `operation:${operationId}` });
         }
     }
 
@@ -322,7 +322,7 @@ class OperationTracker {
         });
 
         // Subscribe to operation channel
-        this._send({ type: 'subscribe', conversation_id: operationId });
+        this._send({ type: 'subscribe', topic: `operation:${operationId}` });
 
         console.log(`[OperationTracker] Tracking operation: ${operationId}`);
 

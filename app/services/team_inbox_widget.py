@@ -22,7 +22,7 @@ from app.models.team_inbox import (
 from app.services import auth_flow as auth_flow_service
 from app.services import team_inbox_realtime
 from app.services.common import coerce_uuid
-from app.websocket.events import EventType
+from app.services.realtime_platform import EventType
 
 T = TypeVar("T")
 

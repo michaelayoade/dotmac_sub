@@ -73,22 +73,37 @@ async def authenticate_websocket(websocket: WebSocket) -> dict | None:
             widget_principal = decode_widget_token(db, token)
             return {
                 "subscriber_id": f"chat_widget:{widget_principal.session_id}",
+                "principal_id": f"chat_widget:{widget_principal.session_id}",
+                "principal_type": "chat_widget",
                 "session_id": widget_principal.session_id,
                 "conversation_id": str(widget_principal.conversation_id),
                 "surface": widget_principal.surface,
+                "roles": [],
+                "scopes": [],
             }
         except Exception:
             pass
 
         payload = decode_access_token(db, token)
-        subscriber_id = payload.get("sub")
+        subscriber_id = payload.get("principal_id") or payload.get("sub")
         session_id = payload.get("session_id")
 
         if not subscriber_id:
             await websocket.close(code=4001, reason="Invalid token")
             return None
 
-        return {"subscriber_id": subscriber_id, "session_id": session_id}
+        principal_type = str(payload.get("principal_type") or "subscriber")
+        roles, scopes = claims_for_principal(
+            db, str(subscriber_id), principal_type, payload
+        )
+        return {
+            "subscriber_id": str(subscriber_id),
+            "principal_id": str(subscriber_id),
+            "principal_type": principal_type,
+            "session_id": session_id,
+            "roles": roles,
+            "scopes": scopes,
+        }
     except Exception:
         await websocket.close(code=4001, reason="Invalid token")
         return None
