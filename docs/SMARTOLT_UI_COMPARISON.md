@@ -1,5 +1,10 @@
 # SmartOLT UI/UX Comparison Report
 
+> **Status: comparative research, not a specification.** A SmartOLT difference
+> is not automatically a Dotmac gap. Current information, action, table, and
+> page-depth decisions follow `UI_INFORMATION_AND_ACTION_STANDARD.md` and the
+> relevant domain source of truth.
+
 **Date**: 2026-04-22
 **Purpose**: Comprehensive analysis of SmartOLT's UI patterns vs. DotMac Sub implementation
 

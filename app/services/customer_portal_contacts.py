@@ -9,16 +9,13 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models.subscriber import Subscriber, SubscriberContact
+from app.services.customer_context import resolve_customer_context
 from app.services.customer_identity_normalization import (
     normalize_email_identifier,
     normalize_phone_identifier,
 )
 from app.services.customer_identity_resolution import (
     rebuild_identity_index_for_subscriber,
-)
-from app.services.customer_portal_context import (
-    resolve_allowed_subscriber_ids,
-    resolve_customer_account,
 )
 
 CONTACT_TYPES = ("general", "billing", "technical", "installation", "emergency")
@@ -69,6 +66,7 @@ def normalize_contact_form(
     receives_notifications: bool,
     is_billing_contact: bool,
     notes: str | None,
+    allow_authority_flags: bool = True,
 ) -> ContactForm:
     normalized_type = (contact_type or "general").strip().lower()
     if normalized_type not in CONTACT_TYPES:
@@ -86,19 +84,19 @@ def normalize_contact_form(
         other_social=_clean(other_social),
         relationship=_clean(relationship),
         contact_type=normalized_type,
-        is_authorized=bool(is_authorized),
+        is_authorized=bool(is_authorized) if allow_authority_flags else False,
         receives_notifications=bool(receives_notifications),
-        is_billing_contact=bool(is_billing_contact or normalized_type == "billing"),
+        is_billing_contact=(
+            bool(is_billing_contact or normalized_type == "billing")
+            if allow_authority_flags
+            else False
+        ),
         notes=_clean(notes),
     )
 
 
 def _require_subscriber_id(customer: dict, db: Session) -> str:
-    subscriber_id, _subscription_id = resolve_customer_account(customer, db)
-    subscriber_id = subscriber_id or customer.get("subscriber_id")
-    if not subscriber_id:
-        raise ValueError("Unable to resolve customer account.")
-    return str(subscriber_id)
+    return resolve_customer_context(db, customer).require_account_id()
 
 
 def _target_subscriber_id(customer: dict, db: Session) -> str:
@@ -110,11 +108,7 @@ def _target_subscriber_id(customer: dict, db: Session) -> str:
 
 
 def _allowed_subscriber_ids(customer: dict, db: Session) -> list[str]:
-    allowed_ids = [
-        subscriber_id
-        for subscriber_id in resolve_allowed_subscriber_ids(customer, db)
-        if subscriber_id
-    ]
+    allowed_ids = list(resolve_customer_context(db, customer).allowed_subscriber_ids)
     if allowed_ids:
         return allowed_ids
     return [_require_subscriber_id(customer, db)]

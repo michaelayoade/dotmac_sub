@@ -6,7 +6,7 @@ under ``templates/admin/billing/consolidated/``.
 
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from uuid import UUID
 
 from sqlalchemy import select
@@ -150,19 +150,73 @@ def record_bulk_payment(
     currency: str = "NGN",
     memo: str | None = None,
     collection_account_id: str | None = None,
+    preview_fingerprint: str | None = None,
+    idempotency_key: str | None = None,
+    actor_id: str | None = None,
 ) -> UUID:
-    """Record a bulk payment + auto-allocate FIFO. Returns the Payment.id."""
-    from app.schemas.billing import PaymentCreate
+    """Confirm a previously previewed bulk payment. Returns the Payment.id."""
+    from app.models.billing import PaymentSettlementOrigin
+    from app.schemas.billing import BillingAccountPaymentConfirm
 
-    payload = PaymentCreate(
-        billing_account_id=UUID(billing_account_id),
-        amount=Decimal(amount),
+    try:
+        payment_amount = Decimal(amount)
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError("Amount must be a valid number") from exc
+    if payment_amount <= 0:
+        raise ValueError("Amount must be greater than 0")
+
+    if not preview_fingerprint or not idempotency_key:
+        raise ValueError("Consolidated payment requires preview confirmation")
+    command = BillingAccountPaymentConfirm(
+        amount=payment_amount,
         currency=currency,
         memo=memo,
         collection_account_id=UUID(collection_account_id)
         if collection_account_id
         else None,
         allocations=None,
+        auto_allocate=True,
+        preview_fingerprint=preview_fingerprint,
+        idempotency_key=idempotency_key,
     )
-    payment = billing_service.payments.create(db, payload)
-    return payment.id
+    result = billing_service.consolidated_payment_settlements.confirm(
+        db,
+        billing_account_id,
+        command,
+        origin=PaymentSettlementOrigin.manual,
+        actor_id=actor_id,
+    )
+    return result.payment.id
+
+
+def preview_bulk_payment(
+    db: Session,
+    *,
+    billing_account_id: str,
+    amount: str,
+    currency: str = "NGN",
+    memo: str | None = None,
+    collection_account_id: str | None = None,
+):
+    """Preview the exact consolidated payment result without writing money."""
+    from app.schemas.billing import BillingAccountPaymentPreviewRequest
+
+    try:
+        payment_amount = Decimal(amount)
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError("Amount must be a valid number") from exc
+    if payment_amount <= 0:
+        raise ValueError("Amount must be greater than 0")
+    request = BillingAccountPaymentPreviewRequest(
+        amount=payment_amount,
+        currency=currency,
+        memo=memo,
+        collection_account_id=(
+            UUID(collection_account_id) if collection_account_id else None
+        ),
+        allocations=None,
+        auto_allocate=True,
+    )
+    return billing_service.consolidated_payment_settlements.preview(
+        db, billing_account_id, request
+    )

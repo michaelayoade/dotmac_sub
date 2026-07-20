@@ -109,12 +109,12 @@ def process_bandwidth_stream():
     batches of bandwidth samples from the Redis stream.
     """
     r = _get_redis_client()
-    db = db_session_adapter.create_session()
 
     try:
         # Get configurable settings
-        batch_size = _get_batch_size(db)
-        read_timeout_ms = _get_redis_read_timeout_ms(db)
+        with db_session_adapter.read_session() as db:
+            batch_size = _get_batch_size(db)
+            read_timeout_ms = _get_redis_read_timeout_ms(db)
 
         # Read batch from stream
         # Use consumer group for reliability
@@ -197,45 +197,47 @@ def process_bandwidth_stream():
             except Exception as e:
                 logger.error("Failed to parse sample %s: %s", msg_id, e)
 
-        network_device_by_nas: dict[UUID, UUID | None] = {}
-        if nas_device_ids:
-            network_device_by_nas = {
-                row.id: row.network_device_id
-                for row in db.scalars(
-                    select(NasDevice).where(NasDevice.id.in_(nas_device_ids))
-                ).all()
-            }
-
-        for sample, data in samples:
-            nas_device_id_raw = data.get(b"nas_device_id")
-            if not nas_device_id_raw:
-                continue
-            try:
-                nas_device_id = UUID(nas_device_id_raw.decode())
-            except ValueError:
-                continue
-            sample.device_id = network_device_by_nas.get(nas_device_id)
-
         # Bulk insert samples — filter out orphaned subscription IDs first
         # to prevent a single bad FK from failing the entire batch.
         # Uses cached subscription ID validation to reduce DB queries.
         inserted = 0
         if samples:
-            adapter = get_bandwidth_metrics_adapter()
-            valid_ids = adapter.filter_valid_subscription_ids(
-                db, {s.subscription_id for s, _ in samples}
-            )
-            valid_samples = [s for s, _ in samples if s.subscription_id in valid_ids]
-            skipped = len(samples) - len(valid_samples)
-            if skipped:
-                logger.warning(
-                    "Skipped %d bandwidth samples with orphaned subscription_ids",
-                    skipped,
+            with db_session_adapter.session() as db:
+                network_device_by_nas: dict[UUID, UUID | None] = {}
+                if nas_device_ids:
+                    network_device_by_nas = {
+                        row.id: row.network_device_id
+                        for row in db.scalars(
+                            select(NasDevice).where(NasDevice.id.in_(nas_device_ids))
+                        ).all()
+                    }
+
+                for sample, data in samples:
+                    nas_device_id_raw = data.get(b"nas_device_id")
+                    if not nas_device_id_raw:
+                        continue
+                    try:
+                        nas_device_id = UUID(nas_device_id_raw.decode())
+                    except ValueError:
+                        continue
+                    sample.device_id = network_device_by_nas.get(nas_device_id)
+
+                adapter = get_bandwidth_metrics_adapter()
+                valid_ids = adapter.filter_valid_subscription_ids(
+                    db, {s.subscription_id for s, _ in samples}
                 )
-            if valid_samples:
-                db.bulk_save_objects(valid_samples)
-                db.commit()
-                inserted = len(valid_samples)
+                valid_samples = [
+                    s for s, _ in samples if s.subscription_id in valid_ids
+                ]
+                skipped = len(samples) - len(valid_samples)
+                if skipped:
+                    logger.warning(
+                        "Skipped %d bandwidth samples with orphaned subscription_ids",
+                        skipped,
+                    )
+                if valid_samples:
+                    db.bulk_save_objects(valid_samples)
+                    inserted = len(valid_samples)
 
         # Acknowledge processed messages (including skipped ones — they can't be retried)
         if message_ids:
@@ -250,10 +252,8 @@ def process_bandwidth_stream():
 
     except Exception as e:
         logger.error("Error processing bandwidth stream: %s", e)
-        db.rollback()
         raise
     finally:
-        db.close()
         r.close()
 
 
@@ -265,26 +265,21 @@ def cleanup_hot_data():
     Hot data (raw samples) is kept in PostgreSQL for the configured retention hours,
     after which it's deleted. Aggregated data is retained in VictoriaMetrics.
     """
-    db = db_session_adapter.create_session()
-    retention_hours = _get_hot_retention_hours(db)
-    cutoff = datetime.now(UTC) - timedelta(hours=retention_hours)
-
     try:
-        result = db.execute(
-            delete(BandwidthSample).where(BandwidthSample.sample_at < cutoff)
-        )
-        deleted = result.rowcount
-        db.commit()
+        with db_session_adapter.session() as db:
+            retention_hours = _get_hot_retention_hours(db)
+            cutoff = datetime.now(UTC) - timedelta(hours=retention_hours)
+            result = db.execute(
+                delete(BandwidthSample).where(BandwidthSample.sample_at < cutoff)
+            )
+            deleted = result.rowcount
 
         logger.info("Cleaned up %s bandwidth samples older than %s", deleted, cutoff)
         return {"deleted": deleted}
 
     except Exception as e:
         logger.error("Error cleaning up hot data: %s", e)
-        db.rollback()
         raise
-    finally:
-        db.close()
 
 
 @celery_app.task(name="app.tasks.bandwidth.aggregate_to_metrics")
@@ -297,8 +292,6 @@ def aggregate_to_metrics():
 
     Uses sync VictoriaMetrics writer with batched writes for efficiency.
     """
-    db = db_session_adapter.create_session()
-
     try:
         # Calculate aggregates for the last minute
         now = datetime.now(UTC)
@@ -322,42 +315,45 @@ def aggregate_to_metrics():
             )
             .group_by(BandwidthSample.subscription_id, BandwidthSample.device_id)
         )
-        aggregates = db.execute(stmt).all()
+        with db_session_adapter.read_session() as db:
+            aggregates = db.execute(stmt).all()
 
-        if not aggregates:
-            return {"pushed": 0}
+            if not aggregates:
+                return {"pushed": 0}
 
-        # Map network device IDs to NAS device IDs
-        nas_device_by_network_device: dict[UUID, UUID] = {}
-        device_ids = {agg.device_id for agg in aggregates if agg.device_id}
-        if device_ids:
-            nas_device_by_network_device = {
-                row.network_device_id: row.id
-                for row in db.scalars(
-                    select(NasDevice).where(NasDevice.network_device_id.in_(device_ids))
-                ).all()
-                if row.network_device_id
-            }
+            # Map network device IDs to NAS device IDs
+            nas_device_by_network_device: dict[UUID, UUID] = {}
+            device_ids = {agg.device_id for agg in aggregates if agg.device_id}
+            if device_ids:
+                nas_device_by_network_device = {
+                    row.network_device_id: row.id
+                    for row in db.scalars(
+                        select(NasDevice).where(
+                            NasDevice.network_device_id.in_(device_ids)
+                        )
+                    ).all()
+                    if row.network_device_id
+                }
 
-        # Build batch of aggregates for VictoriaMetrics
-        batch: list[BandwidthAggregate] = []
-        for agg in aggregates:
-            nas_device_id = None
-            if agg.device_id and nas_device_by_network_device.get(agg.device_id):
-                nas_device_id = str(nas_device_by_network_device[agg.device_id])
+            # Build batch before the session closes; VM writes must not hold DB.
+            batch: list[BandwidthAggregate] = []
+            for agg in aggregates:
+                nas_device_id = None
+                if agg.device_id and nas_device_by_network_device.get(agg.device_id):
+                    nas_device_id = str(nas_device_by_network_device[agg.device_id])
 
-            batch.append(
-                BandwidthAggregate(
-                    subscription_id=str(agg.subscription_id),
-                    nas_device_id=nas_device_id,
-                    timestamp=aggregate_timestamp,
-                    rx_avg=float(agg.rx_avg or 0),
-                    tx_avg=float(agg.tx_avg or 0),
-                    rx_max=float(agg.rx_max or 0),
-                    tx_max=float(agg.tx_max or 0),
-                    sample_count=int(agg.sample_count),
+                batch.append(
+                    BandwidthAggregate(
+                        subscription_id=str(agg.subscription_id),
+                        nas_device_id=nas_device_id,
+                        timestamp=aggregate_timestamp,
+                        rx_avg=float(agg.rx_avg or 0),
+                        tx_avg=float(agg.tx_avg or 0),
+                        rx_max=float(agg.rx_max or 0),
+                        tx_max=float(agg.tx_max or 0),
+                        sample_count=int(agg.sample_count),
+                    )
                 )
-            )
 
         # Push to VictoriaMetrics in a single batched HTTP call (sync)
         adapter = get_bandwidth_metrics_adapter()
@@ -390,8 +386,6 @@ def aggregate_to_metrics():
     except Exception as e:
         logger.error("Error aggregating to metrics: %s", e)
         raise
-    finally:
-        db.close()
 
 
 @celery_app.task(name="app.tasks.bandwidth.trim_redis_stream")
@@ -402,11 +396,11 @@ def trim_redis_stream():
     Keeps only the configured max number of messages in the stream.
     """
     r = _get_redis_client()
-    db = db_session_adapter.create_session()
 
     try:
         # Get configurable max length
-        max_length = _get_redis_stream_max_length(db)
+        with db_session_adapter.read_session() as db:
+            max_length = _get_redis_stream_max_length(db)
         # Trim stream to max length
         trimmed = r.xtrim(REDIS_STREAM, maxlen=max_length, approximate=True)
         logger.info("Trimmed %s entries from bandwidth stream", trimmed)
@@ -416,7 +410,6 @@ def trim_redis_stream():
         logger.error("Error trimming Redis stream: %s", e)
         raise
     finally:
-        db.close()
         r.close()
 
 

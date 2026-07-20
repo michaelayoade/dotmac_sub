@@ -1,0 +1,58 @@
+{% extends "layouts/admin.html" %}
+{% from "admin/projects/_components.html" import project_card %}
+{% block title %}{{ page_title or 'Template Task' }}{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-2xl space-y-4">
+    <div>
+        <nav class="mb-2 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+            <a href="/admin/projects/templates" class="hover:text-emerald-600 dark:hover:text-emerald-400">Project Templates</a>
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            <a href="/admin/projects/templates/{{ template.id }}" class="hover:text-emerald-600 dark:hover:text-emerald-400">{{ template.name }}</a>
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            <span class="text-slate-900 dark:text-white">{{ page_title or 'Task' }}</span>
+        </nav>
+        <h1 class="font-display text-xl font-bold tracking-tight text-slate-900 dark:text-white">{{ page_title or 'Template Task' }}</h1>
+    </div>
+
+    {% if error %}
+    <div class="rounded-2xl border border-red-200 bg-red-50/90 p-4 text-sm text-red-800 dark:border-red-800 dark:bg-red-900/25 dark:text-red-100">{{ error }}</div>
+    {% endif %}
+
+    {% call project_card() %}
+    <form method="post"
+          action="{% if form_mode == 'edit' and task %}/admin/projects/templates/{{ template.id }}/tasks/{{ task.id }}/edit{% else %}/admin/projects/templates/{{ template.id }}/tasks{% endif %}"
+          class="space-y-5">
+        <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+        <div>
+            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Title <span class="text-red-500">*</span></label>
+            <input type="text" name="title" required value="{{ prefill.title }}"
+                   class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+        </div>
+        <div>
+            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Description</label>
+            <textarea name="description" rows="3"
+                      class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ prefill.description }}</textarea>
+        </div>
+        <div class="grid gap-4 sm:grid-cols-2">
+            <div>
+                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Sort Order</label>
+                <input type="number" name="sort_order" min="0" value="{{ prefill.sort_order }}"
+                       class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div>
+                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Effort Hours</label>
+                <input type="number" name="effort_hours" min="0" value="{{ prefill.effort_hours }}"
+                       class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+        </div>
+        <div class="flex items-center justify-end gap-2 border-t border-slate-200/70 pt-4 dark:border-slate-700/70">
+            <a href="/admin/projects/templates/{{ template.id }}" class="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">Cancel</a>
+            <button class="rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 px-4 py-2 text-sm font-semibold text-white shadow-sm shadow-emerald-500/20 transition hover:shadow-md">
+                {% if form_mode == 'edit' %}Save Changes{% else %}Add Task{% endif %}
+            </button>
+        </div>
+    </form>
+    {% endcall %}
+</div>
+{% endblock %}

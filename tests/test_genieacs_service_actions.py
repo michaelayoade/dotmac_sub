@@ -374,8 +374,8 @@ def test_set_pppoe_credentials_prefers_existing_primary_igd_ppp_child(
 
 def test_genieacs_service_delegates_wifi_config(monkeypatch) -> None:
     from app.services.genieacs_service import genieacs_service
-    from app.services.network import ont_action_wifi
     from app.services.network.ont_action_common import ActionResult
+    from app.services.network.ont_features import OntFeatureService
 
     calls = {}
 
@@ -385,7 +385,7 @@ def test_genieacs_service_delegates_wifi_config(monkeypatch) -> None:
         calls["kwargs"] = kwargs
         return ActionResult(success=True, message="ok", data={"service": "genieacs"})
 
-    monkeypatch.setattr(ont_action_wifi, "set_wifi_config", fake_set_wifi_config)
+    monkeypatch.setattr(OntFeatureService, "set_wifi_config", fake_set_wifi_config)
 
     result = genieacs_service.set_wifi_config(
         object(),
@@ -560,6 +560,34 @@ def test_verified_write_deletes_queued_spv_when_connection_request_never_recover
     assert deleted == ["gpv-task", "gpv-task", "spv-task"]
 
 
+def test_verified_write_exposes_structured_queued_delivery() -> None:
+    import pytest
+
+    from app.services.genieacs_client import (
+        GenieACSDeliveryCode,
+        GenieACSTaskQueuedError,
+    )
+    from app.services.network.ont_action_common import set_and_verify
+
+    class FakeClient:
+        def set_parameter_values(self, _device_id, _params):
+            return {
+                "_id": "spv-task",
+                "connectionRequestError": "HTTP 401",
+            }
+
+    with pytest.raises(GenieACSTaskQueuedError) as raised:
+        set_and_verify(
+            FakeClient(),
+            "device-1",
+            {"Device.WiFi.SSID.1.SSID": "DOTMAC"},
+        )
+
+    assert raised.value.task_id == "spv-task"
+    assert raised.value.reason == "HTTP 401"
+    assert raised.value.delivery_code is GenieACSDeliveryCode.connection_request_failed
+
+
 def test_ont_client_resolution_repairs_stale_genieacs_identity(
     db_session,
     monkeypatch,
@@ -655,47 +683,34 @@ def test_genieacs_service_download_uses_acs_download_rpc(monkeypatch) -> None:
 def test_genieacs_service_firmware_upgrade_uses_firmware_image(
     db_session, monkeypatch
 ) -> None:
-    from app.models.network import OntFirmwareImage
     from app.services.genieacs_service import genieacs_service
-    from app.services.network import ont_action_common
+    from app.services.network.ont_action_common import ActionResult
 
-    firmware = OntFirmwareImage(
-        vendor="Huawei",
-        model="EG8145V5",
-        version="V1R2",
-        file_url="https://example.test/eg8145v5.bin",
-        filename="eg8145v5.bin",
-        checksum="sha256:abc",
-        file_size_bytes=1234,
-        is_active=True,
-    )
-    db_session.add(firmware)
-    db_session.commit()
-    db_session.refresh(firmware)
+    calls = {}
 
-    class FakeOnt:
-        serial_number = "ONT123"
-
-    class FakeClient:
-        def download(self, _device_id, **_kwargs):
-            return {"_id": "firmware-task"}
+    def _request(db, ont_id, firmware_image_id):
+        calls.update(db=db, ont_id=ont_id, firmware_image_id=firmware_image_id)
+        return ActionResult(
+            success=True,
+            waiting=True,
+            message="queued",
+            data={"operation_id": "op-1"},
+        )
 
     monkeypatch.setattr(
-        ont_action_common,
-        "get_ont_client_or_error",
-        lambda _db, _ont_id: ((FakeOnt(), FakeClient(), "device-1"), None),
+        "app.services.network.ont_firmware.request_firmware_upgrade", _request
     )
 
     result = genieacs_service.firmware_upgrade(
         db_session,
         "ont-1",
-        str(firmware.id),
+        "image-1",
     )
 
     assert result.success is True
-    assert result.data["firmware_image_id"] == str(firmware.id)
-    assert result.data["firmware_version"] == "V1R2"
-    assert result.data["task"] == {"_id": "firmware-task"}
+    assert result.waiting is True
+    assert calls["ont_id"] == "ont-1"
+    assert calls["firmware_image_id"] == "image-1"
 
 
 def test_genieacs_service_queues_wifi_config(monkeypatch) -> None:

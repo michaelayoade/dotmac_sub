@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hmac
+import logging
 from datetime import UTC, datetime, time
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -10,10 +11,14 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db import get_db
-from app.models.subscriber import SubscriberStatus
 from app.services import crm_api
+from app.services.secrets import resolve_secret
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/crm", tags=["crm-api"])
+
+CRM_MAX_PER_PAGE = 500
 
 
 def _error(
@@ -25,8 +30,36 @@ def _error(
     raise HTTPException(status_code=status_code, detail=detail)
 
 
-def require_crm_bearer(authorization: str | None = Header(default=None)) -> None:
-    expected = settings.selfcare_api_token
+CRM_INTEGRATION_PERMISSION = "integration:crm"
+
+
+def require_crm_service_auth(
+    request: Request,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-Api-Key"),
+    db: Session = Depends(get_db),
+) -> None:
+    """Authenticate the CRM service caller.
+
+    Preferred: a scoped, rotatable ``ApiKey`` (fail-closed — the key must hold
+    the ``integration:crm`` permission, wildcard-aware). During migration the
+    legacy shared bearer (``selfcare_api_token``) is still accepted while
+    ``settings.crm_legacy_bearer_enabled`` is true; flip it off after CRM
+    switches to ``X-Api-Key`` to retire the unscoped credential.
+    """
+    if isinstance(x_api_key, str) and x_api_key:
+        from app.services.auth_dependencies import _api_key_principal, has_permission
+
+        auth = _api_key_principal(db, x_api_key, request)
+        if auth is not None and has_permission(auth, db, CRM_INTEGRATION_PERMISSION):
+            return
+        _error(
+            status.HTTP_401_UNAUTHORIZED,
+            "Invalid or insufficiently scoped API key.",
+        )
+    if not settings.crm_legacy_bearer_enabled:
+        _error(status.HTTP_401_UNAUTHORIZED, "CRM API requires an X-Api-Key.")
+    expected = resolve_secret(settings.selfcare_api_token) or ""
     if not expected:
         _error(status.HTTP_401_UNAUTHORIZED, "CRM API bearer token is not configured.")
     scheme, _, token = str(authorization or "").partition(" ")
@@ -34,6 +67,11 @@ def require_crm_bearer(authorization: str | None = Header(default=None)) -> None
         _error(status.HTTP_401_UNAUTHORIZED, "Missing bearer token.")
     if not hmac.compare_digest(token, expected):
         _error(status.HTTP_401_UNAUTHORIZED, "Invalid bearer token.")
+    logger.warning(
+        "crm api authenticated via legacy shared bearer (deprecated); "
+        "provision a scoped ApiKey with %s and set CRM_LEGACY_BEARER_ENABLED=false",
+        CRM_INTEGRATION_PERMISSION,
+    )
 
 
 def _envelope(data: Any, meta: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -48,33 +86,66 @@ def _query_value(request: Request, name: str) -> str | None:
     return value if value not in ("", None) else None
 
 
-def _pagination(request: Request) -> tuple[int, int, dict[str, Any]]:
+def _pagination(
+    request: Request, *, max_per_page: int = CRM_MAX_PER_PAGE
+) -> tuple[int, int, dict[str, Any]]:
     errors: dict[str, list[str]] = {}
 
-    def parse_int(name: str, default: int, *, min_value: int, max_value: int) -> int:
+    def parse_int(
+        name: str,
+        default: int,
+        *,
+        min_value: int,
+        max_value: int,
+        aliases: tuple[str, ...] = (),
+    ) -> int:
+        source_name = name
         raw = _query_value(request, name)
+        if raw is None:
+            for alias in aliases:
+                raw = _query_value(request, alias)
+                if raw is not None:
+                    source_name = alias
+                    break
         if raw is None:
             return default
         try:
             value = int(raw)
         except ValueError:
-            errors.setdefault(name, []).append("Must be an integer.")
+            errors.setdefault(source_name, []).append("Must be an integer.")
             return default
         if value < min_value:
-            errors.setdefault(name, []).append(
+            errors.setdefault(source_name, []).append(
                 f"Must be greater than or equal to {min_value}."
             )
         if value > max_value:
-            errors.setdefault(name, []).append(
+            errors.setdefault(source_name, []).append(
                 f"Must be less than or equal to {max_value}."
             )
         return value
 
     page = parse_int("page", 1, min_value=1, max_value=1_000_000)
-    per_page = parse_int("per_page", 100, min_value=1, max_value=500)
+    per_page = parse_int(
+        "per_page",
+        100,
+        min_value=1,
+        max_value=max_per_page,
+        aliases=("limit",),
+    )
     if errors:
         _error(status.HTTP_400_BAD_REQUEST, "Invalid query parameters.", errors)
     return page, per_page, {"page": page, "per_page": per_page}
+
+
+def _finish_read_response(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    bind = db.get_bind()
+    if (
+        bind.dialect.name == "postgresql"
+        and db.in_transaction()
+        and not db.in_nested_transaction()
+    ):
+        db.rollback()
+    return payload
 
 
 def _include_values(request: Request, allowed: set[str]) -> set[str]:
@@ -138,12 +209,12 @@ def _subscriber_or_404(db: Session, subscriber_id: str):
     return subscriber
 
 
-@router.get("/ping", dependencies=[Depends(require_crm_bearer)])
+@router.get("/ping", dependencies=[Depends(require_crm_service_auth)])
 def ping() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@router.get("/subscribers", dependencies=[Depends(require_crm_bearer)])
+@router.get("/subscribers", dependencies=[Depends(require_crm_service_auth)])
 def list_subscribers(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
     page, per_page, meta = _pagination(request)
     includes = _include_values(
@@ -160,6 +231,7 @@ def list_subscribers(request: Request, db: Session = Depends(get_db)) -> dict[st
         crm_api.billing_by_subscriber(db, subscribers) if "billing" in includes else {}
     )
     sessions = crm_api.latest_session_by_subscriber(db, subscriber_ids)
+    metadata = crm_api.subscriber_payload_metadata(db, subscribers)
     data = []
     for subscriber in subscribers:
         kwargs: dict[str, Any] = {}
@@ -173,13 +245,14 @@ def list_subscribers(request: Request, db: Session = Depends(get_db)) -> dict[st
                 subscriber,
                 session=sessions.get(subscriber.id),
                 include_session_state="session_state" in includes,
+                metadata=metadata.get(subscriber.id),
                 **kwargs,
             )
         )
-    return _envelope(data, {**meta, "total": total})
+    return _finish_read_response(db, _envelope(data, {**meta, "total": total}))
 
 
-@router.get("/subscribers/search", dependencies=[Depends(require_crm_bearer)])
+@router.get("/subscribers/search", dependencies=[Depends(require_crm_service_auth)])
 def search_subscribers(
     request: Request, db: Session = Depends(get_db)
 ) -> dict[str, Any]:
@@ -196,22 +269,34 @@ def search_subscribers(
     sessions = crm_api.latest_session_by_subscriber(
         db, [item.id for item in subscribers]
     )
+    metadata = crm_api.subscriber_payload_metadata(db, subscribers)
     data = [
-        crm_api.subscriber_payload(db, subscriber, session=sessions.get(subscriber.id))
+        crm_api.subscriber_payload(
+            db,
+            subscriber,
+            session=sessions.get(subscriber.id),
+            metadata=metadata.get(subscriber.id),
+        )
         for subscriber in subscribers
     ]
-    return _envelope(data, {**meta, "total": total})
+    return _finish_read_response(db, _envelope(data, {**meta, "total": total}))
 
 
-@router.get("/subscribers/online", dependencies=[Depends(require_crm_bearer)])
-def online_subscribers(db: Session = Depends(get_db)) -> dict[str, Any]:
+@router.get("/subscribers/online", dependencies=[Depends(require_crm_service_auth)])
+def online_subscribers(
+    request: Request, db: Session = Depends(get_db)
+) -> dict[str, Any]:
     # Online state is inferred from open, fresh RADIUS accounting sessions.
     # It is not an authoritative real-time device poll; subscribers whose NAS
     # has not sent interim accounting inside ONLINE_FRESH_SECONDS are excluded.
-    return _envelope(crm_api.online_subscribers(db))
+    page, per_page, meta = _pagination(request)
+    data, total = crm_api.online_subscribers(db, page=page, per_page=per_page)
+    return _finish_read_response(db, _envelope(data, {**meta, "total": total}))
 
 
-@router.get("/subscribers/{subscriber_id}", dependencies=[Depends(require_crm_bearer)])
+@router.get(
+    "/subscribers/{subscriber_id}", dependencies=[Depends(require_crm_service_auth)]
+)
 def subscriber_detail(
     subscriber_id: str, db: Session = Depends(get_db)
 ) -> dict[str, Any]:
@@ -232,7 +317,8 @@ def subscriber_detail(
 
 
 @router.get(
-    "/subscribers/{subscriber_id}/services", dependencies=[Depends(require_crm_bearer)]
+    "/subscribers/{subscriber_id}/services",
+    dependencies=[Depends(require_crm_service_auth)],
 )
 def subscriber_services(
     subscriber_id: str, db: Session = Depends(get_db)
@@ -242,7 +328,8 @@ def subscriber_services(
 
 
 @router.get(
-    "/subscribers/{subscriber_id}/billing", dependencies=[Depends(require_crm_bearer)]
+    "/subscribers/{subscriber_id}/billing",
+    dependencies=[Depends(require_crm_service_auth)],
 )
 def subscriber_billing(
     subscriber_id: str, db: Session = Depends(get_db)
@@ -252,7 +339,8 @@ def subscriber_billing(
 
 
 @router.get(
-    "/subscribers/{subscriber_id}/sessions", dependencies=[Depends(require_crm_bearer)]
+    "/subscribers/{subscriber_id}/sessions",
+    dependencies=[Depends(require_crm_service_auth)],
 )
 def subscriber_sessions(
     subscriber_id: str, db: Session = Depends(get_db)
@@ -263,7 +351,7 @@ def subscriber_sessions(
 
 @router.get(
     "/subscribers/{subscriber_id}/statistics",
-    dependencies=[Depends(require_crm_bearer)],
+    dependencies=[Depends(require_crm_service_auth)],
 )
 def subscriber_statistics(
     subscriber_id: str, db: Session = Depends(get_db)
@@ -273,7 +361,8 @@ def subscriber_statistics(
 
 
 @router.patch(
-    "/subscribers/{subscriber_id}/status", dependencies=[Depends(require_crm_bearer)]
+    "/subscribers/{subscriber_id}/status",
+    dependencies=[Depends(require_crm_service_auth)],
 )
 def update_subscriber_status(
     subscriber_id: str,
@@ -295,45 +384,11 @@ def update_subscriber_status(
     if errors:
         _error(status.HTTP_400_BAD_REQUEST, "Invalid request body.", errors)
 
-    current = subscriber.status
-    current_value = current.value if current else None
-    if current in {SubscriberStatus.disabled, SubscriberStatus.canceled}:
-        crm_api.log_status_writeback(
-            db,
-            subscriber_id=subscriber.id,
-            actor=x_crm_actor,
-            source=source,
-            reason=reason,
-            requested_status=requested_status,
-            previous_status=current_value,
-            result="already_terminal",
-            status_code=200,
-        )
-        db.commit()
-        return _envelope({"id": str(subscriber.id), "status": current_value})
-
-    if current not in {SubscriberStatus.blocked, SubscriberStatus.suspended}:
-        crm_api.log_status_writeback(
-            db,
-            subscriber_id=subscriber.id,
-            actor=x_crm_actor,
-            source=source,
-            reason=reason,
-            requested_status=requested_status,
-            previous_status=current_value,
-            result="rejected_transition",
-            status_code=status.HTTP_409_CONFLICT,
-        )
-        db.commit()
-        _error(
-            status.HTTP_409_CONFLICT,
-            "Subscriber can only be disabled from blocked, suspended, or nonpayment_suspended state.",
-        )
-
     return _envelope(
-        crm_api.disable_subscriber_from_crm(
+        crm_api.update_subscriber_status_from_crm(
             db,
             subscriber,
+            requested_status=requested_status,
             actor=x_crm_actor,
             source=source,
             reason=reason,
@@ -341,21 +396,341 @@ def update_subscriber_status(
     )
 
 
-@router.get("/locations", dependencies=[Depends(require_crm_bearer)])
-def locations(db: Session = Depends(get_db)) -> dict[str, Any]:
-    return _envelope(crm_api.locations(db))
+@router.get("/locations", dependencies=[Depends(require_crm_service_auth)])
+def locations(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
+    page, per_page, meta = _pagination(request)
+    data, total = crm_api.locations(db, page=page, per_page=per_page)
+    return _finish_read_response(db, _envelope(data, {**meta, "total": total}))
 
 
-@router.get("/billing-risk-source", dependencies=[Depends(require_crm_bearer)])
+@router.get("/billing-risk-source", dependencies=[Depends(require_crm_service_auth)])
 def billing_risk_source(
     request: Request, db: Session = Depends(get_db)
 ) -> dict[str, Any]:
     page, per_page, meta = _pagination(request)
     rows, total = crm_api.billing_risk_rows(db, page=page, per_page=per_page)
-    return _envelope(rows, {**meta, "total": total})
+    return _finish_read_response(db, _envelope(rows, {**meta, "total": total}))
 
 
-@router.get("/service-extensions", dependencies=[Depends(require_crm_bearer)])
+@router.post(
+    "/payments",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_crm_service_auth)],
+    tags=["payments"],
+)
+def record_crm_payment(
+    payload: dict[str, Any] = Body(default_factory=dict),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Record a payment a customer made in the CRM (installation / subscription)
+    into the ledger so it settles the invoice and shows in the customer portal.
+
+    Body: ``{subscriber_id, amount, external_ref, paid_at?, memo?,
+    invoice_external_ref?, currency?}``. Idempotent on ``external_ref``.
+    """
+    errors: dict[str, list[str]] = {}
+    subscriber_id = str(payload.get("subscriber_id") or "").strip()
+    if not subscriber_id:
+        errors.setdefault("subscriber_id", []).append("Required.")
+    external_ref = str(payload.get("external_ref") or "").strip()
+    if not external_ref:
+        errors.setdefault("external_ref", []).append("Required.")
+    amount_raw = payload.get("amount")
+    try:
+        amount = Decimal(str(amount_raw))
+    except (InvalidOperation, TypeError, ValueError):
+        errors.setdefault("amount", []).append("Must be a number.")
+        amount = Decimal("0")
+    else:
+        if amount <= 0:
+            errors.setdefault("amount", []).append("Must be greater than 0.")
+    if errors:
+        _error(status.HTTP_400_BAD_REQUEST, "Invalid payment payload.", errors)
+
+    paid_at_raw = payload.get("paid_at")
+    paid_at = None
+    if paid_at_raw:
+        try:
+            paid_at = datetime.fromisoformat(str(paid_at_raw).replace("Z", "+00:00"))
+        except ValueError:
+            _error(
+                status.HTTP_400_BAD_REQUEST,
+                "Invalid payment payload.",
+                {"paid_at": ["Must be ISO 8601."]},
+            )
+
+    invoice_external_ref = payload.get("invoice_external_ref")
+    invoice_external_ref = (
+        str(invoice_external_ref).strip()
+        if invoice_external_ref not in (None, "")
+        else None
+    )
+
+    try:
+        payment = crm_api.record_external_payment(
+            db,
+            subscriber_id=subscriber_id,
+            amount=amount,
+            external_ref=external_ref,
+            paid_at=paid_at,
+            memo=payload.get("memo"),
+            invoice_external_ref=invoice_external_ref,
+            currency=str(payload.get("currency") or "NGN"),
+        )
+    except LookupError:
+        _error(status.HTTP_404_NOT_FOUND, "Subscriber not found.")
+    except ValueError as exc:
+        _error(status.HTTP_400_BAD_REQUEST, str(exc))
+
+    return _envelope(
+        {
+            "id": str(payment.id),
+            "amount": str(payment.amount),
+            "status": payment.status.value,
+            "account_id": str(payment.account_id) if payment.account_id else None,
+            "external_id": payment.external_id,
+        }
+    )
+
+
+@router.post(
+    "/subscriptions",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_crm_service_auth)],
+    tags=["subscriptions"],
+)
+def create_crm_subscription(
+    payload: dict[str, Any] = Body(default_factory=dict),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Create a subscription for a subscriber from a CRM sale (+ its first
+    invoice). Body: ``{subscriber_id, offer_ref|offer_id|offer_code,
+    external_ref, unit_price?, start_at?}``. Idempotent on ``external_ref``."""
+    errors: dict[str, list[str]] = {}
+    subscriber_id = str(payload.get("subscriber_id") or "").strip()
+    if not subscriber_id:
+        errors.setdefault("subscriber_id", []).append("Required.")
+    offer_ref = str(
+        payload.get("offer_ref")
+        or payload.get("offer_id")
+        or payload.get("offer_code")
+        or ""
+    ).strip()
+    if not offer_ref:
+        errors.setdefault("offer_ref", []).append("Required (offer id or code).")
+    external_ref = str(payload.get("external_ref") or "").strip()
+    if not external_ref:
+        errors.setdefault("external_ref", []).append("Required.")
+    if errors:
+        _error(status.HTTP_400_BAD_REQUEST, "Invalid subscription payload.", errors)
+
+    start_at = None
+    start_raw = payload.get("start_at")
+    if start_raw:
+        try:
+            start_at = datetime.fromisoformat(str(start_raw).replace("Z", "+00:00"))
+        except ValueError:
+            _error(
+                status.HTTP_400_BAD_REQUEST,
+                "Invalid subscription payload.",
+                {"start_at": ["Must be ISO 8601."]},
+            )
+
+    try:
+        result = crm_api.create_subscription(
+            db,
+            subscriber_id=subscriber_id,
+            offer_ref=offer_ref,
+            external_ref=external_ref,
+            unit_price=payload.get("unit_price"),
+            start_at=start_at,
+        )
+    except LookupError as exc:
+        _error(status.HTTP_404_NOT_FOUND, str(exc).capitalize())
+
+    subscription = result["subscription"]
+    invoice = result["invoice"]
+    return _envelope(
+        {
+            "subscription_id": str(subscription.id) if subscription else None,
+            "invoice_id": str(invoice.id) if invoice else None,
+            "status": subscription.status.value if subscription else None,
+            "created": result["created"],
+        }
+    )
+
+
+@router.get("/offers", dependencies=[Depends(require_crm_service_auth)])
+def catalog_offers(
+    q: str | None = None,
+    active_only: bool = True,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """The plan catalog (offers + recurring price) for the CRM to pick from when
+    quoting a subscription — sub owns the plans; the CRM reads them."""
+    return _envelope(crm_api.list_catalog_offers(db, q=q, active_only=active_only))
+
+
+@router.get("/infrastructure/assets", dependencies=[Depends(require_crm_service_auth)])
+def infrastructure_assets(
+    q: str | None = None,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Pickable infrastructure items — OLTs (Huawei/Ubiquiti), their PON ports,
+    and basestations — for raising an infrastructure/outage ticket."""
+    return _envelope(crm_api.list_infrastructure_assets(db, q=q))
+
+
+@router.get("/ncc/subscribers", dependencies=[Depends(require_crm_service_auth)])
+def ncc_subscriber_report(
+    as_of: str | None = None,
+    statuses: str | None = None,
+    reseller_id: str | None = None,
+    access_capacity_gbps: str | None = None,
+    unutilized_capacity_mbps: str | None = None,
+    points_of_presence: str | None = None,
+    data_usage_tb: str | None = None,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """The NCC quarterly Subscriber & Capacity aggregate, for the CRM's
+    regulatory-pack aggregator. Same parameters as the admin report (period-end
+    ``as_of``, comma-separated ``statuses``, optional ``reseller_id``, and the
+    manual capacity figures)."""
+    from app.services import ncc_subscriber_report as ncc
+
+    params = ncc.parse_report_params(
+        as_of=as_of,
+        statuses=statuses,
+        reseller_id=reseller_id,
+        capacity={
+            "access_capacity_gbps": access_capacity_gbps,
+            "unutilized_capacity_mbps": unutilized_capacity_mbps,
+            "points_of_presence": points_of_presence,
+            "data_usage_tb": data_usage_tb,
+        },
+    )
+    return _envelope(ncc.build_ncc_subscriber_report(db, params))
+
+
+@router.get("/outages/impact", dependencies=[Depends(require_crm_service_auth)])
+def outage_impact(
+    node_id: str | None = None,
+    basestation_id: str | None = None,
+    olt_id: str | None = None,
+    pon_port_id: str | None = None,
+    fdh_id: str | None = None,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Subscribers affected by a failed infrastructure asset.
+
+    Pass one of: ``node_id`` (a monitored NetworkDevice — switch/router, with
+    LLDP downstream expansion), ``basestation_id`` (a PopSite), ``olt_id`` (all
+    ONTs on an OLT), ``pon_port_id`` (only the ONTs on that PON port), or
+    ``fdh_id`` (active subscriptions behind an FDH cabinet). OLT and PON-port
+    resolution are vendor-agnostic (Huawei + Ubiquiti). The ``coverage`` block
+    flags where the e2e chain is incomplete so the caller can fall back to manual
+    selection.
+    """
+    from app.models.network import FdhCabinet
+    from app.models.network_monitoring import NetworkDevice, PopSite
+
+    if not any([node_id, basestation_id, olt_id, pon_port_id, fdh_id]):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "One of node_id, basestation_id, olt_id, pon_port_id "
+                "or fdh_id is required"
+            ),
+        )
+
+    node = None
+    if node_id:
+        node = db.get(NetworkDevice, crm_api.coerce_subscriber_id(node_id))
+        if node is None:
+            raise HTTPException(status_code=404, detail="Network device not found")
+    basestation = None
+    if basestation_id:
+        basestation = db.get(PopSite, crm_api.coerce_subscriber_id(basestation_id))
+        if basestation is None:
+            raise HTTPException(status_code=404, detail="Basestation not found")
+    if fdh_id:
+        fdh = db.get(FdhCabinet, crm_api.coerce_subscriber_id(fdh_id))
+        if fdh is None:
+            raise HTTPException(status_code=404, detail="FDH cabinet not found")
+
+    return _envelope(
+        crm_api.outage_impact(
+            db,
+            node=node,
+            basestation=basestation,
+            olt_id=crm_api.coerce_subscriber_id(olt_id) if olt_id else None,
+            pon_port_id=crm_api.coerce_subscriber_id(pon_port_id)
+            if pon_port_id
+            else None,
+            fdh_id=crm_api.coerce_subscriber_id(fdh_id) if fdh_id else None,
+        )
+    )
+
+
+@router.get("/outages", dependencies=[Depends(require_crm_service_auth)])
+def list_outages(
+    status_filter: str | None = None,
+    basestation_id: str | None = None,
+    node_id: str | None = None,
+    resolved_within_hours: int = 24,
+    page: int = 1,
+    per_page: int = 100,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Outage incidents for the CRM/mobile backend. The default "active" view is
+    operator ``open`` plus debounced-real classifier incidents (``confirmed``/
+    ``clearing``), plus anything resolved within ``resolved_within_hours``
+    (default 24); ``suspected``/``discarded`` are excluded from the default. Each
+    row carries scope (node/basestation/FDH + name), ``detection_source``
+    (operator vs classifier), ``state``, ``status_presentation``, lifecycle
+    timestamps, ``confidence`` and ``mttr_seconds``. ``status_filter`` narrows to
+    a single lifecycle state, ``basestation_id`` and ``node_id`` narrow the
+    scope."""
+    from app.services.topology.outage import OUTAGE_STATUS_VALUES
+
+    _valid_status = OUTAGE_STATUS_VALUES
+    if status_filter is not None and status_filter not in _valid_status:
+        _error(
+            status.HTTP_400_BAD_REQUEST,
+            "Invalid query parameters.",
+            {"status_filter": [f"Must be one of {', '.join(_valid_status)}."]},
+        )
+    page = max(1, page)
+    per_page = max(1, min(per_page, 500))
+    rows, total = crm_api.list_outage_incidents(
+        db,
+        status=status_filter,
+        basestation_id=basestation_id,
+        node_id=node_id,
+        resolved_within_hours=max(0, min(resolved_within_hours, 24 * 30)),
+        page=page,
+        per_page=per_page,
+    )
+    return _envelope(rows, {"page": page, "per_page": per_page, "total": total})
+
+
+@router.get("/outages/{incident_id}", dependencies=[Depends(require_crm_service_auth)])
+def outage_detail(
+    incident_id: str,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """One incident with the affected subscriptions (id, subscriber name,
+    service address, status), capped at ``limit`` (max 500) with
+    ``affected_total``/``affected_truncated`` for the full size. Membership is
+    derived via the same topology resolvers as the declare-time snapshot."""
+    row = crm_api.outage_incident_detail(db, incident_id, limit=max(1, min(limit, 500)))
+    if row is None:
+        _error(status.HTTP_404_NOT_FOUND, "Outage incident not found.")
+    return _envelope(row)
+
+
+@router.get("/service-extensions", dependencies=[Depends(require_crm_service_auth)])
 def service_extensions(
     request: Request, db: Session = Depends(get_db)
 ) -> dict[str, Any]:
@@ -365,7 +740,8 @@ def service_extensions(
 
 
 @router.get(
-    "/service-extensions/{extension_id}", dependencies=[Depends(require_crm_bearer)]
+    "/service-extensions/{extension_id}",
+    dependencies=[Depends(require_crm_service_auth)],
 )
 def service_extension_detail(
     extension_id: str, db: Session = Depends(get_db)
@@ -378,7 +754,7 @@ def service_extension_detail(
 
 @router.get(
     "/subscribers/{subscriber_id}/service-extensions",
-    dependencies=[Depends(require_crm_bearer)],
+    dependencies=[Depends(require_crm_service_auth)],
 )
 def subscriber_service_extensions(
     subscriber_id: str, db: Session = Depends(get_db)
@@ -387,7 +763,7 @@ def subscriber_service_extensions(
     return _envelope(crm_api.service_extensions_for_subscriber(db, subscriber.id))
 
 
-@router.get("/finance/transactions", dependencies=[Depends(require_crm_bearer)])
+@router.get("/finance/transactions", dependencies=[Depends(require_crm_service_auth)])
 def finance_transactions(
     request: Request, db: Session = Depends(get_db)
 ) -> dict[str, Any]:
@@ -403,7 +779,7 @@ def finance_transactions(
     return _envelope(rows, {**meta, "total": total})
 
 
-@router.get("/finance/payments", dependencies=[Depends(require_crm_bearer)])
+@router.get("/finance/payments", dependencies=[Depends(require_crm_service_auth)])
 def finance_payments(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
     page, per_page, meta = _pagination(request)
     rows, total = crm_api.payment_rows(
@@ -420,18 +796,18 @@ def finance_payments(request: Request, db: Session = Depends(get_db)) -> dict[st
 @router.post(
     "/credits",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_crm_bearer)],
+    dependencies=[Depends(require_crm_service_auth)],
     tags=["credits"],
 )
 def create_crm_credit(
     payload: dict[str, Any] = Body(default_factory=dict),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Pay a referral reward into a subscriber's VAS wallet (a spendable
-    balance) — used by the CRM to pay out referral rewards. Body:
-    ``{subscriber_id, amount, reason?, external_ref?, currency?}``. Idempotent on
-    ``external_ref``. Individual subscribers only (reseller float wallets are
-    never credited here).
+    """Issue a referral reward as account credit. Body:
+    ``{subscriber_id, amount, external_ref, reason?, currency?}``. ``external_ref``
+    is REQUIRED and is the idempotency key (a repeat call returns the existing
+    entry). Individual subscribers only (reseller float wallets are never
+    credited here).
     """
     errors: dict[str, list[str]] = {}
     subscriber_id = str(payload.get("subscriber_id") or "").strip()
@@ -445,17 +821,21 @@ def create_crm_credit(
     else:
         if amount <= 0:
             errors.setdefault("amount", []).append("Must be greater than 0.")
+    # external_ref is the idempotency key. It is required so a retry/redelivery
+    # cannot issue the same account credit twice.
+    external_ref = payload.get("external_ref")
+    external_ref = str(external_ref).strip() if external_ref not in (None, "") else None
+    if not external_ref:
+        errors.setdefault("external_ref", []).append("Required (idempotency key).")
     if errors:
         _error(status.HTTP_400_BAD_REQUEST, "Invalid credit payload.", errors)
 
     currency = str(payload.get("currency") or "NGN").strip().upper() or "NGN"
     reason = payload.get("reason")
     reason = str(reason).strip() if reason not in (None, "") else None
-    external_ref = payload.get("external_ref")
-    external_ref = str(external_ref).strip() if external_ref not in (None, "") else None
 
     try:
-        entry = crm_api.credit_referral_reward_to_wallet(
+        credit_note = crm_api.create_account_credit(
             db,
             subscriber_id=subscriber_id,
             amount=amount,
@@ -468,12 +848,12 @@ def create_crm_credit(
 
     return _envelope(
         {
-            "id": str(entry.id),
-            "wallet_id": str(entry.wallet_id),
-            "amount": str(entry.amount),
-            "currency": entry.currency,
-            "reference": entry.reference,
-            "type": "wallet_credit",
+            "id": str(credit_note.id),
+            "account_id": str(credit_note.account_id),
+            "amount": str(credit_note.total),
+            "currency": credit_note.currency,
+            "credit_number": credit_note.credit_number,
+            "type": "account_credit",
         }
     )
 
@@ -481,7 +861,7 @@ def create_crm_credit(
 @router.post(
     "/invoices",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_crm_bearer)],
+    dependencies=[Depends(require_crm_service_auth)],
     tags=["invoices"],
 )
 def create_crm_invoice(
@@ -535,5 +915,67 @@ def create_crm_invoice(
             "total": str(invoice.total),
             "status": invoice.status.value,
             "account_id": str(invoice.account_id),
+        }
+    )
+
+
+@router.post(
+    "/subscriptions/{subscription_id}/radio-mac",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_crm_service_auth)],
+    tags=["provisioning"],
+)
+def register_subscription_radio_mac(
+    subscription_id: str,
+    payload: dict[str, Any] = Body(default_factory=dict),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Register the customer's wireless-radio MAC at install time.
+
+    Called by the field/mobile app at turn-up so the radio is traceable by
+    construction instead of waiting for the UISP sync's MAC guess. Body:
+    ``{mac_address}``. Idempotent: re-posting the same MAC for the same
+    subscriber returns the existing device with ``created: false``. A MAC
+    already bound to a DIFFERENT subscriber is rejected with 409 and an
+    unmatched-radio ops review item is opened.
+    """
+    from app.services import radio_registration
+
+    mac = payload.get("mac_address") or payload.get("mac")
+    if not str(mac or "").strip():
+        _error(
+            status.HTTP_400_BAD_REQUEST,
+            "Invalid radio MAC payload.",
+            {"mac_address": ["Required."]},
+        )
+    try:
+        result = radio_registration.register_radio_mac(
+            db,
+            subscription_id=subscription_id,
+            mac=str(mac),
+            source=radio_registration.SOURCE_CRM_API,
+        )
+    except LookupError:
+        _error(status.HTTP_404_NOT_FOUND, "Subscription not found.")
+    except radio_registration.InvalidMacError as exc:
+        _error(
+            status.HTTP_400_BAD_REQUEST,
+            "Invalid radio MAC payload.",
+            {"mac_address": [str(exc)]},
+        )
+    except radio_registration.MacConflictError as exc:
+        _error(status.HTTP_409_CONFLICT, str(exc))
+
+    device = result.device
+    return _envelope(
+        {
+            "id": str(device.id),
+            "mac_address": device.mac_address,
+            "device_type": device.device_type.value,
+            "subscriber_id": str(device.subscriber_id),
+            "created": result.created,
+            "subscription_mac_stamped": result.subscription_mac_stamped,
+            "uisp_confirmed": device.uisp_device_id is not None,
+            "warnings": result.warnings,
         }
     )

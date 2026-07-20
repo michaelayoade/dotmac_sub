@@ -1,0 +1,56 @@
+{% extends "layouts/reseller.html" %}
+
+{% block page_header %}
+<div>
+    <div class="mb-2 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+        <a href="/reseller/accounts" class="hover:text-indigo-600 dark:hover:text-indigo-400">Accounts</a>
+        <span>/</span>
+        <a href="/reseller/accounts/{{ proposal.account_id }}" class="hover:text-indigo-600 dark:hover:text-indigo-400">{{ proposal.account_name }}</a>
+        <span>/</span>
+        <span class="text-slate-900 dark:text-white">Confirm</span>
+    </div>
+    <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ proposal.title }}</h1>
+    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Review the server-calculated impact before changing this customer account.</p>
+</div>
+{% endblock %}
+
+{% block content %}
+<section class="mx-auto max-w-2xl overflow-hidden rounded-2xl border border-amber-200 bg-white shadow-sm dark:border-amber-900/60 dark:bg-slate-800">
+    <div class="border-b border-amber-200 bg-amber-50 px-6 py-5 dark:border-amber-900/60 dark:bg-amber-950/30">
+        <p class="text-xs font-bold uppercase tracking-wide text-amber-700 dark:text-amber-300">Confirmation required</p>
+        <h2 class="mt-1 text-xl font-bold text-slate-900 dark:text-white">{{ proposal.account_name }}</h2>
+        {% if proposal.account_number %}<p class="mt-1 text-sm text-slate-600 dark:text-slate-300">Account {{ proposal.account_number }}</p>{% endif %}
+    </div>
+    <dl class="divide-y divide-slate-100 px-6 dark:divide-slate-700">
+        <div class="grid gap-1 py-4 sm:grid-cols-[12rem_1fr]">
+            <dt class="text-sm font-semibold text-slate-600 dark:text-slate-300">Services changed</dt>
+            <dd class="text-sm text-slate-900 dark:text-white">{{ proposal.affected }}</dd>
+        </div>
+        <div class="grid gap-1 py-4 sm:grid-cols-[12rem_1fr]">
+            <dt class="text-sm font-semibold text-slate-600 dark:text-slate-300">Services unchanged</dt>
+            <dd class="text-sm text-slate-900 dark:text-white">{{ proposal.unaffected }}</dd>
+        </div>
+        <div class="grid gap-1 py-4 sm:grid-cols-[12rem_1fr]">
+            <dt class="text-sm font-semibold text-slate-600 dark:text-slate-300">Account state</dt>
+            <dd class="text-sm text-slate-900 dark:text-white">{{ 'Will change' if proposal.account_affected else 'Derived from resulting service state' }}</dd>
+        </div>
+        <div class="grid gap-1 py-4 sm:grid-cols-[12rem_1fr]">
+            <dt class="text-sm font-semibold text-slate-600 dark:text-slate-300">Result</dt>
+            <dd class="text-sm text-slate-900 dark:text-white">{{ proposal.consequence }}</dd>
+        </div>
+    </dl>
+    <div class="border-t border-slate-200 px-6 py-5 dark:border-slate-700">
+        <p class="mb-4 text-sm text-slate-600 dark:text-slate-300">If account, service, lock, or login state changed since this preview, Sub will reject the confirmation and ask you to review it again.</p>
+        <div class="flex flex-wrap justify-end gap-3">
+            <a href="/reseller/accounts/{{ proposal.account_id }}" class="rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700 dark:border-slate-600 dark:text-slate-200">Cancel</a>
+            <form method="post" action="/reseller/accounts/{{ proposal.account_id }}/status/confirm">
+                {% include "components/forms/csrf_input.html" %}
+                <input type="hidden" name="action" value="{{ proposal.action }}">
+                <input type="hidden" name="preview_fingerprint" value="{{ proposal.preview_fingerprint }}">
+                <input type="hidden" name="idempotency_key" value="{{ proposal.idempotency_key }}">
+                <button type="submit" class="rounded-xl bg-rose-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-rose-700">Confirm {{ proposal.action }}</button>
+            </form>
+        </div>
+    </div>
+</section>
+{% endblock %}

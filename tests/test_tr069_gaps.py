@@ -22,6 +22,7 @@ from app.models.tr069 import (
 )
 from app.schemas.tr069 import Tr069AcsServerCreate, Tr069JobCreate
 from app.services.events.types import EventType
+from app.web.brand_globals import _app_datetime_filter
 
 # ---------------------------------------------------------------------------
 # 1. TR-069 event types
@@ -733,16 +734,12 @@ class TestAutoLinkOnts:
         assert rows[0].id == ont.id
         assert rows[0].last_seen_at == device.last_inform_at
 
-    def test_ont_list_page_data_uses_zabbix_for_last_seen(
-        self, db_session, monkeypatch
-    ) -> None:
+    def test_ont_list_page_data_uses_inventory_for_last_seen(self, db_session) -> None:
         from app.models.network import OntUnit
-        from app.services import zabbix_ont_status
         from app.services.web_network_core_devices_views import onts_list_page_data
 
         stale_last_seen = datetime.now(UTC) - timedelta(hours=2)
         latest_inform = datetime.now(UTC) - timedelta(minutes=5)
-        zabbix_seen = datetime.now(UTC) - timedelta(minutes=1)
         server = Tr069AcsServer(
             name="Latest Inform Table ACS",
             base_url="http://genieacs:7557",
@@ -768,29 +765,19 @@ class TestAutoLinkOnts:
         )
         db_session.commit()
 
-        monkeypatch.setattr(
-            zabbix_ont_status,
-            "get_ont_snapshots_from_zabbix",
-            lambda db, onts, **_: {
-                str(item.id): zabbix_ont_status.OntSignalData(
-                    online=True,
-                    updated_at=zabbix_seen,
-                )
-                for item in onts
-            },
-        )
-
         page_data = onts_list_page_data(
             db_session,
             authorization="all",
             search=ont.serial_number,
         )
 
+        # The live snapshot source was retired: the list resolves persisted
+        # native OLT/ACS evidence and marks absent evidence as derived offline.
         signal_data = page_data["signal_data"][str(ont.id)]
         assert signal_data["acs_last_inform_at"] == stale_last_seen.replace(tzinfo=None)
-        assert signal_data["last_seen_at"] == zabbix_seen
-        assert signal_data["status_source"] == "zabbix"
-        assert signal_data["status_display"] == "Online"
+        assert signal_data["last_seen_at"] == stale_last_seen.replace(tzinfo=None)
+        assert signal_data["status_source"] == "derived"
+        assert signal_data["status_display"] == "Offline"
 
     def test_ont_index_template_renders_zabbix_last_seen_column(self) -> None:
         ont_id = uuid4()
@@ -868,16 +855,20 @@ class TestAutoLinkOnts:
             "authorization_result": None,
         }
 
-        html = (
-            Environment(loader=FileSystemLoader("templates"), autoescape=True)
-            .get_template("admin/network/onts/index.html")
-            .render(context)
-        )
+        env = Environment(loader=FileSystemLoader("templates"), autoescape=True)
+        # The template renders timestamps through the owned app_datetime filter;
+        # a bare Environment doesn't get it (that's registered on Jinja2Templates
+        # instances), so register it here to keep the test isolation-safe.
+        env.filters["app_datetime"] = _app_datetime_filter
+        html = env.get_template("admin/network/onts/index.html").render(context)
 
         assert "UI-ACS-LAST-SEEN-001" in html
-        assert "Apr 28, 08:55" in html
-        assert "2026-04-28 08:55:00" in html
-        assert "Apr 28, 08:10" not in html
+        # Timestamps render in the fixed display timezone (WAT = UTC+1) via the
+        # app_datetime owned filter, so the 08:55 UTC Zabbix reading shows as
+        # 09:55 and the stale 08:10 ONT reading (superseded by Zabbix) as 09:10.
+        assert "Apr 28, 09:55" in html
+        assert "2026-04-28 09:55:00" in html
+        assert "Apr 28, 09:10" not in html
 
     def test_sync_auto_links_ont_by_normalized_serial(self, db_session) -> None:
         from app.models.network import OntUnit
@@ -2170,7 +2161,7 @@ class TestAcsPropagation:
 
         assert called["olt"] is olt
 
-    def test_queue_acs_propagation_includes_tr098_and_tr181_paths(
+    def test_queue_acs_propagation_delegates_to_tracked_reconciliation(
         self, db_session
     ) -> None:
         from app.models.network import OLTDevice, OntUnit
@@ -2196,27 +2187,18 @@ class TestAcsPropagation:
         db_session.add(ont)
         db_session.commit()
 
-        fake_client = MagicMock()
-
+        expected = {
+            "attempted": 1,
+            "queued": 1,
+            "duplicates": 0,
+            "errors": 0,
+            "operation_id": "operation-1",
+        }
         with patch(
-            "app.services.network._resolve.resolve_genieacs_with_reason",
-            return_value=((fake_client, "device-1"), "resolved_via_olt_acs"),
-        ):
+            "app.services.network.ont_reconcile_queue.queue_olt_acs_reconciliation",
+            return_value=expected,
+        ) as queue_reconciliation:
             stats = _queue_acs_propagation(db_session, olt)
 
-        assert stats["attempted"] == 1
-        assert stats["propagated"] == 1
-        fake_client.set_parameter_values.assert_called_once()
-        sent_params = fake_client.set_parameter_values.call_args.args[1]
-        assert (
-            sent_params["Device.ManagementServer.URL"] == "http://acs.example.com/cwmp"
-        )
-        assert (
-            sent_params["InternetGatewayDevice.ManagementServer.URL"]
-            == "http://acs.example.com/cwmp"
-        )
-        assert sent_params["Device.ManagementServer.Username"] == "cwmp-user"
-        assert (
-            sent_params["InternetGatewayDevice.ManagementServer.Username"]
-            == "cwmp-user"
-        )
+        assert stats == expected
+        queue_reconciliation.assert_called_once_with(db_session, olt)

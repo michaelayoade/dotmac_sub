@@ -7,6 +7,7 @@
     <input
         type="radio"
         name="payment_choice"
+        data-form-consumer="client"
         value="provider:{{ option.provider_type }}"
         x-model="selectedPaymentChoice"
         class="h-4 w-4 border-stone-300 text-emerald-600 focus:ring-emerald-500">
@@ -27,6 +28,7 @@
     <input
         type="radio"
         name="payment_choice"
+        data-form-consumer="client"
         value="card:{{ method.id }}"
         x-model="selectedPaymentChoice"
         class="h-4 w-4 border-stone-300 text-emerald-600 focus:ring-emerald-500">

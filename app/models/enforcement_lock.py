@@ -41,6 +41,13 @@ class EnforcementReason(enum.Enum):
     system = "system"  # System-level (migration, maintenance)
 
 
+class AccessRestrictionMode(enum.Enum):
+    """Network treatment requested by an active enforcement lock."""
+
+    hard_reject = "hard_reject"
+    captive = "captive"
+
+
 class EnforcementLock(Base):
     """A single enforcement lock on a subscription.
 
@@ -95,6 +102,16 @@ class EnforcementLock(Base):
     )
     reason: Mapped[EnforcementReason] = mapped_column(
         Enum(EnforcementReason, name="enforcementreason", create_constraint=False),
+        nullable=False,
+    )
+    access_mode: Mapped[AccessRestrictionMode] = mapped_column(
+        Enum(
+            AccessRestrictionMode,
+            name="accessrestrictionmode",
+            create_constraint=False,
+        ),
+        default=AccessRestrictionMode.hard_reject,
+        server_default=AccessRestrictionMode.hard_reject.value,
         nullable=False,
     )
     source: Mapped[str] = mapped_column(

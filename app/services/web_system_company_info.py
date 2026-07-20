@@ -68,3 +68,16 @@ def save_company_info(db: Session, data: Mapping[str, Any]) -> None:
             db.add(setting)
     db.flush()
     db.commit()
+    from app.services.brand_profiles import sync_platform_brand_from_legacy_settings
+
+    sync_platform_brand_from_legacy_settings(
+        db,
+        overwrite_fields={
+            "product_name",
+            "legal_name",
+            "support_email",
+            "support_phone",
+            "legal_address",
+        },
+    )
+    db.commit()

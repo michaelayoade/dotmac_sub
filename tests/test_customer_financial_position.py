@@ -1,0 +1,277 @@
+"""Shared invoice collectibility and customer financial position tests."""
+
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+
+from app.models.billing import (
+    Invoice,
+    InvoiceStatus,
+    LedgerEntry,
+    LedgerEntryType,
+    LedgerSource,
+)
+from app.models.catalog import BillingMode
+from app.models.subscriber import Subscriber
+from app.services.customer_financial_position import (
+    get_customer_financial_position,
+    get_native_customer_financial_balance,
+)
+from app.services.invoice_collectibility import (
+    due_invoice_balance,
+    invoice_balance_sum_by_currency,
+    list_open_invoices,
+    open_invoice_balance,
+    open_invoice_balance_for_accounts,
+    open_invoice_filters_for_accounts,
+    overdue_debt_balance_for_accounts,
+    overdue_status_count,
+    overdue_status_count_for_accounts,
+)
+from app.services.notification_template_conditions import conditions_match
+from app.services.web_customer_actions import _billing_template_variables
+
+
+def _subscriber(db_session) -> Subscriber:
+    subscriber = Subscriber(
+        first_name="Financial",
+        last_name="Position",
+        email=f"financial-{uuid.uuid4().hex}@example.com",
+        billing_mode=BillingMode.postpaid,
+    )
+    db_session.add(subscriber)
+    db_session.commit()
+    return subscriber
+
+
+def _invoice(
+    db_session,
+    subscriber,
+    *,
+    status=InvoiceStatus.issued,
+    balance="100.00",
+    due_at=None,
+    currency="NGN",
+    is_active=True,
+):
+    invoice = Invoice(
+        account_id=subscriber.id,
+        invoice_number=f"INV-{uuid.uuid4().hex[:8]}",
+        status=status,
+        total=Decimal(balance),
+        balance_due=Decimal(balance),
+        due_at=due_at,
+        currency=currency,
+        is_active=is_active,
+    )
+    db_session.add(invoice)
+    db_session.commit()
+    return invoice
+
+
+def test_invoice_collectibility_splits_open_due_and_overdue_status(db_session):
+    subscriber = _subscriber(db_session)
+    now = datetime.now(UTC)
+    past = now - timedelta(days=3)
+    future = now + timedelta(days=3)
+    _invoice(
+        db_session,
+        subscriber,
+        status=InvoiceStatus.issued,
+        balance="100.00",
+        due_at=past,
+    )
+    _invoice(
+        db_session,
+        subscriber,
+        status=InvoiceStatus.partially_paid,
+        balance="50.00",
+        due_at=future,
+    )
+    _invoice(db_session, subscriber, status=InvoiceStatus.overdue, balance="25.00")
+    _invoice(
+        db_session, subscriber, status=InvoiceStatus.paid, balance="10.00", due_at=past
+    )
+    _invoice(
+        db_session, subscriber, status=InvoiceStatus.issued, balance="0.00", due_at=past
+    )
+    _invoice(
+        db_session,
+        subscriber,
+        status=InvoiceStatus.issued,
+        balance="99.00",
+        due_at=past,
+        is_active=False,
+    )
+
+    assert open_invoice_balance(db_session, subscriber.id) == Decimal("175.00")
+    assert due_invoice_balance(db_session, subscriber.id, now=now) == Decimal("125.00")
+    assert overdue_status_count(db_session, subscriber.id) == 1
+    assert [
+        invoice.balance_due for invoice in list_open_invoices(db_session, subscriber.id)
+    ] == [
+        Decimal("100.00"),
+        Decimal("50.00"),
+        Decimal("25.00"),
+    ]
+
+
+def test_multi_account_collectibility_uses_shared_billing_rules(db_session):
+    subscriber_a = _subscriber(db_session)
+    subscriber_b = _subscriber(db_session)
+    now = datetime.now(UTC)
+    _invoice(
+        db_session,
+        subscriber_a,
+        status=InvoiceStatus.issued,
+        balance="100.00",
+        due_at=now - timedelta(days=2),
+    )
+    _invoice(
+        db_session,
+        subscriber_b,
+        status=InvoiceStatus.partially_paid,
+        balance="50.00",
+        currency="USD",
+        due_at=now + timedelta(days=2),
+    )
+    _invoice(
+        db_session,
+        subscriber_b,
+        status=InvoiceStatus.overdue,
+        balance="25.00",
+    )
+    _invoice(
+        db_session,
+        subscriber_b,
+        status=InvoiceStatus.paid,
+        balance="999.00",
+        due_at=now - timedelta(days=2),
+    )
+    _invoice(
+        db_session,
+        subscriber_b,
+        status=InvoiceStatus.issued,
+        balance="0.00",
+        due_at=now - timedelta(days=2),
+    )
+
+    account_ids = [subscriber_a.id, subscriber_b.id]
+
+    assert open_invoice_balance_for_accounts(db_session, account_ids) == Decimal(
+        "175.00"
+    )
+    assert overdue_debt_balance_for_accounts(
+        db_session, account_ids, now=now
+    ) == Decimal("125.00")
+    assert overdue_status_count_for_accounts(db_session, account_ids) == 1
+    assert invoice_balance_sum_by_currency(
+        db_session, open_invoice_filters_for_accounts(account_ids)
+    ) == [("NGN", Decimal("125.00")), ("USD", Decimal("50.00"))]
+
+
+def test_customer_financial_position_summarizes_customer_debt(db_session):
+    subscriber = _subscriber(db_session)
+    now = datetime.now(UTC)
+    oldest = _invoice(
+        db_session,
+        subscriber,
+        status=InvoiceStatus.issued,
+        balance="120.00",
+        due_at=now - timedelta(days=5),
+    )
+    _invoice(
+        db_session,
+        subscriber,
+        status=InvoiceStatus.overdue,
+        balance="80.00",
+        due_at=now - timedelta(days=1),
+    )
+
+    position = get_customer_financial_position(
+        db_session,
+        subscriber.id,
+        now=now,
+        include_prepaid_balance=False,
+    )
+
+    assert position.open_invoice_balance == Decimal("200.00")
+    assert position.due_invoice_balance == Decimal("200.00")
+    assert position.overdue_debt_balance == Decimal("200.00")
+    assert position.collection_blocking_balance == Decimal("80.00")
+    assert position.overdue_invoice_count == 1
+    assert position.oldest_due_invoice == oldest
+    assert position.days_overdue == 5
+    assert position.has_open_debt is True
+    assert position.has_due_debt is True
+    assert position.has_overdue_debt is True
+    assert position.has_collection_blocking_debt is True
+
+
+def test_native_signed_balance_is_currency_typed_and_fail_closed(db_session):
+    subscriber = _subscriber(db_session)
+    _invoice(
+        db_session,
+        subscriber,
+        status=InvoiceStatus.issued,
+        balance="100.00",
+        currency="NGN",
+    )
+    db_session.add(
+        LedgerEntry(
+            account_id=subscriber.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.adjustment,
+            amount=Decimal("150.00"),
+            currency="USD",
+            memo="Approved USD credit",
+        )
+    )
+    db_session.commit()
+
+    position = get_native_customer_financial_balance(
+        db_session, subscriber.id, currency="NGN"
+    )
+
+    assert position.available_balance == Decimal("-100.00")
+    assert position.other_currency_balances == (("USD", Decimal("150.00")),)
+    assert position.automation_safe is False
+
+
+def test_wired_consumers_use_shared_due_and_overdue_rules(db_session):
+    subscriber = _subscriber(db_session)
+    _invoice(db_session, subscriber, status=InvoiceStatus.issued, balance="20.00")
+    _invoice(db_session, subscriber, status=InvoiceStatus.overdue, balance="30.00")
+
+    assert get_customer_financial_position(
+        db_session, subscriber.id
+    ).due_invoice_balance == Decimal("30.00")
+    assert conditions_match(
+        db_session,
+        subscriber_id=subscriber.id,
+        conditions={
+            "field": "has_overdue_invoice",
+            "operator": "=",
+            "value": True,
+        },
+    )
+
+
+def test_billing_template_variables_use_financial_position(db_session):
+    subscriber = _subscriber(db_session)
+    due_at = datetime.now(UTC) - timedelta(days=4)
+    invoice = _invoice(
+        db_session,
+        subscriber,
+        status=InvoiceStatus.issued,
+        balance="45.50",
+        due_at=due_at,
+    )
+
+    variables = _billing_template_variables(db_session, subscriber)
+
+    assert variables["balance_due"] == "₦45.50"
+    assert variables["days_overdue"] == "4"
+    assert variables["invoice_number"] == invoice.invoice_number

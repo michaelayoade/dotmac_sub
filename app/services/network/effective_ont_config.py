@@ -20,6 +20,8 @@ from app.models.network import (
     OltOnuTypeProfileMapping,
     OntAssignment,
     OntUnit,
+    OntWanServiceInstance,
+    WanServiceType,
 )
 from app.services.network.equipment_identity import normalize_ont_equipment_id
 from app.services.network.olt_config_pack import OltConfigPack, resolve_olt_config_pack
@@ -53,6 +55,21 @@ def _get_active_assignment(ont: OntUnit) -> OntAssignment | None:
         if getattr(assignment, "active", False):
             return assignment
     return None
+
+
+def _resolve_primary_internet_wan_service(
+    db: Session, ont: OntUnit | None
+) -> OntWanServiceInstance | None:
+    if ont is None or getattr(ont, "id", None) is None:
+        return None
+    return db.scalars(
+        select(OntWanServiceInstance)
+        .where(OntWanServiceInstance.ont_id == ont.id)
+        .where(OntWanServiceInstance.is_active.is_(True))
+        .where(OntWanServiceInstance.service_type == WanServiceType.internet)
+        .order_by(OntWanServiceInstance.priority, OntWanServiceInstance.created_at)
+        .limit(1)
+    ).first()
 
 
 def _resolve_imported_profile_mapping(
@@ -289,11 +306,13 @@ def _values_from_assignment(
             db,
             olt_id=olt_id,
             subscriber_id=getattr(active_assignment, "subscriber_id", None),
+            subscription_id=getattr(active_assignment, "subscription_id", None),
         )
         if active_assignment is not None
         else None
     )
     profile_mapping = _resolve_imported_profile_mapping(db, ont, olt_id)
+    primary_wan_instance = _resolve_primary_internet_wan_service(db, ont)
     imported_line_profile_id = (
         int(profile_mapping.line_profile_id) if profile_mapping else None
     )
@@ -336,7 +355,7 @@ def _values_from_assignment(
     values = {
         "config_method": None,
         "onu_mode": asn_wan_mode,
-        "ip_protocol": None,
+        "ip_protocol": cfg("wan", "ip_protocol", default="ipv4"),
         "wan_mode": asn_ip_mode,
         "wan_vlan": internet_vlan_tag,
         "wan_vlan_id": str(wan_vlan.id) if wan_vlan and wan_vlan.id else None,
@@ -346,6 +365,14 @@ def _values_from_assignment(
         "wan_static_subnet": asn_static_subnet,
         "wan_static_gateway": asn_static_gateway,
         "wan_static_dns": asn_static_dns,
+        # The instantiated primary Internet service is the order-resolved SOT
+        # for ONT-side NAT. Additional routed IPs stay BNG-owned and never
+        # become ONT WAN addresses.
+        "nat_enabled": (
+            bool(primary_wan_instance.nat_enabled)
+            if primary_wan_instance is not None
+            else cfg("wan", "nat_enabled")
+        ),
         "wan_instance_index": cfg("wan", "instance_index", default=1),
         "wan_gem_index": internet_gem_index,
         "mgmt_ip_mode": asn_mgmt_ip_mode,
@@ -377,9 +404,13 @@ def _values_from_assignment(
             else False
         ),
         "tr069_acs_server_id": config_pack.tr069_acs_server_id if config_pack else None,
-        "tr069_olt_profile_id": config_pack.tr069_olt_profile_id
-        if config_pack
-        else None,
+        "tr069_olt_profile_id": (
+            ont.desired_tr069_profile_id
+            if ont is not None and ont.desired_tr069_profile_id is not None
+            else config_pack.tr069_olt_profile_id
+            if config_pack
+            else None
+        ),
         "cr_username": config_pack.cr_username if config_pack else None,
         "cr_password": config_pack.cr_password if config_pack else None,
         "internet_config_ip_index": _coalesce_mapping_config(

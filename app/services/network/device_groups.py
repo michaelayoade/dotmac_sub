@@ -55,6 +55,33 @@ def create_device_group(
     return group
 
 
+def create_device_group_committed(
+    db: Session,
+    *,
+    name: str,
+    kind: str = "manual",
+    description: str | None = None,
+    criteria: dict[str, Any] | None = None,
+    created_by: str | None = None,
+) -> DeviceGroup:
+    """Create a device group and own the transaction boundary."""
+    try:
+        group = create_device_group(
+            db,
+            name=name,
+            kind=kind,
+            description=description,
+            criteria=criteria,
+            created_by=created_by,
+        )
+        db.commit()
+        db.refresh(group)
+        return group
+    except Exception:
+        db.rollback()
+        raise
+
+
 def update_device_group(
     db: Session,
     *,
@@ -73,6 +100,29 @@ def update_device_group(
     return group
 
 
+def update_device_group_committed(
+    db: Session,
+    *,
+    group_id: str | UUID,
+    name: str,
+    description: str | None = None,
+) -> DeviceGroup:
+    """Update editable device group fields and own the transaction boundary."""
+    try:
+        group = update_device_group(
+            db,
+            group_id=group_id,
+            name=name,
+            description=description,
+        )
+        db.commit()
+        db.refresh(group)
+        return group
+    except Exception:
+        db.rollback()
+        raise
+
+
 def archive_device_group(
     db: Session,
     *,
@@ -83,6 +133,22 @@ def archive_device_group(
     group.is_active = False
     db.flush()
     return group
+
+
+def archive_device_group_committed(
+    db: Session,
+    *,
+    group_id: str | UUID,
+) -> DeviceGroup:
+    """Archive a group and own the transaction boundary."""
+    try:
+        group = archive_device_group(db, group_id=group_id)
+        db.commit()
+        db.refresh(group)
+        return group
+    except Exception:
+        db.rollback()
+        raise
 
 
 def list_device_groups(
@@ -335,6 +401,33 @@ def add_device_group_member(
     return member
 
 
+def add_device_group_member_committed(
+    db: Session,
+    *,
+    group_id: str | UUID,
+    device_type: str,
+    device_id: str | UUID,
+    added_by: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> DeviceGroupMember:
+    """Add one ONT or CPE to a group and own the transaction boundary."""
+    try:
+        member = add_device_group_member(
+            db,
+            group_id=group_id,
+            device_type=device_type,
+            device_id=device_id,
+            added_by=added_by,
+            metadata=metadata,
+        )
+        db.commit()
+        db.refresh(member)
+        return member
+    except Exception:
+        db.rollback()
+        raise
+
+
 def add_device_group_members_from_text(
     db: Session,
     *,
@@ -452,6 +545,21 @@ def remove_device_group_member(
     db.flush()
 
 
+def remove_device_group_member_committed(
+    db: Session,
+    *,
+    group_id: str | UUID,
+    member_id: str | UUID,
+) -> None:
+    """Remove one member from a group and own the transaction boundary."""
+    try:
+        remove_device_group_member(db, group_id=group_id, member_id=member_id)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+
 def list_device_group_ont_ids(db: Session, group_id: str | UUID) -> list[str]:
     """Return active ONT IDs in a group."""
     group = _get_active_group(db, group_id)
@@ -494,6 +602,30 @@ def enqueue_ont_group_action(
         "ont_count": len(ont_ids),
         "task_id": getattr(task, "id", None),
     }
+
+
+def enqueue_ont_group_action_committed(
+    db: Session,
+    *,
+    group_id: str | UUID,
+    action: str,
+    params: dict[str, Any] | None = None,
+    initiated_by: str | None = None,
+) -> dict[str, Any]:
+    """Queue a bulk action for all ONTs in a group and own the transaction."""
+    try:
+        result = enqueue_ont_group_action(
+            db,
+            group_id=group_id,
+            action=action,
+            params=params,
+            initiated_by=initiated_by,
+        )
+        db.commit()
+        return result
+    except Exception:
+        db.rollback()
+        raise
 
 
 def _get_active_group(db: Session, group_id: str | UUID) -> DeviceGroup:

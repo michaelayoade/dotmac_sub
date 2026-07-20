@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -44,6 +46,140 @@ class TestCustomerBillingRouteRegistration:
         }
         assert ("/portal/billing/pay/intent", "POST") in routes
 
+    def test_payment_receipt_routes_exist(self) -> None:
+        from app.web.customer.routes import router
+
+        routes = {
+            (getattr(route, "path", ""), method)
+            for route in router.routes
+            for method in getattr(route, "methods", set())
+        }
+        assert ("/portal/billing/payments/{payment_id}/receipt", "GET") in routes
+        assert ("/portal/billing/payments/{payment_id}/receipt/pdf", "GET") in routes
+
+
+class TestCustomerBillingReadTransaction:
+    def test_billing_page_finishes_read_transaction_before_render(self) -> None:
+        from app.web.customer.routes import customer_billing
+
+        request = MagicMock()
+        db = MagicMock()
+        customer = {"subscriber_id": "sub-1", "account_id": "acct-1"}
+        response = MagicMock(name="template_response")
+        events: list[str] = []
+
+        def _finish_read_transaction(_db):
+            events.append("finish")
+
+        def _render(_template, _context):
+            events.append("render")
+            return response
+
+        with (
+            patch(
+                "app.web.customer.routes.get_current_customer_from_request",
+                return_value=customer,
+            ),
+            patch(
+                "app.web.customer.routes.customer_portal.get_billing_page",
+                return_value={
+                    "invoices": [],
+                    "status": None,
+                    "page": 1,
+                    "per_page": 10,
+                    "total": 0,
+                    "total_pages": 1,
+                    "prepaid_balance": None,
+                    "ledger_entries": [],
+                    "billing_activity": [],
+                },
+            ),
+            patch(
+                "app.web.customer.routes.finish_read_transaction",
+                side_effect=_finish_read_transaction,
+            ) as finish,
+            patch(
+                "app.web.customer.routes.templates.TemplateResponse",
+                side_effect=_render,
+            ),
+        ):
+            assert customer_billing(request=request, db=db) is response
+
+        finish.assert_called_once_with(db)
+        assert events == ["finish", "render"]
+
+
+class TestPaymentReceiptPdf:
+    def _receipt_context(self) -> dict:
+        return {
+            "payment": SimpleNamespace(
+                id="197d4836-26a4-4431-a045-9c5e7df82f4a",
+                receipt_number="RCP-TEST",
+            ),
+            "receipt_number": "#RCP-TEST",
+            "receipt_date": datetime(2026, 7, 9, 12, 0, tzinfo=UTC),
+            "account_number": "ACC-1001",
+            "received_from": "Test Customer",
+            "received_email": "customer@example.com",
+            "amount_received": Decimal("5000.00"),
+            "amount_applied": Decimal("3500.00"),
+            "unallocated_credit": Decimal("1500.00"),
+            "currency": "NGN",
+            "status": "Succeeded",
+            "transaction_ref": "PAY-REF-1",
+            "method": "Card",
+            "allocations": [
+                SimpleNamespace(
+                    invoice_number="INV-1001",
+                    status="Partially Paid",
+                    amount=Decimal("3500.00"),
+                )
+            ],
+        }
+
+    def test_receipt_pdf_falls_back_when_weasyprint_fails(self) -> None:
+        from app.services import billing_payment_receipts as receipt_service
+
+        with patch.object(
+            receipt_service,
+            "_build_weasyprint_receipt_pdf",
+            side_effect=AttributeError("'super' object has no attribute 'transform'"),
+        ):
+            pdf_bytes = receipt_service.build_receipt_pdf(self._receipt_context())
+
+        assert pdf_bytes.startswith(b"%PDF-")
+        assert len(pdf_bytes) > 1500
+
+    def test_receipt_pdf_route_returns_pdf_response(self) -> None:
+        from app.web.customer.routes import customer_payment_receipt_pdf
+
+        context = self._receipt_context()
+        request = MagicMock()
+
+        with (
+            patch(
+                "app.web.customer.routes.get_current_customer_from_request",
+                return_value={"subscriber_id": "sub-1"},
+            ),
+            patch(
+                "app.web.customer.routes.payment_receipts_service.get_customer_payment_receipt_context",
+                return_value=context,
+            ),
+            patch(
+                "app.web.customer.routes.payment_receipts_service.build_receipt_pdf",
+                return_value=b"%PDF-1.4\nreceipt",
+            ),
+        ):
+            response = customer_payment_receipt_pdf(
+                request=request,
+                payment_id=context["payment"].id,
+                db=MagicMock(),
+            )
+
+        assert response.media_type == "application/pdf"
+        assert bytes(response.body).startswith(b"%PDF-")
+        assert "receipt-RCP-TEST.pdf" in response.headers["content-disposition"]
+
 
 class TestPaymentSuccessBanner:
     def test_payment_success_only_marks_service_restored_after_post_payment_check(
@@ -58,6 +194,7 @@ class TestPaymentSuccessBanner:
             "invoice": SimpleNamespace(id="inv-1", invoice_number="INV-1"),
             "amount": 5000,
             "reference": "ref-1",
+            "provider_type": "paystack",
         }
 
         template_response = MagicMock(name="template_response")
@@ -104,6 +241,7 @@ class TestPaymentSuccessBanner:
             "invoice": SimpleNamespace(id="inv-2", invoice_number="INV-2"),
             "amount": 1000,
             "reference": "ref-2",
+            "provider_type": "paystack",
         }
 
         template_response = MagicMock(name="template_response")
@@ -137,6 +275,50 @@ class TestPaymentSuccessBanner:
         context = render.call_args.args[1]
         assert context["was_restricted"] is True
         assert context["service_restored"] is False
+
+    def test_payment_verify_decline_renders_payment_status_page(self) -> None:
+        from app.web.customer.routes import customer_verify_payment
+
+        request = MagicMock()
+        customer = {"subscriber_id": "sub-1", "account_id": "acct-1"}
+        template_response = MagicMock(name="template_response")
+
+        with (
+            patch(
+                "app.web.customer.routes.get_current_customer_from_request",
+                return_value=customer,
+            ),
+            patch(
+                "app.web.customer.routes.customer_portal.verify_and_record_payment",
+                side_effect=ValueError("Payment was not successful"),
+            ),
+            patch(
+                "app.web.customer.routes.is_subscriber_restricted",
+                return_value=False,
+            ),
+            patch(
+                "app.web.customer.routes.customer_cards.capture_card_after_payment"
+            ) as capture,
+            patch(
+                "app.web.customer.routes.templates.TemplateResponse",
+                return_value=template_response,
+            ) as render,
+        ):
+            response = customer_verify_payment(
+                request=request,
+                reference="ref-declined",
+                provider="paystack",
+                save_card=True,
+                db=MagicMock(),
+            )
+
+        assert response is template_response
+        assert render.call_args.args[0] == "customer/billing/payment_status.html"
+        context = render.call_args.args[1]
+        assert context["status_kind"] == "declined"
+        assert context["reference"] == "ref-declined"
+        assert "not confirm" in context["message"]
+        capture.assert_not_called()
 
 
 class TestCustomerTopupRoutes:
@@ -226,6 +408,39 @@ class TestCustomerTopupRoutes:
         assert payload["reference"] == "ref-topup"
         assert payload["checkout_metadata"]["topup_intent_id"] == "intent-1"
 
+    def test_topup_intent_route_returns_safe_error_on_provider_failure(self) -> None:
+        import json
+
+        from app.web.customer.routes import customer_create_topup_intent
+
+        request = MagicMock()
+        request.headers = {}
+        request.url_for.return_value = (
+            "https://selfcare.test/portal/billing/topup/verify"
+        )
+        customer = {"subscriber_id": "sub-1", "account_id": "acct-1"}
+
+        with (
+            patch(
+                "app.web.customer.routes.get_current_customer_from_request",
+                return_value=customer,
+            ),
+            patch(
+                "app.web.customer.routes.customer_portal.create_topup_intent",
+                side_effect=RuntimeError("provider exploded"),
+            ),
+        ):
+            response = customer_create_topup_intent(
+                request=request,
+                payload={"amount": 5000, "provider": "paystack"},
+                db=MagicMock(),
+            )
+
+        assert response.status_code == 400
+        detail = json.loads(response.body)["detail"]
+        assert "Unable to start the payment" in detail
+        assert "provider exploded" not in detail
+
     def test_pay_intent_route_returns_json_payload(self) -> None:
         import json
 
@@ -309,6 +524,37 @@ class TestCustomerTopupRoutes:
         assert response.status_code == 403
         assert "View-only" in json.loads(response.body)["detail"]
 
+    def test_pay_intent_route_returns_safe_error_on_provider_failure(self) -> None:
+        import json
+
+        from app.web.customer.routes import customer_create_invoice_payment_intent
+
+        request = MagicMock()
+        request.headers = {}
+        request.url_for.return_value = "https://selfcare.test/portal/billing/pay/verify"
+        customer = {"subscriber_id": "sub-1", "account_id": "acct-1"}
+
+        with (
+            patch(
+                "app.web.customer.routes.get_current_customer_from_request",
+                return_value=customer,
+            ),
+            patch(
+                "app.web.customer.routes.customer_portal.create_invoice_payment_intent",
+                side_effect=RuntimeError("provider exploded"),
+            ),
+        ):
+            response = customer_create_invoice_payment_intent(
+                request=request,
+                payload={"invoice": "inv-1", "provider": "paystack"},
+                db=MagicMock(),
+            )
+
+        assert response.status_code == 400
+        detail = json.loads(response.body)["detail"]
+        assert "Unable to start the payment" in detail
+        assert "provider exploded" not in detail
+
     def test_topup_success_marks_service_restored_after_post_payment_check(
         self,
     ) -> None:
@@ -320,6 +566,7 @@ class TestCustomerTopupRoutes:
             "payment": SimpleNamespace(receipt_number="RCT-T1"),
             "amount": 5000,
             "reference": "ref-topup-1",
+            "provider_type": "paystack",
             "already_recorded": False,
             "allocated_to_invoices": [],
             "allocated_total": 0,
@@ -362,6 +609,49 @@ class TestCustomerTopupRoutes:
         assert context["service_restored"] is True
         assert context["credit_added"] == 5000
 
+    def test_topup_verify_decline_renders_payment_status_page(self) -> None:
+        from app.web.customer.routes import customer_verify_topup
+
+        request = MagicMock()
+        customer = {"subscriber_id": "sub-1", "account_id": "acct-1"}
+        template_response = MagicMock(name="template_response")
+
+        with (
+            patch(
+                "app.web.customer.routes.get_current_customer_from_request",
+                return_value=customer,
+            ),
+            patch(
+                "app.web.customer.routes.customer_portal.verify_and_record_topup",
+                side_effect=ValueError("Payment was not successful"),
+            ),
+            patch(
+                "app.web.customer.routes.is_subscriber_restricted",
+                return_value=False,
+            ),
+            patch(
+                "app.web.customer.routes.customer_cards.capture_card_after_payment"
+            ) as capture,
+            patch(
+                "app.web.customer.routes.templates.TemplateResponse",
+                return_value=template_response,
+            ) as render,
+        ):
+            response = customer_verify_topup(
+                request=request,
+                reference="ref-topup-declined",
+                provider="paystack",
+                save_card=True,
+                db=MagicMock(),
+            )
+
+        assert response is template_response
+        assert render.call_args.args[0] == "customer/billing/payment_status.html"
+        context = render.call_args.args[1]
+        assert context["status_kind"] == "declined"
+        assert context["flow"] == "account_topup"
+        capture.assert_not_called()
+
 
 class TestSaveCardOnVerify:
     @staticmethod
@@ -371,6 +661,7 @@ class TestSaveCardOnVerify:
             "invoice": SimpleNamespace(id="inv-1", invoice_number="INV-1"),
             "amount": 5000,
             "reference": "ref-1",
+            "provider_type": "paystack",
         }
 
     @staticmethod
@@ -379,6 +670,7 @@ class TestSaveCardOnVerify:
             "payment": SimpleNamespace(receipt_number="RCT-T1"),
             "amount": 5000,
             "reference": "ref-topup-1",
+            "provider_type": "paystack",
             "already_recorded": False,
             "allocated_to_invoices": [],
             "allocated_total": 0,
@@ -429,7 +721,9 @@ class TestSaveCardOnVerify:
             "message": "Your card was saved for future payments.",
         }
 
-    def test_pay_verify_surfaces_card_save_failure_without_failing_payment(self) -> None:
+    def test_pay_verify_surfaces_card_save_failure_without_failing_payment(
+        self,
+    ) -> None:
         from app.web.customer.routes import customer_verify_payment
 
         request = MagicMock()
@@ -549,11 +843,8 @@ class TestSaveCardOnVerify:
 
         capture.assert_not_called()
 
-    def test_pay_verify_uses_safe_message_for_gateway_exception(self) -> None:
-        from app.web.customer.routes import (
-            PAYMENT_VERIFICATION_ERROR_MESSAGE,
-            customer_verify_payment,
-        )
+    def test_pay_verify_transient_error_renders_pending_status_page(self) -> None:
+        from app.web.customer.routes import customer_verify_payment
 
         request = MagicMock()
         customer = {"subscriber_id": "sub-1", "account_id": "acct-1"}
@@ -586,16 +877,22 @@ class TestSaveCardOnVerify:
             )
 
         assert response is template_response
-        assert render.call_args.args[0] == "customer/errors/400.html"
-        assert render.call_args.args[1]["message"] == PAYMENT_VERIFICATION_ERROR_MESSAGE
-        assert "gateway raw stack detail" not in render.call_args.args[1]["message"]
-        assert render.call_args.kwargs["status_code"] == 400
+        assert render.call_args.args[0] == "customer/billing/payment_status.html"
+        context = render.call_args.args[1]
+        assert context["status_kind"] == "pending"
+        assert context["reference"] == "ref-1"
+        assert "reconciled automatically" in context["message"]
+        assert "gateway raw stack detail" not in context["message"]
+        assert render.call_args.kwargs["status_code"] == 200
 
     def test_invoice_pay_template_blocks_paystack_without_email(self) -> None:
         template = Path("templates/customer/billing/pay.html").read_text()
 
         assert "const checkoutEmail =" in template
-        assert "Add an email address to your account before paying with Paystack." in template
+        assert (
+            "Add an email address to your account before paying with Paystack."
+            in template
+        )
         assert "email: checkoutEmail" in template
 
     def test_invoice_pay_success_template_shows_remaining_balance(self) -> None:

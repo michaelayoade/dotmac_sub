@@ -10,7 +10,7 @@ import csv
 import logging
 from decimal import Decimal
 from io import StringIO
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
@@ -27,7 +27,6 @@ from app.models.catalog import (
     RefundPolicy,
     RegionZone,
     SlaProfile,
-    SuspensionAction,
     UsageAllowance,
 )
 from app.schemas.catalog import (
@@ -47,6 +46,7 @@ from app.schemas.catalog import (
     UsageAllowanceUpdate,
 )
 from app.services import catalog as catalog_service
+from app.services import catalog_billing_governance
 from app.services.common import coerce_uuid
 
 logger = logging.getLogger(__name__)
@@ -508,7 +508,6 @@ def policy_set_form_defaults() -> dict[str, object]:
         "trial_days": "",
         "trial_card_required": False,
         "grace_days": "",
-        "suspension_action": "suspend",
         "refund_policy": "none",
         "refund_window_days": "",
         "is_active": True,
@@ -520,7 +519,6 @@ def policy_set_form_options() -> dict[str, list[str]]:
     """Return enum option lists for policy-set forms."""
     return {
         "proration_policies": [item.value for item in ProrationPolicy],
-        "suspension_actions": [item.value for item in SuspensionAction],
         "refund_policies": [item.value for item in RefundPolicy],
         "dunning_actions": [item.value for item in DunningAction],
     }
@@ -563,10 +561,7 @@ def policy_set_form_context(
             else "next_cycle",
             "trial_days": obj.trial_days or "",
             "trial_card_required": obj.trial_card_required,
-            "grace_days": obj.grace_days or "",
-            "suspension_action": obj.suspension_action.value
-            if obj.suspension_action
-            else "suspend",
+            "grace_days": obj.grace_days if obj.grace_days is not None else "",
             "refund_policy": obj.refund_policy.value if obj.refund_policy else "none",
             "refund_window_days": obj.refund_window_days or "",
             "is_active": obj.is_active,
@@ -633,7 +628,6 @@ def parse_policy_set_form(
         "trial_days": form_str("trial_days").strip(),
         "trial_card_required": form_str("trial_card_required") == "true",
         "grace_days": form_str("grace_days").strip(),
-        "suspension_action": form_str("suspension_action", "suspend").strip(),
         "refund_policy": form_str("refund_policy", "none").strip(),
         "refund_window_days": form_str("refund_window_days").strip(),
         "is_active": form_str("is_active") == "true",
@@ -652,7 +646,6 @@ def _policy_set_payload(values: dict[str, object]) -> dict[str, object]:
         "trial_days": _optional_int(values["trial_days"]),
         "trial_card_required": values["trial_card_required"],
         "grace_days": _optional_int(values["grace_days"]),
-        "suspension_action": SuspensionAction(str(values["suspension_action"])),
         "refund_policy": RefundPolicy(str(values["refund_policy"])),
         "refund_window_days": _optional_int(values["refund_window_days"]),
         "is_active": values["is_active"],
@@ -855,27 +848,51 @@ def _add_on_payload(values: dict[str, object]) -> dict[str, object]:
     }
 
 
-def create_add_on_from_form(db: Session, *, form) -> None:
+def create_add_on_from_form(
+    db: Session,
+    *,
+    form,
+    actor_id: str | None = None,
+) -> None:
     """Validate and create an add-on with submitted prices."""
     values = parse_add_on_form(form)
+    submitted_prices = cast(list[dict[str, str]], values["prices"])
+    price_types = [price["price_type"] for price in submitted_prices]
+    if len(price_types) != len(set(price_types)):
+        raise ValueError("Only one active add-on price is allowed per price type")
     payload = AddOnCreate.model_validate(_add_on_payload(values))
     created = catalog_service.add_ons.create(db=db, payload=payload)
     create_addon_prices(
         db,
         str(created.id),
         values["prices"],  # type: ignore[arg-type]
+        actor_id=actor_id,
     )
 
 
-def update_add_on_from_form(db: Session, *, addon_id: str, form) -> None:
+def update_add_on_from_form(
+    db: Session,
+    *,
+    addon_id: str,
+    form,
+    actor_id: str | None = None,
+) -> None:
     """Validate and update an add-on with submitted prices."""
     values = parse_add_on_form(form, include_price_ids=True)
+    sync_addon_prices(
+        db,
+        addon_id,
+        values["prices"],  # type: ignore[arg-type]
+        actor_id=actor_id,
+        validate_only=True,
+    )
     payload = AddOnUpdate.model_validate(_add_on_payload(values))
     catalog_service.add_ons.update(db=db, add_on_id=addon_id, payload=payload)
     sync_addon_prices(
         db,
         addon_id,
         values["prices"],  # type: ignore[arg-type]
+        actor_id=actor_id,
     )
 
 
@@ -1053,7 +1070,7 @@ def export_policy_sets_csv(db: Session) -> str:
                 p.downgrade_policy.value if p.downgrade_policy else "",
                 p.trial_days or "",
                 "Yes" if p.trial_card_required else "No",
-                p.grace_days or "",
+                p.grace_days if p.grace_days is not None else "",
                 p.suspension_action.value if p.suspension_action else "",
                 p.refund_policy.value if p.refund_policy else "",
                 p.refund_window_days or "",
@@ -1162,8 +1179,13 @@ def create_addon_prices(
     db: Session,
     add_on_id: str,
     prices: list[dict[str, str]],
+    *,
+    actor_id: str | None = None,
 ) -> None:
     """Create prices for a newly-created add-on."""
+    price_types = [price["price_type"] for price in prices]
+    if len(price_types) != len(set(price_types)):
+        raise ValueError("Only one active add-on price is allowed per price type")
     addon_uuid = coerce_uuid(add_on_id)
     for price in prices:
         price_payload = AddOnPriceCreate(
@@ -1177,13 +1199,21 @@ def create_addon_prices(
             unit=PriceUnit(price["unit"]) if price["unit"] else None,
             description=price["description"] or None,
         )
-        catalog_service.add_on_prices.create(db=db, payload=price_payload)
+        catalog_service.add_on_prices.create(
+            db=db,
+            payload=price_payload,
+            actor_id=actor_id,
+            actor_type="user",
+        )
 
 
 def sync_addon_prices(
     db: Session,
     addon_id: str,
     prices: list[dict[str, str]],
+    *,
+    actor_id: str | None = None,
+    validate_only: bool = False,
 ) -> None:
     """Reconcile submitted add-on prices against the existing set.
 
@@ -1200,11 +1230,56 @@ def sync_addon_prices(
     )
     existing_ids = {str(p.id) for p in existing_prices}
     submitted_ids = {p["id"] for p in prices if p.get("id")}
+    submitted_types = [price["price_type"] for price in prices]
+    if len(submitted_types) != len(set(submitted_types)):
+        raise ValueError("Only one active add-on price is allowed per price type")
+
+    # Validate the complete financial mutation before the first service method
+    # commits, so a blocked live-price edit cannot leave a partially-updated
+    # add-on form behind.
+    for existing in existing_prices:
+        if str(existing.id) not in submitted_ids:
+            catalog_billing_governance.assert_add_on_price_update_safe(
+                db,
+                existing,
+                {"is_active": False},
+            )
+    by_id = {str(existing.id): existing for existing in existing_prices}
+    for price in prices:
+        existing = by_id.get(str(price.get("id") or ""))
+        if existing is None:
+            continue
+        candidate = {
+            "price_type": PriceType(price["price_type"]),
+            "amount": Decimal(price["amount"]),
+            "currency": price["currency"] or "NGN",
+            "billing_cycle": BillingCycle(price["billing_cycle"])
+            if price["billing_cycle"]
+            else None,
+            "unit": PriceUnit(price["unit"]) if price["unit"] else None,
+        }
+        changes = catalog_billing_governance.billing_field_changes(
+            existing,
+            candidate,
+        )
+        catalog_billing_governance.assert_add_on_price_update_safe(
+            db,
+            existing,
+            changes,
+        )
+
+    if validate_only:
+        return
 
     # Delete removed prices
     for price in existing_prices:
         if str(price.id) not in submitted_ids:
-            catalog_service.add_on_prices.delete(db=db, price_id=str(price.id))
+            catalog_service.add_on_prices.delete(
+                db=db,
+                price_id=str(price.id),
+                actor_id=actor_id,
+                actor_type="user",
+            )
 
     # Update or create prices
     for price in prices:
@@ -1222,6 +1297,8 @@ def sync_addon_prices(
                     unit=PriceUnit(price["unit"]) if price["unit"] else None,
                     description=price["description"] or None,
                 ),
+                actor_id=actor_id,
+                actor_type="user",
             )
         else:
             catalog_service.add_on_prices.create(
@@ -1237,4 +1314,6 @@ def sync_addon_prices(
                     unit=PriceUnit(price["unit"]) if price["unit"] else None,
                     description=price["description"] or None,
                 ),
+                actor_id=actor_id,
+                actor_type="user",
             )

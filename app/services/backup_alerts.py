@@ -9,12 +9,9 @@ from datetime import UTC, datetime
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import SettingDomain
-from app.models.notification import (
-    Notification,
-    NotificationChannel,
-    NotificationStatus,
-)
+from app.models.notification import NotificationChannel
 from app.services import settings_spec
+from app.services.staff_notifications import queue_staff_notification
 
 logger = logging.getLogger(__name__)
 
@@ -99,12 +96,11 @@ def queue_backup_failure_notification(
         f"Error: {error_message}\n"
     )
 
-    notification = Notification(
+    queue_staff_notification(
+        db,
         channel=channel,
         recipient=recipient,
         subject=subject,
         body=body,
-        status=NotificationStatus.queued,
     )
-    db.add(notification)
     return True

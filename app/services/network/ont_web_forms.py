@@ -20,7 +20,6 @@ from app.models.network import (
     GponChannel,
     IpProtocol,
     MgmtIpMode,
-    OntAssignment,
     OnuMode,
     SplitterPort,
     SplitterPortType,
@@ -165,13 +164,6 @@ def form_int_or_none(form: FormData, key: str) -> int | None:
         return None
 
 
-def active_assignment_for_ont(db: Session, ont: Any) -> OntAssignment:
-    """Get the active assignment for an ONT, creating one if none exists."""
-    from app.services import web_network_ont_assignments as assignments_service
-
-    return assignments_service.get_or_create_active_assignment(db, ont)
-
-
 def normalize_vendor_serial(value: str) -> str | None:
     normalized = "".join(ch for ch in value.upper() if ch.isalnum()).strip()
     return normalized or None
@@ -256,6 +248,11 @@ def build_ont_create_payload(form: FormData) -> tuple[OntUnitCreate | None, str 
         gps_latitude=form_float_or_none(form, "gps_latitude"),
         gps_longitude=form_float_or_none(form, "gps_longitude"),
     )
+    if payload.splitter_id is not None or payload.splitter_port_id is not None:
+        return payload, (
+            "Splitter attachments require the independently reviewed fiber access "
+            "attachment workflow. Create the ONT without a splitter attachment."
+        )
     if payload.olt_device_id is None:
         return payload, "Select an OLT for this ONT."
     if payload.is_active:
@@ -412,6 +409,19 @@ def update_location_details_from_form(
     except ValueError as exc:
         return OntFormResult(ont=ont, form_model=form_values, error=str(exc))
 
+    if ("splitter_id" in form or "splitter_port_number" in form) and (
+        cast(uuid.UUID | None, form_values["splitter_id"]) != ont.splitter_id
+        or splitter_port_id != ont.splitter_port_id
+    ):
+        return OntFormResult(
+            ont=ont,
+            form_model=form_values,
+            error=(
+                "Splitter attachment changes require independent review through "
+                "network.fiber_access_attachments. Other location fields were not saved."
+            ),
+        )
+
     gps_latitude = form_float_or_none(form, "gps_latitude")
     gps_longitude = form_float_or_none(form, "gps_longitude")
     address_val = (
@@ -422,8 +432,6 @@ def update_location_details_from_form(
     contact_val = str(form_values["contact"]) if form_values["contact"] else ""
     payload = OntUnitUpdate(
         zone_id=cast(uuid.UUID | None, form_values["zone_id"]),
-        splitter_id=cast(uuid.UUID | None, form_values["splitter_id"]),
-        splitter_port_id=splitter_port_id,
         name=str(form_values["name"]) if form_values["name"] else None,
         address_or_comment=build_location_address_or_comment(address_val, contact_val),
         contact=contact_val or None,
@@ -659,6 +667,10 @@ def wifi_controls_context(db: Session, ont_id: str) -> dict[str, object]:
 
 
 def firmware_form_context(db: Session, ont_id: str) -> dict[str, object]:
+    from sqlalchemy import select
+
+    from app.models.network_operation import NetworkOperation, NetworkOperationType
+
     ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     ont_vendor = str(getattr(ont, "vendor", "") or "").strip() if ont else ""
     available_firmware = web_onts_service.get_active_firmware_images(
@@ -666,10 +678,28 @@ def firmware_form_context(db: Session, ont_id: str) -> dict[str, object]:
         vendor_contains=ont_vendor or None,
         limit=20,
     )
+    latest_operation = None
+    if ont is not None:
+        latest_operation = db.scalars(
+            select(NetworkOperation)
+            .where(
+                NetworkOperation.target_id == ont.id,
+                NetworkOperation.operation_type
+                == NetworkOperationType.ont_firmware_upgrade,
+            )
+            .order_by(NetworkOperation.created_at.desc())
+            .limit(1)
+        ).first()
     return {
         "ont_id": ont_id,
         "available_firmware": available_firmware,
         "ont_vendor": ont_vendor,
+        "current_firmware": (
+            getattr(ont, "software_version", None)
+            or getattr(ont, "firmware_version", None)
+            or None
+        ),
+        "firmware_operation": latest_operation,
     }
 
 

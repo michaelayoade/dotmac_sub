@@ -20,7 +20,7 @@
             <div class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ "{:,}".format(signal_info.distance_meters) }}m from OLT</div>
             {% endif %}
             {% if signal_info and signal_info.last_seen_at %}
-            <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">Last seen {{ signal_info.last_seen_at.strftime('%b %d, %H:%M') if signal_info.last_seen_at else 'unknown' }}</div>
+            <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">Last seen {{ signal_info.last_seen_at | app_datetime('%b %d, %H:%M', 'unknown') }}</div>
             {% endif %}
         </div>
 
@@ -63,11 +63,11 @@
             </div>
             <div class="mt-1 text-sm {{ signal_info.olt_quality_class }}">{{ signal_info.olt_quality | title }}</div>
             {% if signal_info.signal_updated_at %}
-            <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">Updated {{ signal_info.signal_updated_at.strftime('%H:%M') }}</div>
+            <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">Updated {{ signal_info.signal_updated_at | app_datetime('%H:%M') }}</div>
             {% endif %}
             {% else %}
             <div class="mt-2 text-xl font-bold text-slate-400 dark:text-slate-500">No data</div>
-            <button type="button" hx-get="/admin/network/onts/{{ ont.id }}/refresh-status" hx-swap="none" data-refresh-status-action class="mt-1 text-sm text-cyan-600 hover:text-cyan-700 dark:text-cyan-400">Refresh &rarr;</button>
+            <button type="button" hx-post="/admin/network/onts/{{ ont.id }}/refresh" hx-swap="none" hx-disabled-elt="this" data-refresh-status-action class="mt-1 text-sm text-cyan-600 hover:text-cyan-700 dark:text-cyan-400">Refresh &rarr;</button>
             {% endif %}
         </div>
 
@@ -83,7 +83,7 @@
                 <span class="text-xl font-bold tabular-nums text-slate-900 dark:text-white">{{ signal_info.acs_status | title }}</span>
             </div>
             {% if signal_info.acs_last_inform_at %}
-            <div class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ signal_info.acs_last_inform_at.strftime('%b %d, %H:%M') if signal_info.acs_last_inform_at else 'Never' }}</div>
+            <div class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ signal_info.acs_last_inform_at | app_datetime('%b %d, %H:%M', 'Never') }}</div>
             {% endif %}
             {% if signal_info.connection_request_status %}
             {% set cr_status = signal_info.connection_request_status %}
@@ -106,7 +106,7 @@
         <div class="flex items-center justify-between mb-4">
             <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Optical Link</h2>
             {% if signal_info.signal_updated_at %}
-            <span class="text-xs text-slate-500 dark:text-slate-400">Updated {{ signal_info.signal_updated_at.strftime('%H:%M') }}</span>
+            <span class="text-xs text-slate-500 dark:text-slate-400">Updated {{ signal_info.signal_updated_at | app_datetime('%H:%M') }}</span>
             {% endif %}
         </div>
 
@@ -196,7 +196,7 @@
             <svg class="mx-auto h-12 w-12 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
             <h3 class="mt-2 text-sm font-medium text-slate-900 dark:text-white">No Signal Data</h3>
             <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">No signal sample has been recorded for this ONT.</p>
-            <button type="button" hx-get="/admin/network/onts/{{ ont.id }}/refresh-status" hx-swap="none" data-refresh-status-action class="mt-4 inline-flex items-center gap-2 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-700">
+            <button type="button" hx-post="/admin/network/onts/{{ ont.id }}/refresh" hx-swap="none" hx-disabled-elt="this" data-refresh-status-action class="mt-4 inline-flex items-center gap-2 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-700">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
                 Refresh Status
             </button>
@@ -313,7 +313,7 @@
                                 <td class="px-3 py-2 font-mono text-slate-900 dark:text-white">{{ pa.pon_port.name if pa.pon_port else '—' }}</td>
                                 <td class="px-3 py-2 text-slate-600 dark:text-slate-300">{% if pa.pon_port and pa.pon_port.olt %}{{ pa.pon_port.olt.name }}{% else %}—{% endif %}</td>
                                 <td class="px-3 py-2 text-slate-600 dark:text-slate-300">{% if pa.subscriber %}<a href="/admin/customers/person/{{ pa.subscriber.id }}" class="text-cyan-600 hover:text-cyan-800 dark:text-cyan-400">{{ pa.subscriber.name }}</a>{% else %}—{% endif %}</td>
-                                <td class="px-3 py-2 text-slate-500 dark:text-slate-400">{{ pa.assigned_at.strftime('%b %d, %Y') if pa.assigned_at else '—' }}</td>
+                                <td class="px-3 py-2 text-slate-500 dark:text-slate-400">{{ pa.assigned_at | app_datetime('%b %d, %Y', '—', include_tz=False) }}</td>
                             </tr>
                             {% endfor %}
                         </tbody>
@@ -341,8 +341,8 @@
                         </div>
                         {% if failure.status == 'pending' %}
                         <div class="flex gap-2">
-                            <form method="post" action="/admin/network/onts/{{ ont.id }}/compensation-failures/{{ failure.id }}/retry"><button type="submit" class="rounded bg-amber-600 px-2 py-1 text-xs font-medium text-white hover:bg-amber-700">Retry</button></form>
-                            <form method="post" action="/admin/network/onts/{{ ont.id }}/compensation-failures/{{ failure.id }}/resolve"><button type="submit" class="rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300">Resolve</button></form>
+                            <form method="post" action="/admin/network/onts/{{ ont.id }}/compensation-failures/{{ failure.id }}/retry" data-confirm="Retry this failed compensation action on the ONT?" data-confirm-variant="warning"><button type="submit" class="rounded bg-amber-600 px-2 py-1 text-xs font-medium text-white hover:bg-amber-700">Retry</button></form>
+                            <form method="post" action="/admin/network/onts/{{ ont.id }}/compensation-failures/{{ failure.id }}/resolve" data-confirm="Resolve this compensation failure without retrying it?" data-confirm-variant="warning"><button type="submit" class="rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300">Resolve</button></form>
                         </div>
                         {% endif %}
                     </div>
@@ -359,7 +359,7 @@
                     {% for activity in activities %}
                     <div class="flex items-start justify-between gap-3 text-sm">
                         <div><p class="font-medium text-slate-900 dark:text-white">{{ activity.title }}</p>{% if activity.description %}<p class="text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</p>{% endif %}</div>
-                        {% if activity.occurred_at %}<span class="shrink-0 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at.strftime('%b %d, %H:%M') }}</span>{% endif %}
+                        {% if activity.occurred_at %}<span class="shrink-0 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at | app_datetime('%b %d, %H:%M') }}</span>{% endif %}
                     </div>
                     {% endfor %}
                 </div>

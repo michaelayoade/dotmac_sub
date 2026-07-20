@@ -443,10 +443,17 @@ class TestReturnOntToInventory:
         assert sample_assignment.release_reason == "returned_to_inventory"
 
     def test_success_clears_subscriber_assignment_links(
-        self, db_session, sample_ont, sample_olt, sample_assignment, subscriber
+        self,
+        db_session,
+        sample_ont,
+        sample_olt,
+        sample_assignment,
+        subscriber,
+        subscription,
     ):
         """Returned inventory ONTs must not keep stale subscriber links."""
         sample_assignment.subscriber_id = subscriber.id
+        sample_assignment.subscription_id = subscription.id
         sample_assignment.pon_port_id = sample_ont.pon_port_id
         sample_assignment.pppoe_username = "old-user"
         sample_assignment.pppoe_password = "old-password"
@@ -477,6 +484,7 @@ class TestReturnOntToInventory:
         assert "subscriber assignment links cleared" in result.message
         db_session.refresh(sample_assignment)
         assert sample_assignment.active is False
+        assert sample_assignment.subscription_id is None
         assert sample_assignment.subscriber_id is None
         assert sample_assignment.service_address_id is None
         assert sample_assignment.pon_port_id is None

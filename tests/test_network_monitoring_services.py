@@ -3,7 +3,11 @@
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
+import pytest
+
+from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.network import (
     OLTDevice,
     OntAssignment,
@@ -18,7 +22,10 @@ from app.models.network_monitoring import (
     AlertStatus,
     DeviceMetric,
     MetricType,
+    NetworkDevice,
+    PopSite,
 )
+from app.models.subscription_engine import SettingValueType
 from app.models.system_user import SystemUser
 from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
 from app.schemas.network_monitoring import (
@@ -34,7 +41,6 @@ from app.schemas.network_monitoring import (
 from app.services import monitoring_metrics as monitoring_metrics_service
 from app.services import network_monitoring as monitoring_service
 from app.services import web_network_monitoring as web_network_monitoring_service
-from app.services import zabbix_ont_status
 from app.services.network import olt_polling_metrics as olt_polling_metrics_service
 from app.tasks import alert_evaluation as alert_evaluation_task
 
@@ -51,6 +57,18 @@ def test_create_pop_site(db_session):
     )
     assert pop.name == "Downtown POP"
     assert pop.code == "DT001"
+
+
+def test_create_pop_site_committed_persists(db_session):
+    pop = monitoring_service.pop_sites.create_committed(
+        db_session,
+        PopSiteCreate(name="Committed POP", code="CPOP"),
+    )
+
+    persisted = db_session.get(PopSite, pop.id)
+
+    assert persisted is not None
+    assert persisted.name == "Committed POP"
 
 
 def test_update_pop_site(db_session):
@@ -154,60 +172,8 @@ def test_onu_auth_trend_returns_json_safe_series(db_session):
     json.dumps(trend["values"])
 
 
-def test_get_onu_status_summary_uses_zabbix_directly(db_session, monkeypatch):
-    olt = OLTDevice(
-        name="Status Summary OLT",
-        vendor="Huawei",
-        model="MA5608T",
-        zabbix_host_id="10101",
-    )
-    db_session.add(olt)
-    db_session.flush()
-    db_session.add_all(
-        [
-            OntUnit(
-                serial_number="ONT-SUM-1",
-                olt_device_id=olt.id,
-            ),
-            OntUnit(
-                serial_number="ONT-SUM-2",
-                olt_device_id=olt.id,
-            ),
-            OntUnit(
-                serial_number="ONT-SUM-3",
-                olt_device_id=olt.id,
-            ),
-        ]
-    )
-    db_session.commit()
-
-    def _fake_zabbix_summary(olt, onts=None, **_kwargs):
-        return {
-            "total_count": len(onts or []),
-            "online_count": 2,
-            "offline_count": 1,
-            "low_signal_count": 1,
-        }
-
-    monkeypatch.setattr(
-        zabbix_ont_status,
-        "get_olt_ont_summary_from_zabbix",
-        _fake_zabbix_summary,
-    )
-
-    summary = monitoring_service.get_onu_status_summary(db_session)
-
-    assert summary["total"] == 3
-    assert summary["online"] == 2
-    assert summary["offline"] == 1
-    assert summary["low_signal"] == 1
-
-
-def test_get_onu_status_summary_cold_cache_counts_onts_as_offline(
-    db_session, monkeypatch
-):
-    """On a cold per-OLT cache (request path), the OLT's ONTs must be counted as
-    offline via unmonitored_total — not silently dropped from the totals."""
+def test_get_onu_status_summary_counts_never_seen_onts_as_offline(db_session):
+    """Never-seen active ONTs remain in the binary offline count."""
     olt = OLTDevice(
         name="Cold Cache OLT",
         vendor="Huawei",
@@ -221,25 +187,6 @@ def test_get_onu_status_summary_cold_cache_counts_onts_as_offline(
     )
     db_session.commit()
 
-    def _cold_cache(olt, onts=None, **_kwargs):
-        return {
-            "total_count": 0,
-            "online_count": 0,
-            "offline_count": 0,
-            "low_signal_count": 0,
-            "cache_miss": True,
-        }
-
-    def _no_live_walk(*_args, **_kwargs):
-        raise AssertionError("request path must not do a live snapshot walk")
-
-    monkeypatch.setattr(
-        zabbix_ont_status, "get_olt_ont_summary_from_zabbix", _cold_cache
-    )
-    monkeypatch.setattr(
-        zabbix_ont_status, "get_olt_ont_snapshot_from_zabbix", _no_live_walk
-    )
-
     summary = monitoring_service.get_onu_status_summary(db_session)
 
     assert summary["total"] == 3
@@ -247,7 +194,48 @@ def test_get_onu_status_summary_cold_cache_counts_onts_as_offline(
     assert summary["online"] == 0
 
 
-def test_get_onu_olt_status_summary_has_no_unknown_bucket(db_session, monkeypatch):
+def test_get_onu_status_summary_is_binary_across_huawei_and_uisp(db_session):
+    """Huawei and UISP ONTs use the same online/offline projection."""
+    seen = datetime(2026, 7, 5, 6, 0, tzinfo=UTC)
+    huawei_olt = OLTDevice(name="HW-RETRY-PENDING", vendor="Huawei")
+    uf_olt = OLTDevice(
+        name="GPON-UF-1",
+        vendor="ubiquiti",
+        uisp_device_id="uisp-olt-0001",
+        is_active=False,
+    )
+    db_session.add_all([huawei_olt, uf_olt])
+    db_session.flush()
+    db_session.add_all(
+        [
+            # Huawei ONT with no observation is offline while polling retries.
+            OntUnit(serial_number="HW-ONT-1", olt_device_id=huawei_olt.id),
+            # UFiber ONTs: observed online / observed offline / never observed.
+            OntUnit(
+                serial_number="UF-ONT-ON",
+                olt_device_id=uf_olt.id,
+                olt_status=OnuOnlineStatus.online,
+                olt_status_seen_at=seen,
+            ),
+            OntUnit(
+                serial_number="UF-ONT-OFF",
+                olt_device_id=uf_olt.id,
+                olt_status=OnuOnlineStatus.offline,
+                olt_status_seen_at=seen,
+            ),
+            OntUnit(serial_number="UF-ONT-NEW", olt_device_id=uf_olt.id),
+        ]
+    )
+    db_session.commit()
+
+    summary = monitoring_service.get_onu_status_summary(db_session)
+
+    assert summary["online"] == 1  # observed-online UFiber ONT
+    assert summary["offline"] == 3
+    assert summary["total"] == 4
+
+
+def test_get_onu_olt_status_summary_has_no_unknown_bucket(db_session):
     olt = OLTDevice(
         name="OLT Link Summary OLT",
         vendor="Huawei",
@@ -265,29 +253,18 @@ def test_get_onu_olt_status_summary_has_no_unknown_bucket(db_session, monkeypatc
     )
     db_session.commit()
 
-    def _fake_zabbix_summary(olt, onts=None, **_kwargs):
-        return {
-            "total_count": len(onts or []),
-            "online_count": 1,
-            "offline_count": 2,
-            "low_signal_count": 0,
-        }
-
-    monkeypatch.setattr(
-        zabbix_ont_status,
-        "get_olt_ont_summary_from_zabbix",
-        _fake_zabbix_summary,
-    )
-
     summary = monitoring_service.get_onu_olt_status_summary(db_session)
 
+    # Never-seen rows remain offline; the summary stays binary.
     assert summary["total"] == 3
-    assert summary["online"] == 1
-    assert summary["offline"] == 2
+    assert summary["online"] == 0
+    assert summary["offline"] == 3
     assert "unknown" not in summary
 
 
-def test_get_pon_outage_summary_only_flags_fully_offline_ports(db_session, monkeypatch):
+def test_get_pon_outage_summary_flags_ports_with_assignments(db_session):
+    """Only a port with explicit negative observations is an outage."""
+    observed_at = datetime.now(UTC)
     olt = OLTDevice(name="SPDC Huawei OLT", vendor="Huawei", model="MA5608T")
     db_session.add(olt)
     db_session.commit()
@@ -305,6 +282,7 @@ def test_get_pon_outage_summary_only_flags_fully_offline_ports(db_session, monke
             serial_number=f"FULL-{idx}-{uuid.uuid4().hex[:8]}",
             olt_device_id=olt.id,
             olt_status=OnuOnlineStatus.offline,
+            olt_status_seen_at=observed_at,
         )
         db_session.add(ont)
         db_session.flush()
@@ -316,11 +294,13 @@ def test_get_pon_outage_summary_only_flags_fully_offline_ports(db_session, monke
         serial_number=f"PARTIAL-OFFLINE-{uuid.uuid4().hex[:8]}",
         olt_device_id=olt.id,
         olt_status=OnuOnlineStatus.offline,
+        olt_status_seen_at=observed_at,
     )
     online_partial = OntUnit(
         serial_number=f"PARTIAL-ONLINE-{uuid.uuid4().hex[:8]}",
         olt_device_id=olt.id,
         olt_status=OnuOnlineStatus.online,
+        olt_status_seen_at=observed_at,
     )
     db_session.add_all([offline_partial, online_partial])
     db_session.flush()
@@ -340,29 +320,15 @@ def test_get_pon_outage_summary_only_flags_fully_offline_ports(db_session, monke
     )
     db_session.commit()
 
-    def _fake_snapshots(db, onts, **_):
-        return {
-            str(ont.id): zabbix_ont_status.OntSignalData(
-                online=ont.serial_number.startswith("PARTIAL-ONLINE")
-            )
-            for ont in onts
-        }
-
-    monkeypatch.setattr(
-        zabbix_ont_status,
-        "get_ont_snapshots_from_zabbix",
-        _fake_snapshots,
-    )
-
     summary = monitoring_service.get_pon_outage_summary(db_session)
 
-    assert len(summary) == 1
-    assert summary[0]["pon_port_name"] == "pon-0/1/1"
-    assert summary[0]["offline_count"] == 2
-    assert summary[0]["total_count"] == 2
+    by_name = {item["pon_port_name"]: item for item in summary}
+    assert set(by_name) == {"pon-0/1/1"}
+    assert by_name["pon-0/1/1"]["offline_count"] == 2
+    assert by_name["pon-0/1/1"]["total_count"] == 2
 
 
-def test_get_onu_status_trend_uses_current_zabbix_summary(db_session, monkeypatch):
+def test_get_onu_status_trend_uses_current_summary(db_session, monkeypatch):
     monkeypatch.setattr(
         monitoring_service,
         "get_onu_status_summary",
@@ -377,7 +343,7 @@ def test_get_onu_status_trend_uses_current_zabbix_summary(db_session, monkeypatc
     assert trend["olt_online"] == [5.0]
     assert trend["olt_offline"] == [2.0]
     assert trend["low_signal"] == [1.0]
-    assert trend["source"] == "zabbix"
+    assert trend["source"] == "inventory"
 
 
 def test_push_signal_metrics_does_not_emit_ont_status_counts(db_session, monkeypatch):
@@ -944,6 +910,37 @@ def test_get_device_health_table_uses_latest_metrics(db_session, network_device)
     assert row["memory"] == 84.0
 
 
+def test_get_device_health_page_paginates_and_clamps(db_session, network_device):
+    db_session.add_all(
+        [
+            NetworkDevice(
+                name=f"Page Device {index:02d}",
+                hostname=f"page-device-{index:02d}",
+                mgmt_ip=f"203.0.113.{index + 1}",
+                is_active=True,
+            )
+            for index in range(10)
+        ]
+    )
+    db_session.commit()
+
+    rows, pagination = web_network_monitoring_service._get_device_health_page(
+        db_session,
+        page=999,
+        per_page=10,
+    )
+
+    assert pagination == {
+        "page": 2,
+        "per_page": 10,
+        "total": 11,
+        "total_pages": 2,
+        "has_prev": True,
+        "has_next": False,
+    }
+    assert len(rows) == 1
+
+
 def test_poll_onu_signal_strength_reads_zabbix_ingested_inventory(
     db_session, network_device
 ):
@@ -989,10 +986,126 @@ def test_monitoring_config_context_includes_runtime_settings(db_session):
 
     context = get_monitoring_config_context(db_session)
 
+    assert context["monitoring"]["server_health_disk_warn_pct"] == "80"
+    assert context["monitoring"]["server_health_mem_warn_pct"] == "80"
+    assert context["monitoring"]["server_health_load_warn"] == "1.0"
+    assert context["monitoring"]["network_health_warn_pct"] == "90"
+    assert "cpu_warn_pct" not in context["monitoring"]
+    assert "interface_warn_pct" not in context["monitoring"]
     assert context["monitoring"]["device_metrics_retention_days"] == "90"
     assert context["monitoring"]["alert_evaluation_interval_seconds"] == "60"
     assert context["monitoring"]["interface_walk_interval_seconds"] == "300"
     assert context["monitoring"]["hot_retention_hours"] == "24"
+
+
+def test_save_monitoring_config_writes_runtime_health_keys(db_session):
+    from app.services.web_system_config import save_monitoring_config
+
+    save_monitoring_config(
+        db_session,
+        {
+            "server_health_mem_warn_pct": "75",
+            "server_health_mem_crit_pct": "92",
+            "network_health_warn_pct": "88",
+            "network_health_crit_pct": "65",
+            "cpu_warn_pct": "10",
+        },
+    )
+
+    rows = {
+        row.key: row.value_text
+        for row in db_session.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.network_monitoring)
+        .all()
+    }
+
+    assert rows["server_health_mem_warn_pct"] == "75"
+    assert rows["server_health_mem_crit_pct"] == "92"
+    assert rows["network_health_warn_pct"] == "88"
+    assert rows["network_health_crit_pct"] == "65"
+    assert "cpu_warn_pct" not in rows
+
+
+def test_save_monitoring_config_uses_typed_settings_for_spec_keys(db_session):
+    from app.services.web_system_config import save_monitoring_config
+
+    save_monitoring_config(
+        db_session,
+        {
+            "server_health_mem_warn_pct": "75",
+            "server_health_mem_crit_pct": "92",
+            "network_health_warn_pct": "88",
+            "network_health_crit_pct": "65",
+        },
+    )
+
+    rows = {
+        row.key: row
+        for row in db_session.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.network_monitoring)
+        .all()
+    }
+
+    assert rows["server_health_mem_warn_pct"].value_text == "75"
+    assert rows["server_health_mem_warn_pct"].value_type == SettingValueType.integer
+    assert rows["network_health_warn_pct"].value_text == "88"
+    assert rows["network_health_warn_pct"].value_type == SettingValueType.integer
+
+
+def test_save_monitoring_config_invalidates_spec_setting_cache(db_session, monkeypatch):
+    from app.services import domain_settings as domain_settings_service
+    from app.services.web_system_config import save_monitoring_config
+
+    invalidated: list[tuple[str, str]] = []
+
+    def fake_invalidate(domain: str, key: str) -> bool:
+        invalidated.append((domain, key))
+        return True
+
+    monkeypatch.setattr(
+        domain_settings_service.SettingsCache,
+        "invalidate",
+        fake_invalidate,
+    )
+
+    save_monitoring_config(
+        db_session,
+        {
+            "server_health_mem_warn_pct": "75",
+        },
+    )
+
+    assert ("network_monitoring", "server_health_mem_warn_pct") in invalidated
+
+
+def test_save_monitoring_config_invalid_spec_value_is_rejected(db_session):
+    from app.services.web_system_config import save_monitoring_config
+
+    with pytest.raises(ValueError, match="Server Health Memory Warning"):
+        save_monitoring_config(
+            db_session,
+            {
+                "server_health_mem_warn_pct": "150",
+            },
+        )
+
+    assert (
+        db_session.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.network_monitoring)
+        .filter(DomainSetting.key == "server_health_mem_warn_pct")
+        .first()
+        is None
+    )
+
+
+def test_monitoring_config_template_uses_runtime_health_keys():
+    template = Path("templates/admin/system/config/monitoring.html").read_text()
+
+    assert 'name="server_health_disk_warn_pct"' in template
+    assert 'name="server_health_mem_warn_pct"' in template
+    assert 'name="network_health_warn_pct"' in template
+    assert 'name="cpu_warn_pct"' not in template
+    assert 'name="interface_warn_pct"' not in template
 
 
 def test_notify_alert_uses_policy_engine_before_admin_fallback(

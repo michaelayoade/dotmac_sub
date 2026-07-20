@@ -1,8 +1,8 @@
 """Metrics adapter protocol and implementations.
 
-Provides a clean abstraction for fetching ONT signal and traffic metrics,
-allowing different data sources (VictoriaMetrics, Zabbix, database) to be
-used interchangeably.
+Provides a clean abstraction for fetching ONT signal and traffic metrics.
+VictoriaMetrics is the metrics store (the Zabbix adapter was retired with the
+native monitoring cutover).
 
 Usage:
     from app.services.network.metrics_adapters import get_metrics_adapter
@@ -19,12 +19,9 @@ import re
 from abc import ABC
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 import httpx
-
-if TYPE_CHECKING:
-    from app.services.zabbix import ZabbixClient
 
 logger = logging.getLogger(__name__)
 
@@ -302,278 +299,6 @@ class VictoriaMetricsAdapter(ABC, MetricsReader):
 
 
 # ============================================================================
-# Zabbix Adapter
-# ============================================================================
-
-
-class ZabbixMetricsAdapter(MetricsReader):
-    """Adapter for reading metrics from Zabbix API.
-
-    Fetches historical data directly from Zabbix using the history.get API.
-    Maps Zabbix item keys to ONT metrics.
-    """
-
-    # Zabbix item key patterns for ONT signal metrics
-    SIGNAL_ITEM_PATTERNS = {
-        "onu_rx": ["ont.signal.onu_rx", "gpon.onu.rx.power"],
-        "olt_rx": ["ont.signal.olt_rx", "gpon.olt.rx.power"],
-    }
-
-    def __init__(
-        self,
-        api_url: str | None = None,
-        api_token: str | None = None,
-        timeout: float = 15.0,
-    ):
-        from app.services.zabbix import get_zabbix_api_token, get_zabbix_api_url
-
-        self.api_url = api_url or get_zabbix_api_url()
-        self.api_token = api_token or get_zabbix_api_token()
-        self.timeout = timeout
-        self._client: ZabbixClient | None = None
-
-    @property
-    def client(self) -> ZabbixClient:
-        """Lazy-initialize Zabbix client."""
-        if self._client is None:
-            from app.services.zabbix import ZabbixClient
-
-            self._client = ZabbixClient(
-                api_url=self.api_url,
-                api_token=self.api_token,
-                timeout=self.timeout,
-            )
-        return self._client
-
-    def _find_ont_host(self, ont_serial: str) -> dict | None:
-        """Find a Zabbix host by ONT serial number."""
-        try:
-            hosts = self.client.get_hosts(limit=10000)
-            serial_candidates = normalize_serial(ont_serial)
-
-            for host in hosts:
-                # Check host name, inventory serial, or tags
-                name = host.get("name", "").upper()
-                host_name = host.get("host", "").upper()
-                inventory = host.get("inventory") or {}
-                inv_serial = str(inventory.get("serialno_a", "")).upper()
-
-                for candidate in serial_candidates:
-                    candidate_up = candidate.upper()
-                    if candidate_up in name or candidate_up in host_name:
-                        return host
-                    if candidate_up == inv_serial:
-                        return host
-
-                # Check tags
-                tags = host.get("tags", [])
-                for tag in tags:
-                    if tag.get("tag") == "ont_serial":
-                        if tag.get("value", "").upper() in [
-                            c.upper() for c in serial_candidates
-                        ]:
-                            return host
-
-            return None
-        except Exception as e:
-            logger.error("Failed to find ONT host in Zabbix: %s", e)
-            return None
-
-    def _get_signal_items(self, host_id: str) -> dict[str, str]:
-        """Get signal-related items for a host.
-
-        Returns dict mapping signal type to item ID.
-        """
-        try:
-            # Passing no metric to ZabbixClient.get_items defaults to a net.if
-            # search, which excludes ONT signal keys before this matcher runs.
-            items = self.client.get_items(host_ids=[host_id], metric="", limit=10000)
-            result: dict[str, str] = {}
-
-            for item in items:
-                key = item.get("key_", "").lower()
-                item_id = item.get("itemid")
-
-                for signal_type, patterns in self.SIGNAL_ITEM_PATTERNS.items():
-                    for pattern in patterns:
-                        if pattern.lower() in key:
-                            result[signal_type] = item_id
-                            break
-
-            return result
-        except Exception as e:
-            logger.error("Failed to get signal items from Zabbix: %s", e)
-            return {}
-
-    def _fetch_history(
-        self,
-        item_ids: list[str],
-        start: datetime,
-        end: datetime,
-    ) -> dict[str, list[tuple[datetime, float]]]:
-        """Fetch history for multiple items.
-
-        Returns dict mapping item_id to list of (timestamp, value) tuples.
-        """
-        if not item_ids:
-            return {}
-
-        try:
-            time_from = int(start.timestamp())
-            time_till = int(end.timestamp())
-
-            # Try float history first (type 0)
-            history = self.client.get_history(
-                item_ids=item_ids,
-                history_type=0,
-                time_from=time_from,
-                time_till=time_till,
-                limit=50000,
-            )
-
-            result: dict[str, list[tuple[datetime, float]]] = {
-                item_id: [] for item_id in item_ids
-            }
-
-            for record in history:
-                item_id = record.get("itemid")
-                if item_id not in result:
-                    continue
-                try:
-                    ts = datetime.fromtimestamp(int(record["clock"]), tz=UTC)
-                    val = float(record["value"])
-                    result[item_id].append((ts, val))
-                except (KeyError, ValueError):
-                    continue
-
-            return result
-        except Exception as e:
-            logger.error("Failed to fetch Zabbix history: %s", e)
-            return {}
-
-    def get_signal_history(
-        self,
-        ont_serial: str,
-        time_range: str = "24h",
-        *,
-        ont_id: str | None = None,
-    ) -> ChartData:
-        """Get signal history from Zabbix."""
-        start, end, _ = parse_time_range(time_range)
-
-        # Find the ONT host in Zabbix
-        host = self._find_ont_host(ont_serial)
-        if not host:
-            return ChartData(
-                time_range=time_range,
-                available=False,
-                error="ONT not found in Zabbix monitoring.",
-            )
-
-        host_id = host.get("hostid")
-        signal_items = self._get_signal_items(host_id)
-
-        if not signal_items:
-            return ChartData(
-                time_range=time_range,
-                available=False,
-                error="No signal items configured for this ONT in Zabbix.",
-            )
-
-        # Fetch history for signal items
-        item_ids = list(signal_items.values())
-        history = self._fetch_history(item_ids, start, end)
-
-        series: list[ChartSeries] = []
-
-        # Build ONU Rx series
-        onu_item_id = signal_items.get("onu_rx")
-        if onu_item_id and history.get(onu_item_id):
-            data = history[onu_item_id]
-            timestamps = [ts.strftime("%Y-%m-%dT%H:%M:%SZ") for ts, _ in data]
-            values = [v for _, v in data]
-            series.append(ChartSeries("ONU Rx (dBm)", timestamps, values))
-
-        # Build OLT Rx series
-        olt_item_id = signal_items.get("olt_rx")
-        if olt_item_id and history.get(olt_item_id):
-            data = history[olt_item_id]
-            timestamps = [ts.strftime("%Y-%m-%dT%H:%M:%SZ") for ts, _ in data]
-            values = [v for _, v in data]
-            series.append(ChartSeries("OLT Rx (dBm)", timestamps, values))
-
-        if not series:
-            return ChartData(
-                time_range=time_range,
-                available=False,
-                error="No signal history available in Zabbix.",
-            )
-
-        return ChartData(series=series, time_range=time_range, available=True)
-
-    def get_traffic_history(
-        self,
-        ont_serial: str,
-        time_range: str = "24h",
-        *,
-        ont_id: str | None = None,
-    ) -> ChartData:
-        """Get traffic history from Zabbix.
-
-        Traffic counters require mapped Zabbix rate items for the ONT.
-        """
-        return ChartData(
-            time_range=time_range,
-            available=False,
-            error="Traffic history is unavailable because no Zabbix traffic counters are mapped for this ONT.",
-        )
-
-
-# ============================================================================
-# Composite/Fallback Adapter
-# ============================================================================
-
-
-class CompositeMetricsAdapter(MetricsReader):
-    """Adapter that tries multiple sources in order.
-
-    First tries primary adapter, falls back to secondary if no data found.
-    """
-
-    def __init__(self, adapters: list[MetricsReader]):
-        if not adapters:
-            raise ValueError("At least one adapter required")
-        self.adapters = adapters
-
-    def get_signal_history(
-        self,
-        ont_serial: str,
-        time_range: str = "24h",
-        *,
-        ont_id: str | None = None,
-    ) -> ChartData:
-        for adapter in self.adapters:
-            result = adapter.get_signal_history(ont_serial, time_range, ont_id=ont_id)
-            if result.available:
-                return result
-        # Return last result (with error message)
-        return result
-
-    def get_traffic_history(
-        self,
-        ont_serial: str,
-        time_range: str = "24h",
-        *,
-        ont_id: str | None = None,
-    ) -> ChartData:
-        for adapter in self.adapters:
-            result = adapter.get_traffic_history(ont_serial, time_range, ont_id=ont_id)
-            if result.available:
-                return result
-        return result
-
-
-# ============================================================================
 # Factory
 # ============================================================================
 
@@ -582,12 +307,7 @@ _adapter_instance: MetricsReader | None = None
 
 
 def get_metrics_adapter() -> MetricsReader:
-    """Get the configured metrics adapter.
-
-    Configuration via METRICS_ADAPTER env var:
-    - "zabbix" (default): Use Zabbix directly
-    - "victoriametrics": Legacy metrics store
-    - "composite": Legacy VictoriaMetrics first, then Zabbix
+    """Get the configured metrics adapter (VictoriaMetrics).
 
     Returns:
         Configured MetricsReader instance
@@ -597,19 +317,7 @@ def get_metrics_adapter() -> MetricsReader:
     if _adapter_instance is not None:
         return _adapter_instance
 
-    adapter_type = os.getenv("METRICS_ADAPTER", "zabbix").lower()
-
-    if adapter_type == "victoriametrics":
-        _adapter_instance = VictoriaMetricsAdapter()
-    elif adapter_type == "composite":
-        _adapter_instance = CompositeMetricsAdapter(
-            [
-                VictoriaMetricsAdapter(),
-                ZabbixMetricsAdapter(),
-            ]
-        )
-    else:
-        _adapter_instance = ZabbixMetricsAdapter()
+    _adapter_instance = VictoriaMetricsAdapter()
 
     logger.info("Initialized metrics adapter: %s", type(_adapter_instance).__name__)
     return _adapter_instance

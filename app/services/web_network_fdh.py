@@ -5,14 +5,18 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, cast
 
+from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
 from app.models.network import FdhCabinet, Splitter
+from app.schemas.network import SplitterCreate, SplitterUpdate
 from app.services import catalog as catalog_service
 from app.services.audit_helpers import diff_dicts, model_to_dict
 from app.services.common import coerce_uuid
+from app.services.network.splitters import splitters as splitter_service
 
 logger = logging.getLogger(__name__)
 
@@ -272,26 +276,6 @@ def validate_splitter_form(db: Session, values: dict[str, object]) -> str | None
     return None
 
 
-def parse_splitter_port_counts(
-    values: dict[str, object],
-    *,
-    default_input: int,
-    default_output: int,
-) -> tuple[int, int]:
-    """Parse splitter port counts with fallbacks."""
-    input_ports_raw = str(values.get("input_ports_raw") or "")
-    output_ports_raw = str(values.get("output_ports_raw") or "")
-    try:
-        input_ports = int(input_ports_raw) if input_ports_raw else default_input
-    except ValueError:
-        input_ports = default_input
-    try:
-        output_ports = int(output_ports_raw) if output_ports_raw else default_output
-    except ValueError:
-        output_ports = default_output
-    return input_ports, output_ports
-
-
 def build_splitter_form_context(
     db: Session,
     *,
@@ -313,25 +297,22 @@ def build_splitter_form_context(
 
 
 def create_splitter(db: Session, values: dict[str, object]) -> Splitter:
-    """Create and persist splitter from form values."""
-    input_ports, output_ports = parse_splitter_port_counts(
-        values,
-        default_input=1,
-        default_output=8,
+    """Create through the canonical splitter capacity owner."""
+    payload_values: dict[str, object] = {
+        "name": values["name"],
+        "fdh_id": values.get("fdh_id"),
+        "splitter_ratio": values.get("splitter_ratio"),
+        "notes": values.get("notes"),
+        "is_active": bool(values.get("is_active")),
+    }
+    if input_ports := str(values.get("input_ports_raw") or ""):
+        payload_values["input_ports"] = int(input_ports)
+    if output_ports := str(values.get("output_ports_raw") or ""):
+        payload_values["output_ports"] = int(output_ports)
+    return splitter_service.create(
+        db,
+        SplitterCreate.model_validate(payload_values),
     )
-    splitter = Splitter(
-        name=values["name"],
-        fdh_id=values.get("fdh_id"),
-        splitter_ratio=values.get("splitter_ratio"),
-        input_ports=input_ports,
-        output_ports=output_ports,
-        notes=values.get("notes"),
-        is_active=bool(values.get("is_active")),
-    )
-    db.add(splitter)
-    db.commit()
-    db.refresh(splitter)
-    return splitter
 
 
 def create_splitter_submission(
@@ -355,36 +336,44 @@ def create_splitter_submission(
                 error=error,
             ),
         }
-    splitter = create_splitter(db, values)
+    try:
+        splitter = create_splitter(db, values)
+    except (HTTPException, ValidationError, ValueError) as exc:
+        error = str(exc.detail) if isinstance(exc, HTTPException) else str(exc)
+        return {
+            "splitter": None,
+            "error": error,
+            "form_context": build_splitter_form_context(
+                db,
+                splitter=values,
+                action_url=action_url,
+                selected_fdh_id=str(values.get("fdh_id") or "") or None,
+                error=error,
+            ),
+        }
     return {"splitter": splitter, "error": None, "form_context": None}
-
-
-def update_splitter(splitter: Splitter, values: dict[str, object]) -> None:
-    """Apply parsed form values to existing splitter."""
-    input_ports, output_ports = parse_splitter_port_counts(
-        values,
-        default_input=splitter.input_ports,
-        default_output=splitter.output_ports,
-    )
-    splitter.name = cast(str, values["name"])
-    splitter.fdh_id = (
-        coerce_uuid(fdh_id)
-        if (fdh_id := cast(str | None, values.get("fdh_id")))
-        else None
-    )
-    splitter.splitter_ratio = cast(str | None, values.get("splitter_ratio"))
-    splitter.input_ports = input_ports
-    splitter.output_ports = output_ports
-    splitter.notes = cast(str | None, values.get("notes"))
-    splitter.is_active = bool(values.get("is_active"))
 
 
 def commit_splitter_update(
     db: Session, splitter: Splitter, values: dict[str, object]
-) -> None:
-    """Apply form values and flush the splitter update."""
-    update_splitter(splitter, values)
-    db.flush()
+) -> Splitter:
+    """Update through the canonical splitter capacity owner."""
+    payload_values: dict[str, object] = {
+        "name": values["name"],
+        "fdh_id": values.get("fdh_id"),
+        "splitter_ratio": values.get("splitter_ratio"),
+        "notes": values.get("notes"),
+        "is_active": bool(values.get("is_active")),
+    }
+    if input_ports := str(values.get("input_ports_raw") or ""):
+        payload_values["input_ports"] = int(input_ports)
+    if output_ports := str(values.get("output_ports_raw") or ""):
+        payload_values["output_ports"] = int(output_ports)
+    return splitter_service.update(
+        db,
+        str(splitter.id),
+        SplitterUpdate.model_validate(payload_values),
+    )
 
 
 def update_splitter_submission(
@@ -409,7 +398,20 @@ def update_splitter_submission(
                 error=error,
             ),
         }
-    commit_splitter_update(db, splitter, values)
+    try:
+        commit_splitter_update(db, splitter, values)
+    except (HTTPException, ValidationError, ValueError) as exc:
+        error = str(exc.detail) if isinstance(exc, HTTPException) else str(exc)
+        return {
+            "error": error,
+            "form_context": build_splitter_form_context(
+                db,
+                splitter=splitter,
+                action_url=action_url,
+                selected_fdh_id=str(values.get("fdh_id") or "") or None,
+                error=error,
+            ),
+        }
     after_snapshot = model_to_dict(splitter)
     changes = diff_dicts(before_snapshot, after_snapshot)
     metadata = {"changes": changes} if changes else None

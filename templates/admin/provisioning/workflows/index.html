@@ -90,7 +90,7 @@
                             {% endif %}
                         </td>
                         <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-400">
-                            {{ wf.created_at.strftime('%Y-%m-%d') if wf.created_at else '-' }}
+                            {{ wf.created_at | app_datetime('%Y-%m-%d', '-', include_tz=False) }}
                         </td>
                         {% call row_actions() %}
                             {{ row_action(href="/admin/provisioning/workflows/" ~ wf.id, icon=icon_view(), title="View", color="amber") }}

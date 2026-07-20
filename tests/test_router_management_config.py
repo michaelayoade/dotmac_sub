@@ -1,4 +1,5 @@
 import uuid
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -21,6 +22,22 @@ from app.services.router_management.config import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _rest_export_path(monkeypatch):
+    """These tests mock the REST ``execute`` for config export. Snapshots now
+    default to SSH, so pin this file to the REST path (the SSH path would try to
+    load a real key and fail in CI)."""
+    import types
+
+    from app.services.router_management import config_export
+
+    monkeypatch.setattr(
+        config_export,
+        "settings",
+        types.SimpleNamespace(router_config_export_via_ssh=False),
+    )
+
+
 def _make_router(db_session, name: str) -> Router:
     r = Router(
         name=name,
@@ -28,11 +45,23 @@ def _make_router(db_session, name: str) -> Router:
         management_ip="10.0.0.1",
         rest_api_username="admin",
         rest_api_password="enc:test",
+        routeros_version="7.16.2 (stable)",
+        board_name="CCR2004-1G-12S+2XS",
+        architecture="arm64",
     )
     db_session.add(r)
     db_session.commit()
     db_session.refresh(r)
     return r
+
+
+def _address_intent(key: str = "test:loopback") -> dict:
+    return {
+        "resource": "ipv4_address",
+        "key": key,
+        "state": "present",
+        "values": {"address": "192.0.2.1/32", "interface": "loopback"},
+    }
 
 
 def test_store_snapshot(db_session):
@@ -123,29 +152,140 @@ def test_render_template_missing_var():
         RouterConfigService.render_template(body, {})
 
 
+def test_manual_snapshot_uses_canonical_export_transport(db_session, monkeypatch):
+    router = _make_router(db_session, "manual-snapshot-test")
+    calls = []
+
+    def fetch(router_arg):
+        calls.append(router_arg.id)
+        return "/system identity set name=manual-snapshot-test"
+
+    monkeypatch.setattr(
+        "app.services.router_management.config_export.fetch_config_export", fetch
+    )
+    snapshot = RouterConfigService.capture_from_router(db_session, router)
+
+    assert calls == [router.id]
+    assert snapshot.config_export.startswith("/system identity")
+    assert len(snapshot.config_hash) == 64
+
+
 def test_create_push_record(db_session):
     router = _make_router(db_session, "push-test")
     user_id = uuid.uuid4()
 
     push = RouterConfigService.create_push(
         db_session,
-        commands=["/queue simple set [find] queue=sfq/sfq"],
+        desired_state=[_address_intent()],
         router_ids=[router.id],
         initiated_by=user_id,
+        dry_run=True,
+        failure_policy="abort",
     )
     assert push.status == RouterConfigPushStatus.pending
+    assert push.dry_run is True
+    assert push.failure_policy == "abort"
+    assert push.allow_dangerous_commands is False
     assert len(push.results) == 1
     assert push.results[0].router_id == router.id
+    assert push.operation_id is not None
+    assert push.results[0].operation_id is not None
 
 
-def test_create_push_dangerous_command(db_session):
-    router = _make_router(db_session, "push-danger-test")
-    with pytest.raises(ValueError, match="Dangerous command blocked"):
+def test_create_push_pins_routeros_adapter_identity(db_session):
+    router = _make_router(db_session, "push-binding-test")
+
+    push = RouterConfigService.create_push(
+        db_session,
+        desired_state=[_address_intent()],
+        router_ids=[router.id],
+        initiated_by=uuid.uuid4(),
+    )
+
+    binding = push.results[0].operation.input_payload["_adapter_binding"]
+    assert binding["adapter_name"] == "mikrotik-routeros-rest-v7"
+    assert binding["identity"]["model"] == "CCR2004-1G-12S+2XS"
+    assert binding["identity"]["firmware_version"] == "7.16.2 (stable)"
+
+
+def test_create_push_rejects_routeros_v6_write(db_session):
+    router = _make_router(db_session, "push-v6-test")
+    router.routeros_version = "6.49.18"
+    db_session.commit()
+
+    with pytest.raises(ValueError, match="require a mapped v7 profile"):
         RouterConfigService.create_push(
             db_session,
-            commands=["/system/reset-configuration"],
+            desired_state=[_address_intent()],
             router_ids=[router.id],
             initiated_by=uuid.uuid4(),
+        )
+
+
+def test_execute_config_push_rejects_changed_router_identity(db_session, monkeypatch):
+    from app.tasks.router_sync import execute_config_push
+
+    router = _make_router(db_session, "push-stale-binding-test")
+    push = RouterConfigService.create_push(
+        db_session,
+        desired_state=[_address_intent()],
+        router_ids=[router.id],
+        initiated_by=uuid.uuid4(),
+    )
+    router.routeros_version = "7.17.0"
+    db_session.commit()
+    calls = []
+    monkeypatch.setattr(
+        "app.tasks.router_sync.db_session_adapter.create_session",
+        lambda: db_session,
+    )
+    monkeypatch.setattr(db_session, "close", lambda: None)
+    monkeypatch.setattr(
+        "app.tasks.router_sync.RouterConnectionService.execute",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    outcome = execute_config_push.run(str(push.id))
+
+    db_session.refresh(push.results[0])
+    assert outcome["failed"] == 1
+    assert calls == []
+    assert push.results[0].status == RouterPushResultStatus.failed
+    assert "requires replanning" in push.results[0].error_message
+
+
+def test_create_push_rejects_unmanaged_resource(db_session):
+    router = _make_router(db_session, "push-danger-test")
+    with pytest.raises(ValueError, match="Unsupported managed RouterOS resource"):
+        RouterConfigService.create_push(
+            db_session,
+            desired_state=[{"resource": "system_reboot", "key": "unsafe"}],
+            router_ids=[router.id],
+            initiated_by=uuid.uuid4(),
+        )
+
+
+def test_create_push_dangerous_command_override(db_session):
+    router = _make_router(db_session, "push-danger-override-test")
+    with pytest.raises(ValueError, match="override is disabled"):
+        RouterConfigService.create_push(
+            db_session,
+            desired_state=[_address_intent()],
+            router_ids=[router.id],
+            initiated_by=uuid.uuid4(),
+            allow_dangerous_commands=True,
+        )
+
+
+def test_create_push_rejects_unknown_failure_policy(db_session):
+    router = _make_router(db_session, "push-bad-policy-test")
+    with pytest.raises(ValueError, match="Failure policy"):
+        RouterConfigService.create_push(
+            db_session,
+            desired_state=[_address_intent()],
+            router_ids=[router.id],
+            initiated_by=uuid.uuid4(),
+            failure_policy="rollback",
         )
 
 
@@ -169,7 +309,7 @@ def test_api_create_push_marks_results_failed_when_enqueue_fails(
     with pytest.raises(HTTPException) as exc_info:
         create_push(
             RouterConfigPushCreate(
-                commands=['/system/ntp/client/set {"enabled":"yes"}'],
+                desired_state=[_address_intent()],
                 router_ids=[router.id],
             ),
             auth={"principal_id": str(user_id)},
@@ -183,3 +323,384 @@ def test_api_create_push_marks_results_failed_when_enqueue_fails(
     assert len(push.results) == 1
     assert push.results[0].status == RouterPushResultStatus.failed
     assert "broker unavailable" in push.results[0].error_message
+
+
+def test_api_create_push_rejects_unmanaged_field(db_session):
+    from fastapi import HTTPException
+
+    from app.api.router_management import create_push
+
+    router = _make_router(db_session, "push-invalid-command-test")
+    with pytest.raises(HTTPException) as exc_info:
+        create_push(
+            RouterConfigPushCreate(
+                desired_state=[
+                    {
+                        **_address_intent(),
+                        "values": {
+                            "address": "192.0.2.1/32",
+                            "interface": "loopback",
+                            "script": "/system reboot",
+                        },
+                    }
+                ],
+                router_ids=[router.id],
+            ),
+            auth={"principal_id": str(uuid.uuid4())},
+            db=db_session,
+        )
+
+    assert exc_info.value.status_code == 422
+    assert db_session.query(RouterConfigPush).count() == 0
+
+
+def test_execute_config_push_dry_run_captures_preview_without_posting(
+    db_session, monkeypatch
+):
+    from app.tasks.router_sync import execute_config_push
+
+    router = _make_router(db_session, "push-dry-run-test")
+    push = RouterConfigService.create_push(
+        db_session,
+        desired_state=[_address_intent()],
+        router_ids=[router.id],
+        initiated_by=uuid.uuid4(),
+        dry_run=True,
+    )
+    calls = []
+
+    def fake_execute(router_arg, method, path, payload=None, **kwargs):
+        calls.append((router_arg.name, method, path, payload))
+        if path == "/export":  # config read (POST /rest/export), not a change
+            return "/exported config"
+        raise AssertionError("dry-run must not POST router changes")
+
+    monkeypatch.setattr(
+        "app.tasks.router_sync.db_session_adapter.create_session",
+        lambda: db_session,
+    )
+    monkeypatch.setattr(db_session, "close", lambda: None)
+    monkeypatch.setattr(
+        "app.tasks.router_sync.RouterConnectionService.execute", fake_execute
+    )
+
+    result = execute_config_push.run(str(push.id))
+
+    db_session.refresh(push)
+    db_session.refresh(push.results[0])
+    assert result["dry_run"] is True
+    assert result["success"] == 1
+    assert push.status == RouterConfigPushStatus.completed
+    assert push.results[0].status == RouterPushResultStatus.success
+    assert push.results[0].pre_snapshot_id is not None
+    assert push.results[0].post_snapshot_id is None
+    assert push.results[0].response_data["planned_intents"][0]["resource"] == (
+        "ipv4_address"
+    )
+    assert calls == [
+        ("push-dry-run-test", "POST", "/export", None),
+    ]
+
+
+def test_execute_config_push_abort_policy_skips_remaining_after_failure(
+    db_session, monkeypatch
+):
+    from app.tasks.router_sync import execute_config_push
+
+    first = _make_router(db_session, "push-abort-a")
+    second = _make_router(db_session, "push-abort-b")
+    push = RouterConfigService.create_push(
+        db_session,
+        desired_state=[_address_intent()],
+        router_ids=[first.id, second.id],
+        initiated_by=uuid.uuid4(),
+        failure_policy="abort",
+    )
+    calls = []
+
+    def fake_execute(router_arg, method, path, payload=None, **kwargs):
+        calls.append((router_arg.name, method, path, payload))
+        if path == "/export":  # config read (POST /rest/export), not a change
+            return "/exported config"
+        if router_arg.name == "push-abort-a":
+            raise RuntimeError("router rejected command")
+        return {}
+
+    monkeypatch.setattr(
+        "app.tasks.router_sync.db_session_adapter.create_session",
+        lambda: db_session,
+    )
+    monkeypatch.setattr(db_session, "close", lambda: None)
+    monkeypatch.setattr(
+        "app.tasks.router_sync.RouterConnectionService.execute", fake_execute
+    )
+
+    result = execute_config_push.run(str(push.id))
+
+    db_session.refresh(push)
+    for row in push.results:
+        db_session.refresh(row)
+    statuses = {row.router_id: row.status for row in push.results}
+    errors = {row.router_id: row.error_message for row in push.results}
+    assert result["failure_policy"] == "abort"
+    assert result["failed"] == 1
+    assert result["skipped"] == 1
+    assert push.status == RouterConfigPushStatus.failed
+    assert statuses[first.id] == RouterPushResultStatus.failed
+    assert statuses[second.id] == RouterPushResultStatus.skipped
+    assert "aborted" in (errors[second.id] or "")
+    assert not any(call[0] == "push-abort-b" for call in calls)
+
+
+def test_execute_config_push_requires_readback_and_snapshot(db_session, monkeypatch):
+    from app.models.network_operation import NetworkOperationStatus
+    from app.tasks.router_sync import execute_config_push
+
+    router = _make_router(db_session, "push-verified-test")
+    push = RouterConfigService.create_push(
+        db_session,
+        desired_state=[_address_intent()],
+        router_ids=[router.id],
+        initiated_by=uuid.uuid4(),
+    )
+    calls = []
+
+    def fake_execute(router_arg, method, path, payload=None, **kwargs):
+        calls.append((method, path, payload, kwargs.get("max_retries")))
+        if path == "/export":
+            return "/exported config"
+        if path.startswith("/ip/address?") and method == "GET":
+            return (
+                [
+                    {
+                        ".id": "*7",
+                        "address": "192.0.2.1/32",
+                        "interface": "loopback",
+                        "comment": "dotmac-sot:test:loopback",
+                    }
+                ]
+                if any(call[1] == "/ip/address/add" for call in calls)
+                else []
+            )
+        if method == "POST":
+            return {}
+        return []
+
+    monkeypatch.setattr(
+        "app.tasks.router_sync.db_session_adapter.create_session",
+        lambda: db_session,
+    )
+    monkeypatch.setattr(db_session, "close", lambda: None)
+    monkeypatch.setattr(
+        "app.tasks.router_sync.RouterConnectionService.execute", fake_execute
+    )
+
+    outcome = execute_config_push.run(str(push.id))
+
+    db_session.refresh(push)
+    result = push.results[0]
+    db_session.refresh(result)
+    assert outcome["success"] == 1
+    assert result.status == RouterPushResultStatus.success
+    assert result.pre_snapshot_id is not None
+    assert result.post_snapshot_id is not None
+    assert result.response_data["verified"] is True
+    assert calls[1][0] == "GET"
+    assert calls[1][1].startswith("/ip/address?comment=dotmac-sot%3Atest%3Aloopback")
+    assert calls[2] == (
+        "POST",
+        "/ip/address/add",
+        {
+            "address": "192.0.2.1/32",
+            "interface": "loopback",
+            "comment": "dotmac-sot:test:loopback",
+        },
+        1,
+    )
+    assert calls[3][0] == "GET"
+    assert calls[3][1].startswith("/ip/address?comment=dotmac-sot%3Atest%3Aloopback")
+    assert result.operation.status == NetworkOperationStatus.succeeded
+    assert push.operation.status == NetworkOperationStatus.succeeded
+
+
+def test_ambiguous_write_waits_for_reconciliation(db_session, monkeypatch):
+    from app.models.network_operation import NetworkOperationStatus
+    from app.services.router_management.connection import RouterTransportError
+    from app.tasks.router_sync import (
+        execute_config_push,
+        reconcile_config_push_readback,
+    )
+
+    router = _make_router(db_session, "push-pending-readback-test")
+    push = RouterConfigService.create_push(
+        db_session,
+        desired_state=[_address_intent()],
+        router_ids=[router.id],
+        initiated_by=uuid.uuid4(),
+    )
+
+    def ambiguous_execute(router_arg, method, path, payload=None, **kwargs):
+        if path == "/export":
+            return "/exported config"
+        if method == "GET":
+            return []
+        if method == "POST":
+            raise RouterTransportError("response timed out")
+        raise AssertionError("readback must not run after ambiguous delivery")
+
+    monkeypatch.setattr(
+        "app.tasks.router_sync.db_session_adapter.create_session",
+        lambda: db_session,
+    )
+    monkeypatch.setattr(db_session, "close", lambda: None)
+    monkeypatch.setattr(
+        "app.tasks.router_sync.RouterConnectionService.execute", ambiguous_execute
+    )
+
+    outcome = execute_config_push.run(str(push.id))
+    db_session.refresh(push)
+    result = push.results[0]
+    db_session.refresh(result)
+    assert outcome["pending_readback"] == 1
+    assert push.status == RouterConfigPushStatus.pending_readback
+    assert push.completed_at is None
+    assert result.status == RouterPushResultStatus.pending_readback
+    assert result.operation.status == NetworkOperationStatus.waiting
+
+    def recovered_execute(router_arg, method, path, payload=None, **kwargs):
+        if path == "/export":
+            return "/reconciled config"
+        assert method == "GET"
+        return [
+            {
+                ".id": "*7",
+                "address": "192.0.2.1/32",
+                "interface": "loopback",
+                "comment": "dotmac-sot:test:loopback",
+            }
+        ]
+
+    monkeypatch.setattr(
+        "app.tasks.router_sync.RouterConnectionService.execute", recovered_execute
+    )
+    stats = reconcile_config_push_readback.run()
+
+    db_session.refresh(push)
+    db_session.refresh(result)
+    assert stats == {"checked": 1, "verified": 1, "drifted": 0, "pending": 0}
+    assert result.status == RouterPushResultStatus.success
+    assert result.post_snapshot_id is not None
+    assert result.operation.status == NetworkOperationStatus.succeeded
+    assert push.status == RouterConfigPushStatus.completed
+    assert push.operation.status == NetworkOperationStatus.succeeded
+
+
+def test_audit_persistence_recovery_marks_pending_readback(db_session, monkeypatch):
+    from app.models.network_operation import NetworkOperationStatus
+    from app.tasks.router_sync import _recover_pending_readback
+
+    router = _make_router(db_session, "push-audit-recovery-test")
+    push = RouterConfigService.create_push(
+        db_session,
+        desired_state=[_address_intent()],
+        router_ids=[router.id],
+        initiated_by=uuid.uuid4(),
+    )
+    result = push.results[0]
+    monkeypatch.setattr(
+        "app.tasks.router_sync.db_session_adapter.create_session",
+        lambda: db_session,
+    )
+    monkeypatch.setattr(db_session, "close", lambda: None)
+    failed_db = MagicMock()
+
+    _recover_pending_readback(
+        failed_db,
+        result.id,
+        "audit transaction failed",
+        {"write_accepted": True, "verified": True},
+    )
+    failed_db.rollback.assert_called_once()
+
+    db_session.refresh(push)
+    db_session.refresh(result)
+    assert push.status == RouterConfigPushStatus.pending_readback
+    assert result.status == RouterPushResultStatus.pending_readback
+    assert result.response_data["verified"] is True
+    assert result.operation.status == NetworkOperationStatus.waiting
+    assert push.operation.status == NetworkOperationStatus.waiting
+
+
+def test_sot_drift_audit_uses_latest_intent_without_writing(db_session, monkeypatch):
+    from app.tasks.router_sync import audit_sot_drift
+
+    router = _make_router(db_session, "router-sot-audit-test")
+    RouterConfigService.create_push(
+        db_session,
+        desired_state=[
+            {
+                **_address_intent(),
+                "values": {"address": "192.0.2.1/32", "interface": "loopback"},
+            }
+        ],
+        router_ids=[router.id],
+        initiated_by=uuid.uuid4(),
+    )
+    RouterConfigService.create_push(
+        db_session,
+        desired_state=[
+            {
+                **_address_intent(),
+                "values": {"address": "192.0.2.2/32", "interface": "loopback"},
+            }
+        ],
+        router_ids=[router.id],
+        initiated_by=uuid.uuid4(),
+    )
+    calls = []
+
+    def fake_execute(router_arg, method, path, payload=None, **kwargs):
+        calls.append((method, path, payload))
+        assert method == "GET"
+        return [
+            {
+                ".id": "*7",
+                "address": "192.0.2.2/32",
+                "interface": "loopback",
+                "comment": "dotmac-sot:test:loopback",
+            }
+        ]
+
+    snapshots = []
+    monkeypatch.setattr(
+        "app.tasks.router_sync.db_session_adapter.create_session",
+        lambda: db_session,
+    )
+    monkeypatch.setattr(db_session, "close", lambda: None)
+    monkeypatch.setattr(
+        "app.services.router_management.write_adapter.RouterConnectionService.execute",
+        fake_execute,
+    )
+    monkeypatch.setattr(
+        "app.services.observability.publish_state_snapshot",
+        lambda domain, observations, status: (
+            snapshots.append((domain, list(observations), status)) or True
+        ),
+    )
+
+    stats = audit_sot_drift.run()
+
+    assert stats == {
+        "routers": 1,
+        "intents": 1,
+        "in_sync": 1,
+        "drifted": 0,
+        "unreachable": 0,
+        "invalid": 0,
+    }
+    assert len(calls) == 1
+    assert calls[0][0] == "GET"
+    assert calls[0][1].startswith("/ip/address?comment=dotmac-sot%3Atest%3Aloopback")
+    assert calls[0][2] is None
+    assert snapshots[0][0] == "router_sot"
+    assert snapshots[0][2] == "ok"

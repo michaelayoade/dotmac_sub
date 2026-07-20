@@ -1,7 +1,12 @@
 """Customer FUP notifications emitted by the periodic FUP evaluation task."""
 
+from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.notification import Notification, NotificationChannel
-from app.tasks.usage import _build_fup_notification, _emit_fup_notifications
+from app.models.subscription_engine import SettingValueType
+from app.services.fup_enforcement import (
+    _build_fup_notification,
+    _emit_fup_notifications,
+)
 
 
 def test_build_fup_notification_messages():
@@ -74,6 +79,46 @@ def test_emit_approaching_is_push_only(db_session, subscriber):
     assert [n.channel for n in notes] == [NotificationChannel.push]
 
 
+def test_emit_fup_notifications_uses_channel_policy(db_session, subscriber):
+    subscriber.email = "fup-policy@example.com"
+    subscriber.phone = "+2348012340001"
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.notification,
+            key="notification_channel_policy",
+            value_type=SettingValueType.json,
+            value_json={"events": {"fup_throttled": ["whatsapp", "push"]}},
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    sent = _emit_fup_notifications(
+        db_session,
+        [
+            {
+                "subscriber_id": subscriber.id,
+                "kind": "throttled",
+                "rule_name": "Monthly 100GB cap",
+                "threshold_gb": 100,
+                "used_gb": 120,
+            }
+        ],
+    )
+
+    notes = (
+        db_session.query(Notification)
+        .filter(Notification.subscriber_id == subscriber.id)
+        .filter(Notification.event_type == "fup_throttled")
+        .all()
+    )
+    assert sent == 1
+    assert {n.channel for n in notes} == {
+        NotificationChannel.whatsapp,
+        NotificationChannel.push,
+    }
+
+
 def test_emit_fup_notifications_skips_unknown_subscriber(db_session):
     import uuid
 
@@ -112,7 +157,7 @@ def test_repeat_upsell_fires_after_two_of_three_cycles(
     from decimal import Decimal
 
     from app.models.usage import QuotaBucket
-    from app.tasks.usage import _maybe_queue_repeat_upsell
+    from app.services.fup_enforcement import _maybe_queue_repeat_upsell
 
     subscriber.email = "fup.customer3@example.com"
     db_session.commit()
@@ -161,7 +206,7 @@ def test_repeat_upsell_silent_on_first_offense(db_session, subscriber, subscript
     from decimal import Decimal
 
     from app.models.usage import QuotaBucket
-    from app.tasks.usage import _maybe_queue_repeat_upsell
+    from app.services.fup_enforcement import _maybe_queue_repeat_upsell
 
     now = datetime.now(UTC)
     bucket = QuotaBucket(
@@ -192,7 +237,7 @@ def test_build_repeat_upsell_message():
 def test_emit_push_still_created_when_subscriber_has_no_email(db_session, subscriber):
     """A missing email must only skip the email channel, not push."""
     from app.models.notification import Notification, NotificationChannel
-    from app.tasks.usage import _emit_fup_notifications
+    from app.services.fup_enforcement import _emit_fup_notifications
 
     subscriber.email = ""
     db_session.commit()

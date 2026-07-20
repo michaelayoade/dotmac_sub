@@ -1,0 +1,96 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}ONT Identity Decision - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div>
+        <nav class="mb-2 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+            <a href="/admin/network/ont-identity-reviews" class="hover:text-indigo-600">ONT identity review</a><span>/</span><span class="font-mono">{{ decision.id }}</span>
+        </nav>
+        <div class="flex flex-wrap items-start justify-between gap-3">
+            <div>
+                <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ decision.action | title }} ONT identity</h1>
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ ont.serial_number if ont else 'Unknown ONT' }} · assignment <span class="font-mono">{{ decision.primary_assignment_id }}</span></p>
+            </div>
+            <span class="rounded-full px-3 py-1 text-sm font-semibold {{ 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200' if decision.status == 'applied' else 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900/40 dark:text-indigo-200' if decision.status in ['proposed', 'approved'] else 'bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-200' }}">{{ decision.status | title }}</span>
+        </div>
+    </div>
+
+    {% if error %}<div class="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800 dark:border-rose-800 dark:bg-rose-950/30 dark:text-rose-200">{{ error }}</div>{% endif %}
+    {% if input_is_current is sameas false %}
+    <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+        <p class="font-semibold">Authoritative inputs changed</p>
+        <p class="mt-1">{{ current_error or 'The current input hash no longer matches the proposal.' }} Approval will fail, and an already-approved execution will close stale without changing any assignment.</p>
+    </div>
+    {% endif %}
+
+    <div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
+        <div class="space-y-6">
+            <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Exact decision</h2>
+                <dl class="mt-4 grid gap-4 text-xs md:grid-cols-2">
+                    <div><dt class="font-semibold text-slate-500">ONT</dt><dd class="mt-1 break-all font-mono text-slate-800 dark:text-slate-200">{{ decision.ont_unit_id }}</dd></div>
+                    <div><dt class="font-semibold text-slate-500">Primary assignment</dt><dd class="mt-1 break-all font-mono text-slate-800 dark:text-slate-200">{{ decision.primary_assignment_id }}</dd></div>
+                    <div><dt class="font-semibold text-slate-500">Target subscription</dt><dd class="mt-1 break-all font-mono text-slate-800 dark:text-slate-200">{{ decision.target_subscription_id or 'None' }}</dd></div>
+                    <div><dt class="font-semibold text-slate-500">Subscription-derived subscriber</dt><dd class="mt-1 break-all font-mono text-slate-800 dark:text-slate-200">{{ decision.target_subscriber_id or 'None' }}</dd></div>
+                    <div><dt class="font-semibold text-slate-500">Target PON</dt><dd class="mt-1 break-all font-mono text-slate-800 dark:text-slate-200">{{ decision.target_pon_port_id or 'None' }}</dd></div>
+                    <div><dt class="font-semibold text-slate-500">PON-derived OLT</dt><dd class="mt-1 break-all font-mono text-slate-800 dark:text-slate-200">{{ decision.target_olt_id or 'None' }}</dd></div>
+                </dl>
+                <div class="mt-5">
+                    <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-200">Reviewed duplicate assignments</h3>
+                    {% if decision.duplicate_assignment_ids %}<ul class="mt-2 space-y-1 rounded-lg bg-slate-50 p-3 font-mono text-xs text-slate-700 dark:bg-slate-900 dark:text-slate-200">{% for assignment_id in decision.duplicate_assignment_ids %}<li>{{ assignment_id }}</li>{% endfor %}</ul>{% else %}<p class="mt-1 text-sm text-slate-500">None.</p>{% endif %}
+                </div>
+            </section>
+
+            <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="flex flex-wrap items-center justify-between gap-2"><h2 class="text-lg font-semibold text-slate-900 dark:text-white">Hashed input evidence</h2><span class="break-all font-mono text-xs text-slate-500">{{ decision.input_sha256 }}</span></div>
+                <pre class="mt-4 overflow-auto rounded-lg bg-slate-950 p-4 text-xs text-slate-100">{{ decision.input_snapshot | tojson(indent=2) }}</pre>
+            </section>
+
+            {% if decision.result_payload %}
+            <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="flex flex-wrap items-center justify-between gap-2"><h2 class="text-lg font-semibold text-slate-900 dark:text-white">Execution result</h2><span class="break-all font-mono text-xs text-slate-500">{{ decision.result_sha256 }}</span></div>
+                <pre class="mt-4 overflow-auto rounded-lg bg-slate-950 p-4 text-xs text-slate-100">{{ decision.result_payload | tojson(indent=2) }}</pre>
+            </section>
+            {% endif %}
+        </div>
+
+        <aside class="space-y-5">
+            <section class="rounded-xl border border-slate-200 bg-white p-4 text-sm shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Review history</h2>
+                <dl class="mt-3 space-y-3 text-xs text-slate-600 dark:text-slate-300">
+                    <div><dt class="font-semibold text-slate-500">Proposed by</dt><dd class="mt-1 break-all">{{ decision.proposed_by }}</dd><dd>{{ decision.proposed_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</dd></div>
+                    <div><dt class="font-semibold text-slate-500">Reason</dt><dd class="mt-1 whitespace-pre-wrap">{{ decision.reason }}</dd></div>
+                    {% if decision.reviewed_by %}<div><dt class="font-semibold text-slate-500">Reviewed by</dt><dd class="mt-1 break-all">{{ decision.reviewed_by }}</dd><dd>{{ decision.reviewed_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</dd></div><div><dt class="font-semibold text-slate-500">Review notes</dt><dd class="mt-1 whitespace-pre-wrap">{{ decision.review_notes }}</dd></div>{% endif %}
+                    {% if decision.executed_by %}<div><dt class="font-semibold text-slate-500">Executed by</dt><dd class="mt-1 break-all">{{ decision.executed_by }}</dd><dd>{{ decision.executed_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</dd></div>{% endif %}
+                    {% if decision.closed_reason %}<div><dt class="font-semibold text-slate-500">Closure</dt><dd class="mt-1">{{ decision.closed_reason }}</dd></div>{% endif %}
+                </dl>
+            </section>
+
+            {% if decision.status == 'proposed' %}
+            <form method="post" action="/admin/network/ont-identity-reviews/{{ decision.id }}/approve" class="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm dark:border-emerald-800 dark:bg-emerald-950/30">
+                {% include "components/forms/csrf_input.html" %}
+                <h2 class="font-semibold text-emerald-900 dark:text-emerald-200">Independent approval</h2>
+                <p class="mt-1 text-xs text-emerald-800 dark:text-emerald-300">The proposer cannot submit this transition.</p>
+                <textarea name="review_notes" rows="4" required maxlength="4000" class="mt-3 w-full rounded-lg border border-emerald-300 bg-white px-3 py-2 text-sm text-slate-800 dark:border-emerald-700 dark:bg-slate-900 dark:text-white" placeholder="State which exact IDs and conflicts you checked"></textarea>
+                <button type="submit" class="mt-3 w-full rounded-lg bg-emerald-600 px-4 py-2 font-semibold text-white hover:bg-emerald-700">Approve only</button>
+            </form>
+            <form method="post" action="/admin/network/ont-identity-reviews/{{ decision.id }}/decline" class="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm dark:border-rose-800 dark:bg-rose-950/30">
+                {% include "components/forms/csrf_input.html" %}
+                <h2 class="font-semibold text-rose-900 dark:text-rose-200">Decline</h2>
+                <textarea name="review_notes" rows="3" required maxlength="4000" class="mt-3 w-full rounded-lg border border-rose-300 bg-white px-3 py-2 text-sm text-slate-800 dark:border-rose-700 dark:bg-slate-900 dark:text-white" placeholder="Required reason"></textarea>
+                <button type="submit" class="mt-3 w-full rounded-lg bg-rose-600 px-4 py-2 font-semibold text-white hover:bg-rose-700">Decline proposal</button>
+            </form>
+            {% elif decision.status == 'approved' %}
+            <form method="post" action="/admin/network/ont-identity-reviews/{{ decision.id }}/execute" class="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm dark:border-amber-800 dark:bg-amber-950/30">
+                {% include "components/forms/csrf_input.html" %}
+                <h2 class="font-semibold text-amber-900 dark:text-amber-200">Execute reviewed repair</h2>
+                <p class="mt-2 text-xs text-amber-800 dark:text-amber-300">Execution locks and revalidates every hashed input. Stale or conflicting data closes without mutation.</p>
+                <button type="submit" class="mt-3 w-full rounded-lg bg-amber-600 px-4 py-2 font-semibold text-white hover:bg-amber-700">Execute exact repair</button>
+            </form>
+            {% endif %}
+        </aside>
+    </div>
+</div>
+{% endblock %}

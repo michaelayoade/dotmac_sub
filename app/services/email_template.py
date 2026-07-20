@@ -8,19 +8,19 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Mapping
 from html import escape
 from html.parser import HTMLParser
 from urllib.parse import urljoin
 
+from app.services.brand_theme import DEFAULT_HEX, DEFAULT_SECONDARY_HEX
 from app.services.branding_config import get_brand
 
 logger = logging.getLogger(__name__)
 
 _HTML_TAG_RE = re.compile(r"<[a-zA-Z][^>]*>")
 _FULL_HTML_DOCUMENT_RE = re.compile(r"<!doctype\b|<html\b", re.IGNORECASE)
-DOTMAC_RED = "#FF0000"
-DOTMAC_GREEN = "#008000"
-DOTMAC_WHITE = "#F4F4F9"
+EMAIL_CANVAS_COLOR = "#F4F4F9"
 
 
 def looks_like_html(body: str | None) -> bool:
@@ -93,6 +93,7 @@ def render_email_bodies(
     base_url: str = "",
     company_name: str | None = None,
     support_email: str | None = None,
+    brand: Mapping[str, object] | None = None,
 ) -> tuple[str, str | None]:
     """Return ``(body_html, body_text)`` for an outgoing email.
 
@@ -111,6 +112,7 @@ def render_email_bodies(
             base_url=base_url,
             company_name=company_name,
             support_email=support_email,
+            brand=brand,
         )
         return html, html_to_text(body)
 
@@ -126,6 +128,7 @@ def render_email_bodies(
         base_url=base_url,
         company_name=company_name,
         support_email=support_email,
+        brand=brand,
     )
     return html, body
 
@@ -141,6 +144,7 @@ def wrap_email_html(
     base_url: str = "",
     company_name: str | None = None,
     support_email: str | None = None,
+    brand: Mapping[str, object] | None = None,
 ) -> str:
     """Wrap email body HTML in a branded template with header and footer.
 
@@ -156,17 +160,24 @@ def wrap_email_html(
     """
     from html import escape
 
-    brand = get_brand()
-    base = base_url or brand["app_url"]
-    primary = DOTMAC_RED
-    secondary = DOTMAC_GREEN
-    logo_url = _asset_url(base, "/static/branding/favicon/icon-192.png")
+    resolved_brand = dict(brand) if brand is not None else get_brand()
+    base = base_url or str(resolved_brand["app_url"])
+    primary = str(resolved_brand.get("primary_color") or DEFAULT_HEX)
+    secondary = str(resolved_brand.get("secondary_color") or DEFAULT_SECONDARY_HEX)
+    configured_logo = str(resolved_brand.get("logo_url") or "").strip()
+    logo_url = (
+        _asset_url(base, configured_logo)
+        if configured_logo
+        else _asset_url(base, "/static/branding/favicon/icon-192.png")
+    )
     safe_subject = escape(subject)
     safe_company = escape(
-        company_name if company_name is not None else brand["legal_name"]
+        company_name if company_name is not None else str(resolved_brand["legal_name"])
     )
     safe_support = escape(
-        support_email if support_email is not None else brand["support_email"]
+        support_email
+        if support_email is not None
+        else str(resolved_brand["support_email"])
     )
 
     return f"""<!DOCTYPE html>
@@ -178,14 +189,14 @@ def wrap_email_html(
 <meta name="supported-color-schemes" content="light dark">
 <title>{safe_subject}</title>
 <style>
-body {{ margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: {DOTMAC_WHITE}; color: #1f2937; }}
+body {{ margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: {EMAIL_CANVAS_COLOR}; color: #1f2937; }}
 .wrapper {{ max-width: 600px; margin: 0 auto; padding: 24px 20px; }}
-.header {{ background: {DOTMAC_WHITE}; padding: 0 0 22px; text-align: center; border-bottom: 3px solid {primary}; }}
+.header {{ background: {EMAIL_CANVAS_COLOR}; padding: 0 0 22px; text-align: center; border-bottom: 3px solid {primary}; }}
 .header img {{ max-height: 64px; max-width: 160px; width: auto; height: auto; }}
 .header-fallback {{ color: {primary}; font-size: 20px; font-weight: 700; margin-top: 8px; }}
-.content {{ background: {DOTMAC_WHITE}; padding: 30px 0; color: #374151; }}
+.content {{ background: {EMAIL_CANVAS_COLOR}; padding: 30px 0; color: #374151; }}
 .content a {{ color: {secondary}; text-decoration: none; }}
-.footer {{ background: {DOTMAC_WHITE}; padding: 20px 0 0; text-align: center; border-top: 1px solid #e5e7eb; }}
+.footer {{ background: {EMAIL_CANVAS_COLOR}; padding: 20px 0 0; text-align: center; border-top: 1px solid #e5e7eb; }}
 .footer p {{ margin: 4px 0; font-size: 12px; color: #6b7280; }}
 .footer a {{ color: {secondary}; text-decoration: none; }}
 .brand-accent {{ color: {primary}; }}

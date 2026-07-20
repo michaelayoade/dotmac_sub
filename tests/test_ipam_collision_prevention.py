@@ -517,10 +517,14 @@ class TestPoolAvailabilityTracking:
 class TestLegacyCacheSynchronization:
     """Tests ensuring legacy cache fields stay in sync with IPAM."""
 
-    def test_ont_assignment_mgmt_ip_synced_on_allocation(
+    def test_ipam_does_not_create_assignment_for_legacy_cache(
         self, db_session, ip_pool, ont_unit
     ):
-        """OntAssignment.mgmt_ip_address should be set on allocation."""
+        """IPAM owns the allocation without manufacturing customer identity."""
+        from app.services.network.ont_desired_config import (
+            desired_config,
+            get_desired_config_value,
+        )
         from app.services.network.ont_management_ipam import allocate_ont_management_ip
 
         allocation = allocate_ont_management_ip(
@@ -529,16 +533,24 @@ class TestLegacyCacheSynchronization:
             pool_id=ip_pool.id,
         )
 
-        # Check assignment was updated
+        # No customer assignment is created merely to cache management fields.
         assignment = db_session.scalars(
             select(OntAssignment)
             .where(OntAssignment.ont_unit_id == ont_unit.id)
             .where(OntAssignment.active.is_(True))
         ).first()
 
-        assert assignment is not None
-        assert assignment.mgmt_ip_address == allocation.address
-        assert assignment.mgmt_ip_mode == MgmtIpMode.static_ip
+        assert assignment is None
+        assert (
+            get_desired_config_value(
+                desired_config(ont_unit), "management", "ip_address"
+            )
+            == allocation.address
+        )
+        assert (
+            get_desired_config_value(desired_config(ont_unit), "management", "ip_mode")
+            == "static_ip"
+        )
 
     def test_ont_assignment_mgmt_ip_cleared_on_release(
         self, db_session, ip_pool, ont_unit

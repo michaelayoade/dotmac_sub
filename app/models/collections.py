@@ -2,12 +2,24 @@ import enum
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
 from app.models.catalog import DunningAction
+from app.models.enforcement_lock import AccessRestrictionMode, EnforcementReason
 
 
 class DunningCaseStatus(enum.Enum):
@@ -15,6 +27,28 @@ class DunningCaseStatus(enum.Enum):
     paused = "paused"
     resolved = "resolved"
     closed = "closed"
+
+
+class FinancialAccessAction(enum.Enum):
+    suspend = "suspend"
+    reject = "reject"
+    throttle = "throttle"
+    restore = "restore"
+
+
+class FinancialAccessOrigin(enum.Enum):
+    dunning = "dunning"
+    prepaid_enforcement = "prepaid_enforcement"
+    financial_reconciliation = "financial_reconciliation"
+    historical_reconciliation = "historical_reconciliation"
+
+
+class FinancialAccessEvidenceOperation(enum.Enum):
+    lock_created = "lock_created"
+    lock_resolved = "lock_resolved"
+    credential_throttled = "credential_throttled"
+    credential_restored = "credential_restored"
+    dunning_case_resolved = "dunning_case_resolved"
 
 
 class DunningCase(Base):
@@ -73,6 +107,11 @@ class DunningActionLog(Base):
     payment_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("payments.id")
     )
+    access_consequence_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("financial_access_consequences.id", ondelete="RESTRICT"),
+        unique=True,
+    )
     step_day: Mapped[int | None] = mapped_column(Integer)
     action: Mapped[DunningAction] = mapped_column(Enum(DunningAction), nullable=False)
     outcome: Mapped[str | None] = mapped_column(String(120))
@@ -84,3 +123,142 @@ class DunningActionLog(Base):
     case = relationship("DunningCase", back_populates="actions")
     invoice = relationship("Invoice", back_populates="dunning_actions")
     payment = relationship("Payment", back_populates="dunning_actions")
+    access_consequence = relationship(
+        "FinancialAccessConsequence",
+        back_populates="dunning_action_log",
+        foreign_keys=[access_consequence_id],
+    )
+
+
+class FinancialAccessConsequence(Base):
+    """Durable owner decision for a financial service-access consequence."""
+
+    __tablename__ = "financial_access_consequences"
+    __table_args__ = (
+        UniqueConstraint(
+            "idempotency_key", name="uq_financial_access_consequence_idempotency"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        "subscriber_id",
+        UUID(as_uuid=True),
+        ForeignKey("subscribers.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    dunning_case_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("dunning_cases.id", ondelete="RESTRICT"),
+    )
+    action: Mapped[FinancialAccessAction] = mapped_column(
+        Enum(FinancialAccessAction), nullable=False
+    )
+    requested_reason: Mapped[EnforcementReason | None] = mapped_column(
+        Enum(EnforcementReason, name="enforcementreason", create_constraint=False)
+    )
+    access_mode: Mapped[AccessRestrictionMode | None] = mapped_column(
+        Enum(
+            AccessRestrictionMode,
+            name="accessrestrictionmode",
+            create_constraint=False,
+        )
+    )
+    origin: Mapped[FinancialAccessOrigin] = mapped_column(
+        Enum(FinancialAccessOrigin), nullable=False
+    )
+    eligible: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    outcome: Mapped[str] = mapped_column(String(120), nullable=False)
+    preview_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    decision_inputs: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    result: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+
+    subscriber = relationship("Subscriber")
+    dunning_case = relationship("DunningCase")
+    dunning_action_log = relationship(
+        "DunningActionLog",
+        back_populates="access_consequence",
+        uselist=False,
+        foreign_keys="DunningActionLog.access_consequence_id",
+    )
+    evidence = relationship(
+        "FinancialAccessConsequenceEvidence",
+        back_populates="consequence",
+        cascade="all, delete-orphan",
+    )
+
+
+class FinancialAccessConsequenceEvidence(Base):
+    """Structural link from a financial decision to its exact consequence."""
+
+    __tablename__ = "financial_access_consequence_evidence"
+    __table_args__ = (
+        CheckConstraint(
+            "(CASE WHEN enforcement_lock_id IS NOT NULL THEN 1 ELSE 0 END) + "
+            "(CASE WHEN access_credential_id IS NOT NULL THEN 1 ELSE 0 END) + "
+            "(CASE WHEN dunning_case_id IS NOT NULL THEN 1 ELSE 0 END) = 1",
+            name="ck_financial_access_evidence_exactly_one_target",
+        ),
+        UniqueConstraint(
+            "consequence_id",
+            "enforcement_lock_id",
+            "operation",
+            name="uq_financial_access_evidence_lock_operation",
+        ),
+        UniqueConstraint(
+            "consequence_id",
+            "access_credential_id",
+            "operation",
+            name="uq_financial_access_evidence_credential_operation",
+        ),
+        UniqueConstraint(
+            "consequence_id",
+            "dunning_case_id",
+            "operation",
+            name="uq_financial_access_evidence_case_operation",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    consequence_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("financial_access_consequences.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    enforcement_lock_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("enforcement_locks.id", ondelete="RESTRICT"),
+    )
+    access_credential_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("access_credentials.id", ondelete="RESTRICT"),
+    )
+    dunning_case_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("dunning_cases.id", ondelete="RESTRICT"),
+    )
+    operation: Mapped[FinancialAccessEvidenceOperation] = mapped_column(
+        Enum(FinancialAccessEvidenceOperation), nullable=False
+    )
+    profile_before_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("radius_profiles.id", ondelete="RESTRICT")
+    )
+    profile_after_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("radius_profiles.id", ondelete="RESTRICT")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+
+    consequence = relationship("FinancialAccessConsequence", back_populates="evidence")
+    enforcement_lock = relationship("EnforcementLock")
+    access_credential = relationship("AccessCredential")
+    dunning_case = relationship("DunningCase", foreign_keys=[dunning_case_id])

@@ -1,0 +1,99 @@
+{% extends "layouts/admin.html" %}
+{% from "admin/projects/_components.html" import project_card %}
+{% block title %}{{ page_title or 'Project Task' }}{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-3xl space-y-4">
+    <div>
+        <nav class="mb-2 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+            <a href="/admin/projects/tasks" class="hover:text-emerald-600 dark:hover:text-emerald-400">Project Tasks</a>
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            <span class="text-slate-900 dark:text-white">{{ page_title or 'Task' }}</span>
+        </nav>
+        <h1 class="font-display text-xl font-bold tracking-tight text-slate-900 dark:text-white">{{ page_title or 'Task' }}</h1>
+    </div>
+
+    {% if error %}
+    <div class="rounded-2xl border border-red-200 bg-red-50/90 p-4 text-sm text-red-800 dark:border-red-800 dark:bg-red-900/25 dark:text-red-100">{{ error }}</div>
+    {% endif %}
+
+    {% call project_card() %}
+    <form method="post"
+          action="{% if form_mode == 'edit' and task %}/admin/projects/tasks/{{ task.number or task.id }}/edit{% else %}/admin/projects/tasks{% endif %}"
+          class="space-y-5">
+        <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+
+        <div class="grid gap-4 sm:grid-cols-2">
+            <div class="sm:col-span-2">
+                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Project <span class="text-red-500">*</span></label>
+                <select name="project_id" required class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">— Select a project —</option>
+                    {% for p in projects %}
+                    <option value="{{ p.id }}" {% if prefill.project_id == p.id|string %}selected{% endif %}>{{ p.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="sm:col-span-2">
+                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Title <span class="text-red-500">*</span></label>
+                <input type="text" name="title" required value="{{ prefill.title }}"
+                       class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div class="sm:col-span-2">
+                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Description</label>
+                <textarea name="description" rows="3"
+                          class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ prefill.description }}</textarea>
+            </div>
+            <div>
+                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Status</label>
+                <select name="status" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    {% for s in task_statuses %}
+                    <option value="{{ s }}" {% if prefill.status == s %}selected{% endif %}>{{ s|replace('_', ' ')|title }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Priority</label>
+                <select name="priority" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    {% for p in task_priorities %}
+                    <option value="{{ p }}" {% if prefill.priority == p %}selected{% endif %}>{{ p|title }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="sm:col-span-2">
+                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Assignees</label>
+                <select name="assigned_to_person_ids" multiple size="6"
+                        class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    {% for person in staff_options %}
+                    <option value="{{ person.id }}" {% if person.id|string in prefill.assigned_to_person_ids %}selected{% endif %}>{{ person.label }}</option>
+                    {% endfor %}
+                </select>
+                <p class="mt-1 text-xs text-slate-400 dark:text-slate-500">Hold Ctrl / Cmd to select multiple staff; the first selection becomes the primary assignee.</p>
+            </div>
+            <div>
+                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Start</label>
+                <input type="datetime-local" name="start_at" value="{{ prefill.start_at }}"
+                       class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div>
+                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Due</label>
+                <input type="datetime-local" name="due_at" value="{{ prefill.due_at }}"
+                       class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div>
+                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Effort Hours</label>
+                <input type="number" name="effort_hours" min="0" value="{{ prefill.effort_hours }}"
+                       class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+        </div>
+
+        <div class="flex items-center justify-end gap-2 border-t border-slate-200/70 pt-4 dark:border-slate-700/70">
+            <a href="{% if form_mode == 'edit' and task %}/admin/projects/tasks/{{ task.number or task.id }}{% else %}/admin/projects/tasks{% endif %}"
+               class="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">Cancel</a>
+            <button class="rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 px-4 py-2 text-sm font-semibold text-white shadow-sm shadow-emerald-500/20 transition hover:shadow-md">
+                {% if form_mode == 'edit' %}Save Changes{% else %}Create Task{% endif %}
+            </button>
+        </div>
+    </form>
+    {% endcall %}
+</div>
+{% endblock %}

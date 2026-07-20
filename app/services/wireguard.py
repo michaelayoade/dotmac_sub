@@ -48,6 +48,21 @@ from app.services.wireguard_crypto import (
 logger = logging.getLogger(__name__)
 
 
+def _safe_disconnect_pool(pool) -> None:
+    """Best-effort disconnect of a RouterOsApiPool.
+
+    Constructing a pool opens the socket and performs the API login, so a
+    session exists on the router even if a later call fails. Always release it
+    (in a finally) and never let a disconnect error mask the real failure.
+    """
+    if pool is None:
+        return
+    try:
+        pool.disconnect()
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("Error disconnecting RouterOS pool: %s", e)
+
+
 def _ensure_utc_aware(dt: datetime) -> datetime:
     """Normalize a datetime to timezone-aware UTC.
 
@@ -1346,6 +1361,7 @@ class RouterSyncService:
         if not conn:
             return False, "Router connection not configured or password not set"
 
+        pool = None
         try:
             # Connect to router
             pool = routeros_api.RouterOsApiPool(
@@ -1387,7 +1403,6 @@ class RouterSyncService:
                         "comment": peer.name,
                     },
                 )
-                pool.disconnect()
                 return True, f"Peer updated on router (id={peer_id})"
             else:
                 # Add new peer
@@ -1399,13 +1414,17 @@ class RouterSyncService:
                         "comment": peer.name,
                     },
                 )
-                pool.disconnect()
                 return True, "Peer added to router"
 
         except routeros_api.exceptions.RouterOsApiCommunicationError as e:
             return False, f"Router communication error: {e}"
         except Exception as e:
             return False, f"Failed to sync peer to router: {e}"
+        finally:
+            # RouterOsApiPool construction already performed the API login, so
+            # the session exists on the router. Disconnect on every path (incl.
+            # an exception after get_api) so it is never orphaned.
+            _safe_disconnect_pool(pool)
 
     @staticmethod
     def remove_peer_from_router(
@@ -1425,6 +1444,7 @@ class RouterSyncService:
         if not conn:
             return False, "Router connection not configured or password not set"
 
+        pool = None
         try:
             pool = routeros_api.RouterOsApiPool(
                 host=conn["host"],
@@ -1447,16 +1467,18 @@ class RouterSyncService:
             if existing:
                 peer_id = existing[0]["id"]
                 peers_resource.remove(id=peer_id)
-                pool.disconnect()
                 return True, f"Peer removed from router (id={peer_id})"
             else:
-                pool.disconnect()
                 return True, "Peer not found on router (already removed)"
 
         except routeros_api.exceptions.RouterOsApiCommunicationError as e:
             return False, f"Router communication error: {e}"
         except Exception as e:
             return False, f"Failed to remove peer from router: {e}"
+        finally:
+            # See sync_peer_to_router: disconnect on every path so the
+            # already-logged-in session is never orphaned on the router.
+            _safe_disconnect_pool(pool)
 
     @staticmethod
     def sync_all_peers(

@@ -13,6 +13,7 @@ import 'package:dotmac_portal/src/models/plan_change.dart';
 import 'package:dotmac_portal/src/models/service_status.dart';
 import 'package:dotmac_portal/src/models/session.dart';
 import 'package:dotmac_portal/src/models/subscription.dart';
+import 'package:dotmac_portal/src/models/ticket.dart';
 import 'package:dotmac_portal/src/models/usage.dart';
 
 void main() {
@@ -67,6 +68,12 @@ void main() {
         'id': 'i1',
         'account_id': 'a1',
         'status': 'issued',
+        'status_presentation': {
+          'value': 'issued',
+          'label': 'Awaiting payment',
+          'tone': 'info',
+          'icon': 'info',
+        },
         'currency': 'NGN',
         'subtotal': '1000.00',
         'tax_total': '75.00',
@@ -77,6 +84,8 @@ void main() {
       expect(inv.total, 1075.0);
       expect(inv.isPaid, isFalse);
       expect(inv.isOverdue, isTrue);
+      expect(inv.statusPresentation.label, 'Awaiting payment');
+      expect(inv.statusPresentation.tone.name, 'info');
     });
 
     test('treats zero balance as paid', () {
@@ -88,6 +97,40 @@ void main() {
         'total': '500.00',
       });
       expect(inv.isPaid, isTrue);
+      expect(inv.statusPresentation.tone.name, 'neutral');
+    });
+  });
+
+  group('Payment', () {
+    test('parses the server-owned status presentation', () {
+      final payment = Payment.fromJson({
+        'id': 'p1',
+        'amount': '2500.00',
+        'currency': 'NGN',
+        'status': 'partially_refunded',
+        'status_presentation': {
+          'value': 'partially_refunded',
+          'label': 'Partially refunded',
+          'tone': 'warning',
+          'icon': 'clock',
+        },
+      });
+
+      expect(payment.amount, 2500.0);
+      expect(payment.statusPresentation.label, 'Partially refunded');
+      expect(payment.statusPresentation.tone.name, 'warning');
+      expect(payment.statusPresentation.icon, 'clock');
+    });
+
+    test('uses a neutral compatibility fallback for older servers', () {
+      final payment = Payment.fromJson({
+        'id': 'p2',
+        'amount': '100.00',
+        'status': 'succeeded',
+      });
+
+      expect(payment.statusPresentation.label, 'Succeeded');
+      expect(payment.statusPresentation.tone.name, 'neutral');
     });
   });
 
@@ -158,6 +201,12 @@ void main() {
         'account_id': 'a1',
         'offer_id': 'o1',
         'status': 'active',
+        'status_presentation': {
+          'value': 'active',
+          'label': 'Service active',
+          'tone': 'positive',
+          'icon': 'check',
+        },
         'billing_mode': 'prepaid',
         'ipv4_address': '10.11.128.186',
         'offer': {
@@ -170,6 +219,8 @@ void main() {
       expect(s.isPrepaid, isTrue);
       expect(s.planType, 'business · fiber');
       expect(s.displayName, 'unlimited 3');
+      expect(s.statusPresentation.label, 'Service active');
+      expect(s.statusPresentation.tone.name, 'positive');
     });
 
     test('computes negative days for an expired service', () {
@@ -325,13 +376,39 @@ void main() {
         expect(withStatus(status).isCurrent, isFalse, reason: status);
       }
     });
+  });
 
-    test('needsPayment only for blocked and suspended', () {
-      expect(withStatus('blocked').needsPayment, isTrue);
-      expect(withStatus('suspended').needsPayment, isTrue);
-      for (final status in ['active', 'pending', 'stopped', 'disabled']) {
-        expect(withStatus(status).needsPayment, isFalse, reason: status);
-      }
+  group('Ticket', () {
+    test('parses the server-owned status presentation', () {
+      final ticket = Ticket.fromJson({
+        'id': 'ticket-1',
+        'title': 'Slow browsing',
+        'status': 'waiting_on_customer',
+        'priority': 'normal',
+        'status_presentation': {
+          'value': 'waiting_on_customer',
+          'label': 'Waiting on customer',
+          'tone': 'warning',
+          'icon': 'clock',
+        },
+      });
+
+      expect(ticket.statusPresentation.label, 'Waiting on customer');
+      expect(ticket.statusPresentation.tone.name, 'warning');
+      expect(ticket.statusPresentation.icon, 'clock');
+    });
+
+    test('uses a neutral fallback for an old server payload', () {
+      final ticket = Ticket.fromJson({
+        'id': 'ticket-2',
+        'title': 'Legacy ticket',
+        'status': 'future_state',
+        'priority': 'normal',
+      });
+
+      expect(ticket.statusPresentation.label, 'Future State');
+      expect(ticket.statusPresentation.tone.name, 'neutral');
+      expect(ticket.statusPresentation.icon, 'info');
     });
   });
 
@@ -340,22 +417,54 @@ void main() {
       final q = PlanChangeQuote.fromJson({
         'charge_amount': 5000.0,
         'net_amount': 2900.0,
-        'current_balance': 2100.0,
+        'prepaid_funding_before': 5000.0,
+        'prepaid_funding_after': 2100.0,
+        'postpaid_receivables': 750.0,
+        'collection_blocking_balance': 125.0,
         'shortfall': 0.0,
         'days_remaining': 12,
         'can_apply_immediately': true,
         'is_upgrade': true,
         'is_downgrade': false,
+        'preview_fingerprint': List.filled(64, 'p').join(),
+        'has_financial_effect': true,
+        'ledger_entry_type': 'debit',
+        'ledger_source': 'adjustment',
+        'ledger_amount': 2900.0,
+        'access_consequence': 'none_plan_change_only',
       });
       expect(q.hasProration, isTrue);
       expect(q.isUpgrade, isTrue);
       expect(q.needsTopUp, isFalse);
       expect(q.netAmount, 2900.0);
+      expect(q.prepaidFundingAfter, 2100.0);
+      expect(q.postpaidReceivables, 750.0);
+      expect(q.collectionBlockingBalance, 125.0);
+      expect(q.previewFingerprint, hasLength(64));
+      expect(q.ledgerEntryType, 'debit');
+      expect(q.ledgerSource, 'adjustment');
+      expect(q.ledgerAmount, 2900.0);
+      expect(q.accessConsequence, 'none_plan_change_only');
     });
 
     test('empty quote => no proration (postpaid)', () {
       final q = PlanChangeQuote.fromJson(const {});
       expect(q.hasProration, isFalse);
+    });
+
+    test('postpaid quote still carries a confirmable no-ledger fingerprint',
+        () {
+      final q = PlanChangeQuote.fromJson({
+        'preview_fingerprint': List.filled(64, 'n').join(),
+        'has_financial_effect': false,
+        'postpaid_receivables': 750.0,
+        'collection_blocking_balance': 0.0,
+        'access_consequence': 'none_plan_change_only',
+      });
+      expect(q.hasProration, isFalse);
+      expect(q.hasFinancialEffect, isFalse);
+      expect(q.previewFingerprint, hasLength(64));
+      expect(q.postpaidReceivables, 750.0);
     });
 
     test('flags a shortfall as needing top-up', () {
@@ -408,7 +517,7 @@ void main() {
   });
 
   group('Add-ons', () {
-    test('AddonsAvailable parses options + wallet (Decimal-as-string)', () {
+    test('AddonsAvailable parses options without deriving a balance', () {
       final d = AddonsAvailable.fromJson({
         'available': [
           {
@@ -424,18 +533,33 @@ void main() {
         'active': [
           {'id': 's1', 'add_on_id': 'a1', 'name': 'Static IP', 'quantity': 2}
         ],
-        'wallet_balance': '2071.49',
-        'currency': 'NGN',
       });
       expect(d.available.single.maxQuantity, 3);
       expect(d.active.single.quantity, 2);
-      expect(d.walletBalance, 2071.49);
     });
 
-    test('AddonPurchaseResult flags insufficient balance', () {
+    test('AddonQuote keeps funding and receivables visibly distinct', () {
+      final q = AddonQuote.fromJson({
+        'charge': '2000.00',
+        'currency': 'NGN',
+        'prepaid_funding_before': '5000.00',
+        'prepaid_funding_after': '3000.00',
+        'postpaid_receivables': '750.00',
+        'shortfall': '0.00',
+        'can_afford': true,
+        'allowed': true,
+        'preview_fingerprint': List.filled(64, 'a').join(),
+      });
+      expect(q.prepaidFundingBefore, 5000.0);
+      expect(q.prepaidFundingAfter, 3000.0);
+      expect(q.postpaidReceivables, 750.0);
+      expect(q.previewFingerprint, hasLength(64));
+    });
+
+    test('AddonPurchaseResult flags insufficient prepaid funding', () {
       final r = AddonPurchaseResult.fromJson({
         'success': false,
-        'reason': 'insufficient_balance',
+        'reason': 'insufficient_prepaid_funding',
         'charge': '4000.00',
         'shortfall': '2000.00',
         'currency': 'NGN',
@@ -477,10 +601,12 @@ void main() {
         'id': 'n1',
         'channel': 'email',
         'status': 'queued',
+        'is_read': true,
         'subject': 'Service suspended — action required',
         'event_type': 'service_suspended',
       });
       expect(n.title, 'Service suspended — action required');
+      expect(n.isRead, isTrue);
     });
 
     test('falls back to a humanised event_type when no subject', () {
@@ -491,6 +617,7 @@ void main() {
         'event_type': 'payment_received',
       });
       expect(n.title, 'payment received');
+      expect(n.isRead, isFalse);
     });
   });
 
@@ -585,13 +712,35 @@ void main() {
         'min_balance': '100.00',
         'low_balance': true,
         'grace_until': '2026-07-01T00:00:00Z',
+        'primary_action': {
+          'kind': 'top_up',
+          'label': 'Top up',
+          'message': 'Balance low — top up NGN 50.00 to keep your service.',
+          'amount': '50.00',
+          'currency': 'NGN',
+          'restores_service': false,
+        },
         'services': [
           {
             'subscription_id': 's1',
             'status': 'active',
+            'status_presentation': {
+              'value': 'active',
+              'label': 'Active',
+              'tone': 'positive',
+              'icon': 'check',
+            },
             'billing_mode': 'prepaid',
             'usable': true,
             'reason': 'low_balance',
+            'action': {
+              'kind': 'top_up',
+              'label': 'Top up',
+              'message': 'Balance low — top up NGN 50.00 to keep your service.',
+              'amount': '50.00',
+              'currency': 'NGN',
+              'restores_service': false,
+            },
           }
         ],
       });
@@ -601,6 +750,11 @@ void main() {
       expect(s.graceUntil, isNotNull);
       expect(s.needsRenewal, isTrue);
       expect(s.services.single.actionable, isTrue);
+      expect(s.services.single.statusPresentation.label, 'Active');
+      expect(s.services.single.statusPresentation.tone.name, 'positive');
+      expect(s.primaryAction?.kind, 'top_up');
+      expect(s.primaryAction?.amount, 50.0);
+      expect(s.primaryAction?.restoresService, isFalse);
     });
 
     test('healthy account does not flag a renewal', () {
@@ -619,6 +773,42 @@ void main() {
       });
       expect(s.needsRenewal, isFalse);
       expect(s.services.single.actionable, isFalse);
+    });
+
+    test('manual suspension directs support and never implies payment restore',
+        () {
+      final s = ServiceStatus.fromJson({
+        'billing_mode': 'postpaid',
+        'primary_action': {
+          'kind': 'contact_support',
+          'label': 'Contact support',
+          'message': 'This hold cannot be cleared by payment.',
+          'currency': 'NGN',
+          'restores_service': false,
+        },
+        'services': [
+          {
+            'subscription_id': 's1',
+            'status': 'suspended',
+            'billing_mode': 'postpaid',
+            'usable': false,
+            'reason': 'administrative_hold',
+            'action': {
+              'kind': 'contact_support',
+              'label': 'Contact support',
+              'message': 'This hold cannot be cleared by payment.',
+              'currency': 'NGN',
+              'restores_service': false,
+            },
+          }
+        ],
+      });
+
+      expect(s.unavailableServices, hasLength(1));
+      expect(s.needsRenewal, isFalse);
+      expect(s.primaryAction?.kind, 'contact_support');
+      expect(s.services.single.action?.isFinancial, isFalse);
+      expect(s.services.single.action?.restoresService, isFalse);
     });
   });
 }

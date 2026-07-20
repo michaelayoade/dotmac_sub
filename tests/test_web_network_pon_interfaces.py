@@ -122,23 +122,23 @@ def test_save_alias_updates_existing_pon_port(db_session):
     assert cleaned is None
 
 
-def test_save_alias_creates_modeled_pon_port_for_discovered_interface(db_session):
+def test_save_alias_rejects_unmodeled_discovered_interface(db_session):
     olt = OLTDevice(name="OLT-D", mgmt_ip="198.51.100.13", is_active=True)
     db_session.add(olt)
     db_session.commit()
 
-    saved = save_alias(
-        db_session,
-        olt_id=str(olt.id),
-        interface_name="gpon 0/4/0",
-        alias="Warehouse",
-        pon_port_id=None,
-    )
+    with pytest.raises(HTTPException) as exc_info:
+        save_alias(
+            db_session,
+            olt_id=str(olt.id),
+            interface_name="gpon 0/4/0",
+            alias="Warehouse",
+            pon_port_id=None,
+        )
 
-    assert saved.name == "0/4/0"
-    assert saved.port_number == 0
-    alias, _cleaned = parse_pon_port_notes(saved.notes)
-    assert alias == "Warehouse"
+    assert exc_info.value.status_code == 409
+    assert "not modeled as an active port" in exc_info.value.detail
+    assert db_session.query(PonPort).count() == 0
 
 
 def test_save_alias_rejects_pon_port_from_other_olt(db_session):
@@ -163,7 +163,7 @@ def test_save_alias_rejects_pon_port_from_other_olt(db_session):
     assert exc_info.value.detail == "PON port does not belong to the selected OLT"
 
 
-def test_save_alias_reactivates_inactive_matching_port(db_session):
+def test_save_alias_does_not_reactivate_inactive_matching_port(db_session):
     olt = OLTDevice(name="OLT-G", mgmt_ip="198.51.100.16", is_active=True)
     db_session.add(olt)
     db_session.flush()
@@ -171,18 +171,19 @@ def test_save_alias_reactivates_inactive_matching_port(db_session):
     db_session.add(inactive)
     db_session.commit()
 
-    saved = save_alias(
-        db_session,
-        olt_id=str(olt.id),
-        interface_name="0/6/0",
-        alias="Fresh Alias",
-        pon_port_id=None,
-    )
+    with pytest.raises(HTTPException) as exc_info:
+        save_alias(
+            db_session,
+            olt_id=str(olt.id),
+            interface_name="0/6/0",
+            alias="Fresh Alias",
+            pon_port_id=None,
+        )
 
-    assert saved.id == inactive.id
-    assert saved.is_active is True
-    alias, _cleaned = parse_pon_port_notes(saved.notes)
-    assert alias == "Fresh Alias"
+    db_session.refresh(inactive)
+    assert exc_info.value.status_code == 409
+    assert inactive.is_active is False
+    assert inactive.notes is None
 
 
 def test_save_alias_rejects_explicit_inactive_pon_port(db_session):

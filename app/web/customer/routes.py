@@ -1,6 +1,7 @@
 """Customer portal web routes."""
 
 import logging
+from dataclasses import replace
 from datetime import UTC, datetime
 from urllib.parse import quote_plus
 from uuid import UUID
@@ -19,22 +20,29 @@ from fastapi import (
 )
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
-from app.db import get_db
+from app.db import finish_read_transaction, get_db
 from app.services import auth_flow as auth_flow_service
 from app.services import autopay as autopay_service
+from app.services import billing_payment_receipts as payment_receipts_service
 from app.services import chat_session as chat_session_service
 from app.services import crm_portal, customer_portal
 from app.services import customer_portal_bandwidth as customer_portal_bandwidth_service
 from app.services import customer_portal_contacts as customer_portal_contacts_service
 from app.services import customer_portal_flow_payment_methods as customer_cards
+from app.services import customer_portal_notifications as customer_notifications_service
 from app.services import payment_proofs as payment_proofs_service
 from app.services import web_customer_auth as web_customer_auth_service
 from app.services import web_network_speedtests as web_network_speedtests_service
 from app.services.audit_helpers import log_audit_event
 from app.services.bandwidth import add_directions_to_series, bandwidth_samples
+from app.services.customer_context import (
+    optional_customer_account_id,
+    optional_customer_subscriber_id,
+)
 from app.services.customer_portal_context import (
     emit_customer_event,
     get_dashboard_template_context,
@@ -42,6 +50,7 @@ from app.services.customer_portal_context import (
     resolve_allowed_subscriber_ids,
     resolve_customer_subscription,
 )
+from app.services.nin_matching import mask_nin
 from app.web.customer.auth import get_current_customer_from_request
 from app.web.customer.branding import get_customer_templates
 
@@ -59,11 +68,38 @@ PAYMENT_CHARGE_ERROR_MESSAGE = (
     "We could not charge that saved card. Please use another payment method or "
     "try again later."
 )
+PAYMENT_START_ERROR_MESSAGE = (
+    "Unable to start the payment. If your card was charged, the payment will "
+    "be reconciled automatically."
+)
 CARD_SAVE_SUCCESS_MESSAGE = "Your card was saved for future payments."
 CARD_SAVE_ERROR_MESSAGE = (
     "Payment was recorded, but we could not save this card. You can add a card "
     "from Payment Methods."
 )
+READ_ONLY_MUTATION_MESSAGE = "View-only sessions cannot make changes."
+
+
+def _is_read_only_customer(customer: dict | None) -> bool:
+    return bool(customer and customer.get("read_only"))
+
+
+def _read_only_response(
+    request: Request,
+    customer: dict | None,
+    *,
+    active_page: str,
+) -> Response:
+    return templates.TemplateResponse(
+        "customer/errors/400.html",
+        {
+            "request": request,
+            "customer": customer,
+            "message": READ_ONLY_MUTATION_MESSAGE,
+            "active_page": active_page,
+        },
+        status_code=403,
+    )
 
 
 def _payment_verification_error_response(
@@ -80,6 +116,52 @@ def _payment_verification_error_response(
         "customer/errors/400.html",
         {"request": request, "message": PAYMENT_VERIFICATION_ERROR_MESSAGE},
         status_code=status_code,
+    )
+
+
+def _render_payment_return_status(
+    request: Request,
+    *,
+    reference: str,
+    provider: str | None,
+    flow: str,
+    exc: Exception,
+) -> Response:
+    is_decline = isinstance(exc, (ValueError, HTTPException)) and not (
+        isinstance(exc, HTTPException) and exc.status_code >= 500
+    )
+    if is_decline:
+        status_kind = "declined"
+        title = "Payment not confirmed"
+        message = (
+            "The payment provider did not confirm a successful payment. "
+            "No duplicate payment was recorded."
+        )
+    else:
+        status_kind = "pending"
+        title = "Payment verification pending"
+        message = (
+            "We could not confirm the payment provider response right now. "
+            "If you were debited, the payment will be reconciled automatically."
+        )
+        logger.warning(
+            "Customer payment verification returned pending state",
+            extra={"reference": reference, "provider": provider, "flow": flow},
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
+    return templates.TemplateResponse(
+        "customer/billing/payment_status.html",
+        {
+            "request": request,
+            "status_kind": status_kind,
+            "title": title,
+            "message": message,
+            "reference": reference,
+            "provider": provider,
+            "flow": flow,
+            "active_page": "billing",
+        },
+        status_code=200,
     )
 
 
@@ -115,8 +197,9 @@ def _format_bps(value: float | int | None) -> str:
 
 
 def _profile_value(value):
-    if hasattr(value, "value"):
-        return value.value
+    enum_value = getattr(value, "value", None)
+    if isinstance(enum_value, str):
+        return enum_value
     if hasattr(value, "isoformat"):
         return value.isoformat()
     return value
@@ -124,12 +207,17 @@ def _profile_value(value):
 
 def _profile_audit_snapshot(subscriber) -> dict[str, object]:
     metadata = dict(getattr(subscriber, "metadata_", None) or {})
+    nin_value = getattr(subscriber, "nin", None)
+    masked_nin = (
+        mask_nin(nin_value) if isinstance(nin_value, str) and nin_value else None
+    )
     return {
         "first_name": subscriber.first_name,
         "last_name": subscriber.last_name,
         "display_name": subscriber.display_name,
         "email": subscriber.email,
         "phone": subscriber.phone,
+        "nin": masked_nin,
         "date_of_birth": _profile_value(subscriber.date_of_birth),
         "gender": _profile_value(subscriber.gender),
         "preferred_contact_method": _profile_value(subscriber.preferred_contact_method),
@@ -139,9 +227,35 @@ def _profile_audit_snapshot(subscriber) -> dict[str, object]:
         "region": subscriber.region,
         "postal_code": subscriber.postal_code,
         "country_code": subscriber.country_code,
-        "billing_notifications": bool(metadata.get("billing_notifications")),
-        "sms_updates": bool(metadata.get("sms_updates")),
+        "billing_notifications": bool(metadata.get("billing_notifications", True)),
+        "sms_updates": bool(metadata.get("sms_updates", True)),
+        "push_notifications": bool(metadata.get("push_notifications", True)),
+        "service_notifications": bool(metadata.get("service_notifications", True)),
+        "account_notifications": bool(metadata.get("account_notifications", True)),
+        "usage_notifications": bool(metadata.get("usage_notifications", True)),
+        "general_notifications": bool(metadata.get("general_notifications", True)),
+        "locale": subscriber.locale,
         "email_verified": subscriber.email_verified,
+    }
+
+
+def _profile_completion(subscriber) -> dict[str, object]:
+    gender_value = _profile_value(getattr(subscriber, "gender", None))
+    if not isinstance(gender_value, str):
+        gender_value = ""
+    required = {
+        "date_of_birth": bool(getattr(subscriber, "date_of_birth", None)),
+        "gender": gender_value not in {"", "unknown"},
+        "nin": bool(getattr(subscriber, "nin", None)),
+    }
+    missing = [key for key, complete in required.items() if not complete]
+    return {
+        "required": required,
+        "missing": missing,
+        "missing_labels": ", ".join(item.replace("_", " ") for item in missing),
+        "complete": not missing,
+        "completed_count": sum(1 for value in required.values() if value),
+        "total_count": len(required),
     }
 
 
@@ -230,10 +344,10 @@ def customer_portal_chat_session(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         raise HTTPException(status_code=401, detail="Unauthorized")
+    if _is_read_only_customer(customer):
+        raise HTTPException(status_code=403, detail=READ_ONLY_MUTATION_MESSAGE)
 
-    subscriber_id = customer.get("subscriber_id") or customer.get("session", {}).get(
-        "subscriber_id"
-    )
+    subscriber_id = optional_customer_subscriber_id(db, customer)
     if not subscriber_id:
         raise HTTPException(status_code=409, detail="Customer account is incomplete")
     return chat_session_service.broker_customer_session(db, str(subscriber_id))
@@ -259,6 +373,8 @@ def customer_support(
 @router.get("/support/new", response_class=HTMLResponse)
 def customer_support_new(
     request: Request,
+    title: str | None = None,
+    description: str | None = None,
     db: Session = Depends(get_db),
 ) -> Response:
     customer = get_current_customer_from_request(request, db)
@@ -267,6 +383,12 @@ def customer_support_new(
             url="/portal/auth/login?next=/portal/support/new", status_code=303
         )
     context = crm_portal.ticket_create_context(request, customer)
+    if title or description:
+        context["form_values"] = {
+            "title": title or "",
+            "description": description or "",
+            "priority": "normal",
+        }
     return templates.TemplateResponse("customer/support/new.html", context)
 
 
@@ -282,11 +404,15 @@ def customer_support_create(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="support")
 
     subscriber_id, _subscription_id = customer_portal.resolve_customer_account(
         customer, db
     )
-    subscriber_lookup = str(subscriber_id or customer.get("subscriber_id") or "")
+    subscriber_lookup = str(
+        subscriber_id or optional_customer_subscriber_id(db, customer) or ""
+    )
     result = crm_portal.handle_ticket_create(
         db,
         customer,
@@ -354,6 +480,8 @@ def customer_support_add_comment(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="support")
 
     subscriber_ids = resolve_allowed_subscriber_ids(customer, db)
     result = crm_portal.handle_ticket_comment(
@@ -371,6 +499,31 @@ def customer_support_add_comment(
             status_code=400,
         )
     return RedirectResponse(url=f"/portal/support/{ticket_id}", status_code=303)
+
+
+@router.post("/support/{ticket_id}/rate")
+def customer_support_rate(
+    request: Request,
+    ticket_id: str,
+    rating: int = Form(...),
+    comment: str = Form(""),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Submit a support-satisfaction (CSAT) rating on a resolved/closed ticket,
+    then redirect back to the ticket with a toast flag."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="support")
+    subscriber_ids = resolve_allowed_subscriber_ids(customer, db)
+    result = crm_portal.handle_ticket_rating(
+        db, subscriber_ids, ticket_id, rating, comment=comment
+    )
+    status = "ok" if result.get("success") else "error"
+    return RedirectResponse(
+        url=f"/portal/support/{ticket_id}?rated={status}", status_code=303
+    )
 
 
 # ── Work Orders (CRM-backed) ─────────────────────────────────────────────
@@ -394,6 +547,13 @@ def customer_billing(
     billing_data = customer_portal.get_billing_page(
         db, customer, status=status, page=page, per_page=per_page
     )
+    # Payment is the one flow the mostly-dormant customer base reliably uses,
+    # so re-surface the location-confirmation prompt here regardless of any
+    # snooze. Read-only, gated by loyalty.capture_prompt (default off).
+    from app.web.customer.location import location_prompt_context
+
+    location_prompt = location_prompt_context(db, customer, ignore_snooze=True)
+    finish_read_transaction(db)
 
     from datetime import UTC, datetime
 
@@ -404,6 +564,7 @@ def customer_billing(
             "customer": customer,
             **billing_data,
             "active_page": "billing",
+            "location_prompt": location_prompt,
             "now": datetime.now(UTC),
         },
     )
@@ -514,8 +675,7 @@ def customer_invoice_pdf(
     generated_export = billing_invoice_pdf_service.generate_export_now(
         db,
         invoice_id=str(invoice_id),
-        requested_by_id=customer.get("subscriber_id")
-        or customer.get("session", {}).get("subscriber_id"),
+        requested_by_id=optional_customer_subscriber_id(db, customer),
     )
     if billing_invoice_pdf_service.is_export_cache_valid(db, invoice, generated_export):
         try:
@@ -542,9 +702,7 @@ def customer_invoice_pdf(
             )
 
     # Queue generation if the inline path did not produce a downloadable PDF.
-    subscriber_id = customer.get("subscriber_id") or customer.get("session", {}).get(
-        "subscriber_id"
-    )
+    subscriber_id = optional_customer_subscriber_id(db, customer)
     billing_invoice_pdf_service.queue_export(
         db,
         str(invoice_id),
@@ -554,6 +712,80 @@ def customer_invoice_pdf(
     return RedirectResponse(
         url=f"/portal/billing/invoices/{invoice_id}?pdf_notice=generating",
         status_code=303,
+    )
+
+
+@router.get("/billing/payments/{payment_id}/receipt", response_class=HTMLResponse)
+def customer_payment_receipt(
+    request: Request,
+    payment_id: UUID,
+    db: Session = Depends(get_db),
+) -> Response:
+    """View a customer payment receipt."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+    try:
+        detail = payment_receipts_service.get_customer_payment_receipt_context(
+            db, customer, str(payment_id)
+        )
+    except HTTPException:
+        return templates.TemplateResponse(
+            "customer/errors/404.html",
+            {"request": request, "message": "Receipt not found"},
+            status_code=404,
+        )
+
+    return templates.TemplateResponse(
+        "customer/billing/receipt.html",
+        {
+            "request": request,
+            "customer": customer,
+            **detail,
+            "active_page": "billing",
+        },
+    )
+
+
+@router.get("/billing/payments/{payment_id}/receipt/pdf")
+def customer_payment_receipt_pdf(
+    request: Request,
+    payment_id: UUID,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Download a customer payment receipt PDF."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+    try:
+        detail = payment_receipts_service.get_customer_payment_receipt_context(
+            db, customer, str(payment_id)
+        )
+        pdf_bytes = payment_receipts_service.build_receipt_pdf(detail)
+    except HTTPException:
+        return templates.TemplateResponse(
+            "customer/errors/404.html",
+            {"request": request, "message": "Receipt not found"},
+            status_code=404,
+        )
+    except Exception:
+        logger.warning("Failed to render payment receipt PDF", exc_info=True)
+        return templates.TemplateResponse(
+            "customer/errors/400.html",
+            {"request": request, "message": "Unable to generate receipt PDF"},
+            status_code=500,
+        )
+
+    from app.services.file_storage import build_content_disposition
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": build_content_disposition(
+                payment_receipts_service.download_filename(detail["payment"])
+            )
+        },
     )
 
 
@@ -616,40 +848,9 @@ def customer_bandwidth_series(
     if not subscription:
         return JSONResponse({"data": [], "total": 0, "source": "postgres"})
 
-    try:
-        from app.services.zabbix_engine import get_zabbix_engine
-
-        cached = get_zabbix_engine().get_cached_customer_usage(
-            str(subscription.id),
-            "current",
-            1,
-            10000,
-        )
-        if cached and cached.get("graph"):
-            result = {
-                "data": [
-                    {
-                        "timestamp": datetime.fromtimestamp(
-                            point["timestamp"],
-                            tz=UTC,
-                        ),
-                        "rx_bps": point["download_bps"],
-                        "tx_bps": point["upload_bps"],
-                        "download_bps": point["download_bps"],
-                        "upload_bps": point["upload_bps"],
-                    }
-                    for point in cached["graph"]
-                ],
-                "total": len(cached["graph"]),
-                "source": "zabbix",
-            }
-            return JSONResponse(content=jsonable_encoder(result))
-    except Exception:
-        logger.info(
-            "customer_zabbix_bandwidth_series_fallback",
-            extra={"event": "customer_zabbix_bandwidth_series_fallback"},
-        )
-
+    # The cached Zabbix usage engine was retired with the native monitoring
+    # cutover; serve straight from the Postgres bandwidth samples (the same
+    # fallback the cache-miss path always took).
     result = anyio.from_thread.run(
         bandwidth_samples.get_bandwidth_series,
         db,
@@ -684,63 +885,9 @@ def customer_bandwidth_stats(
             }
         )
 
-    try:
-        from app.services.zabbix_engine import get_zabbix_engine
-
-        cached = get_zabbix_engine().get_cached_customer_usage(
-            str(subscription.id),
-            "current",
-            1,
-            10000,
-        )
-        if cached and cached.get("graph"):
-            graph = cached["graph"]
-            latest = graph[-1] if graph else {}
-            stats = {
-                "current_rx_bps": float(latest.get("download_bps") or 0),
-                "current_tx_bps": float(latest.get("upload_bps") or 0),
-                "peak_rx_bps": max(
-                    (float(point.get("download_bps") or 0) for point in graph),
-                    default=0,
-                ),
-                "peak_tx_bps": max(
-                    (float(point.get("upload_bps") or 0) for point in graph),
-                    default=0,
-                ),
-                "total_rx_bytes": int(
-                    float(cached.get("totalDownloadGB") or 0) * (1024**3)
-                ),
-                "total_tx_bytes": int(
-                    float(cached.get("totalUploadGB") or 0) * (1024**3)
-                ),
-                "sample_count": len(graph),
-                "source": "zabbix",
-                # Zabbix data is already subscriber-perspective (its rx is the
-                # subscriber's download); expose the explicit fields the UI reads.
-                "download_bps": float(latest.get("download_bps") or 0),
-                "upload_bps": float(latest.get("upload_bps") or 0),
-                "peak_download_bps": max(
-                    (float(point.get("download_bps") or 0) for point in graph),
-                    default=0,
-                ),
-                "peak_upload_bps": max(
-                    (float(point.get("upload_bps") or 0) for point in graph),
-                    default=0,
-                ),
-                "total_download_bytes": int(
-                    float(cached.get("totalDownloadGB") or 0) * (1024**3)
-                ),
-                "total_upload_bytes": int(
-                    float(cached.get("totalUploadGB") or 0) * (1024**3)
-                ),
-            }
-            return JSONResponse(stats)
-    except Exception:
-        logger.info(
-            "customer_zabbix_bandwidth_stats_fallback",
-            extra={"event": "customer_zabbix_bandwidth_stats_fallback"},
-        )
-
+    # The cached Zabbix usage engine was retired with the native monitoring
+    # cutover; serve straight from the Postgres bandwidth samples (the same
+    # fallback the cache-miss path always took).
     stats = anyio.from_thread.run(
         bandwidth_samples.get_bandwidth_stats,
         db,
@@ -796,9 +943,7 @@ def customer_speedtest(
     account_id, resolved_subscription_id = customer_portal.resolve_customer_account(
         customer, db
     )
-    subscriber_id = account_id or (
-        str(customer.get("subscriber_id")) if customer.get("subscriber_id") else None
-    )
+    subscriber_id = account_id or optional_customer_subscriber_id(db, customer)
     if not subscriber_id:
         return templates.TemplateResponse(
             "customer/errors/404.html",
@@ -838,12 +983,12 @@ def customer_speedtest_submit(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="speedtest")
     account_id, resolved_subscription_id = customer_portal.resolve_customer_account(
         customer, db
     )
-    subscriber_id = account_id or (
-        str(customer.get("subscriber_id")) if customer.get("subscriber_id") else None
-    )
+    subscriber_id = account_id or optional_customer_subscriber_id(db, customer)
     if not subscriber_id:
         return templates.TemplateResponse(
             "customer/errors/404.html",
@@ -985,6 +1130,8 @@ def customer_reboot_service_ont(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="services")
 
     from app.services.customer_portal_flow_services import (
         reboot_customer_subscription_ont,
@@ -1017,6 +1164,8 @@ def customer_update_service_wifi(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="services")
 
     from app.services.customer_portal_flow_services import (
         update_customer_subscription_wifi,
@@ -1143,6 +1292,7 @@ def customer_installation_detail(
 def customer_service_order_detail(
     request: Request,
     service_order_id: UUID,
+    signed: str | None = None,
     db: Session = Depends(get_db),
 ) -> Response:
     """Customer service order detail view."""
@@ -1165,6 +1315,7 @@ def customer_service_order_detail(
             "request": request,
             "customer": customer,
             **detail,
+            "signed": signed,
             "active_page": "service-orders",
         },
     )
@@ -1199,11 +1350,90 @@ def customer_notifications(
     )
 
 
+@router.post("/notifications/read", response_class=HTMLResponse)
+def customer_notifications_mark_read(
+    request: Request,
+    read_key: str | None = Form(None),
+    all_visible: bool = Form(False),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Mark one or all visible customer notifications as read."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="notifications")
+    customer_notifications_service.mark_notifications_read(
+        db,
+        customer,
+        read_key=read_key,
+        all_visible=all_visible,
+    )
+    return RedirectResponse(url="/portal/notifications", status_code=303)
+
+
+def _profile_context(
+    request: Request,
+    db: Session,
+    customer: dict,
+    *,
+    saved: str | None = None,
+    verify_sent: str | None = None,
+    sessions: str | None = None,
+    error: str | None = None,
+) -> dict[str, object]:
+    from app.models.subscriber import Subscriber as _Subscriber
+
+    subscriber = None
+    subscriber_id = optional_customer_subscriber_id(db, customer)
+    if subscriber_id:
+        subscriber = db.get(_Subscriber, subscriber_id)
+    mfa_methods = []
+    if subscriber_id:
+        mfa_methods = web_customer_auth_service.list_active_mfa_methods(
+            db, subscriber_id
+        )
+    current_session_token = request.cookies.get(customer_portal.SESSION_COOKIE_NAME)
+    active_sessions = (
+        customer_portal.list_customer_sessions_for_subscriber(
+            subscriber_id,
+            current_session_token=current_session_token,
+        )
+        if subscriber_id
+        else []
+    )
+    success = None
+    if sessions == "signed-out":
+        success = "Other portal sessions signed out."
+    elif saved:
+        success = "Profile updated successfully"
+    profile_completion = _profile_completion(subscriber) if subscriber else None
+    return {
+        "request": request,
+        "customer": customer,
+        "subscriber": subscriber,
+        "mfa_methods": mfa_methods,
+        "mfa_enabled": any(
+            bool(method.enabled and method.is_active) for method in mfa_methods
+        ),
+        "active_sessions": active_sessions,
+        "other_session_count": sum(
+            1 for session in active_sessions if not session["is_current"]
+        ),
+        "active_page": "profile",
+        "success": success,
+        "error": error,
+        "verify_sent": verify_sent,
+        "profile_completion": profile_completion,
+    }
+
+
 @router.get("/profile", response_class=HTMLResponse)
 def customer_profile(
     request: Request,
     saved: str | None = None,
     verify_sent: str | None = None,
+    sessions: str | None = None,
     db: Session = Depends(get_db),
 ) -> Response:
     """Customer profile settings."""
@@ -1212,35 +1442,39 @@ def customer_profile(
         return RedirectResponse(
             url="/portal/auth/login?next=/portal/profile", status_code=303
         )
-    # Hydrate the subscriber so the form pre-fills with actual DB values
-    # rather than the cached session blob (which only carries 'name' as a
-    # display string, not editable fields).
-    from app.models.subscriber import Subscriber as _Subscriber
-
-    subscriber = None
-    subscriber_id = customer.get("subscriber_id")
-    if subscriber_id:
-        subscriber = db.get(_Subscriber, subscriber_id)
-    mfa_methods = []
-    if subscriber_id:
-        mfa_methods = web_customer_auth_service.list_active_mfa_methods(
-            db, subscriber_id
-        )
     return templates.TemplateResponse(
         "customer/profile/index.html",
-        {
-            "request": request,
-            "customer": customer,
-            "subscriber": subscriber,
-            "mfa_methods": mfa_methods,
-            "mfa_enabled": any(
-                bool(method.enabled and method.is_active) for method in mfa_methods
-            ),
-            "active_page": "profile",
-            "success": "Profile updated successfully" if saved else None,
-            "verify_sent": verify_sent,
-        },
+        _profile_context(
+            request,
+            db,
+            customer,
+            saved=saved,
+            verify_sent=verify_sent,
+            sessions=sessions,
+        ),
     )
+
+
+@router.post("/profile/sessions/sign-out-others")
+def customer_profile_sign_out_other_sessions(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Sign out other customer portal sessions while keeping the current one."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="profile")
+    subscriber_id = optional_customer_subscriber_id(db, customer)
+    current_session_token = request.cookies.get(customer_portal.SESSION_COOKIE_NAME)
+    if subscriber_id:
+        customer_portal.revoke_other_customer_sessions_for_subscriber(
+            subscriber_id,
+            current_session_token,
+            db=db,
+        )
+    return RedirectResponse(url="/portal/profile?sessions=signed-out", status_code=303)
 
 
 @router.post("/profile", response_class=HTMLResponse)
@@ -1251,6 +1485,7 @@ def customer_update_profile(
     email: str = Form(...),
     display_name: str = Form(None),
     phone: str = Form(None),
+    nin: str = Form(None),
     date_of_birth: str = Form(None),
     gender: str = Form(None),
     preferred_contact_method: str = Form(None),
@@ -1262,13 +1497,32 @@ def customer_update_profile(
     country_code: str = Form(None),
     billing_notifications: bool = Form(False),
     sms_updates: bool = Form(False),
+    push_notifications: bool = Form(False),
+    service_notifications: bool = Form(False),
+    account_notifications: bool = Form(False),
+    usage_notifications: bool = Form(False),
+    general_notifications: bool = Form(False),
+    locale: str | None = Form(None),
     db: Session = Depends(get_db),
 ) -> Response:
     """Update customer profile."""
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
-    subscriber_id = customer.get("subscriber_id")
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="profile")
+    subscriber_id = optional_customer_subscriber_id(db, customer)
+    if not subscriber_id:
+        return templates.TemplateResponse(
+            "customer/profile/index.html",
+            _profile_context(
+                request,
+                db,
+                customer,
+                error="We could not find your customer account. Please contact support.",
+            ),
+            status_code=404,
+        )
     if subscriber_id:
         from app.models.subscriber import Subscriber
         from app.services.web_customer_actions import update_customer_profile
@@ -1277,26 +1531,71 @@ def customer_update_profile(
         before_snapshot = (
             _profile_audit_snapshot(subscriber_before) if subscriber_before else {}
         )
-        updated = update_customer_profile(
-            db,
-            subscriber_id=subscriber_id,
-            first_name=first_name,
-            last_name=last_name,
-            display_name=display_name,
-            email=email,
-            phone=phone,
-            date_of_birth=date_of_birth,
-            gender=gender,
-            preferred_contact_method=preferred_contact_method,
-            address_line1=address_line1,
-            address_line2=address_line2,
-            city=city,
-            region=region,
-            postal_code=postal_code,
-            country_code=country_code,
-            billing_notifications=billing_notifications,
-            sms_updates=sms_updates,
-        )
+        try:
+            updated = update_customer_profile(
+                db,
+                subscriber_id=subscriber_id,
+                first_name=first_name,
+                last_name=last_name,
+                display_name=display_name,
+                email=email,
+                phone=phone,
+                nin=nin,
+                date_of_birth=date_of_birth,
+                gender=gender,
+                preferred_contact_method=preferred_contact_method,
+                address_line1=address_line1,
+                address_line2=address_line2,
+                city=city,
+                region=region,
+                postal_code=postal_code,
+                country_code=country_code,
+                billing_notifications=billing_notifications,
+                sms_updates=sms_updates,
+                push_notifications=push_notifications,
+                service_notifications=service_notifications,
+                account_notifications=account_notifications,
+                usage_notifications=usage_notifications,
+                general_notifications=general_notifications,
+                locale=locale,
+            )
+        except (ValueError, IntegrityError) as exc:
+            db.rollback()
+            logger.info("customer_profile_update_rejected", exc_info=True)
+            return templates.TemplateResponse(
+                "customer/profile/index.html",
+                _profile_context(
+                    request,
+                    db,
+                    customer,
+                    error=str(exc) or "We could not save those profile changes.",
+                ),
+                status_code=400,
+            )
+        except Exception:
+            db.rollback()
+            logger.exception("customer_profile_update_failed")
+            return templates.TemplateResponse(
+                "customer/profile/index.html",
+                _profile_context(
+                    request,
+                    db,
+                    customer,
+                    error="We could not save your profile right now. Please try again.",
+                ),
+                status_code=500,
+            )
+        if updated is None:
+            return templates.TemplateResponse(
+                "customer/profile/index.html",
+                _profile_context(
+                    request,
+                    db,
+                    customer,
+                    error="We could not find your customer account. Please contact support.",
+                ),
+                status_code=404,
+            )
         if updated is not None:
             after_snapshot = _profile_audit_snapshot(updated)
             changes = _profile_audit_changes(before_snapshot, after_snapshot)
@@ -1332,9 +1631,11 @@ def customer_resend_email_verification(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="profile")
     sent = False
-    subscriber_id = customer.get("subscriber_id")
-    if subscriber_id and not customer.get("read_only"):
+    subscriber_id = optional_customer_subscriber_id(db, customer)
+    if subscriber_id:
         try:
             sent = auth_flow_service.send_email_verification(db, str(subscriber_id))
         except Exception:
@@ -1353,7 +1654,9 @@ def customer_mfa_setup(request: Request, db: Session = Depends(get_db)) -> Respo
         return RedirectResponse(
             url="/portal/auth/login?next=/portal/profile", status_code=303
         )
-    subscriber_id = customer.get("subscriber_id")
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="profile")
+    subscriber_id = optional_customer_subscriber_id(db, customer)
     if not subscriber_id:
         return RedirectResponse(url="/portal/profile", status_code=303)
 
@@ -1392,12 +1695,14 @@ def customer_mfa_confirm(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
-    subscriber_id = customer.get("subscriber_id")
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="profile")
+    subscriber_id = optional_customer_subscriber_id(db, customer)
     if not subscriber_id:
         return RedirectResponse(url="/portal/profile", status_code=303)
 
     try:
-        auth_flow_service.auth_flow.mfa_confirm(
+        method = auth_flow_service.auth_flow.mfa_confirm(
             db, method_id, code.strip(), str(subscriber_id)
         )
     except Exception:
@@ -1413,6 +1718,26 @@ def customer_mfa_confirm(
                 "error": "Invalid verification code. Please try again.",
             },
             status_code=401,
+        )
+
+    recovery_codes = (
+        auth_flow_service.generate_mfa_recovery_codes(db, method)
+        if getattr(method, "id", None)
+        else []
+    )
+    if recovery_codes:
+        return templates.TemplateResponse(
+            "customer/profile/mfa_setup.html",
+            {
+                "request": request,
+                "customer": customer,
+                "active_page": "profile",
+                "method_id": method_id,
+                "secret_key": "",
+                "otpauth_uri": "",
+                "recovery_codes": recovery_codes,
+                "continue_url": "/portal/profile?saved=security",
+            },
         )
 
     return RedirectResponse(url="/portal/profile?saved=security", status_code=303)
@@ -1465,6 +1790,8 @@ def customer_contacts_create(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="contacts")
 
     form = customer_portal_contacts_service.normalize_contact_form(
         full_name=full_name,
@@ -1483,6 +1810,7 @@ def customer_contacts_create(
         receives_notifications=receives_notifications,
         is_billing_contact=is_billing_contact,
         notes=notes,
+        allow_authority_flags=False,
     )
     try:
         warnings = customer_portal_contacts_service.create_contact(db, customer, form)
@@ -1540,6 +1868,8 @@ def customer_contacts_update(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="contacts")
 
     if intent == "delete":
         try:
@@ -1585,7 +1915,17 @@ def customer_contacts_update(
         receives_notifications=receives_notifications,
         is_billing_contact=is_billing_contact,
         notes=notes,
+        allow_authority_flags=False,
     )
+    existing_contact = customer_portal_contacts_service.get_owned_contact(
+        db, customer, contact_id
+    )
+    if existing_contact:
+        form = replace(
+            form,
+            is_authorized=bool(existing_contact.is_authorized),
+            is_billing_contact=bool(existing_contact.is_billing_contact),
+        )
     try:
         warnings = customer_portal_contacts_service.update_contact(
             db, customer, contact_id, form
@@ -1684,11 +2024,18 @@ def customer_create_invoice_payment_intent(
             redirect_url=str(request.url_for("customer_verify_payment")),
             idempotency_key=idempotency_key,
         )
-    except ValueError as exc:
+    except (ValueError, HTTPException) as exc:
         return JSONResponse({"detail": str(exc)}, status_code=400)
     except Exception:
-        logger.warning("Customer saved-card invoice charge failed", exc_info=True)
-        return JSONResponse({"detail": PAYMENT_CHARGE_ERROR_MESSAGE}, status_code=400)
+        logger.warning(
+            "Unable to start customer invoice payment intent",
+            extra={
+                "invoice_id": invoice_id,
+                "account_id": optional_customer_account_id(db, customer),
+            },
+            exc_info=True,
+        )
+        return JSONResponse({"detail": PAYMENT_START_ERROR_MESSAGE}, status_code=400)
 
     return JSONResponse(content=jsonable_encoder(result))
 
@@ -1708,7 +2055,7 @@ def customer_verify_payment(
 
     try:
         # Check if subscriber was restricted before payment
-        subscriber_id = customer.get("subscriber_id")
+        subscriber_id = optional_customer_subscriber_id(db, customer)
         was_restricted = bool(
             subscriber_id and is_subscriber_restricted(db, subscriber_id)
         )
@@ -1723,9 +2070,9 @@ def customer_verify_payment(
         )
         card_save = _capture_card_save_status(
             db,
-            account_id=str(customer.get("account_id") or ""),
+            account_id=str(optional_customer_account_id(db, customer) or ""),
             reference=reference,
-            provider=provider,
+            provider=result["provider_type"],
             requested=save_card,
         )
         service_restored = bool(
@@ -1752,13 +2099,22 @@ def customer_verify_payment(
                 "active_page": "billing",
             },
         )
-    except HTTPException as exc:
-        status_code = exc.status_code if exc.status_code < 500 else 400
-        return _payment_verification_error_response(
-            request, exc, status_code=status_code
+    except (ValueError, HTTPException) as exc:
+        return _render_payment_return_status(
+            request,
+            reference=reference,
+            provider=provider,
+            flow="invoice_payment",
+            exc=exc,
         )
     except Exception as exc:
-        return _payment_verification_error_response(request, exc)
+        return _render_payment_return_status(
+            request,
+            reference=reference,
+            provider=provider,
+            flow="invoice_payment",
+            exc=exc,
+        )
 
 
 @router.get("/billing/topup", response_class=HTMLResponse)
@@ -1771,7 +2127,7 @@ def customer_billing_topup(
     amount: int | None = Query(None, ge=0),
     db: Session = Depends(get_db),
 ) -> Response:
-    """Show add-funds page for a customer account."""
+    """Show Deposit Account Credit for a customer account."""
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
@@ -1788,7 +2144,7 @@ def customer_billing_topup(
             "customer": customer,
             **page_data,
             "autopay": autopay_service.get_status(
-                db, str(customer.get("account_id") or "")
+                db, str(optional_customer_account_id(db, customer) or "")
             ),
             "autopay_error": autopay_error,
             "autopay_success": autopay_success,
@@ -1810,10 +2166,12 @@ def customer_create_topup_intent(
     payload: dict = Body(...),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
-    """Create a server-owned top-up intent for checkout."""
+    """Create a server-owned account-credit deposit intent for checkout."""
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+    if _is_read_only_customer(customer):
+        return JSONResponse({"detail": READ_ONLY_MUTATION_MESSAGE}, status_code=403)
 
     amount_value = payload.get("amount")
     if amount_value is None:
@@ -1833,8 +2191,15 @@ def customer_create_topup_intent(
             redirect_url=str(request.url_for("customer_verify_topup")),
             idempotency_key=idempotency_key,
         )
-    except ValueError as exc:
+    except (ValueError, HTTPException) as exc:
         return JSONResponse({"detail": str(exc)}, status_code=400)
+    except Exception:
+        logger.warning(
+            "Unable to start customer account-credit deposit intent",
+            extra={"account_id": optional_customer_account_id(db, customer)},
+            exc_info=True,
+        )
+        return JSONResponse({"detail": PAYMENT_START_ERROR_MESSAGE}, status_code=400)
 
     return JSONResponse(content=jsonable_encoder(result))
 
@@ -1928,7 +2293,8 @@ def customer_direct_transfer_topup_submitted(
         return RedirectResponse(url="/portal/auth/login", status_code=303)
 
     proof = payment_proofs_service.get_proof(db, proof_id)
-    if proof is None or str(proof.account_id) != str(customer.get("account_id") or ""):
+    account_id = optional_customer_account_id(db, customer)
+    if proof is None or str(proof.account_id) != str(account_id or ""):
         return RedirectResponse(
             url="/portal/billing/topup?autopay_error="
             + quote_plus("Submitted transfer receipt was not found."),
@@ -1953,13 +2319,13 @@ def customer_verify_topup(
     save_card: bool = Query(False),
     db: Session = Depends(get_db),
 ) -> Response:
-    """Verify a top-up payment and show allocation results."""
+    """Verify an account-credit deposit and show allocation results."""
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
 
     try:
-        subscriber_id = customer.get("subscriber_id")
+        subscriber_id = optional_customer_subscriber_id(db, customer)
         was_restricted = bool(
             subscriber_id and is_subscriber_restricted(db, subscriber_id)
         )
@@ -1969,9 +2335,9 @@ def customer_verify_topup(
         )
         card_save = _capture_card_save_status(
             db,
-            account_id=str(customer.get("account_id") or ""),
+            account_id=str(optional_customer_account_id(db, customer) or ""),
             reference=reference,
-            provider=provider,
+            provider=result["provider_type"],
             requested=save_card,
         )
         service_restored = bool(
@@ -1999,8 +2365,22 @@ def customer_verify_topup(
                 "active_page": "billing",
             },
         )
+    except (ValueError, HTTPException) as exc:
+        return _render_payment_return_status(
+            request,
+            reference=reference,
+            provider=provider,
+            flow="account_topup",
+            exc=exc,
+        )
     except Exception as exc:
-        return _payment_verification_error_response(request, exc)
+        return _render_payment_return_status(
+            request,
+            reference=reference,
+            provider=provider,
+            flow="account_topup",
+            exc=exc,
+        )
 
 
 @router.post("/billing/autopay/enable")
@@ -2013,6 +2393,12 @@ def customer_autopay_enable(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return RedirectResponse(
+            url="/portal/billing/topup?autopay_error="
+            + quote_plus("View-only sessions cannot change autopay."),
+            status_code=303,
+        )
     # Only a real, non-empty form value selects a card; otherwise the default
     # saved card is used (also keeps a direct call's Form default inert).
     method_id = (
@@ -2021,7 +2407,9 @@ def customer_autopay_enable(
         else None
     )
     try:
-        autopay_service.enable(db, str(customer.get("account_id") or ""), method_id)
+        autopay_service.enable(
+            db, str(optional_customer_account_id(db, customer) or ""), method_id
+        )
     except ValueError as exc:
         return RedirectResponse(
             url=f"/portal/billing/topup?autopay_error={quote_plus(str(exc))}",
@@ -2043,7 +2431,13 @@ def customer_autopay_disable(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
-    autopay_service.disable(db, str(customer.get("account_id") or ""))
+    if _is_read_only_customer(customer):
+        return RedirectResponse(
+            url="/portal/billing/topup?autopay_error="
+            + quote_plus("View-only sessions cannot change autopay."),
+            status_code=303,
+        )
+    autopay_service.disable(db, str(optional_customer_account_id(db, customer) or ""))
     return RedirectResponse(
         url="/portal/billing/topup?autopay_success=" + quote_plus("Autopay is off."),
         status_code=303,
@@ -2072,7 +2466,7 @@ def customer_payment_methods(
             "customer": customer,
             **page_data,
             "autopay": autopay_service.get_status(
-                db, str(customer.get("account_id") or "")
+                db, str(optional_customer_account_id(db, customer) or "")
             ),
             "success": saved,
             "form_error": error,
@@ -2098,7 +2492,7 @@ def customer_payment_method_set_default(
             status_code=303,
         )
     updated = customer_cards.set_default(
-        db, str(customer.get("account_id") or ""), method_id
+        db, str(optional_customer_account_id(db, customer) or ""), method_id
     )
     if updated is None:
         return RedirectResponse(
@@ -2130,7 +2524,7 @@ def customer_payment_method_remove(
             status_code=303,
         )
     removed = customer_cards.remove(
-        db, str(customer.get("account_id") or ""), method_id
+        db, str(optional_customer_account_id(db, customer) or ""), method_id
     )
     if not removed:
         return RedirectResponse(
@@ -2207,12 +2601,17 @@ def customer_submit_change_plan(
     subscription_id: UUID,
     offer_id: str = Form(...),
     notes: str = Form(None),
+    preview_fingerprint: str = Form(...),
+    preview_effective_at: datetime = Form(...),
+    idempotency_key: str = Form(...),
     db: Session = Depends(get_db),
 ) -> Response:
     """Instantly apply a plan change."""
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="services")
     try:
         result = customer_portal.apply_instant_plan_change(
             db=db,
@@ -2220,15 +2619,19 @@ def customer_submit_change_plan(
             subscription_id=str(subscription_id),
             offer_id=offer_id,
             notes=notes,
+            preview_fingerprint=preview_fingerprint,
+            preview_effective_at=preview_effective_at,
+            idempotency_key=idempotency_key,
+            confirmation_origin="customer_web",
         )
         if not result.get("success", False):
             error_ctx = customer_portal.get_change_plan_error_context(
                 db,
                 str(subscription_id),
                 selected_offer_id=str(result.get("selected_offer_id") or offer_id),
-                insufficient_balance={
+                insufficient_funding={
                     "required_amount": result.get("required_amount"),
-                    "current_balance": result.get("current_balance"),
+                    "prepaid_funding_before": result.get("prepaid_funding_before"),
                     "shortfall": result.get("shortfall"),
                     "quote": result.get("plan_change_quote"),
                 },
@@ -2240,7 +2643,7 @@ def customer_submit_change_plan(
                     "customer": customer,
                     **error_ctx,
                     "error": (
-                        "You need additional wallet balance before this upgrade can be applied."
+                        "You need additional prepaid funding before this upgrade can be applied."
                     ),
                     "active_page": "services",
                 },
@@ -2249,6 +2652,30 @@ def customer_submit_change_plan(
         return RedirectResponse(
             url=f"/portal/services/{subscription_id}?plan_changed=true",
             status_code=303,
+        )
+    except HTTPException as exc:
+        db.rollback()
+        detail = exc.detail
+        message = (
+            str(detail.get("message") or detail.get("detail") or detail)
+            if isinstance(detail, dict)
+            else str(detail)
+        )
+        error_ctx = customer_portal.get_change_plan_error_context(
+            db,
+            str(subscription_id),
+            selected_offer_id=offer_id,
+        )
+        return templates.TemplateResponse(
+            "customer/services/change_plan.html",
+            {
+                "request": request,
+                "customer": customer,
+                **error_ctx,
+                "error": message,
+                "active_page": "services",
+            },
+            status_code=exc.status_code,
         )
     except ValueError as exc:
         message = str(exc)
@@ -2277,7 +2704,7 @@ def customer_submit_change_plan(
                             {
                                 "ticket_id": ticket_id,
                                 "subscriber_id": str(
-                                    customer.get("subscriber_id") or ""
+                                    optional_customer_subscriber_id(db, customer) or ""
                                 ),
                             },
                         )
@@ -2327,6 +2754,8 @@ def customer_request_plan_migration(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="services")
     try:
         result = customer_portal.request_plan_migration(
             db=db,
@@ -2344,7 +2773,9 @@ def customer_request_plan_migration(
                 "customer_ticket_created",
                 {
                     "ticket_id": ticket_id,
-                    "subscriber_id": str(customer.get("subscriber_id") or ""),
+                    "subscriber_id": str(
+                        optional_customer_subscriber_id(db, customer) or ""
+                    ),
                 },
             )
             return RedirectResponse(url=f"/portal/support/{ticket_id}", status_code=303)
@@ -2417,6 +2848,8 @@ def customer_submit_suspend_service(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="services")
 
     from app.services.customer_portal_flow_services import (
         apply_service_suspend,
@@ -2503,6 +2936,8 @@ def customer_submit_resume_service(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="services")
 
     from app.services.customer_portal_flow_services import (
         apply_service_resume,
@@ -2642,12 +3077,15 @@ def customer_submit_payment_arrangement(
     start_date: str = Form(...),
     invoice_id: str = Form(None),
     notes: str = Form(None),
+    terms: str | None = Form(None),
     db: Session = Depends(get_db),
 ) -> Response:
     """Submit a payment arrangement request."""
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="billing")
 
     try:
         customer_portal.submit_payment_arrangement(
@@ -2659,13 +3097,15 @@ def customer_submit_payment_arrangement(
             start_date=start_date,
             invoice_id=invoice_id,
             notes=notes,
+            terms_accepted=isinstance(terms, str)
+            and terms.strip().lower() in {"1", "true", "on", "yes"},
         )
         return RedirectResponse(
             url="/portal/billing/arrangements?submitted=true",
             status_code=303,
         )
     except (ValueError, HTTPException) as exc:
-        account_id = customer.get("account_id")
+        account_id = optional_customer_account_id(db, customer)
         account_id_str = str(account_id) if account_id else None
         error_ctx = customer_portal.get_arrangement_error_context(db, account_id_str)
         status_code = exc.status_code if isinstance(exc, HTTPException) else 400
@@ -2695,6 +3135,8 @@ def customer_cancel_payment_arrangement(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="billing")
 
     try:
         customer_portal.cancel_customer_arrangement(db, customer, str(arrangement_id))

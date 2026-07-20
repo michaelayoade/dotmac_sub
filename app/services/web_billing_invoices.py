@@ -4,22 +4,23 @@ from __future__ import annotations
 
 import json
 import logging
+import secrets
 from datetime import UTC, datetime
 from decimal import Decimal
-from html import escape
 from typing import TypedDict
-from urllib.parse import urlencode
 from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.billing import CreditNote, CreditNoteStatus, Invoice, InvoiceStatus
+from app.models.billing import Invoice, InvoiceStatus
 from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber
 from app.schemas.billing import (
+    CreditNoteApplicationPreviewRequest,
     CreditNoteApplyRequest,
+    InvoiceClosureConfirm,
     InvoiceCreate,
     InvoiceLineCreate,
     InvoiceLineUpdate,
@@ -28,7 +29,6 @@ from app.schemas.billing import (
 from app.services import audit as audit_service
 from app.services import billing as billing_service
 from app.services import billing_invoice_pdf as billing_invoice_pdf_service
-from app.services import email as email_service
 from app.services import invoice_bank_details as invoice_bank_details_service
 from app.services import numbering
 from app.services import web_billing_customers as web_billing_customers_service
@@ -38,6 +38,7 @@ from app.services.audit_helpers import (
     format_changes,
     log_audit_event,
 )
+from app.services.status_presentation import invoice_status_presentation
 from app.validators.forms import parse_datetime, parse_decimal, parse_uuid
 
 logger = logging.getLogger(__name__)
@@ -244,101 +245,40 @@ def maybe_issue_invoice(db: Session, *, invoice_id, issue_immediately: str | Non
     """Issue invoice when requested."""
     if not issue_immediately:
         return None
-    billing_service.invoices.update(
-        db=db,
-        invoice_id=str(invoice_id),
-        payload=InvoiceUpdate(status=InvoiceStatus.issued, issued_at=datetime.now(UTC)),
+    invoice = billing_service.invoices.get(db=db, invoice_id=str(invoice_id))
+    if invoice is None:
+        return None
+    if invoice.status != InvoiceStatus.draft:
+        return invoice
+    transition = billing_service.invoices.issue_draft_system(
+        db,
+        str(invoice_id),
+        issued_at=datetime.now(UTC),
+        due_at=invoice.due_at,
+        reason="admin_invoice_create",
+        announce=False,
+        commit=True,
     )
-    return billing_service.invoices.get(db=db, invoice_id=str(invoice_id))
+    return transition.invoice
 
 
 def maybe_send_invoice_notification(
     db: Session, *, invoice, send_notification: str | None
 ) -> None:
-    """Send invoice email notification when requested."""
-    if not send_notification or not invoice or not invoice.account:
+    """Request canonical invoice notification delivery when selected."""
+    if not send_notification or not invoice:
         return
-
-    account = invoice.account
-    email_addr = getattr(account, "email", None)
-    if not email_addr:
+    if invoice.status in {
+        InvoiceStatus.draft,
+        InvoiceStatus.void,
+        InvoiceStatus.written_off,
+    }:
         return
-    from app.services.email_template import wrap_email_html
-
-    inv_num = invoice.invoice_number or str(invoice.id)
-    account_ref = (
-        getattr(account, "account_number", None)
-        or getattr(account, "subscriber_number", None)
-        or str(getattr(invoice, "account_id", "") or getattr(account, "id", ""))
-    )
-    amount_due = getattr(invoice, "balance_due", None) or getattr(
-        invoice, "total", "0.00"
-    )
-    currency = getattr(invoice, "currency", "")
-    due_at = getattr(invoice, "due_at", None)
-    due_date = due_at.strftime("%Y-%m-%d") if due_at else "Not set"
-    app_url = email_service._get_app_url(db)  # noqa: SLF001 - shared email URL logic
-    invoice_url = f"{app_url}/portal/billing/invoices/{invoice.id}"
-    payment_url = (
-        f"{app_url}/portal/billing/pay?{urlencode({'invoice': str(invoice.id)})}"
-    )
-    amount_label = f"{currency} {Decimal(str(amount_due or 0)):,.2f}".strip()
-    subject = f"Invoice {inv_num} — payment due {due_date}"
-    body_html = wrap_email_html(
-        (
-            f'<p style="margin: 0 0 16px; font-size: 15px; line-height: 1.6;">'
-            f"Dear {escape(getattr(account, 'display_name', None) or getattr(account, 'first_name', None) or 'Customer')},"
-            "</p>"
-            f'<p style="margin: 0 0 18px; font-size: 15px; line-height: 1.6;">'
-            "Your invoice has been issued. Please review the details below and make payment through the customer portal before the due date."
-            "</p>"
-            '<div style="margin: 22px 0; padding: 18px; border: 1px solid #008000; border-left: 5px solid #FF0000; background: #F4F4F9;">'
-            '<p style="margin: 0 0 12px; color: #FF0000; font-size: 16px; font-weight: 700;">Invoice Summary</p>'
-            '<table role="presentation" cellpadding="0" cellspacing="0" style="width: 100%; border-collapse: collapse; font-size: 14px;">'
-            f'<tr><td style="padding: 7px 0; color: #555;">Account ID</td><td style="padding: 7px 0; text-align: right; font-weight: 700;">{escape(str(account_ref))}</td></tr>'
-            f'<tr><td style="padding: 7px 0; color: #555;">Invoice ID</td><td style="padding: 7px 0; text-align: right; font-weight: 700;">{escape(str(inv_num))}</td></tr>'
-            f'<tr><td style="padding: 7px 0; color: #555;">Amount to Pay</td><td style="padding: 7px 0; text-align: right; color: #FF0000; font-weight: 700;">{escape(amount_label)}</td></tr>'
-            f'<tr><td style="padding: 7px 0; color: #555;">Due Date</td><td style="padding: 7px 0; text-align: right; font-weight: 700;">{escape(due_date)}</td></tr>'
-            "</table>"
-            "</div>"
-            f'<p style="margin: 0 0 20px;"><a href="{escape(payment_url)}" style="display: inline-block; padding: 12px 20px; background: #FF0000; color: #ffffff; text-decoration: none; font-weight: 700;">Pay Invoice in Portal</a></p>'
-            '<div style="margin-top: 24px;">'
-            '<p style="margin: 0 0 10px; color: #008000; font-size: 15px; font-weight: 700;">How to pay through the portal</p>'
-            '<ol style="margin: 0; padding-left: 20px; font-size: 14px; line-height: 1.7;">'
-            "<li>Open the customer portal and sign in to your account.</li>"
-            "<li>Go to <strong>Billing</strong>, then select <strong>Invoices</strong>.</li>"
-            f"<li>Open invoice <strong>{escape(str(inv_num))}</strong> and confirm the amount due.</li>"
-            "<li>Click <strong>Pay invoice</strong>, choose your payment method, and complete the payment.</li>"
-            "<li>Wait for the payment confirmation page before closing the browser.</li>"
-            "</ol>"
-            "</div>"
-            f'<p style="margin: 18px 0 0; font-size: 13px; line-height: 1.6; color: #555;">You can also view the invoice here: <a href="{escape(invoice_url)}" style="color: #008000;">{escape(invoice_url)}</a></p>'
-        ),
-        subject=subject,
-    )
-    body_text = (
-        f"Dear {getattr(account, 'display_name', None) or getattr(account, 'first_name', None) or 'Customer'},\n\n"
-        "Your invoice has been issued.\n\n"
-        f"Account ID: {account_ref}\n"
-        f"Invoice ID: {inv_num}\n"
-        f"Amount to Pay: {amount_label}\n"
-        f"Due Date: {due_date}\n\n"
-        "How to pay through the portal:\n"
-        "1. Open the customer portal and sign in to your account.\n"
-        "2. Go to Billing, then select Invoices.\n"
-        f"3. Open invoice {inv_num} and confirm the amount due.\n"
-        "4. Click Pay invoice, choose your payment method, and complete the payment.\n"
-        "5. Wait for the payment confirmation page before closing the browser.\n\n"
-        f"Pay now: {payment_url}\n"
-        f"View invoice: {invoice_url}"
-    )
-    email_service.send_email(
-        db=db,
-        to_email=email_addr,
-        subject=subject,
-        body_html=body_html,
-        body_text=body_text,
-        activity="billing_invoice",
+    billing_service.invoices.announce_issued(
+        db,
+        str(invoice.id),
+        reason="admin_invoice_send",
+        commit=True,
     )
 
 
@@ -592,24 +532,41 @@ def generate_invoice_from_subscription_web(
     return invoice
 
 
+def preview_credit_note_application(
+    db: Session,
+    *,
+    invoice_id: str,
+    credit_note_id: str,
+    amount: str | None,
+) -> object:
+    payload = CreditNoteApplicationPreviewRequest(
+        invoice_id=UUID(invoice_id),
+        amount=parse_decimal(amount, "amount") if amount else None,
+    )
+    return billing_service.credit_notes.preview_application(db, credit_note_id, payload)
+
+
 def apply_credit_note_to_invoice(
     db: Session,
     *,
     invoice_id: str,
     credit_note_id: str,
-    amount: Decimal | None,
+    amount: Decimal,
     memo: str | None,
-) -> dict[str, object] | None:
-    """Apply credit note to invoice and return audit metadata."""
-    before = billing_service.credit_notes.get(db=db, credit_note_id=credit_note_id)
+    preview_fingerprint: str,
+    idempotency_key: str,
+):
+    """Execute one confirmed preview and return exact financial evidence."""
     payload = CreditNoteApplyRequest(
         invoice_id=UUID(invoice_id),
         amount=amount,
         memo=memo,
+        preview_fingerprint=preview_fingerprint,
+        idempotency_key=idempotency_key,
     )
-    billing_service.credit_notes.apply(db, credit_note_id, payload)
-    after = billing_service.credit_notes.get(db=db, credit_note_id=credit_note_id)
-    return build_changes_metadata(before, after)
+    return billing_service.credit_notes.apply_with_evidence(
+        db, credit_note_id, payload, stage_audit=False
+    )
 
 
 def create_invoice_line_from_form(
@@ -700,19 +657,8 @@ def load_tax_rates(db: Session):
     )
 
 
-def load_credit_notes_for_account(db: Session, *, account_id):
-    stmt = (
-        select(CreditNote)
-        .where(CreditNote.account_id == account_id)
-        .where(CreditNote.is_active.is_(True))
-        .where(
-            CreditNote.status.in_(
-                [CreditNoteStatus.issued, CreditNoteStatus.partially_applied]
-            )
-        )
-        .order_by(CreditNote.created_at.desc())
-    )
-    return db.scalars(stmt).all()
+def load_credit_application_options(db: Session, *, invoice_id: str):
+    return billing_service.credit_notes.list_application_options(db, invoice_id)
 
 
 def build_invoice_activities(db: Session, *, invoice_id: str) -> list[dict]:
@@ -780,9 +726,20 @@ def load_invoice_detail_data(
     )
     return {
         "invoice": invoice,
+        "invoice_financial_summary": billing_service.invoices.financial_summary(
+            db, invoice_id
+        ),
+        "invoice_status_presentation": invoice_status_presentation(invoice.status),
         "tax_rates": load_tax_rates(db),
-        "credit_notes": load_credit_notes_for_account(
-            db, account_id=invoice.account_id
+        "credit_application_options": load_credit_application_options(
+            db, invoice_id=invoice_id
+        ),
+        "credit_application_idempotency_key": secrets.token_urlsafe(24),
+        "invoice_void_capability": billing_service.invoices.void_capability(
+            db, invoice_id
+        ),
+        "invoice_write_off_capability": (
+            billing_service.invoices.write_off_capability(db, invoice_id)
         ),
         "activities": build_invoice_activities(db, invoice_id=invoice_id),
         "pdf_export": pdf_export,
@@ -826,23 +783,29 @@ def apply_credit_note_to_invoice_web(
     credit_note_id: str,
     amount: str | None,
     memo: str | None,
-) -> dict[str, object] | None:
-    metadata_payload = apply_credit_note_to_invoice(
+    preview_fingerprint: str,
+    idempotency_key: str,
+) -> dict[str, object]:
+    result = apply_credit_note_to_invoice(
         db,
         invoice_id=invoice_id,
         credit_note_id=credit_note_id,
-        amount=parse_decimal(amount, "amount") if amount else None,
+        amount=parse_decimal(amount, "amount"),
         memo=memo.strip() if memo else None,
+        preview_fingerprint=preview_fingerprint,
+        idempotency_key=idempotency_key,
     )
-    log_audit_event(
-        db=db,
-        request=request,
-        action="apply",
-        entity_type="credit_note",
-        entity_id=str(credit_note_id),
-        actor_id=actor_id,
-        metadata=metadata_payload,
-    )
+    metadata_payload = result.audit_metadata()
+    if not result.idempotent_replay:
+        log_audit_event(
+            db=db,
+            request=request,
+            action="apply",
+            entity_type="credit_note",
+            entity_id=str(credit_note_id),
+            actor_id=actor_id,
+            metadata=metadata_payload,
+        )
     return metadata_payload
 
 
@@ -874,10 +837,39 @@ def void_invoice_web(
     actor_id: str | None,
     invoice_id: str,
 ) -> None:
-    # Actually void the invoice (reverse its debit ledger entries, set
-    # status=void, balance_due=0) via the canonical service — previously this
-    # only wrote an audit log and left the invoice untouched.
-    billing_service.invoices.void(db, invoice_id)
+    raise HTTPException(
+        status_code=409,
+        detail="Invoice void requires owner preview and confirmation",
+    )
+
+
+def preview_invoice_void_web(db: Session, *, invoice_id: str):
+    return billing_service.invoices.preview_void(db, invoice_id)
+
+
+def preview_invoice_write_off_web(db: Session, *, invoice_id: str):
+    return billing_service.invoices.preview_write_off(db, invoice_id)
+
+
+def confirm_invoice_void_web(
+    db: Session,
+    *,
+    request,
+    actor_id: str | None,
+    invoice_id: str,
+    preview_fingerprint: str,
+    idempotency_key: str,
+    memo: str | None,
+):
+    result = billing_service.invoices.confirm_void(
+        db,
+        invoice_id,
+        InvoiceClosureConfirm(
+            preview_fingerprint=preview_fingerprint,
+            idempotency_key=idempotency_key,
+            memo=memo,
+        ),
+    )
     log_audit_event(
         db=db,
         request=request,
@@ -885,4 +877,37 @@ def void_invoice_web(
         entity_type="invoice",
         entity_id=invoice_id,
         actor_id=actor_id,
+        metadata={"closure_id": str(result.closure.id)},
     )
+    return result
+
+
+def confirm_invoice_write_off_web(
+    db: Session,
+    *,
+    request,
+    actor_id: str | None,
+    invoice_id: str,
+    preview_fingerprint: str,
+    idempotency_key: str,
+    memo: str | None,
+):
+    result = billing_service.invoices.confirm_write_off(
+        db,
+        invoice_id,
+        InvoiceClosureConfirm(
+            preview_fingerprint=preview_fingerprint,
+            idempotency_key=idempotency_key,
+            memo=memo,
+        ),
+    )
+    log_audit_event(
+        db=db,
+        request=request,
+        action="write_off",
+        entity_type="invoice",
+        entity_id=invoice_id,
+        actor_id=actor_id,
+        metadata={"closure_id": str(result.closure.id)},
+    )
+    return result

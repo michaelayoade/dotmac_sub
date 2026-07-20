@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, cast
+from urllib.parse import urlencode
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -12,26 +13,80 @@ from sqlalchemy.orm import Session
 
 from app.models.network import OLTDevice
 from app.models.network_monitoring import DeviceInterface, NetworkDevice
+from app.schemas.status_presentation import StatusTone
+from app.services import device_projection_views
 from app.services import network as network_service
+from app.services.device_operational_status import (
+    DEGRADED,
+    DOWN,
+    UP,
+    annotate_operational_status,
+    derive_olt_operational_status,
+    derive_ont_operational_status,
+    warmer_is_stale,
+)
+from app.services.list_query import (
+    ListDefinition,
+    ListFieldDefinition,
+    ListQuery,
+)
 from app.services.network import cpe as cpe_service
 from app.services.network.imported_service_ports import imported_service_port_summary
-from app.services.zabbix import ZabbixClient, ZabbixClientError, zabbix_configured
+from app.services.status_presentation import device_operational_status_presentation
+from app.services.ui_contracts import Action, Kpi, StateValue
+
+# UI page contract for the admin network-device list. The projection-boundary
+# owner: it declares the searchable/filterable/sortable fields, default order and
+# page sizes. The list reads the materialised device_projections table (via
+# device_projection_views) — the SQL-paginated read model — instead of loading
+# every device and filtering in memory. Projected operational_status is
+# last-known state as of the projection's refreshed_at.
+NETWORK_DEVICE_LIST_DEFINITION = ListDefinition(
+    key="network_devices",
+    fields=(
+        ListFieldDefinition("search", "Search", searchable=True),
+        ListFieldDefinition("type", "Type", filterable=True),
+        ListFieldDefinition("status", "Status", filterable=True),
+        ListFieldDefinition("vendor", "Vendor", filterable=True),
+        ListFieldDefinition("name", "Name", sortable=True),
+        ListFieldDefinition("last_seen", "Last seen", sortable=True),
+    ),
+    default_sort="name",
+    default_sort_dir="asc",
+    default_per_page=25,
+)
+
+
+def build_network_device_list_query(
+    *,
+    device_type: str | None = None,
+    status: str | None = None,
+    vendor: str | None = None,
+    search: str | None = None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
+    page: int = 1,
+    per_page: int | None = None,
+) -> ListQuery:
+    """Normalise loose device-list request params through the page contract."""
+    return NETWORK_DEVICE_LIST_DEFINITION.build_query(
+        search=search,
+        filters={
+            "type": device_type,
+            "status": status,
+            "vendor": vendor,
+        },
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        page=page,
+        per_page=per_page,
+    )
+
 
 if TYPE_CHECKING:
     from app.models.network import Port
 
 logger = logging.getLogger(__name__)
-
-_OLT_ZABBIX_SCALAR_KEYS = {
-    "ont.count.offline",
-    "ont.count.online",
-    "ont.count.total",
-    "ont.low.signal",
-    "ont.pct.online",
-    "pon.port.total",
-    "pon.port.up",
-}
-_OLT_ZABBIX_FRESH_SECONDS = 15 * 60
 
 
 def _network_device_is_olt_candidate(device: NetworkDevice) -> bool:
@@ -131,221 +186,35 @@ def _probe_state_presenter(*, enabled: bool, last_ok: bool | None) -> tuple[str,
     return "Unknown", "unknown"
 
 
-def _utc_from_zabbix_clock(value: object) -> datetime | None:
-    if value is None:
-        return None
-    try:
-        timestamp = int(str(value))
-    except (TypeError, ValueError):
-        return None
-    if timestamp <= 0:
-        return None
-    return datetime.fromtimestamp(timestamp, tz=UTC)
+def _monitoring_retired_probe_status() -> dict[str, str | None]:
+    # The legacy per-device ICMP/SNMP probe source (Zabbix) was retired with
+    # the native monitoring cutover; native reachability lives on the poll
+    # columns / operational status instead.
+    reason = "Legacy probe source is not configured"
+    return {
+        "ping_label": "Refresh pending",
+        "ping_state": "unknown",
+        "ping_reason": reason,
+        "snmp_label": "Refresh pending",
+        "snmp_state": "unknown",
+        "snmp_reason": reason,
+    }
 
 
-def _zabbix_interface_state(host: dict[str, Any] | None) -> tuple[str, str, str | None]:
-    if not host:
-        return "Unknown", "unknown", None
-    if str(host.get("status") or "") == "1":
-        return "Disabled", "fail", "Zabbix host is disabled"
+def _build_legacy_probe_statuses(
+    devices: list[dict[str, Any]],
+) -> dict[str, dict[str, str | None]]:
+    """Degraded ICMP/SNMP probe states for Network Devices core rows.
 
-    interfaces = host.get("interfaces") or []
-    snmp_interfaces = [
-        iface for iface in interfaces if str(iface.get("type") or "") == "2"
-    ]
-    if not snmp_interfaces:
-        return "No SNMP", "unknown", "No SNMP interface in Zabbix"
-
-    if any(str(iface.get("available") or "") == "2" for iface in snmp_interfaces):
-        error = next(
-            (
-                str(iface.get("error") or "").strip()
-                for iface in snmp_interfaces
-                if str(iface.get("available") or "") == "2"
-                and str(iface.get("error") or "").strip()
-            ),
-            None,
-        )
-        return "Fail", "fail", error or "Zabbix SNMP interface is unavailable"
-
-    if any(str(iface.get("available") or "") == "1" for iface in snmp_interfaces):
-        return "OK", "ok", None
-
-    return "Unknown", "unknown", "Zabbix SNMP availability is unknown"
-
-
-def _summarize_zabbix_items(
-    items: list[dict[str, Any]],
-) -> tuple[dict[str, str], datetime | None]:
-    values: dict[str, str] = {}
-    latest_seen: datetime | None = None
-    for item in items:
-        key = str(item.get("key_") or "")
-        if key not in _OLT_ZABBIX_SCALAR_KEYS:
-            continue
-        value = str(item.get("lastvalue") or "").strip()
-        if value:
-            values[key] = value
-        last_seen = _utc_from_zabbix_clock(item.get("lastclock"))
-        if last_seen and (latest_seen is None or last_seen > latest_seen):
-            latest_seen = last_seen
-    return values, latest_seen
-
-
-def _format_zabbix_value(value: str | None) -> str | None:
-    if value is None or value == "":
-        return None
-    try:
-        parsed = float(value)
-    except ValueError:
-        return value
-    if parsed.is_integer():
-        return str(int(parsed))
-    return f"{parsed:.1f}"
-
-
-def _zabbix_trigger_summary(triggers: list[dict[str, Any]]) -> str | None:
-    descriptions = [
-        str(trigger.get("description") or "").strip()
-        for trigger in sorted(
-            triggers,
-            key=lambda item: int(str(item.get("priority") or "0")),
-            reverse=True,
-        )
-        if str(trigger.get("description") or "").strip()
-    ]
-    if not descriptions:
-        return None
-    if len(descriptions) == 1:
-        return descriptions[0]
-    return f"{descriptions[0]} +{len(descriptions) - 1} more"
-
-
-def _build_olt_zabbix_health(
-    olts: list[OLTDevice],
-) -> dict[str, dict[str, object]]:
-    """Return current Zabbix-backed health for OLT table rows."""
-    host_ids = sorted(
-        {
-            str(getattr(olt, "zabbix_host_id", "") or "").strip()
-            for olt in olts
-            if str(getattr(olt, "zabbix_host_id", "") or "").strip()
-        }
-    )
-    if not host_ids or not zabbix_configured():
-        return {}
-
-    try:
-        client = ZabbixClient.from_env()
-        # Batch all three reads: one host.get, one item.get, one trigger.get for
-        # the whole page instead of ~2N+1 calls. The OLT list can hold many rows,
-        # and each per-host round trip added latency proportional to row count
-        # (and to Zabbix's response time).
-        host_count = len(host_ids)
-        hosts_by_id: dict[str, dict[str, Any]] = {}
-        for zabbix_host in client.get_hosts(host_ids=host_ids, limit=host_count):
-            if zabbix_host.get("hostid"):
-                hosts_by_id[str(zabbix_host["hostid"])] = zabbix_host
-
-        items_by_host: dict[str, list[dict[str, Any]]] = {}
-        for item in client.get_items(host_ids=host_ids, metric="", limit=1000):
-            items_by_host.setdefault(str(item.get("hostid") or ""), []).append(item)
-
-        # One batched trigger.get; group by host via each trigger's ``hosts``.
-        # Limit scales with host count so a busy host can't starve the others.
-        triggers_by_host: dict[str, list[dict[str, Any]]] = {}
-        host_id_set = set(host_ids)
-        for trigger in client.get_triggers(
-            host_ids=host_ids,
-            active_only=True,
-            limit=max(100, 20 * host_count),
-        ):
-            for trigger_host in trigger.get("hosts") or []:
-                trigger_host_id = str(trigger_host.get("hostid") or "")
-                if trigger_host_id in host_id_set:
-                    triggers_by_host.setdefault(trigger_host_id, []).append(trigger)
-    except ZabbixClientError:
-        logger.warning("olt_zabbix_health_load_failed", exc_info=True)
-        return {}
-
-    now = datetime.now(UTC)
-    health_by_olt_id: dict[str, dict[str, object]] = {}
-    for olt in olts:
-        host_id = str(getattr(olt, "zabbix_host_id", "") or "").strip()
-        if not host_id:
-            continue
-        current_host = hosts_by_id.get(host_id)
-        snmp_label, snmp_state, snmp_error = _zabbix_interface_state(current_host)
-        scalar_values, latest_seen = _summarize_zabbix_items(
-            items_by_host.get(host_id, [])
-        )
-        triggers = triggers_by_host.get(host_id, [])
-        trigger_summary = _zabbix_trigger_summary(triggers)
-
-        stale = True
-        if latest_seen is not None:
-            stale = (now - latest_seen).total_seconds() > _OLT_ZABBIX_FRESH_SECONDS
-
-        if snmp_state == "fail":
-            health_state = "attention"
-            health_label = "Attention"
-            health_reason = snmp_error or "Zabbix SNMP check failed"
-        elif triggers:
-            health_state = "attention"
-            health_label = "Attention"
-            health_reason = trigger_summary or "Active Zabbix trigger"
-        elif latest_seen is None:
-            health_state = "unknown"
-            health_label = "Unknown"
-            health_reason = "No current Zabbix OLT telemetry"
-        elif stale:
-            health_state = "attention"
-            health_label = "Attention"
-            health_reason = "Zabbix OLT telemetry is stale"
-        else:
-            health_state = "healthy"
-            health_label = "Healthy"
-            health_reason = "Zabbix OLT telemetry is current"
-
-        health_by_olt_id[str(olt.id)] = {
-            "runtime_health_state": health_state,
-            "runtime_health_label": health_label,
-            "runtime_health_reason": health_reason,
-            "runtime_ping_label": "Zabbix",
-            "runtime_ping_state": "ok"
-            if current_host and str(current_host.get("status")) == "0"
-            else "unknown",
-            "runtime_snmp_label": snmp_label,
-            "runtime_snmp_state": snmp_state,
-            "runtime_source": "Zabbix",
-            "runtime_last_seen_at": latest_seen,
-            "runtime_trigger_summary": trigger_summary,
-            "runtime_ont_online": _format_zabbix_value(
-                scalar_values.get("ont.count.online")
-            ),
-            "runtime_ont_offline": _format_zabbix_value(
-                scalar_values.get("ont.count.offline")
-            ),
-            "runtime_ont_total": _format_zabbix_value(
-                scalar_values.get("ont.count.total")
-            ),
-            "runtime_ont_online_pct": _format_zabbix_value(
-                scalar_values.get("ont.pct.online")
-            ),
-            "runtime_low_signal": _format_zabbix_value(
-                scalar_values.get("ont.low.signal")
-            ),
-            "runtime_pon_up": _format_zabbix_value(scalar_values.get("pon.port.up")),
-            "runtime_pon_total": _format_zabbix_value(
-                scalar_values.get("pon.port.total")
-            ),
-        }
-    return health_by_olt_id
-
-
-def build_olt_zabbix_health(olts: list[OLTDevice]) -> dict[str, dict[str, object]]:
-    """Public wrapper for current Zabbix-backed OLT health."""
-    return _build_olt_zabbix_health(olts)
+    The Zabbix probe source was retired with the native monitoring cutover, so
+    every row degrades to a fixed refresh-pending placeholder until native
+    reachability data is available.
+    """
+    return {
+        device_id: _monitoring_retired_probe_status()
+        for device in devices
+        if (device_id := str(device.get("id") or "").strip())
+    }
 
 
 def _find_linked_monitoring_status(
@@ -378,11 +247,47 @@ def get_cpe_ports(db: Session, cpe_id: object) -> list[Port]:
 def collect_devices(db: Session) -> list[dict]:
     """Collect all device types into a unified list of dicts."""
     devices: list[dict] = []
+    seen_keys: set[tuple[str, str]] = set()
+
+    monitoring_devices = list(
+        db.scalars(select(NetworkDevice).order_by(NetworkDevice.name.asc())).all()
+    )
+    by_mgmt_ip = {d.mgmt_ip: d for d in monitoring_devices if d.mgmt_ip}
+    by_hostname = {d.hostname: d for d in monitoring_devices if d.hostname}
+    by_name = {d.name: d for d in monitoring_devices if d.name}
+    warm_stale = warmer_is_stale()
+
+    def _linked_monitoring(device: object) -> NetworkDevice | None:
+        mgmt_ip = getattr(device, "mgmt_ip", None)
+        hostname = getattr(device, "hostname", None)
+        name = getattr(device, "name", None)
+        return (
+            (by_mgmt_ip.get(mgmt_ip) if mgmt_ip else None)
+            or (by_hostname.get(hostname) if hostname else None)
+            or (by_name.get(name) if name else None)
+        )
+
+    def _add_seen(kind: str, value: object | None) -> None:
+        text = str(value or "").strip().lower()
+        if text:
+            seen_keys.add((kind, text))
+
+    def _seen(kind: str, value: object | None) -> bool:
+        text = str(value or "").strip().lower()
+        return bool(text and (kind, text) in seen_keys)
 
     olts = network_service.olt_devices.list(
         db=db, is_active=True, order_by="name", order_dir="asc", limit=500, offset=0
     )
     for olt in olts:
+        linked = _linked_monitoring(olt)
+        linked_live_status = getattr(linked, "live_status", None)
+        linked_live_status = getattr(linked_live_status, "value", linked_live_status)
+        operational = derive_olt_operational_status(
+            olt,
+            linked_live_status=linked_live_status,
+            warm_stale=warm_stale,
+        )
         devices.append(
             {
                 "id": str(olt.id),
@@ -392,11 +297,50 @@ def collect_devices(db: Session) -> list[dict]:
                 "ip_address": getattr(olt, "mgmt_ip", None),
                 "vendor": olt.vendor,
                 "model": olt.model,
-                "status": "online" if olt.is_active else "offline",
+                "status": operational.status,
+                "operational_reason": operational.reason,
+                "status_presentation": operational.presentation,
                 "last_seen": getattr(olt, "last_seen", None),
                 "subscriber": None,
             }
         )
+        _add_seen("id", olt.id)
+        _add_seen("mgmt_ip", getattr(olt, "mgmt_ip", None))
+        _add_seen("hostname", getattr(olt, "hostname", None))
+        _add_seen("name", getattr(olt, "name", None))
+
+    core_devices = [device for device in monitoring_devices if device.is_active]
+    annotate_operational_status(core_devices)
+    for device in core_devices:
+        if _network_device_is_olt_candidate(device):
+            continue
+        if (
+            _seen("mgmt_ip", getattr(device, "mgmt_ip", None))
+            or _seen("hostname", getattr(device, "hostname", None))
+            or _seen("name", getattr(device, "name", None))
+        ):
+            continue
+        operational = cast(Any, device).operational
+        devices.append(
+            {
+                "id": str(device.id),
+                "name": device.name,
+                "type": "core",
+                "serial_number": device.serial_number,
+                "ip_address": device.mgmt_ip,
+                "vendor": device.vendor,
+                "model": device.model,
+                "status": operational.status,
+                "operational_reason": operational.reason,
+                "status_presentation": operational.presentation,
+                "last_seen": device.last_ping_at or device.last_snmp_at,
+                "subscriber": None,
+            }
+        )
+        _add_seen("id", device.id)
+        _add_seen("mgmt_ip", device.mgmt_ip)
+        _add_seen("hostname", device.hostname)
+        _add_seen("name", device.name)
 
     onts = network_service.ont_units.list(
         db=db,
@@ -407,6 +351,7 @@ def collect_devices(db: Session) -> list[dict]:
         offset=0,
     )
     for ont in onts:
+        operational = derive_ont_operational_status(ont)
         devices.append(
             {
                 "id": str(ont.id),
@@ -416,7 +361,9 @@ def collect_devices(db: Session) -> list[dict]:
                 "ip_address": getattr(ont, "ip_address", None),
                 "vendor": ont.vendor,
                 "model": ont.model,
-                "status": "online" if ont.is_active else "offline",
+                "status": operational.status,
+                "operational_reason": operational.reason,
+                "status_presentation": operational.presentation,
                 "last_seen": getattr(ont, "last_seen", None),
                 "subscriber": None,
             }
@@ -448,7 +395,11 @@ def collect_devices(db: Session) -> list[dict]:
                 "ip_address": getattr(cpe, "ip_address", None),
                 "vendor": getattr(cpe, "vendor", None),
                 "model": getattr(cpe, "model", None),
-                "status": "online",
+                "status": "unknown",
+                "operational_reason": "operational_state_not_available",
+                "status_presentation": device_operational_status_presentation(
+                    "unknown"
+                ),
                 "last_seen": getattr(cpe, "last_seen", None),
                 "subscriber": None,
             }
@@ -505,59 +456,266 @@ def compute_device_stats(devices: list[dict]) -> dict[str, int]:
     """Compute summary stats for a filtered device list."""
     return {
         "total": len(devices),
+        "core": sum(1 for d in devices if d["type"] == "core"),
         "olt": sum(1 for d in devices if d["type"] == "olt"),
         "ont": sum(1 for d in devices if d["type"] == "ont"),
         "cpe": sum(1 for d in devices if d["type"] == "cpe"),
-        "online": sum(1 for d in devices if d["status"] == "online"),
-        "offline": sum(1 for d in devices if d["status"] == "offline"),
-        "warning": 0,
-        "unprovisioned": 0,
+        "up": sum(1 for d in devices if d["status"] == UP),
+        "down": sum(1 for d in devices if d["status"] == DOWN),
+        "degraded": sum(1 for d in devices if d["status"] == DEGRADED),
+        "maintenance": sum(1 for d in devices if d["status"] == "maintenance"),
+        "unknown": sum(1 for d in devices if d["status"] == "unknown"),
     }
 
 
-def devices_list_page_data(
-    db: Session,
+# Device-count summary tiles as KPI contracts. Each drills into the exact
+# cohort it counts: type tiles narrow by ``type`` (across every status), status
+# tiles by ``status`` (across every type), and every tile carries the surface's
+# active vendor/search. Tile counts are an overview computed independent of the
+# page status/type filter, so a headline and the list it links to can never
+# diverge and a tile never shrinks because the table below it was filtered
+# (KPI-parity rule).
+_TYPE_KPI_LABELS = {
+    "total": "All Devices",
+    "core": "Core",
+    "olt": "OLT",
+    "ont": "ONT",
+    "cpe": "CPE",
+}
+_STATUS_KPI_LABELS = {
+    "up": "Up",
+    "down": "Down",
+    "degraded": "Degraded",
+    "maintenance": "Maintenance",
+    "unknown": "Unknown",
+}
+_STATUS_KPI_TONES = {
+    "up": StatusTone.positive,
+    "down": StatusTone.negative,
+    "degraded": StatusTone.warning,
+    "maintenance": StatusTone.neutral,
+    "unknown": StatusTone.neutral,
+}
+# Device types that expose an operator-driven reboot; CPE/unknown rows do not.
+_REBOOTABLE_DEVICE_TYPES = {"core", "olt", "ont"}
+
+
+def _device_cohort_url(
+    list_query: ListQuery,
     *,
     device_type: str | None = None,
-    search: str | None = None,
     status: str | None = None,
-    vendor: str | None = None,
-) -> dict[str, object]:
-    """Return full payload for the devices index page."""
-    devices = collect_devices(db)
-    devices = filter_devices(
-        devices, device_type=device_type, search=search, status=status, vendor=vendor
+) -> str:
+    """Drill-down URL to the device list filtered to exactly a KPI's cohort.
+
+    A tile carries ONLY its own narrowing dimension (``device_type`` for the
+    type/total tiles, ``status`` for the status tiles) plus the surface's active
+    vendor/search. It deliberately does NOT inherit the page's active status/type
+    filter, so a type tile drills across every status and a status tile across
+    every type — matching the overview count the tile displays (KPI-parity rule).
+    """
+    params = {
+        "type": device_type,
+        "status": status,
+        "vendor": list_query.filter_value("vendor"),
+        "search": list_query.search,
+    }
+    query = urlencode({key: value for key, value in params.items() if value})
+    return "/admin/network/devices" + (f"?{query}" if query else "")
+
+
+def _device_stat_kpis(
+    stats: dict[str, int],
+    list_query: ListQuery,
+    *,
+    refreshed_at: datetime | None,
+) -> dict[str, Kpi]:
+    """Wrap the projection's summary counts as KPI contracts.
+
+    When the projection has never reconciled (``refreshed_at is None``) the
+    counts are genuinely unknown rather than zero, so they project as an unknown
+    StateValue the template renders as a placeholder — never a 0 standing in for
+    "not yet measured".
+    """
+
+    def _count(key: str) -> StateValue:
+        if refreshed_at is None:
+            return StateValue.unknown()
+        return StateValue.present(int(stats.get(key, 0)))
+
+    kpis: dict[str, Kpi] = {
+        "total": Kpi(
+            label=_TYPE_KPI_LABELS["total"],
+            value=_count("total"),
+            # "All devices" drills across every type and status; only the
+            # active vendor/search narrow the cohort.
+            cohort_url=_device_cohort_url(list_query, device_type="all"),
+        )
+    }
+    for key in ("core", "olt", "ont", "cpe"):
+        kpis[key] = Kpi(
+            label=_TYPE_KPI_LABELS[key],
+            value=_count(key),
+            cohort_url=_device_cohort_url(list_query, device_type=key),
+        )
+    for key, label in _STATUS_KPI_LABELS.items():
+        kpis[key] = Kpi(
+            label=label,
+            value=_count(key),
+            cohort_url=_device_cohort_url(list_query, status=key),
+            tone=_STATUS_KPI_TONES[key],
+        )
+    return kpis
+
+
+def _device_row_actions(device: dict) -> dict[str, Action]:
+    """Per-row management actions with eligibility owned here, not the template.
+
+    Ping/reboot eligibility is a data-availability fact (a reachable management
+    IP, a device type that can be rebooted), computed once so the template hides
+    or disables what cannot run instead of re-deriving it from a status string.
+    """
+    has_ip = bool(str(device.get("ip_address") or "").strip())
+    device_type = str(device.get("type") or "").strip().lower()
+    rebootable = device_type in _REBOOTABLE_DEVICE_TYPES
+    can_ping = has_ip
+    can_reboot = rebootable and has_ip
+    device_id = str(device.get("id") or "").strip()
+    return {
+        "view": Action(
+            key="view",
+            label="View Details",
+            allowed=True,
+            permission="network:device:read",
+        ),
+        "ping": Action(
+            key="ping",
+            label="Ping Device",
+            allowed=can_ping,
+            reason=None if can_ping else "No management IP on record",
+            permission="network:device:write",
+            tone=StatusTone.positive,
+        ),
+        "reboot": Action(
+            key="reboot",
+            label="Reboot Device",
+            allowed=can_reboot,
+            reason=None
+            if can_reboot
+            else (
+                "No management IP on record"
+                if rebootable
+                else "Reboot is not available for this device type"
+            ),
+            permission="network:device:write",
+            preview_url=(
+                f"/admin/network/devices/{device_id}/reboot/preview"
+                if can_reboot and device_id
+                else None
+            ),
+            affected=1 if can_reboot else 0,
+            tone=StatusTone.warning,
+            requires_confirmation=can_reboot and bool(device_id),
+        ),
+        "delete": Action(
+            key="delete",
+            label="Remove Device",
+            allowed=False,
+            reason="Removal is not supported from this inventory",
+            permission="network:device:write",
+            tone=StatusTone.negative,
+        ),
+    }
+
+
+def _query_page(db: Session, list_query: ListQuery) -> tuple[list[dict], int]:
+    return device_projection_views.query_device_projections(
+        db,
+        device_type=list_query.filter_value("type"),
+        status=list_query.filter_value("status"),
+        vendor=list_query.filter_value("vendor"),
+        search=list_query.search,
+        sort_by=list_query.sort_by,
+        sort_dir=list_query.sort_dir,
+        offset=list_query.offset,
+        limit=list_query.per_page,
     )
-    stats = compute_device_stats(devices)
+
+
+def devices_list_page_data(db: Session, list_query: ListQuery) -> dict[str, object]:
+    """Return full payload for the devices index page.
+
+    Reads the materialised device_projections table (SQL search/filter/sort/
+    paginate) via device_projection_views — the canonical read model — instead of
+    aggregating and filtering every device in memory. Projected status is
+    last-known as of ``devices_refreshed_at``.
+    """
+    devices, total = _query_page(db, list_query)
+    for device in devices:
+        device["actions"] = _device_row_actions(device)
+    stats = device_projection_views.device_projection_stats(
+        db,
+        device_type=list_query.filter_value("type"),
+        status=list_query.filter_value("status"),
+        vendor=list_query.filter_value("vendor"),
+        search=list_query.search,
+    )
+    # KPI tiles are a fixed overview: each tile counts its own cohort across
+    # every status and type, so the headline number never shrinks because the
+    # operator filtered the table below it. The counts drop the page status/type
+    # filter (keeping only vendor/search, which each tile's cohort_url also
+    # carries) so a tile's value equals the count at the cohort it links to.
+    overview_stats = device_projection_views.device_projection_stats(
+        db,
+        device_type=None,
+        status=None,
+        vendor=list_query.filter_value("vendor"),
+        search=list_query.search,
+    )
+    per_page = list_query.per_page
+    total_pages = (total + per_page - 1) // per_page if total else 1
+    device_type = list_query.filter_value("type")
+    refreshed_at = device_projection_views.latest_refreshed_at(db)
     return {
         "devices": devices,
         "stats": stats,
+        "device_kpis": _device_stat_kpis(
+            overview_stats, list_query, refreshed_at=refreshed_at
+        ),
         "device_type": device_type,
-        "search": search or "",
-        "status": status or "",
-        "vendor": vendor or "",
+        "type": device_type,
+        "search": list_query.search or "",
+        "status": list_query.filter_value("status") or "",
+        "vendor": list_query.filter_value("vendor") or "",
+        # Pagination context consumed by components/data/table_pagination.html.
+        "pagination": total > per_page,
+        "offset": list_query.offset,
+        "limit": per_page,
+        "total": total,
+        "total_pages": total_pages,
+        "page": list_query.page,
+        "per_page": per_page,
+        "htmx_url": "/admin/network/devices/filter",
+        "htmx_target": "devices-table-body",
+        # Freshness: projected operational status is last-known as of this stamp.
+        "devices_refreshed_at": refreshed_at,
     }
 
 
-def devices_search_data(db: Session, search: str) -> list[dict]:
-    """Return filtered devices for HTMX search partial."""
-    devices = collect_devices(db)
-    term = search.strip().lower()
-    if term:
-        devices = [d for d in devices if _device_matches_search(d, term)]
+def devices_search_data(db: Session, list_query: ListQuery) -> list[dict]:
+    """Return one page of matching devices for the HTMX search/filter partial."""
+    devices, _total = _query_page(db, list_query)
+    for device in devices:
+        device["actions"] = _device_row_actions(device)
     return devices
 
 
-def devices_filter_data(
-    db: Session,
-    *,
-    search: str | None = None,
-    status: str | None = None,
-    vendor: str | None = None,
-) -> list[dict]:
-    """Return filtered devices for HTMX filter partial."""
-    devices = collect_devices(db)
-    return filter_devices(devices, search=search, status=status, vendor=vendor)
+def devices_filter_data(db: Session, list_query: ListQuery) -> list[dict]:
+    """Return one page of filtered devices for the HTMX filter partial."""
+    devices, _total = _query_page(db, list_query)
+    for device in devices:
+        device["actions"] = _device_row_actions(device)
+    return devices
 
 
 def olts_list_page_data(
@@ -565,15 +723,17 @@ def olts_list_page_data(
     *,
     search: str | None = None,
     status: str | None = None,
+    page: int = 1,
+    per_page: int = 50,
 ) -> dict[str, object]:
     """Return OLT list payload with per-OLT stats."""
-    raw_olts = network_service.olt_devices.list(
-        db=db,
-        is_active=True,
-        order_by="name",
-        order_dir="asc",
-        limit=100,
-        offset=0,
+    per_page = min(max(int(per_page or 50), 10), 200)
+    raw_olts = list(
+        db.scalars(
+            select(OLTDevice)
+            .where(OLTDevice.is_active.is_(True))
+            .order_by(OLTDevice.name.asc())
+        ).all()
     )
 
     olt_stats = {}
@@ -624,6 +784,8 @@ def olts_list_page_data(
         if linked is not None:
             linked_monitoring_by_olt_id[str(olt.id)] = linked
 
+    warm_stale = warmer_is_stale()
+
     linked_ids = [d.id for d in linked_monitoring_by_olt_id.values() if d.id]
     interfaces_by_device_id: dict[str, list[DeviceInterface]] = {}
     if linked_ids:
@@ -655,8 +817,6 @@ def olts_list_page_data(
         resolved_count = db_count if db_count > 0 else snmp_count
         olt_stats[olt_id] = {"pon_ports": resolved_count}
 
-    zabbix_health_by_olt_id = _build_olt_zabbix_health(all_olts)
-
     olts = []
     for olt in all_olts:
         service_port_summary = imported_service_port_summary(db, olt_id=olt.id)
@@ -675,44 +835,30 @@ def olts_list_page_data(
             enabled=bool(linked and linked.snmp_enabled),
             last_ok=(linked.last_snmp_ok if linked else None),
         )
-        if ping_state == "fail" or snmp_state == "fail":
+        linked_live_status = getattr(linked, "live_status", None)
+        linked_live_status = getattr(linked_live_status, "value", linked_live_status)
+        operational = derive_olt_operational_status(
+            olt,
+            linked_live_status=linked_live_status,
+            warm_stale=warm_stale,
+        )
+        if operational.alarming:
             health_state = "attention"
             health_label = "Attention"
-            health_reason = "Failed local ping or SNMP check"
-        elif ping_state == "ok" and snmp_state in {"ok", "unknown", "disabled"}:
+            health_reason = operational.reason.replace("_", " ").capitalize()
+        elif operational.retry_pending:
+            health_state = "retry_pending"
+            health_label = "Refresh pending"
+            health_reason = "Reachability evidence is stale or missing; refresh queued"
+        else:
             health_state = "healthy"
             health_label = "Healthy"
-            health_reason = "Local monitoring check is OK"
-        elif ping_state == "unknown" and snmp_state == "unknown":
-            health_state = "unknown"
-            health_label = "Unknown"
-            health_reason = "No local monitoring result"
-        else:
-            health_state = "unknown"
-            health_label = "Unknown"
-            health_reason = "Monitoring result is incomplete"
+            health_reason = "Current reachability evidence is positive"
 
-        zabbix_health = zabbix_health_by_olt_id.get(str(olt.id), {})
-        if zabbix_health:
-            ping_label = str(zabbix_health.get("runtime_ping_label") or ping_label)
-            ping_state = str(zabbix_health.get("runtime_ping_state") or ping_state)
-            snmp_label = str(zabbix_health.get("runtime_snmp_label") or snmp_label)
-            snmp_state = str(zabbix_health.get("runtime_snmp_state") or snmp_state)
-            if snmp_state == "fail":
-                health_state = "attention"
-                health_label = "Attention"
-                health_reason = str(
-                    zabbix_health.get("runtime_health_reason")
-                    or "Zabbix SNMP check failed"
-                )
-            elif snmp_state == "ok":
-                health_state = "healthy"
-                health_label = "Healthy"
-                health_reason = "Zabbix SNMP check is OK"
-            else:
-                health_state = "unknown"
-                health_label = "Unknown"
-                health_reason = "Zabbix SNMP check is unknown"
+        # The legacy runtime-health overlay (Zabbix telemetry) was retired
+        # with the native monitoring cutover: rows keep their local monitoring
+        # values, matching the empty overlay the unconfigured path produced.
+        runtime_health: dict[str, object] = {}
 
         olts.append(
             {
@@ -728,20 +874,26 @@ def olts_list_page_data(
                 "runtime_health_label": health_label,
                 "runtime_health_state": health_state,
                 "runtime_health_reason": health_reason,
+                "operational_status": operational.status,
+                "runtime_operational_reason": operational.reason,
+                "status_presentation": operational.presentation,
+                "runtime_retry_pending": operational.retry_pending,
                 "runtime_ping_label": ping_label,
                 "runtime_ping_state": ping_state,
                 "runtime_snmp_label": snmp_label,
                 "runtime_snmp_state": snmp_state,
-                "runtime_source": zabbix_health.get("runtime_source", "Local"),
-                "runtime_last_seen_at": zabbix_health.get("runtime_last_seen_at"),
-                "runtime_trigger_summary": zabbix_health.get("runtime_trigger_summary"),
-                "runtime_ont_online": zabbix_health.get("runtime_ont_online"),
-                "runtime_ont_offline": zabbix_health.get("runtime_ont_offline"),
-                "runtime_ont_total": zabbix_health.get("runtime_ont_total"),
-                "runtime_ont_online_pct": zabbix_health.get("runtime_ont_online_pct"),
-                "runtime_low_signal": zabbix_health.get("runtime_low_signal"),
-                "runtime_pon_up": zabbix_health.get("runtime_pon_up"),
-                "runtime_pon_total": zabbix_health.get("runtime_pon_total"),
+                "runtime_source": runtime_health.get("runtime_source", "Local"),
+                "runtime_last_seen_at": runtime_health.get("runtime_last_seen_at"),
+                "runtime_trigger_summary": runtime_health.get(
+                    "runtime_trigger_summary"
+                ),
+                "runtime_ont_online": runtime_health.get("runtime_ont_online"),
+                "runtime_ont_offline": runtime_health.get("runtime_ont_offline"),
+                "runtime_ont_total": runtime_health.get("runtime_ont_total"),
+                "runtime_ont_online_pct": runtime_health.get("runtime_ont_online_pct"),
+                "runtime_low_signal": runtime_health.get("runtime_low_signal"),
+                "runtime_pon_up": runtime_health.get("runtime_pon_up"),
+                "runtime_pon_total": runtime_health.get("runtime_pon_total"),
                 "pon_ports": olt_stats.get(str(olt.id), {}).get("pon_ports", 0),
                 "imported_service_ports": service_port_summary["count"],
                 "imported_service_ports_at": service_port_summary["last_imported_at"],
@@ -770,49 +922,69 @@ def olts_list_page_data(
             for item in filtered_olts
             if item.get("runtime_health_state") == "attention"
         ]
-    elif normalized_status == "healthy":
+    elif normalized_status in {"up", "online", "healthy"}:
         filtered_olts = [
-            item
-            for item in filtered_olts
-            if item.get("runtime_health_state") == "healthy"
+            item for item in filtered_olts if item.get("operational_status") == UP
         ]
-    elif normalized_status == "unmonitored":
+    elif normalized_status == "degraded":
         filtered_olts = [
-            item
-            for item in filtered_olts
-            if item.get("runtime_health_state") == "unknown"
+            item for item in filtered_olts if item.get("operational_status") == DEGRADED
         ]
+    elif normalized_status in {"down", "offline"}:
+        filtered_olts = [
+            item for item in filtered_olts if item.get("operational_status") == DOWN
+        ]
+    elif normalized_status == "retry_pending":
+        filtered_olts = [
+            item for item in filtered_olts if item.get("runtime_retry_pending")
+        ]
+
+    filtered_total = len(filtered_olts)
+    total_pages = max(1, (filtered_total + per_page - 1) // per_page)
+    current_page = min(max(page, 1), total_pages)
+    page_start = (current_page - 1) * per_page
+    paged_olts = filtered_olts[page_start : page_start + per_page]
 
     attention_items = [
         item for item in olts if item.get("runtime_health_state") == "attention"
     ]
-    healthy_count = sum(
-        1 for item in olts if item.get("runtime_health_state") == "healthy"
+    up_count = sum(1 for item in olts if item.get("operational_status") == UP)
+    degraded_count = sum(
+        1 for item in olts if item.get("operational_status") == DEGRADED
     )
-    unmonitored_count = sum(
-        1 for item in olts if item.get("runtime_health_state") == "unknown"
-    )
+    down_count = sum(1 for item in olts if item.get("operational_status") == DOWN)
+    retry_pending_count = sum(1 for item in olts if item.get("runtime_retry_pending"))
     total_pon_ports = sum(int(item.get("pon_ports") or 0) for item in olts)  # type: ignore[call-overload]
 
     stats = {
-        "total": len(filtered_olts),
+        "total": filtered_total,
         "fleet_total": len(olts),
         "active": sum(1 for o in filtered_olts if o["is_active"]),
         "attention": len(attention_items),
-        "healthy": healthy_count,
-        "unmonitored": unmonitored_count,
+        "up": up_count,
+        "degraded": degraded_count,
+        "down": down_count,
+        "retry_pending": retry_pending_count,
         "total_pon_ports": total_pon_ports,
     }
 
     attention_summary = attention_items[:6]
 
     return {
-        "olts": filtered_olts,
+        "olts": paged_olts,
         "olt_stats": olt_stats,
         "stats": stats,
         "attention_summary": attention_summary,
         "filters": {
             "search": search or "",
             "status": normalized_status,
+        },
+        "pagination": {
+            "page": current_page,
+            "per_page": per_page,
+            "total": filtered_total,
+            "total_pages": total_pages,
+            "has_prev": current_page > 1,
+            "has_next": current_page < total_pages,
         },
     }

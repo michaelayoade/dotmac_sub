@@ -1,6 +1,6 @@
-import hashlib
 import uuid
 from http.cookies import SimpleCookie
+from pathlib import Path
 from unittest.mock import Mock
 
 import pyotp
@@ -27,7 +27,9 @@ from app.schemas.auth import (
 )
 from app.services import auth as auth_service
 from app.services import auth_flow as auth_flow_service
+from app.services import settings_spec
 from app.services import web_auth as web_auth_service
+from app.services import web_system_config as web_system_config_service
 from app.services.auth_flow import hash_password
 
 
@@ -126,6 +128,80 @@ def test_admin_login_reseller_tile_links_directly_to_reseller_login():
     assert 'href="/reseller"' not in body
 
 
+def test_admin_login_page_uses_configured_remember_duration(db_session):
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.auth,
+            key="jwt_refresh_ttl_days",
+            value_type=SettingValueType.integer,
+            value_text="10",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    response = web_auth_service.login_page(
+        _make_get_request("/auth/login"),
+        next_url="/admin",
+        db=db_session,
+    )
+
+    assert "Remember me for 10 days" in response.body.decode()
+
+
+def _make_get_request_with_cookie(path: str, cookie: str) -> Request:
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": path,
+        "headers": [
+            (b"user-agent", b"pytest"),
+            (b"cookie", cookie.encode("utf-8")),
+        ],
+        "client": ("127.0.0.1", 12345),
+        "query_string": b"",
+    }
+    return Request(scope)
+
+
+def test_reset_password_page_reads_token_from_cookie(db_session):
+    # Forced-reset flow delivers the token via an HttpOnly cookie, not the URL.
+    response = web_auth_service.reset_password_page(
+        _make_get_request_with_cookie(
+            "/auth/reset-password",
+            f"{web_auth_service.PASSWORD_RESET_COOKIE}=cookie-token-xyz",
+        ),
+        db_session,
+        None,
+    )
+    body = response.body.decode()
+    assert "cookie-token-xyz" in body
+
+
+def test_reset_password_page_uses_configured_min_length(db_session):
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.auth,
+            key="password_min_length",
+            value_type=SettingValueType.integer,
+            value_text="12",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    response = web_auth_service.reset_password_page(
+        _make_get_request("/auth/reset-password"),
+        db_session,
+        "reset-token",
+    )
+    body = response.body.decode()
+
+    assert 'minlength="12"' in body
+    assert "Must be at least 12 characters" in body
+    assert "password.length >= this.passwordMinLength" in body
+
+
 def _enable_force_admin_mfa(db_session):
     db_session.add(
         DomainSetting(
@@ -136,6 +212,83 @@ def _enable_force_admin_mfa(db_session):
         )
     )
     db_session.commit()
+
+
+def test_mfa_template_does_not_link_to_unimplemented_recovery_route():
+    template = Path("templates/auth/mfa.html").read_text()
+
+    assert "/auth/mfa/recovery" not in template
+    assert "Use a recovery code" not in template
+    assert "Contact an administrator to reset MFA" in template
+
+
+def test_admin_forgot_password_template_has_submit_loading_state():
+    template = Path("templates/auth/forgot-password.html").read_text()
+
+    assert 'x-data="{ loading: false }"' in template
+    assert 'x-on:submit="loading = true"' in template
+    assert ':disabled="loading"' in template
+    assert "loading ? 'Sending...' : 'Send reset link'" in template
+
+
+def test_auth_admin_policy_settings_are_registered():
+    expected = {
+        "admin_mfa_required": False,
+        "admin_login_max_attempts": 5,
+        "admin_lockout_minutes": 15,
+        "mfa_max_failed_attempts": 5,
+        "mfa_lockout_minutes": 15,
+        "password_min_length": 8,
+    }
+
+    for key, default in expected.items():
+        spec = settings_spec.get_spec(SettingDomain.auth, key)
+        assert spec is not None
+        assert spec.default == default
+
+
+def test_preferences_context_reads_legacy_force_2fa(db_session):
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.auth,
+            key="force_2fa",
+            value_type=SettingValueType.boolean,
+            value_text="true",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    context = web_system_config_service.get_preferences_context(db_session)
+
+    assert context["preferences"]["admin_mfa_required"] == "true"
+
+
+def test_preferences_save_writes_canonical_admin_mfa_required(db_session):
+    web_system_config_service.save_preferences(
+        db_session,
+        {
+            "default_landing_page": "admin",
+            "admin_portal_title": "DotMac Admin",
+            "admin_mfa_required": "true",
+            "search_debounce_ms": "250",
+        },
+    )
+
+    setting = (
+        db_session.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.auth)
+        .filter(DomainSetting.key == "admin_mfa_required")
+        .one()
+    )
+    assert setting.value_text == "true"
+    assert (
+        db_session.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.auth)
+        .filter(DomainSetting.key == "force_2fa")
+        .first()
+        is None
+    )
 
 
 def test_user_credentials_soft_delete(db_session, person):
@@ -292,7 +445,9 @@ def test_api_key_generate_with_redis(monkeypatch, db_session):
     result = auth_service.api_keys.generate_with_rate_limit(db_session, payload, None)
     raw_key = result["key"]
     api_key = result["api_key"]
-    assert hashlib.sha256(raw_key.encode("utf-8")).hexdigest() == api_key.key_hash
+    # Scheme-agnostic: matches whatever hash_api_key produces (HMAC when a
+    # server secret is configured, legacy sha256 otherwise).
+    assert auth_service.hash_api_key(raw_key) == api_key.key_hash
 
 
 def test_api_key_rate_limit_requires_redis(monkeypatch, db_session):
@@ -329,7 +484,7 @@ def test_api_key_update_and_revoke(db_session, person):
         str(created.id),
         ApiKeyUpdate(key_hash="new-key"),
     )
-    assert updated.key_hash == hashlib.sha256(b"new-key").hexdigest()
+    assert updated.key_hash == auth_service.hash_api_key("new-key")
 
     auth_service.api_keys.revoke(db_session, str(created.id))
     db_session.refresh(created)
@@ -459,8 +614,9 @@ def test_web_mfa_enroll_confirm_creates_admin_session(db_session, monkeypatch):
         "/admin/system",
     )
 
-    assert valid_response.status_code == 303
-    assert valid_response.headers.get("location") == "/admin/system"
+    assert valid_response.status_code == 200
+    assert valid_response.context["continue_url"] == "/admin/system"
+    assert len(valid_response.context["recovery_codes"]) == 10
     cookies = _response_cookies(valid_response)
     assert "session_token" in cookies
     assert web_auth_service.MFA_ENROLLMENT_COOKIE in cookies

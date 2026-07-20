@@ -9,6 +9,7 @@ from typing import Any, cast
 from uuid import UUID
 
 from sqlalchemy import and_, or_
+from sqlalchemy.orm import InstrumentedAttribute
 from sqlalchemy.sql.elements import ClauseElement, ColumnElement
 
 logger = logging.getLogger(__name__)
@@ -25,7 +26,7 @@ class FilterFieldSpec:
     """Whitelist definition for a filterable field."""
 
     field: str
-    expression: ColumnElement | None = None
+    expression: ColumnElement | InstrumentedAttribute | None = None
     field_type: str = "text"
     operators: set[str] | None = None
     options: set[str] | None = None
@@ -44,10 +45,18 @@ class FilterCondition:
 
 @dataclass(frozen=True)
 class FilterQuery:
-    """Normalized filter payload with default AND and optional OR group."""
+    """Normalized filter payload with default AND and optional OR groups.
+
+    ``or_filters`` is the single top-level OR group produced by the
+    ``{"and": [...], "or": [...]}`` payload shape. ``or_groups`` carries
+    additional independent OR groups (CRM contract shape: a list payload
+    may inline ``{"or": [rows]}`` objects); each group is OR'd internally
+    and AND'd with everything else.
+    """
 
     and_filters: list[FilterCondition] = field(default_factory=list)
     or_filters: list[FilterCondition] = field(default_factory=list)
+    or_groups: list[list[FilterCondition]] = field(default_factory=list)
 
 
 OPERATOR_LABELS: dict[str, str] = {
@@ -170,7 +179,8 @@ def parse_filter_payload(
     """Parse ERPNext-style filters with optional OR grouping.
 
     Accepted payloads:
-    - list of rows: [[doctype, field, op, value], ...]
+    - list of rows: [[doctype, field, op, value], ...]; rows may be
+      interleaved with `{"or": [rows]}` group objects (CRM contract shape)
     - dict with optional keys `and` (list of rows) and `or` (list of rows)
     """
     if payload is None or payload == "":
@@ -185,9 +195,23 @@ def parse_filter_payload(
     else:
         parsed = payload
 
+    or_group_rows: list[list[Any]] = []
     if isinstance(parsed, list):
-        and_rows = parsed
+        and_rows = []
         or_rows: list[Any] = []
+        for entry in parsed:
+            if isinstance(entry, dict):
+                if set(entry.keys()) != {"or"} or not isinstance(entry["or"], list):
+                    raise FilterValidationError(
+                        "Inline filter group objects must be {'or': [rows]}"
+                    )
+                if not entry["or"]:
+                    raise FilterValidationError(
+                        "OR group must contain at least one filter row"
+                    )
+                or_group_rows.append(entry["or"])
+            else:
+                and_rows.append(entry)
     elif isinstance(parsed, dict):
         and_rows = parsed.get("and", [])
         or_rows = parsed.get("or", [])
@@ -219,7 +243,9 @@ def parse_filter_payload(
         return conditions
 
     return FilterQuery(
-        and_filters=_parse_rows(and_rows), or_filters=_parse_rows(or_rows)
+        and_filters=_parse_rows(and_rows),
+        or_filters=_parse_rows(or_rows),
+        or_groups=[_parse_rows(rows) for rows in or_group_rows],
     )
 
 
@@ -366,6 +392,10 @@ def build_filter_expression(
         final_conditions.append(and_(*and_conditions))
     if or_conditions:
         final_conditions.append(or_(*or_conditions))
+    for group in filter_query.or_groups:
+        group_conditions = [_build_condition(item) for item in group]
+        if group_conditions:
+            final_conditions.append(or_(*group_conditions))
 
     if not final_conditions:
         return None

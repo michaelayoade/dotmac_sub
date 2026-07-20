@@ -11,12 +11,12 @@ from typing import cast
 from uuid import UUID
 
 from pydantic import ValidationError
-from sqlalchemy import func, inspect, or_, select
+from sqlalchemy import func, inspect, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.config import settings
 from app.models.auth import AuthProvider, UserCredential
-from app.models.billing import Invoice, InvoiceStatus, Payment, PaymentStatus
+from app.models.billing import Invoice, Payment, PaymentStatus
 from app.models.catalog import CatalogOffer, Subscription, SubscriptionStatus
 from app.models.offer_availability import OfferResellerAvailability
 from app.models.rbac import Role
@@ -26,12 +26,25 @@ from app.schemas.auth import UserCredentialCreate
 from app.schemas.rbac import SubscriberRoleCreate
 from app.schemas.subscriber import ResellerCreate, ResellerUpdate, SubscriberCreate
 from app.services import auth as auth_service
+from app.services import catalog as catalog_service
 from app.services import rbac as rbac_service
 from app.services import reseller_portal
 from app.services import subscriber as subscriber_service
 from app.services import web_system_user_mutations as web_system_user_mutations_service
 from app.services.auth_flow import hash_password
 from app.services.common import coerce_uuid
+from app.services.customer_support_links import ticket_customer_any_link_filter
+from app.services.invoice_collectibility import (
+    invoice_balance_sum_by_currency,
+    open_invoice_balance_for_accounts,
+    open_invoice_filters_for_accounts,
+    overdue_debt_filters_for_accounts,
+)
+from app.services.list_query import ListDefinition, ListFieldDefinition, ListQuery
+from app.services.status_presentation import (
+    invoice_status_presentation,
+    payment_status_presentation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -89,24 +102,86 @@ def _roles_for_form(db: Session) -> list[Role]:
     )
 
 
+def _policy_sets_for_form(db: Session) -> list:
+    return list(
+        catalog_service.policy_sets.list(
+            db=db,
+            is_active=True,
+            order_by="name",
+            order_dir="asc",
+            limit=500,
+            offset=0,
+        )
+    )
+
+
+RESELLER_LIST_DEFINITION = ListDefinition(
+    key="resellers",
+    fields=(
+        ListFieldDefinition("name", "Reseller", sortable=True),
+        ListFieldDefinition("status", "Status", filterable=True),
+        ListFieldDefinition("created_at", "Created", sortable=True),
+    ),
+    default_sort="name",
+    default_sort_dir="asc",
+    per_page_options=(10, 25, 50, 100, 200),
+)
+
+_RESELLER_STATUS_FILTERS = {"active", "inactive", "all"}
+
+
+def build_reseller_list_query(
+    *,
+    status: str | None = None,
+    page: int = 1,
+    per_page: int | None = None,
+) -> ListQuery:
+    """Normalize the admin reseller list through its declared capabilities.
+
+    ui.reseller_list_projection owns the filterable/sortable fields and pagination;
+    the route submits raw request values and does not rebuild those rules.
+    """
+    normalized_status = (status or "active").strip().lower()
+    if normalized_status not in _RESELLER_STATUS_FILTERS:
+        normalized_status = "active"
+    effective_per_page = per_page or RESELLER_LIST_DEFINITION.default_per_page
+    if effective_per_page not in RESELLER_LIST_DEFINITION.per_page_options:
+        effective_per_page = RESELLER_LIST_DEFINITION.default_per_page
+    return RESELLER_LIST_DEFINITION.build_query(
+        search=None,
+        filters={"status": normalized_status},
+        page=max(1, page),
+        per_page=effective_per_page,
+    )
+
+
 def list_page_context(
     db: Session,
     *,
     page: int,
     per_page: int,
+    status_filter: str = "active",
 ) -> dict[str, object]:
-    total = subscriber_service.resellers.count(db=db, is_active=True)
-    total_pages = max(1, (total + per_page - 1) // per_page)
-    safe_page = min(page, total_pages)
-    offset = (safe_page - 1) * per_page
-    resellers = subscriber_service.resellers.list(
-        db=db,
-        is_active=True,
-        order_by="name",
-        order_dir="asc",
-        limit=per_page,
-        offset=offset,
+    list_query = build_reseller_list_query(
+        status=status_filter, page=page, per_page=per_page
     )
+    normalized_status = list_query.filter_value("status") or "active"
+    active_filter = (
+        True
+        if normalized_status == "active"
+        else False
+        if normalized_status == "inactive"
+        else None
+    )
+    per_page = list_query.per_page
+    query = db.query(Reseller)
+    if active_filter is not None:
+        query = query.filter(Reseller.is_active.is_(active_filter))
+    total = int(query.with_entities(func.count(Reseller.id)).scalar() or 0)
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    safe_page = min(list_query.page, total_pages)
+    offset = (safe_page - 1) * per_page
+    resellers = query.order_by(Reseller.name.asc()).limit(per_page).offset(offset).all()
     return {
         "resellers": resellers,
         "reseller_subscriber_counts": count_subscribers_by_reseller_ids(
@@ -117,6 +192,7 @@ def list_page_context(
         "per_page": per_page,
         "total": total,
         "total_pages": total_pages,
+        "status_filter": normalized_status,
     }
 
 
@@ -125,6 +201,7 @@ def new_form_context(db: Session) -> dict[str, object]:
         "reseller": None,
         "action_url": "/admin/resellers",
         "roles": _roles_for_form(db),
+        "policy_sets": _policy_sets_for_form(db),
     }
 
 
@@ -133,6 +210,7 @@ def edit_form_context(db: Session, *, reseller_id: str) -> dict[str, object]:
     return {
         "reseller": reseller,
         "action_url": f"/admin/resellers/{reseller.id}",
+        "policy_sets": _policy_sets_for_form(db),
     }
 
 
@@ -146,11 +224,13 @@ def create_form_error_context(
         "reseller": payload,
         "action_url": "/admin/resellers",
         "roles": _roles_for_form(db),
+        "policy_sets": _policy_sets_for_form(db),
         "error": error,
     }
 
 
 def update_form_error_context(
+    db: Session,
     *,
     reseller_id: str,
     payload: dict[str, object],
@@ -160,6 +240,7 @@ def update_form_error_context(
     return {
         "reseller": payload,
         "action_url": f"/admin/resellers/{reseller_id}",
+        "policy_sets": _policy_sets_for_form(db),
         "error": error,
     }
 
@@ -174,8 +255,14 @@ def parse_reseller_payload(form) -> dict[str, object]:
         "code": form_str("code").strip() or None,
         "contact_email": form_str("contact_email").strip() or None,
         "contact_phone": form_str("contact_phone").strip() or None,
+        "policy_set_id": form_str("policy_set_id").strip() or None,
         "notes": form_str("notes").strip() or None,
         "is_active": bool(form.get("is_active")),
+        # Checked = opt into assigned-only (True); unchecked = inherit the
+        # global reseller_default_catalog_open setting (NULL).
+        "restrict_to_assigned_offers": (
+            True if form.get("restrict_to_assigned_offers") else None
+        ),
     }
 
 
@@ -213,7 +300,7 @@ def validate_create_user_payload(
     return None
 
 
-def create_reseller_from_form(db: Session, form) -> Reseller:
+def create_reseller_from_form(db: Session, form) -> tuple[Reseller, str | None]:
     payload = parse_reseller_payload(form)
     try:
         data = ResellerCreate.model_validate(payload)
@@ -223,9 +310,12 @@ def create_reseller_from_form(db: Session, form) -> Reseller:
         ) from exc
     reseller = subscriber_service.resellers.create(db=db, payload=data)
     user_payload = parse_create_user_payload(form)
+    invite_note = None
     if user_payload:
-        create_reseller_with_user(db, reseller=reseller, user_payload=user_payload)
-    return reseller
+        invite_note = create_reseller_with_user(
+            db, reseller=reseller, user_payload=user_payload
+        )
+    return reseller, invite_note
 
 
 def update_reseller_from_form(db: Session, *, reseller_id: str, form) -> None:
@@ -237,6 +327,18 @@ def update_reseller_from_form(db: Session, *, reseller_id: str, form) -> None:
             exc.errors()[0].get("msg", "Invalid reseller details.")
         ) from exc
     subscriber_service.resellers.update(db=db, reseller_id=reseller_id, payload=data)
+
+
+def update_reseller_active_status(
+    db: Session, *, reseller_id: str, is_active: bool
+) -> Reseller:
+    reseller = get_reseller_by_id(db, reseller_id)
+    if not reseller:
+        raise ValueError("Reseller not found.")
+    reseller.is_active = is_active
+    db.commit()
+    db.refresh(reseller)
+    return reseller
 
 
 def _reseller_users_table_available(db: Session) -> bool:
@@ -358,7 +460,7 @@ def create_reseller_with_user(
     *,
     reseller: Reseller,
     user_payload: dict[str, str | None],
-) -> None:
+) -> str | None:
     """Create a reseller portal login and link it to the reseller.
 
     Commits the transaction on success. When RESELLER_USER_PRINCIPAL_ENABLED is
@@ -383,7 +485,7 @@ def create_reseller_with_user(
         invite_note = send_reseller_portal_invite(db, email=email)
         if "could not" in invite_note.lower():
             logger.warning("Reseller invite issue for %s: %s", email, invite_note)
-        return
+        return invite_note
 
     subscriber = create_subscriber_credential(
         db,
@@ -419,6 +521,7 @@ def create_reseller_with_user(
         logger.warning(
             "Reseller invite issue for %s: %s", subscriber.email, invite_note
         )
+    return invite_note
 
 
 def list_reseller_subscribers(
@@ -595,6 +698,7 @@ def get_reseller_detail_context(
     suspended_services = 0
     subscriptions_total = 0
     outstanding_balance = Decimal("0.00")
+    outstanding_balance_by_currency: list[dict[str, object]] = []
     overdue_invoices = 0
     recent_invoices: list[Invoice] = []
     recent_payments: list[Payment] = []
@@ -650,25 +754,20 @@ def get_reseller_detail_context(
             .all()
         )
 
-        outstanding_balance = db.scalar(
-            select(func.coalesce(func.sum(Invoice.balance_due), 0))
-            .where(Invoice.account_id.in_(linked_subscriber_ids))
-            .where(Invoice.is_active.is_(True))  # exclude soft-deleted invoices
-            .where(
-                Invoice.status.in_(
-                    [
-                        InvoiceStatus.issued,
-                        InvoiceStatus.partially_paid,
-                        InvoiceStatus.overdue,
-                    ]
-                )
+        outstanding_balance = open_invoice_balance_for_accounts(
+            db, linked_subscriber_ids
+        )
+        outstanding_balance_by_currency = [
+            {"currency": str(currency or ""), "amount": amount}
+            for currency, amount in invoice_balance_sum_by_currency(
+                db, open_invoice_filters_for_accounts(linked_subscriber_ids)
             )
-        ) or Decimal("0.00")
+        ]
         overdue_invoices = int(
             db.scalar(
-                select(func.count(Invoice.id))
-                .where(Invoice.account_id.in_(linked_subscriber_ids))
-                .where(Invoice.status == InvoiceStatus.overdue)
+                select(func.count(Invoice.id)).where(
+                    *overdue_debt_filters_for_accounts(linked_subscriber_ids)
+                )
             )
             or 0
         )
@@ -706,11 +805,7 @@ def get_reseller_detail_context(
             .all()
         )
 
-        ticket_scope = or_(
-            Ticket.subscriber_id.in_(linked_subscriber_ids),
-            Ticket.customer_account_id.in_(linked_subscriber_ids),
-            Ticket.customer_person_id.in_(linked_subscriber_ids),
-        )
+        ticket_scope = ticket_customer_any_link_filter(Ticket, linked_subscriber_ids)
         open_tickets = int(
             db.scalar(
                 select(func.count(Ticket.id))
@@ -759,16 +854,27 @@ def get_reseller_detail_context(
         "suspended_services": suspended_services,
         "subscriptions_total": subscriptions_total,
         "outstanding_balance": outstanding_balance,
+        "outstanding_balance_by_currency": outstanding_balance_by_currency,
         "overdue_invoices": overdue_invoices,
         "payments_30d_total": payments_30d_total,
         "payments_30d_count": payments_30d_count,
         "open_tickets": open_tickets,
         "recent_invoices": recent_invoices,
+        "invoice_status_presentations": {
+            str(invoice.id): invoice_status_presentation(invoice.status)
+            for invoice in recent_invoices
+        },
         "recent_payments": recent_payments,
+        "payment_status_presentations": {
+            str(payment.id): payment_status_presentation(payment.status)
+            for payment in recent_payments
+        },
         "recent_tickets": recent_tickets,
         "recent_subscriptions": recent_subscriptions,
         "explicit_available_offers": explicit_available_offers,
         "explicit_available_offers_total": explicit_available_offers_total,
+        "policy_sets": _policy_sets_for_form(db),
+        "roles": _roles_for_form(db),
         "reseller_urls": {
             "billing_overview": f"/admin/billing?partner_id={reseller.id}",
             "invoices": f"/admin/billing/invoices?partner_id={reseller.id}",
@@ -819,6 +925,7 @@ def create_and_link_reseller_user(
     email: str,
     username: str | None = None,
     password: str | None = None,
+    role: str | None = None,
 ) -> None:
     """Create a new subscriber with credentials and link to a reseller."""
     subscriber = create_subscriber_credential(
@@ -835,6 +942,16 @@ def create_and_link_reseller_user(
         type(subscriber.user_type), "reseller", subscriber.user_type
     )
     subscriber.reseller_id = reseller_uuid
+    if role:
+        role_record = get_role_by_name(db, role)
+        if role_record:
+            rbac_service.subscriber_roles.create(
+                db,
+                SubscriberRoleCreate(
+                    subscriber_id=subscriber.id,
+                    role_id=role_record.id,
+                ),
+            )
     create_reseller_user_link(
         db,
         reseller_id=reseller_uuid,

@@ -1,14 +1,14 @@
 """Monitoring-path coverage — which device subnets are actually reachable.
 
 Devices live on private networks reached only through WireGuard tunnels. When a
-tunnel is down or a subnet has no tunnel at all, Zabbix simply can't reach those
+tunnel is down or a subnet has no tunnel at all, the poller simply can't reach those
 devices — so they read "down" when they may be fine. That's a *blind spot*, not
 an outage (see DEVICE_OPERATIONAL_STATUS.md / INFRASTRUCTURE_SLA_PERFORMANCE.md).
 
 This materialises the set of currently-reachable management CIDRs (from the
 allowed-IPs of *up* WireGuard peers) and caches it. The operational-status
 reader and the SLA availability bridge both consult it: an uncovered device
-reads ``unmonitored(no_path)`` instead of a false ``down``, and the SLA bridge
+reads ``down(no_path_retry_pending)`` without alarming, and the SLA bridge
 records no downtime for it.
 
 Safety: if ``wg`` is unavailable or returns nothing (dev/test, or a transient

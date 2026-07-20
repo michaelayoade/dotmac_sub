@@ -1,5 +1,7 @@
 # Section 11: Integrations & Admin Tools
 
+> **Status: historical product research, not an approved requirement.** Revalidate all UI proposals against `docs/UI_INFORMATION_AND_ACTION_STANDARD.md` and the current integration SOT.
+
 ## Source: legacy BSS ISP Management Platform
 
 This document catalogs feature improvements for DotMac Sub based on a comprehensive review of 23 screenshots from the legacy BSS ISP management platform's Integrations and Tools sections. Each screenshot was analyzed for its feature capabilities and a corresponding improvement is proposed for DotMac Sub.

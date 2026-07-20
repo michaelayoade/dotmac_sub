@@ -1,7 +1,7 @@
 {% extends "layouts/admin.html" %}
 {% from "components/ui/macros.html" import
     ambient_background, detail_header, card, info_grid, info_row,
-    metric_row, status_badge, table_head, table_row,
+    metric_row, status_presentation_badge, table_head, table_row,
     action_button, icon_edit, animation_styles, timeline_item
 %}
 
@@ -12,14 +12,7 @@
 
 {% set status_val = payment.status.value if payment.status is not string and payment.status else (payment.status | default('pending')) %}
 {% set payment_currency = payment.currency or 'NGN' %}
-{% set payment_status_variants = {
-    'succeeded': 'paid',
-    'failed': 'error',
-    'refunded': 'inactive',
-    'canceled': 'inactive',
-    'pending': 'pending'
-} %}
-{% set status_html %}{{ status_badge(status_val | title, variant=payment_status_variants.get(status_val, 'pending')) }}{% endset %}
+{% set status_html %}{{ status_presentation_badge(payment_status_presentation) }}{% endset %}
 
 <div class="relative space-y-8">
     {# ── Detail Header ── #}
@@ -33,12 +26,41 @@
         back_label="Payments",
         status=status_html
     ) %}
+        {% if edit_capability.allowed %}
         {{ action_button("Edit Payment", href="/admin/billing/payments/" ~ payment.id ~ "/edit", icon=icon_edit("h-4 w-4"), variant="secondary", color="emerald") }}
-        {% if status_val == 'succeeded' %}
-        <form method="post" action="/admin/billing/payments/{{ payment.id }}/refund" class="inline-block" onsubmit="return confirm('Refund this payment? The linked invoice will revert to unpaid.');">
+        {% endif %}
+        {% if status_val in ['pending', 'failed'] %}
+        <form method="post" action="/admin/billing/payments/{{ payment.id }}/settlement/preview" class="inline-flex">
             {% include "components/forms/csrf_input.html" %}
+            <button type="submit" class="inline-flex items-center rounded-lg border border-emerald-200 bg-white px-3 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-50 dark:border-emerald-800/60 dark:bg-slate-800 dark:text-emerald-300">Review settlement</button>
+        </form>
+        {% endif %}
+        {% if allocation_invoices %}
+        <form method="post" action="/admin/billing/payments/{{ payment.id }}/allocation/preview" class="inline-flex items-center gap-2">
+            {% include "components/forms/csrf_input.html" %}
+            <select name="invoice_id" required class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800">
+                <option value="">Invoice…</option>
+                {% for invoice in allocation_invoices %}<option value="{{ invoice.id }}">{{ invoice.invoice_number or invoice.id }} — {{ payment_currency }} {{ '{:,.2f}'.format(invoice.balance_due) }}</option>{% endfor %}
+            </select>
+            <input type="number" name="amount" required min="0.01" max="{{ allocation_available }}" step="0.01" placeholder="Up to {{ allocation_available }}" class="w-40 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800">
+            <button type="submit" class="inline-flex items-center rounded-lg border border-blue-200 bg-white px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-50 dark:border-blue-800/60 dark:bg-slate-800 dark:text-blue-300">Review allocation</button>
+        </form>
+        {% endif %}
+        {% if refund_capability.allowed %}
+        <form method="post" action="/admin/billing/payments/{{ payment.id }}/refund/preview" class="inline-flex items-center gap-2">
+            {% include "components/forms/csrf_input.html" %}
+            <input type="number" name="amount" min="0.01" step="0.01" placeholder="Full refundable amount" class="w-44 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800">
             <button type="submit" class="inline-flex items-center gap-2 rounded-lg border border-rose-200 bg-white px-3 py-2 text-sm font-medium text-rose-600 hover:bg-rose-50 dark:border-rose-800/60 dark:bg-slate-800 dark:text-rose-400 dark:hover:bg-rose-900/20">
-                Refund
+                Review confirmed refund
+            </button>
+        </form>
+        {% endif %}
+        {% if reversal_capability.allowed %}
+        <form method="post" action="/admin/billing/payments/{{ payment.id }}/reversal/preview" class="inline-flex items-center gap-2">
+            {% include "components/forms/csrf_input.html" %}
+            <input type="text" name="reason" required minlength="3" maxlength="500" placeholder="Chargeback or bank-reversal reason" class="w-64 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800">
+            <button type="submit" class="inline-flex items-center gap-2 rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm font-medium text-amber-700 hover:bg-amber-50 dark:border-amber-800/60 dark:bg-slate-800 dark:text-amber-300 dark:hover:bg-amber-900/20">
+                Review payment reversal
             </button>
         </form>
         {% endif %}
@@ -54,15 +76,15 @@
                         <p class="mt-2 text-3xl font-bold text-slate-900 dark:text-white font-mono tabular-nums">{{ payment_currency }} {{ "{:,.2f}".format(payment.amount or 0) }}</p>
                     </div>
                     <div class="text-right">
-                        {{ status_badge(status_val | title, variant=payment_status_variants.get(status_val, 'pending'), size="lg") }}
+                        {{ status_presentation_badge(payment_status_presentation, size="lg") }}
                         <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">{{ payment_currency }}</p>
                     </div>
                 </div>
                 {% call info_grid() %}
                     {{ info_row("Transaction ID", payment.id) }}
                     {{ info_row("External Reference", payment.external_id | default("—")) }}
-                    {{ info_row("Paid At", payment.paid_at.strftime('%b %d, %Y %H:%M') if payment.paid_at else '—') }}
-                    {{ info_row("Created", payment.created_at.strftime('%b %d, %Y %H:%M') if payment.created_at else '—') }}
+                    {{ info_row("Paid At", payment.paid_at | app_datetime('%b %d, %Y %H:%M', '—')) }}
+                    {{ info_row("Created", payment.created_at | app_datetime('%b %d, %Y %H:%M', '—')) }}
                 {% endcall %}
                 {% if payment.memo %}
                 <div class="mt-4 border-t border-slate-200 pt-4 text-sm text-slate-600 dark:border-slate-700 dark:text-slate-300">
@@ -88,7 +110,7 @@
                                     <a href="/admin/billing/invoices/{{ alloc.invoice_id }}" class="font-semibold text-amber-600 hover:text-amber-700 dark:text-amber-400 transition-colors">{{ alloc.invoice_id | string | truncate(8, True, '') }}</a>
                                 </td>
                                 <td class="whitespace-nowrap px-6 py-4 text-right text-sm font-bold text-slate-900 dark:text-white font-mono tabular-nums">{{ payment_currency }} {{ "{:,.2f}".format(alloc.amount or 0) }}</td>
-                                <td class="whitespace-nowrap px-6 py-4 text-right text-sm text-slate-600 dark:text-slate-400">{{ alloc.created_at.strftime('%b %d, %Y') if alloc.created_at else '—' }}</td>
+                                <td class="whitespace-nowrap px-6 py-4 text-right text-sm text-slate-600 dark:text-slate-400">{{ alloc.created_at | app_datetime('%b %d, %Y', '—', include_tz=False) }}</td>
                             {% endcall %}
                             {% endfor %}
                         </tbody>
@@ -126,7 +148,7 @@
                                 <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-900 dark:text-white font-mono">{{ entry.id | string | truncate(8, True, '') }}</td>
                                 <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-400">{{ entry.entry_type.value if entry.entry_type else '—' }}</td>
                                 <td class="whitespace-nowrap px-6 py-4 text-right text-sm font-bold text-slate-900 dark:text-white font-mono tabular-nums">{{ entry_currency }} {{ "{:,.2f}".format(entry.amount or 0) }}</td>
-                                <td class="whitespace-nowrap px-6 py-4 text-right text-sm text-slate-600 dark:text-slate-400">{{ entry.created_at.strftime('%b %d, %Y') if entry.created_at else '—' }}</td>
+                                <td class="whitespace-nowrap px-6 py-4 text-right text-sm text-slate-600 dark:text-slate-400">{{ entry.created_at | app_datetime('%b %d, %Y', '—', include_tz=False) }}</td>
                             {% endcall %}
                             {% endfor %}
                         </tbody>
@@ -191,7 +213,7 @@
                 {{ timeline_item(
                     title=activity.title,
                     description=activity.description|default(''),
-                    time=activity.occurred_at.strftime('%b %d, %Y at %H:%M') if activity.occurred_at else '',
+                    time=activity.occurred_at | app_datetime('%b %d, %Y at %H:%M', ''),
                     color="emerald",
                     is_last=loop.last
                 ) }}

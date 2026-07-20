@@ -1,5 +1,5 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import status_badge %}
+{% from "components/ui/macros.html" import status_badge, status_presentation_badge %}
 
 {% block title %}{{ offer.name }} - Tariffs - Admin{% endblock %}
 
@@ -129,14 +129,8 @@
                         <div>
                             <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Status</dt>
                             <dd class="mt-1">
-                                {% set offer_status = offer.status.value %}
-                                {% if offer_status == 'active' %}
-                                {{ status_badge("Active", "active", size="sm") }}
-                                {% elif offer_status == 'inactive' %}
-                                {{ status_badge("Inactive", "inactive", size="sm") }}
-                                {% else %}
-                                <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-300">{{ offer_status | title }}</span>
-                                {% endif %}
+                                {# Status semantics from the offer presentation owner. #}
+                                {{ status_presentation_badge(offer_status_presentation(offer.status), size="sm") }}
                             </dd>
                         </div>
                         {% if offer_clean_description %}
@@ -328,7 +322,7 @@
                                         Subscription #{{ sub.id | string | truncate(8, True, '') }}
                                     {% endif %}
                                 </p>
-                                <p class="text-xs text-slate-500 dark:text-slate-400">Started {{ sub.start_at.strftime('%b %d, %Y') if sub.start_at else 'Pending' }}</p>
+                                <p class="text-xs text-slate-500 dark:text-slate-400">Started {{ sub.start_at | app_datetime('%b %d, %Y', 'Pending', include_tz=False) }}</p>
                             </div>
                             {% set sub_status = sub.status.value %}
                             {% set sub_status_labels = {'active': 'Active', 'blocked': 'Blocked', 'suspended': 'Suspended', 'disabled': 'Disabled', 'pending': 'Pending', 'stopped': 'Stopped', 'hidden': 'Hidden', 'archived': 'Archived', 'canceled': 'Canceled', 'expired': 'Expired'} %}
@@ -361,11 +355,11 @@
                     </div>
                     <div>
                         <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Created</p>
-                        <p class="text-sm text-slate-900 dark:text-white">{{ offer.created_at.strftime('%B %d, %Y') if offer.created_at else '-' }}</p>
+                        <p class="text-sm text-slate-900 dark:text-white">{{ offer.created_at | app_datetime('%B %d, %Y', '-', include_tz=False) }}</p>
                     </div>
                     <div>
                         <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Last Updated</p>
-                        <p class="text-sm text-slate-900 dark:text-white">{{ offer.updated_at.strftime('%B %d, %Y') if offer.updated_at else '-' }}</p>
+                        <p class="text-sm text-slate-900 dark:text-white">{{ offer.updated_at | app_datetime('%B %d, %Y', '-', include_tz=False) }}</p>
                     </div>
                 </div>
             </div>
@@ -383,7 +377,7 @@
                         <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</div>
                         {% endif %}
                         {% if activity.occurred_at %}
-                        <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at.strftime('%b %d, %Y at %H:%M') }}</div>
+                        <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at | app_datetime('%b %d, %Y at %H:%M') }}</div>
                         {% endif %}
                     </div>
                     {% endfor %}

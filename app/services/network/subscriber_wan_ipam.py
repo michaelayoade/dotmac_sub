@@ -98,6 +98,7 @@ def ensure_wan_static_ip_available(
 
     active_ont_assignment = _active_ont_assignment(db, ont)
     subscriber_id = getattr(active_ont_assignment, "subscriber_id", None)
+    subscription_id = getattr(active_ont_assignment, "subscription_id", None)
     if subscriber_id is None:
         raise ValueError(
             "Static WAN IP is in IPAM space, but the ONT has no active subscriber assignment."
@@ -127,16 +128,27 @@ def ensure_wan_static_ip_available(
 
     active_assignment = _active_assignment_for_address(db, address)
     if active_assignment is not None:
-        if active_assignment.subscriber_id == subscriber_id:
+        same_subscription = (
+            subscription_id is not None
+            and active_assignment.subscription_id == subscription_id
+        )
+        legacy_same_subscriber = (
+            active_assignment.subscription_id is None
+            and active_assignment.subscriber_id == subscriber_id
+        )
+        if same_subscription or legacy_same_subscriber:
+            if active_assignment.subscription_id is None:
+                active_assignment.subscription_id = subscription_id
             return normalized_ip
         raise ValueError(
-            f"Static WAN IP {normalized_ip} is already assigned to another subscriber."
+            f"Static WAN IP {normalized_ip} is already assigned to another subscriber or subscription."
         )
 
     assignment = _any_assignment_for_address(db, address)
     if assignment is None:
         assignment = IPAssignment(
             subscriber_id=subscriber_id,
+            subscription_id=subscription_id,
             service_address_id=getattr(
                 active_ont_assignment, "service_address_id", None
             ),
@@ -147,6 +159,7 @@ def ensure_wan_static_ip_available(
         db.add(assignment)
     else:
         assignment.subscriber_id = subscriber_id
+        assignment.subscription_id = subscription_id
         assignment.service_address_id = getattr(
             active_ont_assignment, "service_address_id", None
         )

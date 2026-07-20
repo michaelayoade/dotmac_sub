@@ -1,5 +1,7 @@
 # Outstanding Features to Implement
 
+> **Status: generated historical inventory, not an approved backlog.** An unchecked item is not authorization to implement it. Revalidate against `docs/UI_INFORMATION_AND_ACTION_STANDARD.md`, the current domain SOT, and current product priority.
+
 Total unchecked items across docs: **834**
 
 ## 01_smartolt_features.md

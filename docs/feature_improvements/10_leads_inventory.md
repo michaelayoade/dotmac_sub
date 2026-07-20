@@ -1,5 +1,7 @@
 # Section 10: Leads/CRM & Inventory Management
 
+> **Status: historical product research, not an approved requirement.** Revalidate all UI proposals against `docs/UI_INFORMATION_AND_ACTION_STANDARD.md` and the current customer/inventory SOT.
+
 ## Source: legacy BSS ISP Management Platform
 
 ---

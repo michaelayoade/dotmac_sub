@@ -9,9 +9,8 @@ import '../../models/addon.dart';
 import '../../models/subscription.dart';
 import '../../providers/data_providers.dart';
 
-/// Browse and buy add-ons for a service. Purchases are charged from the wallet
-/// balance (GET/POST /me/subscriptions/{id}/add-ons); insufficient balance
-/// routes the customer to top up.
+/// Browse and buy add-ons through a server-owned preview and exact account
+/// adjustment; insufficient prepaid funding routes the customer to top up.
 class AddOnsScreen extends ConsumerStatefulWidget {
   const AddOnsScreen({super.key, required this.service});
   final Subscription service;
@@ -50,7 +49,7 @@ class _AddOnsScreenState extends ConsumerState<AddOnsScreen> {
   }
 
   Future<void> _buy(AddonOption option) async {
-    final qty = await showModalBottomSheet<int>(
+    final confirmation = await showModalBottomSheet<_AddonPurchaseConfirmation>(
       context: context,
       isScrollControlled: true,
       builder: (_) => _BuySheet(
@@ -58,17 +57,20 @@ class _AddOnsScreenState extends ConsumerState<AddOnsScreen> {
         subscriptionId: _subId,
       ),
     );
-    if (qty == null) return;
-    await _purchase(option, qty);
+    if (confirmation == null) return;
+    await _purchase(option, confirmation);
   }
 
-  Future<void> _purchase(AddonOption option, int quantity) async {
+  Future<void> _purchase(
+      AddonOption option, _AddonPurchaseConfirmation confirmation) async {
     final messenger = ScaffoldMessenger.of(context);
     setState(() => _busy = true);
     try {
-      final result = await ref
-          .read(catalogRepositoryProvider)
-          .purchaseAddon(_subId, option.addOnId, quantity);
+      final result = await ref.read(catalogRepositoryProvider).purchaseAddon(
+          _subId,
+          option.addOnId,
+          confirmation.quantity,
+          confirmation.previewFingerprint);
       if (result.success) {
         ref.invalidate(balanceProvider);
         ref.invalidate(ledgerProvider);
@@ -79,7 +81,7 @@ class _AddOnsScreenState extends ConsumerState<AddOnsScreen> {
       } else if (result.insufficient) {
         messenger.showSnackBar(SnackBar(
           content: Text(
-              'Insufficient balance — top up ${Fmt.money(result.shortfall ?? 0, result.currency)}'),
+              'Insufficient prepaid funding — top up ${Fmt.money(result.shortfall ?? 0, result.currency)}'),
         ));
       } else if (result.serviceNotActive) {
         messenger.showSnackBar(const SnackBar(
@@ -161,18 +163,6 @@ class _AddOnsScreenState extends ConsumerState<AddOnsScreen> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        if (d.walletBalance != null)
-          Card(
-            color: theme.colorScheme.surfaceContainerHighest,
-            child: ListTile(
-              leading: const Icon(Icons.account_balance_wallet_outlined),
-              title: const Text('Wallet balance'),
-              trailing: Text(
-                Fmt.money(d.walletBalance!, d.currency),
-                style: const TextStyle(fontWeight: FontWeight.w700),
-              ),
-            ),
-          ),
         if (d.active.isNotEmpty) ...[
           const SizedBox(height: 16),
           Text('Your add-ons', style: theme.textTheme.titleMedium),
@@ -272,7 +262,8 @@ class _BuySheetState extends ConsumerState<_BuySheet> {
     final o = widget.option;
     final q = _quote;
     final theme = Theme.of(context);
-    final affordable = q?.canAfford ?? true;
+    final affordable = q?.canAfford ?? false;
+    final allowed = q?.allowed ?? false;
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.all(20),
@@ -313,12 +304,25 @@ class _BuySheetState extends ConsumerState<_BuySheet> {
               )
             else if (q != null) ...[
               _row('Charge', Fmt.money(q.charge, q.currency), bold: true),
-              _row('Wallet balance', Fmt.money(q.currentBalance, q.currency)),
+              _row('Prepaid funding',
+                  Fmt.money(q.prepaidFundingBefore, q.currency)),
+              _row('Postpaid receivables',
+                  Fmt.money(q.postpaidReceivables, q.currency)),
+              _row('Funding after purchase',
+                  Fmt.money(q.prepaidFundingAfter, q.currency)),
               if (!affordable)
                 Padding(
                   padding: const EdgeInsets.only(top: 8),
                   child: Text(
                     'Top up ${Fmt.money(q.shortfall, q.currency)} to buy this.',
+                    style: TextStyle(color: theme.colorScheme.error),
+                  ),
+                ),
+              if (q.rejectionReason == 'subscription_not_active')
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    'This service is not active, so the add-on cannot be used.',
                     style: TextStyle(color: theme.colorScheme.error),
                   ),
                 ),
@@ -348,9 +352,15 @@ class _BuySheetState extends ConsumerState<_BuySheet> {
                   const SizedBox(width: 12),
                   Expanded(
                     child: FilledButton(
-                      onPressed: (_loadingQuote || !affordable)
+                      onPressed: (_loadingQuote || !allowed)
                           ? null
-                          : () => Navigator.pop(context, _qty),
+                          : () => Navigator.pop(
+                                context,
+                                _AddonPurchaseConfirmation(
+                                  quantity: _qty,
+                                  previewFingerprint: q!.previewFingerprint,
+                                ),
+                              ),
                       child: const Text('Confirm'),
                     ),
                   ),
@@ -372,6 +382,16 @@ class _BuySheetState extends ConsumerState<_BuySheet> {
       ),
     );
   }
+}
+
+class _AddonPurchaseConfirmation {
+  const _AddonPurchaseConfirmation({
+    required this.quantity,
+    required this.previewFingerprint,
+  });
+
+  final int quantity;
+  final String previewFingerprint;
 }
 
 class _ErrorRetry extends StatelessWidget {

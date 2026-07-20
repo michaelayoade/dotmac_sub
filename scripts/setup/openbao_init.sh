@@ -18,7 +18,7 @@ set -euo pipefail
 
 CONTAINER="dotmac_sub_openbao"
 BAO_ADDR="${BAO_ADDR:-http://127.0.0.1:8200}"
-BAO_TOKEN="${BAO_TOKEN:-dotmac-sub-dev-token}"
+BAO_TOKEN="${BAO_TOKEN:-${OPENBAO_TOKEN:-}}"
 CHECK_ONLY=0
 STRICT=0
 
@@ -36,6 +36,11 @@ for arg in "$@"; do
             ;;
     esac
 done
+
+if [ -z "$BAO_TOKEN" ]; then
+    echo "BAO_TOKEN or OPENBAO_TOKEN is required; no default token is used." >&2
+    exit 1
+fi
 
 if [ -f ".env" ]; then
     set -a
@@ -99,6 +104,65 @@ seed_group() {
     put_secret "$path" "$@"
 }
 
+seed_credential_keyring() {
+    local path="settings/auth"
+    local seed="${CREDENTIAL_ENCRYPTION_KEY_SEED:-}"
+    local active="${CREDENTIAL_ENCRYPTION_KEY:-}"
+    local existing=""
+
+    echo "==> secret/${path}"
+    if [ -z "$seed" ]; then
+        if [ "$STRICT" -eq 1 ]; then
+            echo "  [FAIL] CREDENTIAL_ENCRYPTION_KEY_SEED is required" >&2
+            return 1
+        fi
+        echo "  [SKIP] CREDENTIAL_ENCRYPTION_KEY_SEED is missing"
+        return 0
+    fi
+    if [ -z "$active" ]; then
+        echo "  [FAIL] CREDENTIAL_ENCRYPTION_KEY must be set for seed verification" >&2
+        return 1
+    fi
+    case "$active" in
+        bao://*|openbao://*|vault://*)
+            echo "  [FAIL] remove CREDENTIAL_ENCRYPTION_KEY_SEED after switching to an OpenBao reference" >&2
+            return 1
+            ;;
+    esac
+    if [ "$seed" != "$active" ]; then
+        echo "  [FAIL] seed differs from the active credential key; refusing destructive replacement" >&2
+        return 1
+    fi
+
+    existing="$(run_bao kv get -field=credential_encryption_key "secret/${path}" 2>/dev/null || true)"
+    if [ -n "$existing" ]; then
+        if [ "$existing" != "$seed" ]; then
+            echo "  [FAIL] secret/${path} already contains a different credential key" >&2
+            return 1
+        fi
+        echo "  [OK] secret/${path} already contains the verified active key"
+        return 0
+    fi
+    if [ "$CHECK_ONLY" -eq 1 ]; then
+        echo "  [CHECK] secret/${path} will receive the verified active key"
+        return 0
+    fi
+
+    # Patch an existing payload so rotation metadata is never discarded. A new
+    # install has no payload yet, so create it with the one verified field.
+    if run_bao kv get "secret/${path}" >/dev/null 2>&1; then
+        run_bao kv patch "secret/${path}" "credential_encryption_key=${seed}" >/dev/null
+    else
+        run_bao kv put "secret/${path}" "credential_encryption_key=${seed}" >/dev/null
+    fi
+    existing="$(run_bao kv get -field=credential_encryption_key "secret/${path}" 2>/dev/null || true)"
+    if [ "$existing" != "$seed" ]; then
+        echo "  [FAIL] secret/${path} key read-back did not match" >&2
+        return 1
+    fi
+    echo "  [OK] secret/${path} seeded with the verified active key"
+}
+
 echo "==> Waiting for OpenBao to be ready..."
 for i in $(seq 1 30); do
     if run_bao status -format=json 2>/dev/null | grep -q '"sealed":false'; then
@@ -110,11 +174,14 @@ done
 echo "==> Seeding OpenBao KV v2 (real env values only)..."
 
 seed_group auth \
-    "JWT_SECRET,CREDENTIAL_ENCRYPTION_KEY" \
+    "JWT_SECRET" \
     "jwt_secret=${JWT_SECRET:-}" \
-    "credential_encryption_key=${CREDENTIAL_ENCRYPTION_KEY:-}" \
     "totp_encryption_key=${TOTP_ENCRYPTION_KEY:-}" \
     "wireguard_key_encryption_key=${WIREGUARD_KEY_ENCRYPTION_KEY:-}"
+
+# One-time bootstrap only. The helper refuses a seed that differs from the
+# active literal and never overwrites an existing managed key or its metadata.
+seed_credential_keyring
 
 seed_group database \
     "DATABASE_URL,POSTGRES_PASSWORD" \
@@ -152,6 +219,7 @@ seed_group s3 \
     "secret_key=${S3_SECRET_KEY:-}"
 
 seed_group migration \
+    "SMARTOLT_API_KEY" \
     "smartolt_api_key=${SMARTOLT_API_KEY:-}"
 
 seed_group notifications \

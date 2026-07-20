@@ -1,0 +1,101 @@
+{% extends "layouts/customer_auth.html" %}
+
+{% block title %}Ticket Resolution - {{ portal_name or (brand.product_name if brand is defined and brand else 'DotMac Subs') }}{% endblock %}
+
+{% block auth_content %}
+{% set is_active = state == "ok" %}
+{% set is_done = state in ["confirmed", "disputed"] %}
+{% set tone = "emerald" if state == "confirmed" else ("amber" if state in ["ok", "disputed"] else "red") %}
+<div class="sm:mx-auto sm:w-full sm:max-w-md">
+    <div class="flex justify-center">
+        <div class="flex h-12 w-12 items-center justify-center rounded-xl {% if tone == 'emerald' %}bg-emerald-600{% elif tone == 'amber' %}bg-amber-500{% else %}bg-red-600{% endif %}">
+            {% if state == "confirmed" %}
+            <svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+            </svg>
+            {% elif state == "disputed" %}
+            <svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h8M8 14h5M21 12c0 4.418-4.03 8-9 8a9.9 9.9 0 01-4-.8L3 20l1.6-3.2A7.6 7.6 0 013 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+            </svg>
+            {% else %}
+            <svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4M7 4h10a2 2 0 012 2v12a2 2 0 01-2 2H7a2 2 0 01-2-2V6a2 2 0 012-2z"/>
+            </svg>
+            {% endif %}
+        </div>
+    </div>
+    <h1 class="mt-6 text-center text-2xl font-bold leading-9 tracking-tight text-slate-900 dark:text-white">
+        {% if state == "confirmed" %}
+        Resolution confirmed
+        {% elif state == "disputed" %}
+        Ticket reopened
+        {% elif state == "expired" %}
+        Link expired
+        {% elif state == "closed" %}
+        Link already used
+        {% elif state == "not_found" %}
+        Link not found
+        {% elif state == "error" %}
+        Action unavailable
+        {% else %}
+        Confirm ticket resolution
+        {% endif %}
+    </h1>
+    <p class="mt-2 text-center text-sm text-slate-600 dark:text-slate-400">
+        {% if state == "confirmed" %}
+        Thanks. We have closed this support ticket.
+        {% elif state == "disputed" %}
+        Thanks. We have reopened this ticket for the support team.
+        {% elif state == "expired" %}
+        This confirmation link has expired.
+        {% elif state == "closed" %}
+        This confirmation link is no longer active.
+        {% elif state == "not_found" %}
+        We could not find this confirmation link.
+        {% elif message %}
+        {{ message }}
+        {% else %}
+        Let us know whether the issue is fixed.
+        {% endif %}
+    </p>
+</div>
+
+<div class="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
+    <div class="space-y-6 rounded-xl bg-white px-6 py-8 shadow-xl ring-1 ring-slate-900/5 dark:bg-slate-800 dark:ring-slate-700/50 sm:px-8">
+        {% if ticket %}
+        <div class="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/40">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Ticket</p>
+            <p class="mt-1 text-sm font-semibold text-slate-900 dark:text-white">{{ ticket.ticket_ref }}</p>
+            <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">{{ ticket.subject }}</p>
+            {% if ticket.resolved_at %}
+            <p class="mt-3 text-xs text-slate-500 dark:text-slate-400">Resolved {{ ticket.resolved_at | portal_datetime }}</p>
+            {% endif %}
+        </div>
+        {% endif %}
+
+        {% if is_active %}
+        <form method="post" action="/ticket-confirm/{{ token }}/confirm">
+            <button type="submit" class="flex w-full items-center justify-center rounded-lg bg-emerald-600 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700">
+                Confirm it is fixed
+            </button>
+        </form>
+
+        <form method="post" action="/ticket-confirm/{{ token }}/dispute" class="space-y-3">
+            <label for="reason" class="block text-sm font-medium text-slate-700 dark:text-slate-200">Still need help?</label>
+            <textarea id="reason" name="reason" rows="3" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="Tell us what is still wrong"></textarea>
+            <button type="submit" class="flex w-full items-center justify-center rounded-lg border border-amber-300 px-4 py-3 text-sm font-semibold text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-300 dark:hover:bg-amber-900/20">
+                Reopen ticket
+            </button>
+        </form>
+        {% elif is_done %}
+        <a href="/portal/auth/login" class="flex w-full items-center justify-center rounded-lg bg-primary-600 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-primary-700">
+            Go to customer portal
+        </a>
+        {% else %}
+        <a href="/portal/auth/support-info" class="flex w-full items-center justify-center rounded-lg bg-primary-600 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-primary-700">
+            Contact support
+        </a>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

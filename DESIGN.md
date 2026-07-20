@@ -2,6 +2,8 @@
 version: "1.0"
 name: "DotMac Sub"
 description: "Multi-tenant subscription management system for ISPs and fiber network operators. Designed for NOC technicians who need density, speed, and accuracy under pressure."
+status: "implementation-inventory"
+authority: "docs/UI_INFORMATION_AND_ACTION_STANDARD.md, docs/PRODUCTION_UI_BRIEF.md"
 
 colors:
   # Primary - Teal/Cyan (network, primary actions)
@@ -67,25 +69,25 @@ typography:
     fontSize: "36px"
     fontWeight: 700
     lineHeight: 1.1
-    letterSpacing: "-0.025em"
+    letterSpacing: "0"
   display-lg:
     fontFamily: "Outfit, system-ui, sans-serif"
     fontSize: "30px"
     fontWeight: 700
     lineHeight: 1.2
-    letterSpacing: "-0.025em"
+    letterSpacing: "0"
   heading-lg:
     fontFamily: "Outfit, system-ui, sans-serif"
     fontSize: "24px"
     fontWeight: 700
     lineHeight: 1.3
-    letterSpacing: "-0.02em"
+    letterSpacing: "0"
   heading-md:
     fontFamily: "Outfit, system-ui, sans-serif"
     fontSize: "20px"
     fontWeight: 600
     lineHeight: 1.4
-    letterSpacing: "-0.01em"
+    letterSpacing: "0"
   heading-sm:
     fontFamily: "Outfit, system-ui, sans-serif"
     fontSize: "16px"
@@ -116,7 +118,7 @@ typography:
     fontSize: "11px"
     fontWeight: 600
     lineHeight: 1.3
-    letterSpacing: "0.05em"
+    letterSpacing: "0"
     textTransform: "uppercase"
   mono:
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace"
@@ -151,41 +153,40 @@ spacing:
 
 components:
   button-primary:
-    backgroundColor: "linear-gradient(to right, {colors.primary-500}, {colors.primary-600})"
+    backgroundColor: "{colors.primary-600}"
     textColor: "#ffffff"
     typography: "{typography.body-md}"
     fontWeight: 600
-    rounded: "{rounded.xl}"
+    rounded: "{rounded.md}"
     padding: "10px 16px"
-    shadow: "0 10px 15px -3px rgb(6 182 212 / 0.25)"
+    shadow: "0 1px 2px 0 rgb(0 0 0 / 0.08)"
   button-primary-hover:
-    shadow: "0 20px 25px -5px rgb(6 182 212 / 0.30)"
-    transform: "translateY(-2px)"
+    shadow: "0 1px 3px 0 rgb(0 0 0 / 0.12)"
   button-secondary:
     backgroundColor: "{colors.surface-light}"
     textColor: "{colors.neutral-700}"
     borderColor: "{colors.neutral-200}"
     typography: "{typography.body-md}"
     fontWeight: 600
-    rounded: "{rounded.xl}"
+    rounded: "{rounded.md}"
     padding: "10px 16px"
   button-secondary-hover:
     borderColor: "{colors.primary-300}"
     backgroundColor: "{colors.primary-50}"
     textColor: "{colors.primary-700}"
   button-danger:
-    backgroundColor: "linear-gradient(to right, #ef4444, {colors.error})"
+    backgroundColor: "{colors.error}"
     textColor: "#ffffff"
     typography: "{typography.body-md}"
     fontWeight: 600
-    rounded: "{rounded.xl}"
+    rounded: "{rounded.md}"
     padding: "10px 16px"
-    shadow: "0 10px 15px -3px rgb(239 68 68 / 0.25)"
+    shadow: "0 1px 2px 0 rgb(0 0 0 / 0.08)"
   card:
     backgroundColor: "{colors.surface-light}"
     borderColor: "{colors.neutral-200}"
     borderWidth: "1px"
-    rounded: "{rounded.2xl}"
+    rounded: "{rounded.md}"
     padding: "{spacing.6}"
     shadow: "0 1px 3px 0 rgb(0 0 0 / 0.1)"
   card-dark:
@@ -196,7 +197,7 @@ components:
     textColor: "{colors.neutral-700}"
     borderColor: "{colors.neutral-300}"
     borderWidth: "1px"
-    rounded: "{rounded.lg}"
+    rounded: "{rounded.md}"
     padding: "8px 12px"
     typography: "{typography.body-md}"
   input-focus:
@@ -234,6 +235,11 @@ components:
 ---
 
 # DotMac Sub Design System
+
+> **Status: implementation inventory.** The normative UI authority is
+> `docs/UI_INFORMATION_AND_ACTION_STANDARD.md`, followed by
+> `docs/PRODUCTION_UI_BRIEF.md` and `docs/FRONTEND_SPEC.md`. Existing tokens or
+> examples in this file do not override those policies.
 
 ## Overview
 
@@ -311,7 +317,7 @@ Full dark mode support is mandatory. Use slate neutrals:
 
 | Role | Font | Usage |
 |------|------|-------|
-| Display | **Outfit** | Page titles, headings, hero text |
+| Display | **Outfit** | Page titles and true product/brand heroes only |
 | Body | **Plus Jakarta Sans** | Body text, labels, UI copy |
 | Mono | System monospace | IPs, MACs, serial numbers, code |
 
@@ -398,7 +404,7 @@ shadow-lg shadow-primary-500/25
 
 ### Visual Hierarchy
 
-1. **Page background**: Subtle gradient mesh + noise texture
+1. **Page background**: Quiet solid surface with no decorative mesh or orbs
 2. **Cards**: White/slate-800 with 1px border
 3. **Modals**: White/slate-800 with lg shadow + backdrop blur
 4. **Dropdowns**: White/slate-800 with border + shadow
@@ -416,14 +422,14 @@ shadow-lg shadow-primary-500/25
 | `lg` | 12px | Cards, modals |
 | `xl` | 16px | Buttons, large cards |
 | `2xl` | 20px | Page headers |
-| `3xl` | 24px | Hero cards |
+| `3xl` | 24px | Legacy only; not used for operational cards |
 | `full` | 9999px | Pills, avatars |
 
 ### Conventions
 
-- Buttons: `rounded-xl` (16px)
-- Cards: `rounded-2xl` (20px) to `rounded-3xl` (24px)
-- Inputs: `rounded-lg` (12px)
+- Buttons: `rounded-md` (8px)
+- Cards: `rounded-md` (8px)
+- Inputs: `rounded-md` (8px)
 - Badges: `rounded-full`
 - Avatars: `rounded-full`
 
@@ -433,19 +439,18 @@ shadow-lg shadow-primary-500/25
 
 ### Page Header
 
-Gradient background card with icon, title, subtitle, and action buttons:
+Compact, unframed context bar with title, subtitle, and one primary action:
 
 ```
-rounded-3xl border border-slate-200/70
-bg-gradient-to-br from-{color}-50 via-white to-{color2}-50/70
-px-6 py-6 shadow-sm
+border-b border-slate-200
+px-0 py-4
 ```
 
 ### Stats Cards
 
 KPI display with icon, value, label, and optional trend:
 
-- Icon: Gradient background `rounded-2xl`
+- Icon: restrained orientation treatment; semantic status remains separate
 - Value: `text-2xl font-bold tabular-nums`
 - Label: `text-sm text-slate-500`
 
@@ -538,9 +543,9 @@ Quick color references for AI prompts:
 ### Component Patterns
 
 ```
-Page header: rounded-3xl, gradient from-{color}-50, icon in rounded-2xl gradient
-Cards: rounded-2xl, border-slate-200, bg-white dark:bg-slate-800
-Buttons: rounded-xl, gradient backgrounds, shadow-lg shadow-{color}-500/25
+Page header: compact, unframed context with one primary action
+Cards: rounded-md, border-slate-200, bg-white dark:bg-slate-800
+Buttons: rounded-md, solid semantic or primary backgrounds, restrained shadow
 Tables: text-sm, py-2.5 rows, tabular-nums for numbers
 Badges: rounded-full, px-2.5 py-0.5, text-xs font-medium
 ```

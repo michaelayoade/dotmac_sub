@@ -1,0 +1,43 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Confirm Payment Allocation - Admin{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-4xl space-y-6">
+    <div>
+        <a href="/admin/billing/payments/{{ payment_id }}" class="text-sm font-medium text-primary-600">← Back to payment</a>
+        <h1 class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">Confirm Payment Allocation</h1>
+        <p class="mt-1 text-sm text-slate-500">This transfers settled account credit to a postpaid receivable; it does not create new funding.</p>
+    </div>
+    <div class="grid gap-4 md:grid-cols-2">
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <h2 class="font-semibold">Prepaid funding position</h2>
+            <p class="mt-2 text-lg font-semibold">{{ preview.currency }} {{ '{:,.2f}'.format(preview.prepaid_funding_before) }} → {{ preview.currency }} {{ '{:,.2f}'.format(preview.prepaid_funding_after) }}</p>
+            <p class="mt-1 text-xs text-slate-500">Unchanged</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <h2 class="font-semibold">Unallocated account credit</h2>
+            <p class="mt-2 text-lg font-semibold">{{ preview.currency }} {{ '{:,.2f}'.format(preview.account_credit_before) }} → {{ preview.currency }} {{ '{:,.2f}'.format(preview.account_credit_after) }}</p>
+            <p class="mt-1 text-xs text-slate-500">Payment-specific remainder: {{ preview.currency }} {{ '{:,.2f}'.format(preview.payment_unallocated_before) }} → {{ preview.currency }} {{ '{:,.2f}'.format(preview.payment_unallocated_after) }}</p>
+        </div>
+    </div>
+    <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <h2 class="font-semibold">Invoice {{ preview.invoice_number or preview.invoice_id }}</h2>
+        <p class="mt-2">Receivable: {{ preview.currency }} {{ '{:,.2f}'.format(preview.receivable_before) }} → {{ preview.currency }} {{ '{:,.2f}'.format(preview.receivable_after) }}</p>
+        <div class="mt-4 space-y-1 text-sm text-slate-600 dark:text-slate-300">
+            <p>Exact invoice ledger: {{ preview.invoice_ledger_entry_type.value }} / {{ preview.invoice_ledger_source.value }} / {{ preview.currency }} {{ '{:,.2f}'.format(preview.amount) }}</p>
+            <p>Exact account-credit ledger: {{ preview.account_credit_ledger_entry_type.value }} / {{ preview.account_credit_ledger_source.value }} / {{ preview.currency }} {{ '{:,.2f}'.format(preview.amount) }}</p>
+            <p>Access consequence: {{ preview.access_consequence | replace('_', ' ') | title }}</p>
+        </div>
+    </div>
+    <form method="post" action="/admin/billing/payments/{{ payment_id }}/allocation" class="flex justify-end gap-3">
+        {% include "components/forms/csrf_input.html" %}
+        <input type="hidden" name="invoice_id" value="{{ invoice_id }}">
+        <input type="hidden" name="amount" value="{{ amount }}">
+        <input type="hidden" name="preview_fingerprint" value="{{ preview.fingerprint }}">
+        <input type="hidden" name="idempotency_key" value="{{ idempotency_key }}">
+        <a href="/admin/billing/payments/{{ payment_id }}" class="inline-flex items-center rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium">Cancel</a>
+        <button type="submit" class="inline-flex items-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">Confirm Allocation</button>
+    </form>
+</div>
+{% endblock %}

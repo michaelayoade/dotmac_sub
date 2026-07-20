@@ -1,0 +1,293 @@
+"""Ticket SLA reporting helpers."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from typing import Any
+
+from sqlalchemy import case, func
+from sqlalchemy.orm import Session
+
+from app.models.service_team import ServiceTeam
+from app.models.support import Ticket
+from app.models.system_user import SystemUser
+from app.models.ticket_workflow import (
+    SlaBreach,
+    SlaBreachStatus,
+    SlaClock,
+    SlaClockStatus,
+    WorkflowEntityType,
+)
+
+
+def _as_aware_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _duration_minutes(started_at: datetime | None, ended_at: datetime | None) -> int:
+    start_value = _as_aware_utc(started_at)
+    if start_value is None:
+        return 0
+    end_value = _as_aware_utc(ended_at) or datetime.now(UTC)
+    return max(int((end_value - start_value).total_seconds() // 60), 0)
+
+
+def _duration_label(minutes: int) -> str:
+    if minutes <= 0:
+        return "0m"
+    hours, mins = divmod(minutes, 60)
+    days, hours = divmod(hours, 24)
+    parts: list[str] = []
+    if days:
+        parts.append(f"{days}d")
+    if hours:
+        parts.append(f"{hours}h")
+    if mins or not parts:
+        parts.append(f"{mins}m")
+    return " ".join(parts)
+
+
+def _ticket_clock_query(db: Session):
+    return (
+        db.query(SlaClock)
+        .join(Ticket, Ticket.id == SlaClock.entity_id)
+        .filter(SlaClock.entity_type == WorkflowEntityType.ticket.value)
+        .filter(Ticket.is_active.is_(True))
+    )
+
+
+def _apply_clock_window(query, start_at: datetime | None, end_at: datetime | None):
+    if start_at:
+        query = query.filter(SlaClock.started_at >= start_at)
+    if end_at:
+        query = query.filter(SlaClock.started_at <= end_at)
+    return query
+
+
+def _bucket_rows(rows, *, none_key: str = "unknown") -> list[dict[str, Any]]:
+    buckets: list[dict[str, Any]] = []
+    for key, total, breached in rows:
+        total_count = int(total or 0)
+        breached_count = int(breached or 0)
+        buckets.append(
+            {
+                "key": str(getattr(key, "value", key) or none_key),
+                "total": total_count,
+                "breached": breached_count,
+                "breach_rate": round(
+                    float(breached_count) / float(total_count) if total_count else 0.0,
+                    4,
+                ),
+            }
+        )
+    return buckets
+
+
+def _labeled_bucket_rows(
+    rows, *, none_key: str = "unknown", none_label: str = "Unassigned"
+) -> list[dict[str, Any]]:
+    buckets: list[dict[str, Any]] = []
+    for key, label, total, breached in rows:
+        total_count = int(total or 0)
+        breached_count = int(breached or 0)
+        bucket_key = str(getattr(key, "value", key) or none_key)
+        buckets.append(
+            {
+                "key": bucket_key,
+                "label": str(label or none_label),
+                "total": total_count,
+                "breached": breached_count,
+                "breach_rate": round(
+                    float(breached_count) / float(total_count) if total_count else 0.0,
+                    4,
+                ),
+            }
+        )
+    return buckets
+
+
+def summary(
+    db: Session, start_at: datetime | None = None, end_at: datetime | None = None
+) -> dict[str, Any]:
+    """Summarize ticket SLA clocks and breach rates."""
+    base = _apply_clock_window(_ticket_clock_query(db), start_at, end_at)
+    total_clocks = int(base.count())
+    total_breaches = int(
+        base.filter(
+            (SlaClock.status == SlaClockStatus.breached.value)
+            | SlaClock.breached_at.is_not(None)
+        ).count()
+    )
+    breach_rate = float(total_breaches) / float(total_clocks) if total_clocks else 0.0
+
+    breached_expr = case(
+        (
+            (SlaClock.status == SlaClockStatus.breached.value)
+            | SlaClock.breached_at.is_not(None),
+            1,
+        ),
+        else_=0,
+    )
+    by_status = (
+        base.with_entities(
+            SlaClock.status,
+            func.count(SlaClock.id),
+            func.sum(breached_expr),
+        )
+        .group_by(SlaClock.status)
+        .all()
+    )
+    by_team = (
+        base.outerjoin(ServiceTeam, ServiceTeam.id == Ticket.service_team_id)
+        .with_entities(
+            Ticket.service_team_id,
+            ServiceTeam.name,
+            func.count(SlaClock.id),
+            func.sum(breached_expr),
+        )
+        .group_by(Ticket.service_team_id, ServiceTeam.name)
+        .all()
+    )
+    by_assignee = (
+        base.outerjoin(SystemUser, SystemUser.id == Ticket.assigned_to_person_id)
+        .with_entities(
+            Ticket.assigned_to_person_id,
+            SystemUser.display_name,
+            func.count(SlaClock.id),
+            func.sum(breached_expr),
+        )
+        .group_by(Ticket.assigned_to_person_id, SystemUser.display_name)
+        .all()
+    )
+    return {
+        "total_clocks": total_clocks,
+        "total_breaches": total_breaches,
+        "breach_rate": round(breach_rate, 4),
+        "by_status": _bucket_rows(by_status),
+        "by_service_team": _labeled_bucket_rows(
+            by_team, none_key="unassigned_team", none_label="Unassigned Team"
+        ),
+        "by_assignee": _labeled_bucket_rows(
+            by_assignee, none_key="unassigned_person", none_label="Unassigned Person"
+        ),
+    }
+
+
+def trend_daily(
+    db: Session, start_at: datetime | None = None, end_at: datetime | None = None
+) -> list[dict[str, Any]]:
+    """Group ticket SLA clocks by start day."""
+    base = _apply_clock_window(_ticket_clock_query(db), start_at, end_at)
+    breached_expr = case(
+        (
+            (SlaClock.status == SlaClockStatus.breached.value)
+            | SlaClock.breached_at.is_not(None),
+            1,
+        ),
+        else_=0,
+    )
+    rows = (
+        base.with_entities(
+            func.date(SlaClock.started_at),
+            func.count(SlaClock.id),
+            func.sum(breached_expr),
+        )
+        .group_by(func.date(SlaClock.started_at))
+        .order_by(func.date(SlaClock.started_at).asc())
+        .all()
+    )
+    points: list[dict[str, Any]] = []
+    for day_value, total, breached in rows:
+        total_count = int(total or 0)
+        breached_count = int(breached or 0)
+        points.append(
+            {
+                "date": str(day_value),
+                "total": total_count,
+                "breached": breached_count,
+                "breach_rate": round(
+                    float(breached_count) / float(total_count) if total_count else 0.0,
+                    4,
+                ),
+            }
+        )
+    return points
+
+
+def violation_records(
+    db: Session,
+    *,
+    start_at: datetime | None = None,
+    end_at: datetime | None = None,
+    open_only: bool = False,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    """List ticket SLA breach records for operational cleanup."""
+    query = (
+        db.query(SlaBreach, SlaClock, Ticket, ServiceTeam, SystemUser)
+        .join(SlaClock, SlaClock.id == SlaBreach.clock_id)
+        .join(Ticket, Ticket.id == SlaClock.entity_id)
+        .outerjoin(ServiceTeam, ServiceTeam.id == Ticket.service_team_id)
+        .outerjoin(SystemUser, SystemUser.id == Ticket.assigned_to_person_id)
+        .filter(SlaClock.entity_type == WorkflowEntityType.ticket.value)
+        .filter(Ticket.is_active.is_(True))
+    )
+    if start_at:
+        query = query.filter(SlaBreach.breached_at >= start_at)
+    if end_at:
+        query = query.filter(SlaBreach.breached_at <= end_at)
+    if open_only:
+        query = query.filter(SlaBreach.status != SlaBreachStatus.resolved.value)
+
+    rows = (
+        query.order_by(SlaBreach.breached_at.desc(), SlaBreach.created_at.desc())
+        .limit(max(int(limit), 0))
+        .all()
+    )
+    records: list[dict[str, Any]] = []
+    for breach, clock, ticket, team, assignee in rows:
+        ended_at = (
+            clock.completed_at
+            if breach.status == SlaBreachStatus.resolved.value
+            else None
+        )
+        minutes = _duration_minutes(breach.breached_at, ended_at)
+        reference = ticket.number or str(ticket.id)
+        assignee_name = (
+            assignee.display_name
+            or " ".join(
+                part for part in [assignee.first_name, assignee.last_name] if part
+            ).strip()
+            if assignee
+            else ""
+        )
+        records.append(
+            {
+                "ticket_id": str(ticket.id),
+                "ticket_reference": reference,
+                "ticket_url": f"/admin/support/tickets/{reference}",
+                "title": ticket.title,
+                "status": ticket.status,
+                "priority": ticket.priority,
+                "region": ticket.region or "Unassigned",
+                "service_team_id": str(ticket.service_team_id)
+                if ticket.service_team_id
+                else None,
+                "service_team": team.name if team else "Unassigned",
+                "assignee_person_id": str(ticket.assigned_to_person_id)
+                if ticket.assigned_to_person_id
+                else None,
+                "assignee": assignee_name or "Unassigned",
+                "sla_status": breach.status,
+                "started_at": clock.started_at,
+                "due_at": clock.due_at,
+                "breached_at": breach.breached_at,
+                "breach_minutes": minutes,
+                "breach_duration": _duration_label(minutes),
+            }
+        )
+    return records

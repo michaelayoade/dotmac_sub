@@ -3,51 +3,61 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import logging
 import re
+import secrets
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import cast
 from uuid import UUID
 
+from fastapi import HTTPException
 from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
-from app.models.billing import Payment, PaymentMethod, PaymentMethodType, PaymentStatus
+from app.models.billing import (
+    Invoice,
+    InvoiceStatus,
+    Payment,
+    PaymentMethod,
+    PaymentMethodType,
+    PaymentSettlementOrigin,
+    PaymentStatus,
+)
 from app.models.domain_settings import SettingDomain
-from app.models.idempotency import IdempotencyKey
 from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
-from app.schemas.billing import PaymentCreate, PaymentMethodCreate, PaymentUpdate
+from app.schemas.billing import (
+    BillingAccountPaymentRefundRequest,
+    BillingAccountPaymentReversalRequest,
+    PaymentAllocationConfirm,
+    PaymentAllocationPreviewRequest,
+    PaymentCreate,
+    PaymentCreationConfirm,
+    PaymentCreationPreviewRequest,
+    PaymentMethodCreate,
+    PaymentRefundPreviewRequest,
+    PaymentRefundRequest,
+    PaymentReversalPreviewRequest,
+    PaymentReversalRequest,
+    PaymentUpdate,
+)
 from app.services import audit as audit_service
 from app.services import billing as billing_service
-from app.services import settings_spec
+from app.services import display_format, settings_spec
 from app.services import subscriber as subscriber_service
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services.audit_helpers import build_changes_metadata, log_audit_event
+from app.services.list_query import (
+    ListDefinition,
+    ListFieldDefinition,
+    ListQuery,
+)
+from app.services.status_presentation import payment_status_presentation
 
 logger = logging.getLogger(__name__)
-MANUAL_PAYMENT_IDEMPOTENCY_SCOPE = "admin_manual_payment"
 _IDEMPOTENCY_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{8,120}$")
-
-
-def _currency_code(value: object | None) -> str:
-    code = str(value or "NGN").strip().upper()
-    return code or "NGN"
-
-
-def _format_currency_amount(amount: object, currency: object | None) -> str:
-    return f"{_currency_code(currency)} {Decimal(str(amount or 0)):,.2f}"
-
-
-def _format_currency_groups(amounts: dict[str, Decimal]) -> str:
-    if not amounts:
-        return _format_currency_amount(0, "NGN")
-    return ", ".join(
-        _format_currency_amount(amounts[currency], currency)
-        for currency in sorted(amounts)
-    )
 
 
 IMPORT_HANDLERS: dict[str, dict[str, tuple[str, ...]]] = {
@@ -198,9 +208,52 @@ def build_payment_detail_data(
     payment = billing_service.payments.get(db=db, payment_id=payment_id)
     if not payment:
         return None
+    allocation_available = billing_service.payment_allocations.available_amount(
+        db, payment_id
+    )
+    allocation_invoices: list[Invoice] = []
+    if payment.account_id is not None and allocation_available > Decimal("0.00"):
+        allocated_invoice_ids = {
+            allocation.invoice_id for allocation in payment.allocations
+        }
+        allocation_invoices = (
+            db.query(Invoice)
+            .filter(Invoice.account_id == payment.account_id)
+            .filter(Invoice.currency == payment.currency)
+            .filter(Invoice.is_active.is_(True))
+            .filter(
+                Invoice.status.in_(
+                    [
+                        InvoiceStatus.issued,
+                        InvoiceStatus.partially_paid,
+                        InvoiceStatus.overdue,
+                    ]
+                )
+            )
+            .filter(Invoice.balance_due > Decimal("0.00"))
+            .filter(Invoice.id.notin_(allocated_invoice_ids))
+            .order_by(Invoice.due_at.asc().nulls_last(), Invoice.created_at.asc())
+            .all()
+        )
+    refund_capability = (
+        billing_service.consolidated_payment_refunds.capability(db, payment_id)
+        if payment.billing_account_id is not None
+        else billing_service.refunds.capability(db, payment_id)
+    )
+    reversal_capability = (
+        billing_service.consolidated_payment_reversals.capability(db, payment_id)
+        if payment.billing_account_id is not None
+        else billing_service.reversals.capability(db, payment_id)
+    )
     return {
         "payment": payment,
+        "payment_status_presentation": payment_status_presentation(payment.status),
         "primary_invoice_id": payment_primary_invoice_id(payment),
+        "edit_capability": billing_service.payments.edit_capability(db, payment_id),
+        "refund_capability": refund_capability,
+        "reversal_capability": reversal_capability,
+        "allocation_invoices": allocation_invoices,
+        "allocation_available": allocation_available,
         "active_page": "payments",
         "active_menu": "billing",
     }
@@ -220,6 +273,9 @@ def build_payment_edit_data(
     payment = billing_service.payments.get(db=db, payment_id=payment_id)
     if not payment:
         return None
+    edit_capability = billing_service.payments.edit_capability(db, payment_id)
+    if not edit_capability.allowed:
+        raise HTTPException(status_code=409, detail=edit_capability.reason)
     selected_account = payment.account
     primary_inv_id = payment_primary_invoice_id(payment)
     if not selected_account and payment.account_id:
@@ -278,77 +334,14 @@ def build_create_payload(
     )
 
 
-def _manual_payment_idempotency_key(token: str | None) -> str | None:
-    key = (token or "").strip()
-    if not key:
-        return None
-    if not _IDEMPOTENCY_TOKEN_RE.fullmatch(key):
+def _owner_payment_idempotency_key(token: str | None) -> str:
+    raw = (token or "").strip()
+    if not raw:
+        return f"admin-payment-{secrets.token_urlsafe(24)}"
+    if not _IDEMPOTENCY_TOKEN_RE.fullmatch(raw):
         raise ValueError("Invalid payment submission token")
-    return key
-
-
-def _reserve_manual_payment_key(
-    db: Session, *, key: str | None, account_id: UUID
-) -> tuple[IdempotencyKey | None, Payment | None]:
-    key = _manual_payment_idempotency_key(key)
-    if key is None:
-        return None, None
-
-    prior = db.scalars(
-        select(IdempotencyKey).where(
-            IdempotencyKey.scope == MANUAL_PAYMENT_IDEMPOTENCY_SCOPE,
-            IdempotencyKey.key == key,
-        )
-    ).first()
-    if prior is not None:
-        if str(prior.account_id) != str(account_id):
-            raise ValueError("Payment submission token has already been used")
-        if prior.ref_id:
-            payment = billing_service.payments.get(db=db, payment_id=prior.ref_id)
-            return None, payment
-        raise ValueError("This payment is already being recorded. Please refresh.")
-
-    reservation = IdempotencyKey(
-        scope=MANUAL_PAYMENT_IDEMPOTENCY_SCOPE,
-        key=key,
-        account_id=account_id,
-        ref_id=None,
-    )
-    db.add(reservation)
-    try:
-        db.commit()
-    except IntegrityError as exc:
-        db.rollback()
-        prior = db.scalars(
-            select(IdempotencyKey).where(
-                IdempotencyKey.scope == MANUAL_PAYMENT_IDEMPOTENCY_SCOPE,
-                IdempotencyKey.key == key,
-            )
-        ).first()
-        if prior and str(prior.account_id) == str(account_id) and prior.ref_id:
-            payment = billing_service.payments.get(db=db, payment_id=prior.ref_id)
-            return None, payment
-        raise ValueError(
-            "This payment is already being recorded. Please refresh."
-        ) from exc
-    return reservation, None
-
-
-def _release_manual_payment_key(
-    db: Session, reservation: IdempotencyKey | None
-) -> None:
-    if reservation is not None:
-        db.delete(reservation)
-        db.commit()
-
-
-def _commit_manual_payment_key(
-    db: Session, reservation: IdempotencyKey | None, payment_id: object
-) -> None:
-    if reservation is not None:
-        reservation.ref_id = str(payment_id)
-        db.add(reservation)
-        db.commit()
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return f"admin-payment-{digest}"
 
 
 def build_update_payload(
@@ -367,13 +360,19 @@ def build_update_payload(
     always submits the locked account, so including it here made every payment
     edit fail with a 400. The account is resolved/validated by the caller.
     """
-    return PaymentUpdate(
-        payment_method_id=payment_method_id,
-        amount=amount,
-        currency=currency.strip().upper(),
-        status=PaymentStatus(status) if status else PaymentStatus.pending,
-        memo=memo.strip() if memo else None,
-    )
+    owner_evidence_statuses = {"refunded", "partially_refunded", "reversed"}
+    if status in owner_evidence_statuses:
+        return PaymentUpdate(memo=memo.strip() if memo else None)
+    data: dict[str, object] = {
+        "payment_method_id": payment_method_id,
+        "amount": amount,
+        "currency": currency.strip().upper(),
+        "memo": memo.strip() if memo else None,
+    }
+    # Evidence-backed terminal/partial outcomes are owner projections. The
+    # generic edit adapter must neither set nor resend those statuses.
+    data["status"] = PaymentStatus(status) if status else PaymentStatus.pending
+    return PaymentUpdate(**data)
 
 
 def update_invoice_allocation_if_changed(
@@ -383,25 +382,23 @@ def update_invoice_allocation_if_changed(
     current_invoice_id: str | None,
     requested_invoice_id: str | None,
 ) -> bool:
-    """Replace allocations when requested invoice differs from current."""
+    """Ask the payment owner to move this payment to a different invoice.
+
+    This used to hard-delete the allocations and write a new one for the full
+    payment amount, with no ledger entry, no cap against the target's balance,
+    and no recalculation of either invoice — so the released invoice kept
+    reading ``paid`` with no money behind it while the ledger still credited it.
+    Allocation, ledger credit and both invoices' totals must move together, and
+    only ``Payments.reallocate`` does that.
+    """
     invoice_changed = bool(
         requested_invoice_id and requested_invoice_id != current_invoice_id
     )
     if not invoice_changed:
         return False
-    for alloc in list(payment_obj.allocations):
-        db.delete(alloc)
-    db.flush()
-    from app.models.billing import PaymentAllocation
-
-    db.add(
-        PaymentAllocation(
-            payment_id=payment_obj.id,
-            invoice_id=UUID(requested_invoice_id),
-            amount=payment_obj.amount,
-        )
+    billing_service.payments.reallocate(
+        db, str(payment_obj.id), str(requested_invoice_id)
     )
-    db.commit()
     db.refresh(payment_obj)
     return True
 
@@ -541,6 +538,67 @@ def import_payments(
     return imported_count, errors
 
 
+# UI page contract for the admin payments list. The projection-boundary owner:
+# it declares which fields are searchable/filterable/sortable, the default order
+# and the allowed page sizes. The route validates and normalises request state
+# through this contract; build_payments_list_data remains the read owner that
+# issues the SQL. Only created_at is sortable because that is the ordering the
+# read owner supports today.
+PAYMENTS_LIST_DEFINITION = ListDefinition(
+    key="payments",
+    fields=(
+        ListFieldDefinition("reference", "Reference", searchable=True),
+        ListFieldDefinition("customer_ref", "Customer", filterable=True),
+        ListFieldDefinition("partner_id", "Partner", filterable=True),
+        ListFieldDefinition("status", "Status", filterable=True),
+        ListFieldDefinition("method", "Method", filterable=True),
+        ListFieldDefinition("date_range", "Date range", filterable=True),
+        ListFieldDefinition("unallocated_only", "Unallocated only", filterable=True),
+        ListFieldDefinition("created_at", "Created", sortable=True),
+    ),
+    default_sort="created_at",
+    default_sort_dir="desc",
+    default_per_page=25,
+)
+
+
+def build_payments_list_query(
+    *,
+    customer_ref: str | None = None,
+    partner_id: str | None = None,
+    status: str | None = None,
+    method: str | None = None,
+    search: str | None = None,
+    date_range: str | None = None,
+    unallocated_only: bool = False,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
+    page: int = 1,
+    per_page: int | None = None,
+) -> ListQuery:
+    """Normalise loose payments-list request params through the page contract.
+
+    Drops blank filters and rejects unsupported sort fields / page sizes, so the
+    read owner receives an already-validated query. ``unallocated_only`` is
+    carried as a filter value so it round-trips through the contract.
+    """
+    return PAYMENTS_LIST_DEFINITION.build_query(
+        search=search,
+        filters={
+            "customer_ref": customer_ref,
+            "partner_id": partner_id,
+            "status": status,
+            "method": method,
+            "date_range": date_range,
+            "unallocated_only": "true" if unallocated_only else None,
+        },
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        page=page,
+        per_page=per_page,
+    )
+
+
 def build_payments_list_data(
     db: Session,
     *,
@@ -553,11 +611,26 @@ def build_payments_list_data(
     search: str | None = None,
     date_range: str | None = None,
     unallocated_only: bool = False,
+    sort_dir: str = "desc",
 ) -> dict[str, object]:
-    """Build list/stat data for payments page."""
+    """Build list/stat data for payments page.
+
+    Read owner for the payments list. ``sort_dir`` orders the (contract-only
+    sortable) ``created_at`` column; the route supplies it from the validated
+    ListQuery. Other filters keep their existing semantics.
+    """
+
+    default_currency = display_format.default_currency(db)
 
     def _empty_status_total() -> dict[str, object]:
-        return {"count": 0, "amount": 0.0, "amounts": {}, "display": "NGN 0.00"}
+        return {
+            "count": 0,
+            "amount": 0.0,
+            "amounts": {},
+            "display": display_format.format_currency_groups(
+                {}, empty_currency=default_currency
+            ),
+        }
 
     def _build_status_totals(filtered_subquery) -> dict[str, dict[str, object]]:  # type: ignore[no-untyped-def]
         summary: dict[str, dict[str, object]] = {
@@ -587,7 +660,7 @@ def build_payments_list_data(
             )
             if key not in summary:
                 summary[key] = _empty_status_total()
-            currency = _currency_code(currency_value)
+            currency = display_format.currency_code(currency_value)
             amount = Decimal(str(amount_value or 0))
             amounts = cast(dict[str, Decimal], summary[key]["amounts"])
             amounts[currency] = amounts.get(currency, Decimal("0")) + amount
@@ -596,8 +669,9 @@ def build_payments_list_data(
                 Decimal(str(summary[key]["amount"])) + amount
             )
         for item in summary.values():
-            item["display"] = _format_currency_groups(
-                cast(dict[str, Decimal], item["amounts"])
+            item["display"] = display_format.format_currency_groups(
+                cast(dict[str, Decimal], item["amounts"]),
+                empty_currency=default_currency,
             )
         all_amounts: dict[str, Decimal] = {}
         for item in summary.values():
@@ -607,7 +681,10 @@ def build_payments_list_data(
             "count": sum(int(item["count"]) for item in summary.values()),
             "amount": sum(float(item["amount"]) for item in summary.values()),
             "amounts": all_amounts,
-            "display": _format_currency_groups(all_amounts),
+            "display": display_format.format_currency_groups(
+                all_amounts,
+                empty_currency=default_currency,
+            ),
         }
         return summary
 
@@ -735,9 +812,12 @@ def build_payments_list_data(
         total = db.scalar(select(func.count()).select_from(filtered_subquery)) or 0
         status_totals = _build_status_totals(filtered_subquery)
 
+        created_order = (
+            Payment.created_at.asc() if sort_dir == "asc" else Payment.created_at.desc()
+        )
         base_stmt = _apply_payment_filters(
             select(Payment).options(joinedload(Payment.account))
-        ).order_by(Payment.created_at.desc())
+        ).order_by(created_order)
         payments = list(db.scalars(base_stmt.offset(offset).limit(per_page)).all())
         for payment in payments:
             _enrich_payment_row(payment)
@@ -770,6 +850,17 @@ def build_payments_list_data(
 
     return {
         "payments": payments,
+        "payment_status_presentations": {
+            str(payment.id): payment_status_presentation(payment.status)
+            for payment in payments
+        },
+        "payment_status_options": [
+            {
+                "value": payment_status.value,
+                "label": payment_status_presentation(payment_status).label,
+            }
+            for payment_status in PaymentStatus
+        ],
         "page": page,
         "per_page": per_page,
         "total": total,
@@ -817,7 +908,7 @@ def render_payments_csv(payments: list[Payment]) -> str:
                 getattr(payment, "display_number", None) or "",
                 str(payment.account_id) if payment.account_id else "",
                 f"{Decimal(str(payment.amount or 0)):.2f}",
-                payment.currency or "NGN",
+                display_format.currency_code(payment.currency),
                 payment.status.value
                 if hasattr(payment.status, "value")
                 else str(payment.status or ""),
@@ -831,8 +922,7 @@ def render_payments_csv(payments: list[Payment]) -> str:
 
 
 def resolve_default_currency(db: Session) -> str:
-    value = settings_spec.resolve_value(db, SettingDomain.billing, "default_currency")
-    return str(value) if value else "NGN"
+    return display_format.default_currency(db)
 
 
 def build_import_result_payload(
@@ -873,7 +963,7 @@ def process_payment_import_payload(
             amount = Decimal(str(row.get("amount", 0) or 0))
         except (TypeError, ValueError, InvalidOperation):
             continue
-        currency = _currency_code(row.get("currency") or default_currency)
+        currency = display_format.currency_code(row.get("currency") or default_currency)
         total_amount += amount
         currency_totals[currency] = currency_totals.get(currency, Decimal("0")) + amount
 
@@ -986,10 +1076,14 @@ def list_payment_import_history_filtered(
         currency_totals: dict[str, Decimal] = {}
         if isinstance(raw_currency_totals, dict):
             for currency, amount in raw_currency_totals.items():
-                currency_totals[_currency_code(currency)] = Decimal(str(amount or 0))
+                currency_totals[display_format.currency_code(currency)] = Decimal(
+                    str(amount or 0)
+                )
         if not currency_totals:
             currency_totals[
-                _currency_code(metadata.get("currency") or default_currency)
+                display_format.currency_code(
+                    metadata.get("currency") or default_currency
+                )
             ] = total_amount
         rows.append(
             {
@@ -1004,7 +1098,10 @@ def list_payment_import_history_filtered(
                 "unmatched_count": errors,
                 "total_amount": float(total_amount),
                 "currency_totals": currency_totals,
-                "total_display": _format_currency_groups(currency_totals),
+                "total_display": display_format.format_currency_groups(
+                    currency_totals,
+                    empty_currency=default_currency,
+                ),
             }
         )
     return rows
@@ -1052,7 +1149,7 @@ ACC-002,25000,NGN,TRF-002,2024-01-16
 """
 
 
-def process_payment_create(
+def _prepare_payment_create(
     db: Session,
     *,
     account_id: str | None,
@@ -1063,9 +1160,8 @@ def process_payment_create(
     collection_account_id: str | None,
     payment_method_id: str | None,
     memo: str | None,
-    idempotency_token: str | None = None,
 ) -> dict[str, object]:
-    """Validate inputs, create a payment, and return result dict."""
+    """Resolve adapter inputs into the canonical payment owner request."""
     from app.services import web_billing_payment_forms as forms_svc
 
     resolved_invoice = forms_svc.resolve_invoice(db, invoice_id)
@@ -1099,36 +1195,116 @@ def process_payment_create(
         memo=memo,
         invoice_id=invoice_id,
     )
-    reservation, replayed_payment = _reserve_manual_payment_key(
-        db, key=idempotency_token, account_id=parsed_account_id
-    )
-    if replayed_payment is not None:
-        return {
-            "payment": replayed_payment,
-            "resolved_invoice": resolved_invoice,
-            "balance_value": balance_value,
-            "balance_display": balance_display,
-            "idempotent_replay": True,
-            "audit_metadata": {
-                "amount": str(replayed_payment.amount),
-                "invoice_id": payment_primary_invoice_id(replayed_payment),
-            },
-        }
-    try:
-        payment = billing_service.payments.create(db, payload)
-    except Exception:
-        _release_manual_payment_key(db, reservation)
-        raise
-    _commit_manual_payment_key(db, reservation, payment.id)
     return {
-        "payment": payment,
+        "payload": payload,
         "resolved_invoice": resolved_invoice,
         "balance_value": balance_value,
         "balance_display": balance_display,
-        "audit_metadata": {
-            "amount": str(payment.amount),
-            "invoice_id": payment_primary_invoice_id(payment),
-        },
+    }
+
+
+def preview_payment_create(
+    db: Session,
+    *,
+    account_id: str | None,
+    amount: str,
+    currency: str,
+    status: str | None,
+    invoice_id: str | None,
+    collection_account_id: str | None,
+    payment_method_id: str | None,
+    memo: str | None,
+) -> dict[str, object]:
+    prepared = _prepare_payment_create(
+        db,
+        account_id=account_id,
+        amount=amount,
+        currency=currency,
+        status=status,
+        invoice_id=invoice_id,
+        collection_account_id=collection_account_id,
+        payment_method_id=payment_method_id,
+        memo=memo,
+    )
+    payload = cast(PaymentCreate, prepared["payload"])
+    preview = billing_service.payments.preview_creation(
+        db,
+        PaymentCreationPreviewRequest(
+            **payload.model_dump(),
+            auto_allocate=True,
+        ),
+    )
+    return {
+        **prepared,
+        "preview": preview,
+    }
+
+
+def process_payment_create(
+    db: Session,
+    *,
+    account_id: str | None,
+    amount: str,
+    currency: str,
+    status: str | None,
+    invoice_id: str | None,
+    collection_account_id: str | None,
+    payment_method_id: str | None,
+    memo: str | None,
+    idempotency_token: str | None = None,
+    preview_fingerprint: str | None = None,
+) -> dict[str, object]:
+    """Confirm a reviewed payment preview through the canonical owner."""
+    prepared = _prepare_payment_create(
+        db,
+        account_id=account_id,
+        amount=amount,
+        currency=currency,
+        status=status,
+        invoice_id=invoice_id,
+        collection_account_id=collection_account_id,
+        payment_method_id=payment_method_id,
+        memo=memo,
+    )
+    payload = cast(PaymentCreate, prepared["payload"])
+    owner_key = _owner_payment_idempotency_key(idempotency_token)
+    result = None
+    if preview_fingerprint is None:
+        replay = billing_service.payments.replay_creation_request(
+            db,
+            payload,
+            auto_allocate=True,
+            idempotency_key=owner_key,
+        )
+        if replay is not None:
+            result = replay
+        else:
+            preview = billing_service.payments.preview_creation(
+                db,
+                PaymentCreationPreviewRequest(
+                    **payload.model_dump(),
+                    auto_allocate=True,
+                ),
+            )
+            preview_fingerprint = preview.fingerprint
+    if preview_fingerprint is not None and result is None:
+        result = billing_service.payments.confirm_creation(
+            db,
+            PaymentCreationConfirm(
+                **payload.model_dump(),
+                auto_allocate=True,
+                preview_fingerprint=preview_fingerprint,
+                idempotency_key=owner_key,
+            ),
+        )
+    assert result is not None
+    return {
+        "payment": result.payment,
+        "resolved_invoice": prepared["resolved_invoice"],
+        "balance_value": prepared["balance_value"],
+        "balance_display": prepared["balance_display"],
+        "idempotent_replay": result.idempotent_replay,
+        "audit_metadata": result.audit_metadata(),
     }
 
 
@@ -1152,6 +1328,7 @@ def process_payment_create_with_audit(
     payment_method_id: str | None,
     memo: str | None,
     idempotency_token: str | None = None,
+    preview_fingerprint: str | None = None,
 ) -> dict[str, object]:
     result = process_payment_create(
         db,
@@ -1164,6 +1341,7 @@ def process_payment_create_with_audit(
         payment_method_id=payment_method_id,
         memo=memo,
         idempotency_token=idempotency_token,
+        preview_fingerprint=preview_fingerprint,
     )
     payment = cast(Payment, result["payment"])
     if not result.get("idempotent_replay"):
@@ -1276,22 +1454,164 @@ def process_payment_update_with_audit(
     return result
 
 
-def process_payment_refund_with_audit(db: Session, request, *, payment_id: str) -> None:
-    """Mark a succeeded payment as refunded and recompute the linked invoice(s).
+def preview_payment_refund(
+    db: Session,
+    *,
+    payment_id: str,
+    amount: str | None,
+    reason: str | None,
+) -> dict[str, object]:
+    """Build the owner-authored financial and access consequence preview."""
+    try:
+        parsed_amount = Decimal(amount) if amount and amount.strip() else None
+    except InvalidOperation as exc:
+        raise HTTPException(status_code=400, detail="Invalid refund amount") from exc
+    normalized_reason = reason.strip() if reason and reason.strip() else None
+    request = PaymentRefundPreviewRequest(
+        amount=parsed_amount,
+        reason=normalized_reason,
+    )
+    payment = billing_service.payments.get(db, payment_id)
+    preview = (
+        billing_service.consolidated_payment_refunds.preview(db, payment_id, request)
+        if payment.billing_account_id is not None
+        else billing_service.refunds.preview(db, payment_id, request)
+    )
+    return {
+        "preview": preview,
+        "reason": normalized_reason,
+        "idempotency_key": secrets.token_urlsafe(24),
+    }
 
-    Powers the one-click Refund button. mark_status recomputes the allocated
-    invoices, so the invoice reverts from paid to issued/overdue automatically.
-    """
-    from fastapi import HTTPException
 
-    payment = billing_service.payments.get(db=db, payment_id=payment_id)
-    if not payment:
-        raise HTTPException(status_code=404, detail="Payment not found")
-    if payment.status != PaymentStatus.succeeded:
+def preview_payment_allocation(
+    db: Session,
+    *,
+    payment_id: str,
+    invoice_id: str,
+    amount: str,
+) -> dict[str, object]:
+    """Build the exact account-credit-to-receivable transfer preview."""
+    try:
+        parsed_amount = Decimal(amount)
+    except InvalidOperation as exc:
         raise HTTPException(
-            status_code=400, detail="Only succeeded payments can be refunded"
+            status_code=400, detail="Invalid allocation amount"
+        ) from exc
+    request = PaymentAllocationPreviewRequest(
+        payment_id=UUID(payment_id),
+        invoice_id=UUID(invoice_id),
+        amount=parsed_amount,
+    )
+    preview = billing_service.payment_allocations.preview(db, request)
+    return {
+        "preview": preview,
+        "idempotency_key": secrets.token_urlsafe(24),
+    }
+
+
+def process_payment_allocation_with_audit(
+    db: Session,
+    request,
+    *,
+    payment_id: str,
+    invoice_id: str,
+    amount: str,
+    preview_fingerprint: str,
+    idempotency_key: str,
+):
+    """Confirm a reviewed allocation transfer through its owner."""
+    result = billing_service.payment_allocations.confirm(
+        db,
+        PaymentAllocationConfirm(
+            payment_id=UUID(payment_id),
+            invoice_id=UUID(invoice_id),
+            amount=Decimal(amount),
+            preview_fingerprint=preview_fingerprint,
+            idempotency_key=idempotency_key,
+        ),
+    )
+    if not result.idempotent_replay:
+        log_audit_event(
+            db=db,
+            request=request,
+            action="allocate",
+            entity_type="payment",
+            entity_id=payment_id,
+            actor_id=_actor_id(request),
+            metadata=result.audit_metadata(),
         )
-    billing_service.payments.mark_status(db, payment_id, PaymentStatus.refunded)
+    return result
+
+
+def preview_payment_settlement(db: Session, *, payment_id: str) -> dict[str, object]:
+    """Build the owner-authored pending-to-settled consequence preview."""
+    preview = billing_service.payments.preview_settlement(db, payment_id)
+    return {
+        "preview": preview,
+        "idempotency_key": secrets.token_urlsafe(24),
+    }
+
+
+def process_payment_settlement_with_audit(
+    db: Session,
+    request,
+    *,
+    payment_id: str,
+    preview_fingerprint: str,
+    idempotency_key: str,
+):
+    """Confirm reviewed settlement through the canonical payment owner."""
+    result = billing_service.payments.settle(
+        db,
+        payment_id,
+        preview_fingerprint=preview_fingerprint,
+        idempotency_key=idempotency_key,
+        origin=PaymentSettlementOrigin.manual,
+    )
+    if not result.idempotent_replay:
+        log_audit_event(
+            db=db,
+            request=request,
+            action="settle",
+            entity_type="payment",
+            entity_id=payment_id,
+            actor_id=_actor_id(request),
+            metadata=result.audit_metadata(),
+        )
+    return result
+
+
+def process_payment_refund_with_audit(
+    db: Session,
+    request,
+    *,
+    payment_id: str,
+    amount: str,
+    reason: str | None,
+    preview_fingerprint: str,
+    idempotency_key: str,
+):
+    """Confirm a previewed completed refund through the canonical owner."""
+    payment = billing_service.payments.get(db, payment_id)
+    payload_values = {
+        "amount": Decimal(amount),
+        "reason": reason.strip() if reason and reason.strip() else None,
+        "preview_fingerprint": preview_fingerprint,
+        "idempotency_key": idempotency_key,
+    }
+    result = (
+        billing_service.consolidated_payment_refunds.confirm(
+            db,
+            payment_id,
+            BillingAccountPaymentRefundRequest(**payload_values),
+            actor_id=_actor_id(request),
+        )
+        if payment.billing_account_id is not None
+        else billing_service.refunds.process_with_evidence(
+            db, payment_id, PaymentRefundRequest(**payload_values)
+        )
+    )
     log_audit_event(
         db=db,
         request=request,
@@ -1299,7 +1619,70 @@ def process_payment_refund_with_audit(db: Session, request, *, payment_id: str) 
         entity_type="payment",
         entity_id=payment_id,
         actor_id=_actor_id(request),
+        metadata=result.audit_metadata(),
     )
+    return result
+
+
+def preview_payment_reversal(
+    db: Session,
+    *,
+    payment_id: str,
+    reason: str,
+) -> dict[str, object]:
+    """Build the owner-authored chargeback/bank-reversal preview."""
+    request = PaymentReversalPreviewRequest(reason=reason.strip())
+    payment = billing_service.payments.get(db, payment_id)
+    preview = (
+        billing_service.consolidated_payment_reversals.preview(db, payment_id, request)
+        if payment.billing_account_id is not None
+        else billing_service.reversals.preview(db, payment_id, request)
+    )
+    return {
+        "preview": preview,
+        "reason": request.reason,
+        "idempotency_key": secrets.token_urlsafe(24),
+    }
+
+
+def process_payment_reversal_with_audit(
+    db: Session,
+    request,
+    *,
+    payment_id: str,
+    reason: str,
+    preview_fingerprint: str,
+    idempotency_key: str,
+):
+    """Confirm a previewed payment reversal through its canonical owner."""
+    payment = billing_service.payments.get(db, payment_id)
+    payload_values = {
+        "reason": reason.strip(),
+        "preview_fingerprint": preview_fingerprint,
+        "idempotency_key": idempotency_key,
+    }
+    result = (
+        billing_service.consolidated_payment_reversals.confirm(
+            db,
+            payment_id,
+            BillingAccountPaymentReversalRequest(**payload_values),
+            actor_id=_actor_id(request),
+        )
+        if payment.billing_account_id is not None
+        else billing_service.reversals.process_with_evidence(
+            db, payment_id, PaymentReversalRequest(**payload_values)
+        )
+    )
+    log_audit_event(
+        db=db,
+        request=request,
+        action="reverse",
+        entity_type="payment",
+        entity_id=payment_id,
+        actor_id=_actor_id(request),
+        metadata=result.audit_metadata(),
+    )
+    return result
 
 
 def process_payment_import_payload_with_audit(

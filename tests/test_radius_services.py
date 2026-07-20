@@ -145,6 +145,23 @@ def test_external_password_row_uses_cleartext_password_for_plain_prefixed_secret
     assert row[2] == "secret123"
 
 
+def test_external_password_row_strips_cleartext_marker():
+    credential = AccessCredential(
+        subscriber_id="00000000-0000-0000-0000-000000000001",
+        username="10005031",
+        secret_hash="cleartext:secret123",
+        is_active=True,
+    )
+
+    row = radius_service._external_password_row(
+        credential,
+        default_attribute="Cleartext-Password",
+        default_op=":=",
+    )
+
+    assert row == ("Cleartext-Password", ":=", "secret123")
+
+
 def test_external_password_row_keeps_crypt_password_for_legacy_sha512_crypt():
     credential = AccessCredential(
         subscriber_id="00000000-0000-0000-0000-000000000001",
@@ -415,11 +432,9 @@ def test_delete_radius_client(db_session, radius_server):
     assert client.is_active is False
 
 
-@patch("app.services.radius._active_external_sync_configs", return_value=[])
-@patch("app.services.radius.sync_credential_to_radius", return_value=False)
+@patch("app.services.radius.active_external_radius_targets", return_value=[])
 def test_reconcile_subscription_connectivity_creates_internal_radius_state(
-    _sync_credential_to_radius,
-    _active_external_sync_configs,
+    _active_external_radius_targets,
     db_session,
     subscriber,
     catalog_offer,
@@ -818,273 +833,142 @@ def _read_radreply(db_path):
         conn.close()
 
 
-class TestBlockUnblockExternalRadiusCredentials:
-    """Group-based blocking writes one Auth-Type:=Reject row in radcheck
-    while leaving password/reply/group rows intact. Unblock deletes just
-    that row."""
-
-    def _seed(self, db_session, tmp_path, subscriber):
-        cred = AccessCredential(
-            subscriber_id=subscriber.id,
-            username="100099999",
-            secret_hash="plain:hunter2",
-            is_active=True,
+def test_external_nas_lifecycle_helpers_do_not_read_or_return_secrets(
+    db_session, tmp_path, monkeypatch
+):
+    db_path = tmp_path / "radius-nas-lifecycle.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "CREATE TABLE nas (nasname TEXT, shortname TEXT, type TEXT, "
+            "secret TEXT, description TEXT)"
         )
-        db_session.add(cred)
-        db_session.commit()
-
-        radius_db = tmp_path / "external.db"
-        _write_full_radius_sqlite(
-            radius_db,
-            radcheck=[("100099999", "Cleartext-Password", ":=", "hunter2")],
-            radreply=[("100099999", "Framed-IP-Address", ":=", "10.0.0.5")],
+        conn.executemany(
+            "INSERT INTO nas (nasname, secret) VALUES (?, ?)",
+            [("10.0.0.1", "secret-one"), ("10.0.0.2", "secret-two")],
         )
-        return cred, radius_db
+        conn.commit()
+    finally:
+        conn.close()
+    config = _fake_external_config(db_path)
+    monkeypatch.setattr(
+        radius_service, "_active_external_sync_configs", lambda _db: [config]
+    )
 
-    def test_block_inserts_reject_row_and_preserves_password(
-        self, db_session, tmp_path, subscriber
-    ):
-        cred, radius_db = self._seed(db_session, tmp_path, subscriber)
-        config = _fake_external_config(radius_db)
+    found = radius_service.external_radius_nas_client_ips(
+        db_session, {"10.0.0.1", "10.0.0.3"}
+    )
+    inventory = radius_service.external_radius_nas_secret_inventory(
+        db_session, {"10.0.0.1", "10.0.0.3"}
+    )
+    removed = radius_service.remove_external_radius_nas_clients(
+        db_session, {"10.0.0.1"}
+    )
 
-        with patch(
-            "app.services.radius._active_external_sync_configs",
-            return_value=[config],
-        ):
-            n = radius_service.block_external_radius_credentials(
-                db_session, subscriber.id
-            )
-
-        assert n == 1
-        rows = _read_radcheck(radius_db)
-        # Original password row is untouched.
-        assert ("100099999", "Cleartext-Password", ":=", "hunter2") in rows
-        # New Auth-Type := Reject row is present.
-        assert ("100099999", "Auth-Type", ":=", "Reject") in rows
-        # radreply is untouched.
-        assert _read_radreply(radius_db) == [
-            ("100099999", "Framed-IP-Address", ":=", "10.0.0.5")
-        ]
-
-    def test_block_is_idempotent(self, db_session, tmp_path, subscriber):
-        cred, radius_db = self._seed(db_session, tmp_path, subscriber)
-        config = _fake_external_config(radius_db)
-
-        with patch(
-            "app.services.radius._active_external_sync_configs",
-            return_value=[config],
-        ):
-            radius_service.block_external_radius_credentials(db_session, subscriber.id)
-            radius_service.block_external_radius_credentials(db_session, subscriber.id)
-
-        # Exactly one Reject row, not two — the delete-then-insert pattern
-        # in block() ensures idempotency.
-        reject_rows = [r for r in _read_radcheck(radius_db) if r[1] == "Auth-Type"]
-        assert len(reject_rows) == 1
-
-    def test_unblock_removes_only_reject_row(self, db_session, tmp_path, subscriber):
-        cred, radius_db = self._seed(db_session, tmp_path, subscriber)
-        config = _fake_external_config(radius_db)
-
-        with patch(
-            "app.services.radius._active_external_sync_configs",
-            return_value=[config],
-        ):
-            radius_service.block_external_radius_credentials(db_session, subscriber.id)
-            n = radius_service.unblock_external_radius_credentials(
-                db_session, subscriber.id
-            )
-
-        assert n == 1
-        rows = _read_radcheck(radius_db)
-        assert ("100099999", "Cleartext-Password", ":=", "hunter2") in rows
-        assert not any(r[1] == "Auth-Type" for r in rows)
-        # Reply attrs untouched the whole time.
-        assert _read_radreply(radius_db) == [
-            ("100099999", "Framed-IP-Address", ":=", "10.0.0.5")
-        ]
-
-    def test_unblock_is_noop_when_no_reject_row(self, db_session, tmp_path, subscriber):
-        cred, radius_db = self._seed(db_session, tmp_path, subscriber)
-        config = _fake_external_config(radius_db)
-
-        with patch(
-            "app.services.radius._active_external_sync_configs",
-            return_value=[config],
-        ):
-            n = radius_service.unblock_external_radius_credentials(
-                db_session, subscriber.id
-            )
-
-        assert n == 0
-        assert _read_radcheck(radius_db) == [
-            ("100099999", "Cleartext-Password", ":=", "hunter2")
-        ]
-
-    def test_block_returns_zero_with_no_active_configs(
-        self, db_session, tmp_path, subscriber
-    ):
-        cred, _ = self._seed(db_session, tmp_path, subscriber)
-        with patch(
-            "app.services.radius._active_external_sync_configs",
-            return_value=[],
-        ):
-            n = radius_service.block_external_radius_credentials(
-                db_session, subscriber.id
-            )
-        assert n == 0
+    assert found == {"10.0.0.1"}
+    assert inventory.present_client_ips == {"10.0.0.1"}
+    assert inventory.recoverable_secrets == {"10.0.0.1": "secret-one"}
+    assert inventory.conflicting_client_ips == set()
+    assert removed == 1
+    conn = sqlite3.connect(db_path)
+    try:
+        remaining = list(conn.execute("SELECT nasname FROM nas ORDER BY nasname"))
+    finally:
+        conn.close()
+    assert remaining == [("10.0.0.2",)]
 
 
-# =============================================================================
-# Status-aware _external_sync_users
-# (active → full rebuild, suspended → Reject row only, canceled → delete all)
-# =============================================================================
+def test_authoritative_external_radius_db_url_requires_one_target(
+    db_session, monkeypatch
+):
+    from app.services import external_radius_targets
+
+    monkeypatch.setattr(
+        external_radius_targets,
+        "active_external_radius_targets",
+        lambda _db: [
+            {
+                "db_url": "postgresql+psycopg://radius-one/radius",
+                "authoritative_accounting": False,
+            },
+            {
+                "db_url": "postgresql+psycopg://radius-one/radius",
+                "authoritative_accounting": False,
+            },
+        ],
+    )
+    with pytest.raises(RuntimeError, match="authoritative_accounting"):
+        external_radius_targets.authoritative_external_radius_db_url(db_session)
+
+    monkeypatch.setattr(
+        external_radius_targets,
+        "active_external_radius_targets",
+        lambda _db: [
+            {
+                "db_url": "postgresql+psycopg://radius-one/radius",
+                "authoritative_accounting": True,
+            },
+            {
+                "db_url": "postgresql+psycopg://radius-two/radius",
+                "authoritative_accounting": False,
+            },
+        ],
+    )
+    assert external_radius_targets.authoritative_external_radius_db_url(db_session) == (
+        "postgresql+psycopg://radius-one/radius"
+    )
 
 
-class TestExternalSyncUsersStatusAware:
-    def _seed(self, db_session, tmp_path, subscriber, catalog_offer, status):
-        sub = Subscription(
-            subscriber_id=subscriber.id,
-            offer_id=catalog_offer.id,
-            status=status,
-            login="100088888",
+def test_radius_nas_lifecycle_projects_active_and_inactive_state(
+    db_session, radius_server, tmp_path, monkeypatch
+):
+    db_path = tmp_path / "radius-nas-reconcile.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "CREATE TABLE nas (nasname TEXT, shortname TEXT, type TEXT, "
+            "secret TEXT, description TEXT)"
         )
-        db_session.add(sub)
-        db_session.flush()
-        cred = AccessCredential(
-            subscriber_id=subscriber.id,
-            username="100088888",
-            secret_hash="plain:swordfish",
-            is_active=True,
-        )
-        db_session.add(cred)
-        db_session.commit()
-        # Seed stale rows that sync should rewrite/delete.
-        radius_db = tmp_path / "external.db"
-        _write_full_radius_sqlite(
-            radius_db,
-            radcheck=[("100088888", "Cleartext-Password", ":=", "old-password")],
-            radreply=[("100088888", "Framed-IP-Address", ":=", "192.0.2.1")],
-        )
-        return cred, radius_db
+        conn.commit()
+    finally:
+        conn.close()
+    config = _fake_external_config(db_path)
+    monkeypatch.setattr(
+        radius_service, "_active_external_sync_configs", lambda _db: [config]
+    )
+    device = NasDevice(
+        name="lifecycle-router",
+        vendor=NasVendor.mikrotik,
+        nas_ip="10.40.0.1",
+        shared_secret="plain:radius-secret",
+        is_active=True,
+    )
+    db_session.add(device)
+    db_session.flush()
 
-    def test_active_subscription_triggers_full_rebuild(
-        self, db_session, tmp_path, subscriber, catalog_offer
-    ):
-        cred, radius_db = self._seed(
-            db_session, tmp_path, subscriber, catalog_offer, SubscriptionStatus.active
-        )
-        config = _fake_external_config(radius_db)
+    active = radius_service.apply_radius_nas_lifecycle(db_session, device, active=True)
+    db_session.flush()
+    # The linked client remains authoritative lifecycle evidence while a NAS IP
+    # correction is pending projection to the external store.
+    device.nas_ip = "10.40.0.2"
+    db_session.flush()
+    active_state = radius_service.radius_nas_lifecycle_state(db_session, device)
 
-        with patch(
-            "app.services.connection_type_provisioning.build_radius_reply_attributes",
-            return_value=[],
-        ):
-            result = radius_service._external_sync_users(db_session, config, [cred])
+    assert active.internal_clients_changed == 1
+    assert active.external_clients_changed == 1
+    assert active_state.internal_active_clients == 1
+    assert active_state.external_present is True
 
-        assert result == {"external_users_synced": 1}
-        rows = _read_radcheck(radius_db)
-        # Password row rewritten (still Cleartext-Password since secret_hash starts with "plain:")
-        assert any(r[1] == "Cleartext-Password" for r in rows)
-        # No Reject row for an active subscription.
-        assert not any(r[1] == "Auth-Type" and r[3] == "Reject" for r in rows)
+    inactive = radius_service.apply_radius_nas_lifecycle(
+        db_session, device, active=False
+    )
+    db_session.flush()
+    inactive_state = radius_service.radius_nas_lifecycle_state(db_session, device)
 
-    def test_suspended_subscription_writes_reject_only(
-        self, db_session, tmp_path, subscriber, catalog_offer
-    ):
-        cred, radius_db = self._seed(
-            db_session,
-            tmp_path,
-            subscriber,
-            catalog_offer,
-            SubscriptionStatus.suspended,
-        )
-        config = _fake_external_config(radius_db)
-
-        result = radius_service._external_sync_users(db_session, config, [cred])
-
-        assert result == {"external_users_synced": 1}
-        rows = _read_radcheck(radius_db)
-        # Stale password row is gone, only the Reject row remains.
-        assert rows == [("100088888", "Auth-Type", ":=", "Reject")]
-        # Reply attrs are wiped for a suspended sub.
-        assert _read_radreply(radius_db) == []
-
-    def test_canceled_subscription_deletes_all_rows(
-        self, db_session, tmp_path, subscriber, catalog_offer
-    ):
-        cred, radius_db = self._seed(
-            db_session,
-            tmp_path,
-            subscriber,
-            catalog_offer,
-            SubscriptionStatus.canceled,
-        )
-        config = _fake_external_config(radius_db)
-
-        result = radius_service._external_sync_users(db_session, config, [cred])
-
-        assert result == {"external_users_synced": 1}
-        # Canceled: leave the user with no rows -> auth not-found.
-        assert _read_radcheck(radius_db) == []
-        assert _read_radreply(radius_db) == []
-
-    def test_expired_subscription_also_deletes_all_rows(
-        self, db_session, tmp_path, subscriber, catalog_offer
-    ):
-        cred, radius_db = self._seed(
-            db_session,
-            tmp_path,
-            subscriber,
-            catalog_offer,
-            SubscriptionStatus.expired,
-        )
-        config = _fake_external_config(radius_db)
-
-        radius_service._external_sync_users(db_session, config, [cred])
-
-        assert _read_radcheck(radius_db) == []
-        assert _read_radreply(radius_db) == []
-
-    def test_suspended_optin_subscriber_gets_walled_garden_not_reject(
-        self, db_session, tmp_path, subscriber, catalog_offer
-    ):
-        # Opted-in suspended customer should reach the captive pay-page (usable
-        # password + Address-List), not be hard-rejected — parity with the sweep.
-        subscriber.captive_redirect_enabled = True
-        db_session.flush()
-        cred, radius_db = self._seed(
-            db_session,
-            tmp_path,
-            subscriber,
-            catalog_offer,
-            SubscriptionStatus.suspended,
-        )
-        config = _fake_external_config(radius_db)
-
-        with patch(
-            "app.services.connection_type_provisioning.build_radius_reply_attributes",
-            return_value=[
-                {"attribute": "Service-Type", "op": ":=", "value": "Framed-User"},
-                {
-                    "attribute": "Framed-Route",
-                    "op": "+=",
-                    "value": "10.0.0.0/30 0.0.0.0 1",
-                },
-            ],
-        ):
-            result = radius_service._external_sync_users(db_session, config, [cred])
-
-        assert result == {"external_users_synced": 1}
-        rows = _read_radcheck(radius_db)
-        assert any(r[1] == "Cleartext-Password" for r in rows)
-        assert not any(r[1] == "Auth-Type" and r[3] == "Reject" for r in rows)
-        reply = _read_radreply(radius_db)
-        assert any(
-            r[1] == "Mikrotik-Address-List" and r[3] == "suspended" for r in reply
-        )
-        # Captive must not route extra blocks.
-        assert not any(r[1] == "Framed-Route" for r in reply)
+    assert inactive.internal_clients_changed == 1
+    assert inactive.external_clients_changed == 1
+    assert inactive_state.internal_active_clients == 0
+    assert inactive_state.external_present is False
 
 
 class TestRadiusSyncSubscriptionSelection:

@@ -110,11 +110,18 @@ class TestPeriodEnd:
         assert result.month == 6
         assert result.day == 15
 
+    def test_quarterly_cycle(self):
+        """Test quarterly billing cycle."""
+        start = datetime(2024, 6, 15, 12, 0, 0)
+        result = billing_automation._period_end(start, BillingCycle.quarterly)
+        assert result.year == 2024
+        assert result.month == 9
+        assert result.day == 15
+
     def test_none_cycle_defaults_to_monthly(self):
         """Test that None cycle defaults to monthly."""
         start = datetime(2024, 6, 15, 12, 0, 0)
-        # None/unrecognized should default to monthly in code logic
-        # But _period_end only handles monthly/annual, so just test monthly
+        # None/unrecognized should default to monthly in code logic.
         result = billing_automation._period_end(start, BillingCycle.monthly)
         assert result.month == 7
         assert result.day == 15
@@ -186,6 +193,9 @@ class TestResolvePrice:
             is_active=True,
         )
         db_session.add(offer_price)
+        # Clear the subscription's snapshotted cadence to exercise the
+        # price-fallback branch (SOT: subscription cadence otherwise wins).
+        subscription.billing_cycle = None
         db_session.commit()
 
         amount, currency, cycle = billing_automation._resolve_price(
@@ -831,6 +841,53 @@ class TestRunInvoiceCycle:
         assert invoice.total == Decimal("100.00")
         assert subscription.next_billing_at > run_at
 
+    def test_zero_amount_subscription_advances_without_invoice(
+        self, db_session, subscription, subscriber_account
+    ):
+        """Free/internal services should not stay perpetually due."""
+        from app.models.billing import Invoice
+        from app.models.catalog import (
+            BillingCycle,
+            OfferPrice,
+            PriceType,
+            SubscriptionStatus,
+        )
+        from app.models.subscriber import AccountStatus
+
+        run_at = datetime(2026, 6, 17, tzinfo=UTC).replace(tzinfo=None)
+        period_start = run_at - timedelta(days=2)
+        subscription.status = SubscriptionStatus.active
+        subscriber_account.status = AccountStatus.active
+        subscription.start_at = run_at - timedelta(days=30)
+        subscription.next_billing_at = period_start
+        subscription.unit_price = Decimal("0.00")
+        db_session.add(
+            OfferPrice(
+                offer_id=subscription.offer_id,
+                price_type=PriceType.recurring,
+                amount=Decimal("0.00"),
+                currency="USD",
+                billing_cycle=BillingCycle.monthly,
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
+        summary = billing_automation.run_invoice_cycle(db_session, run_at=run_at)
+
+        assert summary["invoices_created"] == 0
+        assert summary["zero_amount_advanced"] == 1
+        assert (
+            db_session.query(Invoice)
+            .filter(Invoice.account_id == subscriber_account.id)
+            .count()
+            == 0
+        )
+        db_session.refresh(subscription)
+        assert subscription.next_billing_at.replace(tzinfo=None) == (
+            billing_automation._period_end(period_start, BillingCycle.monthly)
+        )
+
     def test_skips_prepaid_invoice_when_paid_coverage_overlaps(
         self, db_session, subscription, subscriber_account
     ):
@@ -857,8 +914,8 @@ class TestRunInvoiceCycle:
         db_session.add_all(
             [
                 DomainSetting(
-                    domain=SettingDomain.billing,
-                    key="prepaid_monthly_invoicing_enabled",
+                    domain=SettingDomain.modules,
+                    key="billing_prepaid_monthly_invoicing",
                     value_text="true",
                 ),
                 OfferPrice(
@@ -928,6 +985,8 @@ class TestRunInvoiceCycle:
             LedgerEntryType,
             LedgerSource,
             Payment,
+            PaymentSettlement,
+            PaymentSettlementOrigin,
             PaymentStatus,
         )
         from app.models.catalog import (
@@ -963,15 +1022,27 @@ class TestRunInvoiceCycle:
         )
         db_session.add(payment)
         db_session.flush()
+        entry = LedgerEntry(
+            account_id=subscriber_account.id,
+            payment_id=payment.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.payment,
+            amount=Decimal("100.00"),
+            currency="USD",
+            memo="Pre-invoice top-up",
+        )
+        db_session.add(entry)
+        db_session.flush()
         db_session.add(
-            LedgerEntry(
-                account_id=subscriber_account.id,
+            PaymentSettlement(
                 payment_id=payment.id,
-                entry_type=LedgerEntryType.credit,
-                source=LedgerSource.payment,
+                unallocated_ledger_entry_id=entry.id,
                 amount=Decimal("100.00"),
+                unallocated_amount=Decimal("100.00"),
+                prepaid_amount=Decimal("0.00"),
                 currency="USD",
-                memo="Pre-invoice top-up",
+                origin=PaymentSettlementOrigin.system,
+                idempotency_key=f"test-preinvoice-credit-{payment.id}",
             )
         )
         db_session.commit()
@@ -1001,6 +1072,8 @@ class TestRunInvoiceCycle:
             LedgerEntryType,
             LedgerSource,
             Payment,
+            PaymentSettlement,
+            PaymentSettlementOrigin,
             PaymentStatus,
         )
         from app.models.catalog import (
@@ -1038,15 +1111,27 @@ class TestRunInvoiceCycle:
         )
         db_session.add(payment)
         db_session.flush()
+        entry = LedgerEntry(
+            account_id=subscriber_account.id,
+            payment_id=payment.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.payment,
+            amount=Decimal("100.00"),
+            currency="USD",
+            memo="Pre-invoice top-up",
+        )
+        db_session.add(entry)
+        db_session.flush()
         db_session.add(
-            LedgerEntry(
-                account_id=subscriber_account.id,
+            PaymentSettlement(
                 payment_id=payment.id,
-                entry_type=LedgerEntryType.credit,
-                source=LedgerSource.payment,
+                unallocated_ledger_entry_id=entry.id,
                 amount=Decimal("100.00"),
+                unallocated_amount=Decimal("100.00"),
+                prepaid_amount=Decimal("0.00"),
                 currency="USD",
-                memo="Pre-invoice top-up",
+                origin=PaymentSettlementOrigin.system,
+                idempotency_key=f"test-walled-credit-{payment.id}",
             )
         )
         db_session.commit()
@@ -1594,15 +1679,14 @@ class TestRunInvoiceCycle:
         assert calls[-1][1]["invoice_number"] == "INV-REM-1"
         assert (invoice.metadata_ or {}).get("invoice_reminder_sent_7")
 
-    def test_run_invoice_cycle_skips_reminders_and_escalations_for_terminal_account(
+    def test_run_invoice_cycle_skips_reminders_for_terminal_account(
         self,
         db_session,
         subscriber,
         subscription,
         monkeypatch,
     ):
-        """Disabled/terminated service → no reminders or dunning escalations,
-        even with an open/overdue balance on the account."""
+        """Disabled/terminated service does not receive pre-due reminders."""
         from app.models.billing import Invoice, InvoiceStatus
         from app.models.catalog import SubscriptionStatus
         from app.models.domain_settings import DomainSetting, SettingDomain
@@ -1624,37 +1708,21 @@ class TestRunInvoiceCycle:
             )
         )
         db_session.add(
-            Invoice(
-                account_id=subscriber.id,
-                invoice_number="INV-DUN-TERM",
-                status=InvoiceStatus.overdue,
-                total=Decimal("200.00"),
-                balance_due=Decimal("200.00"),
-                due_at=run_at - timedelta(days=3),
-                metadata_={},
+            DomainSetting(
+                domain=SettingDomain.billing,
+                key="invoice_reminder_days",
+                value_type=SettingValueType.string,
+                value_text="7,1",
+                is_active=True,
             )
         )
-        for key, value in (
-            ("invoice_reminder_days", "7,1"),
-            ("dunning_escalation_days", "3,7,14"),
-        ):
-            db_session.add(
-                DomainSetting(
-                    domain=SettingDomain.billing,
-                    key=key,
-                    value_type=SettingValueType.string,
-                    value_text=value,
-                    is_active=True,
-                )
-            )
         db_session.commit()
 
         summary = billing_automation.run_invoice_cycle(db_session, run_at=run_at)
 
         assert summary["invoice_reminders_sent"] == 0
-        assert summary["dunning_escalations_sent"] == 0
 
-    def test_run_invoice_cycle_emits_dunning_escalation_for_configured_day(
+    def test_run_invoice_cycle_ignores_retired_dunning_escalation_setting(
         self,
         db_session,
         subscriber,
@@ -1705,10 +1773,9 @@ class TestRunInvoiceCycle:
         summary = billing_automation.run_invoice_cycle(db_session, run_at=run_at)
         db_session.refresh(invoice)
 
-        assert summary["dunning_escalations_sent"] == 1
-        assert calls[-1][0] == EventType.invoice_overdue
-        assert calls[-1][1]["invoice_number"] == "INV-DUN-1"
-        assert (invoice.metadata_ or {}).get("dunning_escalation_sent_3")
+        assert "dunning_escalations_sent" not in summary
+        assert calls == []
+        assert not (invoice.metadata_ or {}).get("dunning_escalation_sent_3")
 
     def test_run_invoice_cycle_logs_structured_summary(
         self,
@@ -1763,10 +1830,6 @@ class TestRunInvoiceCycle:
         assert start_record.event == "billing_run"
         assert (
             complete_record.invoice_reminders_sent == summary["invoice_reminders_sent"]
-        )
-        assert (
-            complete_record.dunning_escalations_sent
-            == summary["dunning_escalations_sent"]
         )
 
 
@@ -2310,12 +2373,12 @@ class TestBillingRunResilience:
 
 
 # =============================================================================
-# mark_overdue_invoices — overdue checker & post-grace escalation
+# mark_overdue_invoices — observational overdue checker
 # =============================================================================
 
 
 class TestMarkOverdueInvoices:
-    """Hourly overdue checker: first emit, then a one-time post-grace re-emit."""
+    """Hourly overdue checker emits one observation per invoice."""
 
     def _make_invoice(self, db_session, subscriber, **kwargs):
         import uuid as _uuid
@@ -2338,12 +2401,16 @@ class TestMarkOverdueInvoices:
         return invoice
 
     def _capture_emits(self, monkeypatch):
+        import importlib
+
+        invoice_owner_module = importlib.import_module("app.services.billing.invoices")
+
         calls = []
 
         def _capture(db, event_type, payload, **kwargs):
             calls.append((event_type, dict(payload)))
 
-        monkeypatch.setattr(billing_automation, "emit_event", _capture)
+        monkeypatch.setattr(invoice_owner_module, "emit_event", _capture)
         return calls
 
     def test_first_run_marks_and_emits_once(self, db_session, subscriber, monkeypatch):
@@ -2356,81 +2423,21 @@ class TestMarkOverdueInvoices:
         db_session.refresh(invoice)
 
         assert result["marked_overdue"] == 1
-        assert result["escalated"] == 0
         assert invoice.status == InvoiceStatus.overdue
         assert (invoice.metadata_ or {}).get("overdue_event_sent")
         assert [c[0] for c in calls] == [EventType.invoice_overdue]
 
-        # Second run within grace: no re-emit, no hourly spam.
+        # Subsequent runs do not re-emit or infer an access consequence.
         result2 = billing_automation.mark_overdue_invoices(db_session)
         assert result2["marked_overdue"] == 0
-        assert result2["escalated"] == 0
         assert [c[0] for c in calls] == [EventType.invoice_overdue]
 
-    def test_post_grace_escalation_reemits_exactly_once(
+    def test_already_overdue_invoice_never_reemits_or_writes_access_metadata(
         self, db_session, subscriber, monkeypatch
     ):
-        """Warning sent + grace elapsed + subscriber active -> one re-emit."""
         from app.models.billing import InvoiceStatus
 
         invoice = self._make_invoice(
-            db_session,
-            subscriber,
-            status=InvoiceStatus.overdue,
-            due_at=datetime.now(UTC) - timedelta(hours=72),
-            metadata_={
-                "overdue_event_sent": "2026-01-01T00:00:00+00:00",
-                "suspension_warning_sent_at": "2026-01-01T00:00:00+00:00",
-            },
-        )
-        calls = self._capture_emits(monkeypatch)
-
-        result = billing_automation.mark_overdue_invoices(db_session)
-        db_session.refresh(invoice)
-
-        assert result["escalated"] == 1
-        assert result["marked_overdue"] == 0
-        assert [c[0] for c in calls] == [EventType.invoice_overdue]
-        assert calls[0][1]["escalation"] == "post_grace_suspension"
-        assert calls[0][1]["invoice_id"] == str(invoice.id)
-        assert (invoice.metadata_ or {}).get("suspension_escalation_sent")
-
-        # Hourly runs after the escalation never re-emit again.
-        for _ in range(3):
-            result_n = billing_automation.mark_overdue_invoices(db_session)
-            assert result_n["escalated"] == 0
-        assert len(calls) == 1
-
-    def test_no_escalation_within_grace(self, db_session, subscriber, monkeypatch):
-        from app.models.billing import InvoiceStatus
-
-        invoice = self._make_invoice(
-            db_session,
-            subscriber,
-            status=InvoiceStatus.overdue,
-            due_at=datetime.now(UTC) - timedelta(hours=6),
-            metadata_={
-                "overdue_event_sent": "2026-01-01T00:00:00+00:00",
-                "suspension_warning_sent_at": "2026-01-01T00:00:00+00:00",
-            },
-        )
-        calls = self._capture_emits(monkeypatch)
-
-        result = billing_automation.mark_overdue_invoices(db_session)
-        db_session.refresh(invoice)
-
-        assert result["escalated"] == 0
-        assert calls == []
-        assert not (invoice.metadata_ or {}).get("suspension_escalation_sent")
-
-    def test_no_escalation_without_warning_sent(
-        self, db_session, subscriber, monkeypatch
-    ):
-        """If no warning was ever sent (grace=0 path or auto-suspend disabled),
-        there is nothing to escalate."""
-        from app.models.billing import InvoiceStatus
-
-        self._make_invoice(
             db_session,
             subscriber,
             status=InvoiceStatus.overdue,
@@ -2440,38 +2447,14 @@ class TestMarkOverdueInvoices:
         calls = self._capture_emits(monkeypatch)
 
         result = billing_automation.mark_overdue_invoices(db_session)
+        db_session.refresh(invoice)
 
-        assert result["escalated"] == 0
+        assert result["marked_overdue"] == 0
         assert calls == []
+        assert not (invoice.metadata_ or {}).get("suspension_warning_sent_at")
+        assert not (invoice.metadata_ or {}).get("suspension_escalation_sent")
 
-    def test_no_escalation_when_subscriber_not_active(
-        self, db_session, subscriber, monkeypatch
-    ):
-        from app.models.billing import InvoiceStatus
-        from app.models.subscriber import SubscriberStatus
-
-        subscriber.status = SubscriberStatus.blocked
-        db_session.commit()
-        self._make_invoice(
-            db_session,
-            subscriber,
-            status=InvoiceStatus.overdue,
-            due_at=datetime.now(UTC) - timedelta(hours=72),
-            metadata_={
-                "overdue_event_sent": "2026-01-01T00:00:00+00:00",
-                "suspension_warning_sent_at": "2026-01-01T00:00:00+00:00",
-            },
-        )
-        calls = self._capture_emits(monkeypatch)
-
-        result = billing_automation.mark_overdue_invoices(db_session)
-
-        assert result["escalated"] == 0
-        assert calls == []
-
-    def test_paid_invoice_not_scanned_for_escalation(
-        self, db_session, subscriber, monkeypatch
-    ):
+    def test_paid_invoice_not_scanned(self, db_session, subscriber, monkeypatch):
         """Once the balance is cleared the invoice drops out of the sweep."""
         from app.models.billing import InvoiceStatus
 
@@ -2491,7 +2474,6 @@ class TestMarkOverdueInvoices:
         result = billing_automation.mark_overdue_invoices(db_session)
 
         assert result["scanned"] == 0
-        assert result["escalated"] == 0
         assert calls == []
 
 
@@ -2725,6 +2707,8 @@ class TestCancellationCreditCycle:
             Invoice,
             InvoiceLine,
             InvoiceStatus,
+            TaxApplication,
+            TaxRate,
         )
         from app.models.catalog import (
             BillingCycle,
@@ -2737,6 +2721,9 @@ class TestCancellationCreditCycle:
         now = datetime.now(UTC)
         subscription.status = SubscriptionStatus.active
         subscriber_account.status = AccountStatus.active
+        # Clear the snapshotted cadence so the weekly price drives the window
+        # via the fallback (SOT: an owned subscription cadence otherwise wins).
+        subscription.billing_cycle = None
         # 3 days left; the active price bills WEEKLY.
         subscription.next_billing_at = now + timedelta(days=3)
         db_session.add(
@@ -2749,6 +2736,12 @@ class TestCancellationCreditCycle:
                 is_active=True,
             )
         )
+        tax_rate = TaxRate(
+            name="Cancellation VAT",
+            code="VAT-CANCEL",
+            rate=Decimal("7.5000"),
+        )
+        db_session.add(tax_rate)
         invoice = Invoice(
             account_id=subscriber_account.id,
             invoice_number="INV-CC-1",
@@ -2765,6 +2758,8 @@ class TestCancellationCreditCycle:
                 quantity=Decimal("1.000"),
                 unit_price=Decimal("70.00"),
                 amount=Decimal("70.00"),
+                tax_rate_id=tax_rate.id,
+                tax_application=TaxApplication.exclusive,
             )
         )
         db_session.commit()
@@ -2777,6 +2772,11 @@ class TestCancellationCreditCycle:
             .first()
         )
         assert credit is not None
+        assert credit.issued_at is not None
+        assert credit.invoice_id == invoice.id
+        assert credit.tax_total > Decimal("0.00")
+        assert credit.lines[0].tax_rate_id == tax_rate.id
+        assert credit.lines[0].tax_application == TaxApplication.exclusive
         # Weekly window: ~3/7 of ₦70 ≈ ₦30. The old offer-cycle (monthly) bug
         # would credit ~3/30 ≈ ₦7.
         assert credit.subtotal > Decimal("20.00")
@@ -2838,3 +2838,321 @@ class TestProratedInvoiceIdempotency:
             .all()
         )
         assert len(lines) == 1
+
+
+class TestPrepaidDraftUntilFunded:
+    """Item 1 of PREPAID_INVOICE_DEPOSIT_ALIGNMENT: prepaid advance invoices stay
+    DRAFT (not AR) until the deposit funds them. This is now the only scheduled
+    runner behavior for prepaid monthly invoices; postpaid AR logic must not be
+    reused for prepaid renewals."""
+
+    def _setup_prepaid_monthly(self, db_session, subscription, subscriber_account):
+        from app.models.catalog import (
+            BillingCycle,
+            BillingMode,
+            OfferPrice,
+            PriceType,
+            SubscriptionStatus,
+        )
+        from app.models.domain_settings import DomainSetting, SettingDomain
+        from app.models.subscriber import AccountStatus
+
+        run_at = datetime(2026, 6, 17, tzinfo=UTC).replace(tzinfo=None)
+        subscription.status = SubscriptionStatus.active
+        subscription.billing_mode = BillingMode.prepaid
+        subscription.start_at = run_at - timedelta(days=30)
+        subscription.next_billing_at = run_at
+        subscriber_account.status = AccountStatus.active
+        settings = [
+            DomainSetting(
+                domain=SettingDomain.modules,
+                key="billing_prepaid_monthly_invoicing",
+                value_text="true",
+            ),
+            OfferPrice(
+                offer_id=subscription.offer_id,
+                price_type=PriceType.recurring,
+                amount=Decimal("100.00"),
+                currency="NGN",
+                billing_cycle=BillingCycle.monthly,
+                is_active=True,
+            ),
+        ]
+        db_session.add_all(settings)
+        db_session.commit()
+        return run_at
+
+    def _add_credit(self, db_session, subscriber_account, amount, run_at):
+        import uuid
+
+        from app.models.billing import (
+            LedgerEntry,
+            LedgerEntryType,
+            LedgerSource,
+            Payment,
+            PaymentSettlement,
+            PaymentSettlementOrigin,
+            PaymentStatus,
+        )
+
+        payment = Payment(
+            account_id=subscriber_account.id,
+            amount=Decimal(amount),
+            currency="NGN",
+            status=PaymentStatus.succeeded,
+            paid_at=run_at - timedelta(hours=1),
+            memo="Top-up",
+        )
+        db_session.add(payment)
+        db_session.flush()
+        entry = LedgerEntry(
+            account_id=subscriber_account.id,
+            payment_id=payment.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.payment,
+            amount=Decimal(amount),
+            currency="NGN",
+            memo="Top-up",
+        )
+        db_session.add(entry)
+        db_session.flush()
+        db_session.add(
+            PaymentSettlement(
+                payment_id=payment.id,
+                unallocated_ledger_entry_id=entry.id,
+                amount=Decimal(amount),
+                unallocated_amount=Decimal(amount),
+                prepaid_amount=Decimal("0.00"),
+                currency="NGN",
+                origin=PaymentSettlementOrigin.system,
+                idempotency_key=f"test-prepaid-credit-{uuid.uuid4()}",
+            )
+        )
+        db_session.commit()
+
+    def _invoice(self, db_session, subscriber_account):
+        from app.models.billing import Invoice
+
+        return (
+            db_session.query(Invoice)
+            .filter(Invoice.account_id == subscriber_account.id)
+            .one()
+        )
+
+    def test_default_leaves_underfunded_prepaid_invoice_draft(
+        self, db_session, subscription, subscriber_account
+    ):
+        from app.models.billing import InvoiceStatus
+
+        run_at = self._setup_prepaid_monthly(
+            db_session, subscription, subscriber_account
+        )
+        billing_automation.run_invoice_cycle(db_session, run_at=run_at)
+        inv = self._invoice(db_session, subscriber_account)
+        assert inv.status == InvoiceStatus.draft
+        assert inv.issued_at is None
+        assert inv.due_at is None
+
+    def test_underfunded_left_draft(self, db_session, subscription, subscriber_account):
+        from app.models.billing import InvoiceStatus, ServiceEntitlement
+
+        run_at = self._setup_prepaid_monthly(
+            db_session, subscription, subscriber_account
+        )
+        summary = billing_automation.run_invoice_cycle(db_session, run_at=run_at)
+        inv = self._invoice(db_session, subscriber_account)
+        # No deposit → stays draft: not AR, no due date, not issued.
+        assert inv.status == InvoiceStatus.draft
+        assert inv.issued_at is None
+        assert inv.due_at is None
+        assert inv.balance_due == Decimal("100.00")
+        assert summary.get("prepaid_invoices_left_draft") == 1
+        db_session.refresh(subscription)
+        assert subscription.next_billing_at == run_at
+        assert (
+            db_session.query(ServiceEntitlement)
+            .filter(ServiceEntitlement.subscription_id == subscription.id)
+            .count()
+            == 0
+        )
+
+    def test_fully_funded_issues_and_pays_drawing_down_wallet(
+        self, db_session, subscription, subscriber_account
+    ):
+        from app.models.billing import InvoiceStatus, ServiceEntitlement
+        from app.services.billing._common import get_account_credit_balance
+
+        run_at = self._setup_prepaid_monthly(
+            db_session, subscription, subscriber_account
+        )
+        self._add_credit(db_session, subscriber_account, "100.00", run_at)
+        assert get_account_credit_balance(
+            db_session, str(subscriber_account.id), currency="NGN"
+        ) == Decimal("100.00")
+
+        summary = billing_automation.run_invoice_cycle(db_session, run_at=run_at)
+        inv = self._invoice(db_session, subscriber_account)
+        # Funded → issued + paid, one drawdown.
+        assert inv.status == InvoiceStatus.paid
+        assert inv.balance_due == Decimal("0.00")
+        assert inv.issued_at is not None
+        assert summary.get("prepaid_invoices_funded") == 1
+        # Wallet drawn down by exactly the invoice total (no double count).
+        assert get_account_credit_balance(
+            db_session, str(subscriber_account.id), currency="NGN"
+        ) == Decimal("0.00")
+        db_session.refresh(subscription)
+        assert subscription.next_billing_at > run_at
+        entitlement = (
+            db_session.query(ServiceEntitlement)
+            .filter(ServiceEntitlement.subscription_id == subscription.id)
+            .one()
+        )
+        assert entitlement.source_invoice_id == inv.id
+        assert entitlement.starts_at == run_at
+        assert entitlement.ends_at == subscription.next_billing_at
+
+    def test_wallet_entitlement_overlap_skips_duplicate_prepaid_invoice(
+        self, db_session, subscription, subscriber_account
+    ):
+        from app.models.billing import (
+            Invoice,
+            ServiceEntitlement,
+            ServiceEntitlementStatus,
+        )
+
+        run_at = self._setup_prepaid_monthly(
+            db_session, subscription, subscriber_account
+        )
+        entitlement_end = run_at + timedelta(days=30)
+        db_session.add(
+            ServiceEntitlement(
+                account_id=subscriber_account.id,
+                subscription_id=subscription.id,
+                starts_at=run_at,
+                ends_at=entitlement_end,
+                amount_funded=Decimal("100.00"),
+                currency="NGN",
+                status=ServiceEntitlementStatus.active,
+                metadata_={"source": "wallet_prepaid_renewal"},
+            )
+        )
+        db_session.commit()
+
+        summary = billing_automation.run_invoice_cycle(db_session, run_at=run_at)
+
+        assert summary["skipped"] >= 1
+        assert (
+            db_session.query(Invoice)
+            .filter(Invoice.account_id == subscriber_account.id)
+            .count()
+            == 0
+        )
+        db_session.refresh(subscription)
+        assert subscription.next_billing_at == entitlement_end
+
+    def test_future_wallet_entitlement_does_not_skip_current_prepaid_invoice(
+        self, db_session, subscription, subscriber_account
+    ):
+        from app.models.billing import (
+            Invoice,
+            InvoiceStatus,
+            ServiceEntitlement,
+            ServiceEntitlementStatus,
+        )
+
+        run_at = self._setup_prepaid_monthly(
+            db_session, subscription, subscriber_account
+        )
+        db_session.add(
+            ServiceEntitlement(
+                account_id=subscriber_account.id,
+                subscription_id=subscription.id,
+                starts_at=run_at + timedelta(days=5),
+                ends_at=run_at + timedelta(days=35),
+                amount_funded=Decimal("100.00"),
+                currency="NGN",
+                status=ServiceEntitlementStatus.active,
+                metadata_={"source": "wallet_prepaid_renewal"},
+            )
+        )
+        db_session.commit()
+
+        summary = billing_automation.run_invoice_cycle(db_session, run_at=run_at)
+
+        assert summary["invoices_created"] == 1
+        invoice = (
+            db_session.query(Invoice)
+            .filter(Invoice.account_id == subscriber_account.id)
+            .one()
+        )
+        assert invoice.status == InvoiceStatus.draft
+        db_session.refresh(subscription)
+        assert subscription.next_billing_at == run_at
+
+    def test_partial_credit_left_draft_no_allocation(
+        self, db_session, subscription, subscriber_account
+    ):
+        from app.models.billing import InvoiceStatus, PaymentAllocation
+        from app.services.billing._common import get_account_credit_balance
+
+        run_at = self._setup_prepaid_monthly(
+            db_session, subscription, subscriber_account
+        )
+        self._add_credit(db_session, subscriber_account, "40.00", run_at)
+
+        billing_automation.run_invoice_cycle(db_session, run_at=run_at)
+        inv = self._invoice(db_session, subscriber_account)
+        # All-or-nothing: 40 < 100 → left draft, no partial allocation made.
+        assert inv.status == InvoiceStatus.draft
+        assert inv.due_at is None
+        alloc = (
+            db_session.query(PaymentAllocation)
+            .filter(PaymentAllocation.invoice_id == inv.id)
+            .count()
+        )
+        assert alloc == 0
+        # Credit untouched.
+        assert get_account_credit_balance(
+            db_session, str(subscriber_account.id), currency="NGN"
+        ) == Decimal("40.00")
+
+    def test_later_topup_settles_existing_prepaid_draft(
+        self, db_session, subscription, subscriber_account
+    ):
+        from app.models.billing import InvoiceStatus, ServiceEntitlement
+        from app.services.billing._common import get_account_credit_balance
+        from app.services.billing.reconcile_unposted import (
+            settle_prepaid_draft_invoices_from_credit,
+        )
+
+        run_at = self._setup_prepaid_monthly(
+            db_session, subscription, subscriber_account
+        )
+        billing_automation.run_invoice_cycle(db_session, run_at=run_at)
+        inv = self._invoice(db_session, subscriber_account)
+        assert inv.status == InvoiceStatus.draft
+        db_session.refresh(subscription)
+        assert subscription.next_billing_at == run_at
+
+        self._add_credit(db_session, subscriber_account, "100.00", run_at)
+        result = settle_prepaid_draft_invoices_from_credit(
+            db_session, str(subscriber_account.id), run_at=run_at + timedelta(hours=2)
+        )
+        db_session.commit()
+
+        db_session.refresh(inv)
+        assert result.applied == Decimal("100.00")
+        assert inv.status == InvoiceStatus.paid
+        assert inv.balance_due == Decimal("0.00")
+        assert get_account_credit_balance(
+            db_session, str(subscriber_account.id), currency="NGN"
+        ) == Decimal("0.00")
+        db_session.refresh(subscription)
+        assert subscription.next_billing_at > run_at
+        assert (
+            db_session.query(ServiceEntitlement)
+            .filter(ServiceEntitlement.subscription_id == subscription.id)
+            .count()
+            == 1
+        )

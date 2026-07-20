@@ -1,10 +1,5 @@
-import logging
-
 from app.celery_app import celery_app
-from app.services.db_session_adapter import db_session_adapter
-
-logger = logging.getLogger(__name__)
-SessionLocal = db_session_adapter.create_session
+from app.services import enforcement_scheduled
 
 
 @celery_app.task(
@@ -21,32 +16,26 @@ def cleanup_subscription_block_sessions(
     if a NAS is slow or unavailable. The periodic safety net can re-converge,
     but this task keeps the customer-facing session cleanup prompt.
     """
-    from app.services.enforcement import (
-        apply_subscription_address_list_block,
-        disconnect_subscription_sessions,
+    return enforcement_scheduled.cleanup_subscription_block_sessions(
+        subscription_id, reason=reason
     )
 
-    session = SessionLocal()
-    try:
-        disconnected = disconnect_subscription_sessions(
-            session, subscription_id, reason=reason
-        )
-        blocked = apply_subscription_address_list_block(session, subscription_id)
-        session.commit()
-        return {
-            "sessions_disconnected": int(disconnected or 0),
-            "address_list_blocks": int(blocked or 0),
-        }
-    except Exception:
-        session.rollback()
-        logger.exception(
-            "subscription_block_session_cleanup_failed",
-            extra={
-                "event": "subscription_block_session_cleanup_failed",
-                "subscription_id": subscription_id,
-                "reason": reason,
-            },
-        )
-        raise
-    finally:
-        session.close()
+
+@celery_app.task(name="app.tasks.enforcement.reconcile_account_status_drift")
+def reconcile_account_status_drift() -> dict[str, int]:
+    """Repair safe ``new``/``blocked`` parent drift for all-active services.
+
+    The all-active cohort filter is the guard; mixed-status accounts are
+    excluded. Pure service-state - no money writes.
+    """
+    return enforcement_scheduled.reconcile_account_status_drift()
+
+
+@celery_app.task(name="app.tasks.enforcement.detect_stale_overdue_locks")
+def detect_stale_overdue_locks() -> dict[str, int]:
+    """Dry-run detector for stale ``overdue`` enforcement locks - accounts held
+    suspended by an overdue lock while they owe NO overdue debt. Deliberately
+    apply=False (money-adjacent): it surfaces candidates via a WARNING for an
+    operator to review and clear manually, closing the SP-8 gap where the
+    backstop only ran when someone typed the command. Writes nothing."""
+    return enforcement_scheduled.detect_stale_overdue_locks()

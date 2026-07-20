@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from http.cookies import SimpleCookie
 from importlib import import_module
 from threading import Lock
-from time import monotonic, sleep
+from time import monotonic
 from typing import TypedDict
 
 warnings.filterwarnings(
@@ -20,6 +20,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy import inspect as sqlalchemy_inspect
+from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from starlette.responses import Response
@@ -52,18 +53,16 @@ install_brand_jinja_global()
 _AUDIT_SETTINGS_CACHE: dict | None = None
 _AUDIT_SETTINGS_CACHE_AT: float | None = None
 _AUDIT_SETTINGS_CACHE_TTL_SECONDS = 30.0
+_AUDIT_SETTINGS_REFRESH_TIMEOUT_MS = 1000
 _AUDIT_SETTINGS_LOCK = Lock()
+_AUDIT_ALWAYS_SKIP_EXACT_PATHS = {"/health", "/metrics"}
+_AUDIT_ALWAYS_SKIP_PATH_PREFIXES = (
+    "/static/",
+    "/api/v1/webhooks/",
+    "/api/v1/alerts/",
+)
 _DEFERRED_ROUTER_TASK = None
 _DEFERRED_STARTUP_TASK = None
-# Startup Zabbix health probe runs in a worker thread (see
-# _run_deferred_startup) with retries so a transient failure while the process
-# is still saturated from the startup seed doesn't false-alarm as
-# "unavailable". All three are env-overridable.
-_ZABBIX_STARTUP_HEALTH_TIMEOUT = float(os.getenv("ZABBIX_STARTUP_HEALTH_TIMEOUT", "10"))
-_ZABBIX_STARTUP_HEALTH_ATTEMPTS = int(os.getenv("ZABBIX_STARTUP_HEALTH_ATTEMPTS", "3"))
-_ZABBIX_STARTUP_HEALTH_RETRY_DELAY = float(
-    os.getenv("ZABBIX_STARTUP_HEALTH_RETRY_DELAY", "5")
-)
 
 _CORE_ROUTER_SPECS = [
     ("app.api.health", "router", "api", "none"),
@@ -74,8 +73,10 @@ _CORE_ROUTER_SPECS = [
     # deferred, they 404 during the startup load window and we'd silently drop
     # payment confirmations / monitoring alerts on every restart.
     ("app.api.billing", "webhook_router", "api", "none"),
-    ("app.api.zabbix_webhook", "router", "api", "none"),
     ("app.api.crm_webhooks", "router", "api", "none"),
+    ("app.api.inbox_webhooks", "router", "api", "none"),
+    ("app.api.meta_inbox_webhooks", "router", "api", "none"),
+    ("app.api.chat_widget", "router", "web", "none"),
     ("app.api.crm", "router", "api", "none"),
     ("app.api.search", "router", "api", "readperm:customer:read"),
     ("app.api.network_ont_ops", "router", "api", "user"),
@@ -89,9 +90,11 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.web_domains", "router", "web", "none"),
     ("app.web.customer", "router", "web", "none"),
     ("app.web.reseller", "router", "web", "none"),
+    ("app.web.vendor_portal", "router", "web", "none"),
     ("app.web.public", "router", "web", "none"),
     ("app.web.admin.network_routers", "router", "admin", "none"),
     ("app.websocket.router", "router", "ws", "none"),
+    ("app.websocket.workqueue_router", "router", "ws", "none"),
     ("app.api.notifications", "router", "api", "perm:monitoring"),
     ("app.api.external", "router", "api", "admin"),
     ("app.api.billing", "router", "api", "user"),
@@ -99,15 +102,33 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.catalog", "router", "api", "user"),
     ("app.api.auth", "router", "api", "admin"),
     ("app.api.auth_flow", "router", "api", "none"),
+    ("app.api.ticket_confirm", "router", "api", "none"),
     # Customer self-care: self-scoped reads, auth-only (no staff permission).
     ("app.api.me", "router", "api", "user"),
     ("app.api.reseller", "router", "api", "user"),
     ("app.api.payment_proofs", "router", "api", "user"),
     ("app.api.service_requests", "router", "api", "user"),
     ("app.api.rbac", "router", "api", "user"),
+    ("app.api.staff_sync", "router", "api", "user"),
     ("app.api.customers", "router", "api", "user"),
     ("app.api.subscribers", "router", "api", "user"),
+    # Native referrals: staff surface rides crm:lead:* per-route
+    # permissions; capture and signed-context signup are public continuations
+    # from shared /r/{code} links.
+    ("app.api.crm_referrals", "router", "api", "user"),
+    ("app.api.crm_referrals", "public_router", "api", "none"),
     ("app.api.support", "router", "api", "user"),
+    # Native sales vertical: per-route crm:lead / crm:quote /
+    # crm:sales_order permission guards on top of the user-auth base.
+    ("app.api.crm_sales", "router", "api", "user"),
+    ("app.api.sales", "router", "api", "user"),
+    ("app.api.sales_orders", "router", "api", "user"),
+    # Native projects vertical.
+    ("app.api.projects", "router", "api", "user"),
+    ("app.api.dispatch", "router", "api", "perm:operations:dispatch:read"),
+    ("app.api.field.config", "router", "api", "none"),
+    ("app.api.field", "router", "api", "user"),
+    ("app.api.vendor_portal", "router", "api", "user"),
     ("app.api.tables", "router", "api", "user"),
     ("app.api.domains_provisioning", "router", "api", "user"),
     ("app.api.domains_monitoring", "router", "api", "user"),
@@ -115,6 +136,7 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.network_device_groups", "router", "api", "user"),
     ("app.api.network_catalog", "router", "api", "user"),
     ("app.api.domains_network_fiber", "router", "api", "user"),
+    ("app.api.asset_inventory", "router", "api", "user"),
     ("app.api.domains_usage", "router", "api", "user"),
     ("app.api.imports", "router", "api", "perm:system:settings"),
     ("app.api.audit", "router", "api", "none"),
@@ -122,13 +144,20 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.geocoding", "router", "api", "readperm:gis:serviceability:check"),
     ("app.api.qualification", "router", "api", "perm:provisioning"),
     ("app.api.settings", "router", "api", "perm:system:settings"),
+    ("app.api.branding", "router", "api", "perm:system:settings"),
     ("app.api.webhooks", "router", "api", "admin"),
     ("app.api.connectors", "router", "api", "admin"),
     ("app.api.integrations", "router", "api", "admin"),
     ("app.api.scheduler", "router", "api", "user"),
     ("app.api.comms", "router", "api", "admin"),
+    ("app.api.campaigns", "router", "api", "admin"),
+    # One-click unsubscribe is followed from a mail client with no session.
+    ("app.api.campaigns", "public_router", "api", "none"),
+    ("app.api.ai_operations", "router", "api", "admin"),
+    ("app.api.workqueue", "router", "api", "user"),
     ("app.api.analytics", "router", "api", "admin"),
     ("app.api.fiber_plant", "router", "api", "perm:network:fiber"),
+    ("app.api.vendor_routes", "router", "api", "perm:network:fiber"),
     ("app.api.nextcloud_talk", "router", "api", "admin"),
     ("app.api.wireguard", "router", "api", "perm:network:vpn"),
     ("app.api.nas", "router", "api", "perm:network:nas"),
@@ -138,7 +167,6 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.bandwidth", "router", "api", "perm:monitoring"),
     ("app.api.validation", "router", "api", "admin"),
     ("app.api.defaults", "router", "api", "perm:system:settings"),
-    ("app.api.zabbix", "router", "api", "perm:monitoring"),
     ("app.api.wireguard", "public_router", "api", "none"),
 ]
 
@@ -384,7 +412,6 @@ def _seed_startup_settings() -> None:
         seed_tr069_settings,
         seed_usage_policy_settings,
         seed_usage_settings,
-        seed_vas_settings,
         seed_wireguard_settings,
     )
 
@@ -425,8 +452,12 @@ def _seed_startup_settings() -> None:
         seed_collections_settings(db)
         seed_collections_policy_settings(db)
         seed_geocoding_settings(db)
-        seed_vas_settings(db)
         seed_radius_settings(db)
+        from app.services.external_radius_targets import (
+            seed_external_radius_target_from_env,
+        )
+
+        seed_external_radius_target_from_env(db)
         seed_radius_policy_settings(db)
         seed_scheduler_settings(db)
         seed_subscriber_settings(db)
@@ -446,59 +477,6 @@ def _seed_startup_settings() -> None:
         extra={
             "event": "startup_seed_complete",
             "duration_ms": round((monotonic() - started_at) * 1000.0, 2),
-        },
-    )
-
-
-def _log_zabbix_startup_health() -> None:
-    """Probe Zabbix availability during deferred startup, with retries.
-
-    Runs in a worker thread off the serving path (see _run_deferred_startup),
-    so a blocking retry loop here never stalls the event loop. The first probe
-    can fail transiently while the process is still saturated from the startup
-    seed, so retry a few times (with a generous, env-tunable timeout) before
-    logging a warning — avoiding false "unavailable" alarms.
-    """
-    from app.services.zabbix import check_zabbix_availability
-
-    health: dict | None = None
-    attempt = 0
-    for attempt in range(1, _ZABBIX_STARTUP_HEALTH_ATTEMPTS + 1):
-        try:
-            health = check_zabbix_availability(timeout=_ZABBIX_STARTUP_HEALTH_TIMEOUT)
-        except Exception:
-            logger.debug(
-                "zabbix_startup_health_attempt_failed",
-                exc_info=True,
-                extra={
-                    "event": "zabbix_startup_health_attempt_failed",
-                    "attempt": attempt,
-                },
-            )
-            health = None
-        if health and health.get("available"):
-            break
-        if attempt < _ZABBIX_STARTUP_HEALTH_ATTEMPTS:
-            sleep(_ZABBIX_STARTUP_HEALTH_RETRY_DELAY)
-
-    if health is None:
-        logger.warning(
-            "zabbix_startup_health_failed",
-            extra={"event": "zabbix_startup_health_failed", "attempts": attempt},
-        )
-        return
-
-    log = logger.info if health.get("available") else logger.warning
-    log(
-        "zabbix_startup_health",
-        extra={
-            "event": "zabbix_startup_health",
-            "status": health.get("status"),
-            "configured": health.get("configured"),
-            "available": health.get("available"),
-            "api_url": health.get("api_url"),
-            "status_message": health.get("message"),
-            "attempts": attempt,
         },
     )
 
@@ -530,7 +508,6 @@ async def _run_deferred_startup() -> None:
     The seeds are idempotent (upsert/skip-if-exists), so deferring is safe."""
     for fn, step in (
         (_seed_startup_settings, "seed"),
-        (_log_zabbix_startup_health, "zabbix"),
         (_warn_on_scheduler_registry_drift, "scheduler_drift"),
     ):
         try:
@@ -626,31 +603,90 @@ async def grafana_webhook_sink(request: Request) -> Response:
     return Response(status_code=204)
 
 
-def _get_cached_audit_settings() -> dict | None:
-    """Return cached audit settings if valid, else None."""
+def _default_audit_settings() -> dict:
+    return {
+        "enabled": True,
+        "methods": {"POST", "PUT", "PATCH", "DELETE"},
+        "skip_paths": ["/static", "/web", "/health"],
+        "read_trigger_header": "x-audit-read",
+        "read_trigger_query": "audit",
+    }
+
+
+def _get_cached_audit_settings(*, allow_stale: bool = False) -> dict | None:
+    """Return cached audit settings when fresh, or stale when explicitly allowed."""
     with _AUDIT_SETTINGS_LOCK:
-        if (
-            _AUDIT_SETTINGS_CACHE
-            and _AUDIT_SETTINGS_CACHE_AT
-            and monotonic() - _AUDIT_SETTINGS_CACHE_AT
-            < _AUDIT_SETTINGS_CACHE_TTL_SECONDS
+        if not _AUDIT_SETTINGS_CACHE or not _AUDIT_SETTINGS_CACHE_AT:
+            return None
+        if allow_stale or (
+            monotonic() - _AUDIT_SETTINGS_CACHE_AT < _AUDIT_SETTINGS_CACHE_TTL_SECONDS
         ):
             return _AUDIT_SETTINGS_CACHE
     return None
+
+
+def _set_audit_settings_refresh_timeout(db: Session) -> None:
+    """Keep best-effort audit config refreshes from waiting behind DB pressure."""
+    bind = db.get_bind()
+    if bind.dialect.name != "postgresql":
+        return
+    db.execute(
+        text(f"SET LOCAL statement_timeout = '{_AUDIT_SETTINGS_REFRESH_TIMEOUT_MS}ms'")
+    )
+
+
+def _is_audit_always_skipped(path: str) -> bool:
+    return path in _AUDIT_ALWAYS_SKIP_EXACT_PATHS or any(
+        path.startswith(prefix) for prefix in _AUDIT_ALWAYS_SKIP_PATH_PREFIXES
+    )
+
+
+def _try_log_audit_request(request: Request, response: Response) -> None:
+    db = SessionLocal()
+    try:
+        audit_service.audit_events.log_request(db, request, response)
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        logger.warning(
+            "audit_log_request_failed",
+            exc_info=True,
+            extra={"event": "audit_log_request_failed"},
+        )
+    finally:
+        db.close()
 
 
 @app.middleware("http")
 async def audit_middleware(request: Request, call_next):
     response: Response
     path = request.url.path
+    if _is_audit_always_skipped(path):
+        return await call_next(request)
+
     # Check cache first to avoid unnecessary session creation
     audit_settings = _get_cached_audit_settings()
     if audit_settings is None:
-        db = SessionLocal()
-        try:
-            audit_settings = _load_audit_settings(db)
-        finally:
-            db.close()
+        audit_settings = _get_cached_audit_settings(allow_stale=True)
+        if audit_settings is None:
+            db = SessionLocal()
+            try:
+                audit_settings = _load_audit_settings(db)
+            except SQLAlchemyError:
+                logger.warning(
+                    "audit_settings_refresh_failed",
+                    exc_info=True,
+                    extra={
+                        "event": "audit_settings_refresh_failed",
+                        "using_stale_cache": False,
+                    },
+                )
+                audit_settings = _default_audit_settings()
+                audit_settings["enabled"] = False
+            finally:
+                db.close()
     if not audit_settings["enabled"]:
         return await call_next(request)
     track_read = request.method == "GET" and (
@@ -664,20 +700,10 @@ async def audit_middleware(request: Request, call_next):
         response = await call_next(request)
     except Exception:
         if should_log:
-            db = SessionLocal()
-            try:
-                audit_service.audit_events.log_request(
-                    db, request, Response(status_code=500)
-                )
-            finally:
-                db.close()
+            _try_log_audit_request(request, Response(status_code=500))
         raise
     if should_log:
-        db = SessionLocal()
-        try:
-            audit_service.audit_events.log_request(db, request, response)
-        finally:
-            db.close()
+        _try_log_audit_request(request, response)
     return response
 
 
@@ -743,6 +769,10 @@ def _get_cached_domain_routing(*, allow_stale: bool = False) -> dict[str, str] |
 @app.middleware("http")
 async def domain_routing_middleware(request: Request, call_next):
     """Apply lightweight host-aware routing for the selfcare domain."""
+    path = request.url.path
+    if path not in {"", "/"}:
+        return await call_next(request)
+
     host = (request.headers.get("host") or "").split(":")[0].lower()
     if not host:
         return await call_next(request)
@@ -770,13 +800,8 @@ async def domain_routing_middleware(request: Request, call_next):
     if not selfcare or host != selfcare:
         return await call_next(request)
 
-    path = request.url.path
-
     # Keep the selfcare host convenient by redirecting only the bare root
     # to the configured portal landing page. All other paths stay reachable.
-    if path not in {"", "/"}:
-        return await call_next(request)
-
     redirect_target = str(routing.get("redirect", "/portal/"))
     from starlette.responses import RedirectResponse as StarletteRedirect
 
@@ -784,7 +809,14 @@ async def domain_routing_middleware(request: Request, call_next):
 
 
 # CSRF Protection paths - protect all web portals and auth forms
-_CSRF_PROTECTED_PATHS = ["/admin/", "/web/", "/portal/", "/reseller/", "/auth/"]
+_CSRF_PROTECTED_PATHS = [
+    "/admin/",
+    "/web/",
+    "/portal/",
+    "/reseller/",
+    "/vendor/",
+    "/auth/",
+]
 _CSRF_EXEMPT_PATHS = ["/api/", "/health", "/metrics", "/static/"]
 _CSRF_EXEMPT_EXACT_PATHS = {"/portal/auth/logout"}
 _WEB_AUTH_REFRESH_PATHS = ("/admin/", "/web/")
@@ -1109,6 +1141,56 @@ def _client_ip(request: Request) -> str:
     return client_ip(request)
 
 
+_API_SYNC_PRESSURE_DEFAULT_PREFIXES = ("/api/v1/",)
+_API_SYNC_PRESSURE_DEFAULT_EXEMPT_PREFIXES = (
+    "/api/v1/auth/login",
+    "/api/v1/alerts/",
+    "/api/v1/webhooks/",
+)
+_API_SYNC_PRESSURE_DEFAULT_OFFENDER_IPS = ("149.102.158.167",)
+_API_SYNC_FEED_PATHS = frozenset(
+    {
+        "/api/v1/billing-accounts/sync",
+        "/api/v1/credit-notes/sync",
+        "/api/v1/invoices/sync",
+        "/api/v1/payment-channels/sync",
+        "/api/v1/payments/sync",
+        "/api/v1/resellers/sync",
+        "/api/v1/subscribers/sync",
+        "/api/v1/tax-rates/sync",
+    }
+)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return max(int(raw), minimum)
+    except ValueError:
+        logger.warning("Invalid integer env %s=%r; using %s", name, raw, default)
+        return default
+
+
+def _env_csv(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return tuple(item.strip() for item in raw.split(",") if item.strip())
+
+
+def _path_matches_prefix(path: str, prefixes: tuple[str, ...]) -> bool:
+    return any(path.startswith(prefix) for prefix in prefixes)
+
+
 def _request_is_https(request: Request) -> bool:
     proto = request.headers.get("x-forwarded-proto", "")
     if proto:
@@ -1190,6 +1272,77 @@ async def login_rate_limit_middleware(request: Request, call_next):
 
 
 @app.middleware("http")
+async def api_sync_pressure_guard_middleware(request: Request, call_next):
+    """Throttle API sync bursts before downstream handlers can acquire DB sessions."""
+    if not _env_bool("API_SYNC_PRESSURE_GUARD_ENABLED", True):
+        return await call_next(request)
+
+    path = request.url.path
+    prefixes = _env_csv(
+        "API_SYNC_PRESSURE_PATH_PREFIXES", _API_SYNC_PRESSURE_DEFAULT_PREFIXES
+    )
+    exempt_prefixes = _env_csv(
+        "API_SYNC_PRESSURE_EXEMPT_PATH_PREFIXES",
+        _API_SYNC_PRESSURE_DEFAULT_EXEMPT_PREFIXES,
+    )
+    if not _path_matches_prefix(path, prefixes) or _path_matches_prefix(
+        path, exempt_prefixes
+    ):
+        return await call_next(request)
+
+    from starlette.responses import JSONResponse as _JSONResponse
+
+    from app.services.rate_limiter_adapter import allow_operation
+
+    ip_address = _client_ip(request)
+    window = _env_int("API_SYNC_PRESSURE_WINDOW_SECONDS", 60)
+    offender_ips = set(
+        _env_csv(
+            "API_SYNC_PRESSURE_OFFENDER_IPS",
+            _API_SYNC_PRESSURE_DEFAULT_OFFENDER_IPS,
+        )
+    )
+    if path in _API_SYNC_FEED_PATHS:
+        bucket = "feed"
+        limit = _env_int("API_SYNC_PRESSURE_FEED_LIMIT", 60)
+    elif ip_address in offender_ips:
+        bucket = "listed"
+        limit = _env_int("API_SYNC_PRESSURE_OFFENDER_LIMIT", 10)
+    else:
+        bucket = "general"
+        limit = _env_int("API_SYNC_PRESSURE_PER_IP_LIMIT", 300)
+
+    decision = allow_operation(
+        f"api-v1-pressure:{bucket}:{ip_address}",
+        limit=limit,
+        window_seconds=window,
+    )
+    if decision.allowed:
+        return await call_next(request)
+
+    retry_after = decision.retry_after_seconds or window
+    try:
+        from app.metrics import API_SYNC_PRESSURE_LIMITED
+
+        scope = next(
+            (
+                prefix
+                for prefix in prefixes
+                if path == prefix or path.startswith(prefix)
+            ),
+            "api",
+        )
+        API_SYNC_PRESSURE_LIMITED.labels(bucket, scope).inc()
+    except Exception:
+        logger.debug("api_sync_pressure_metric_failed", exc_info=True)
+    return _JSONResponse(
+        {"detail": "API sync pressure limit reached. Please retry shortly."},
+        status_code=429,
+        headers={"Retry-After": str(retry_after)},
+    )
+
+
+@app.middleware("http")
 async def security_headers_middleware(request: Request, call_next):
     """Emit baseline security headers from the app itself, independent of the
     reverse proxy (the deployed proxy config can drift from the repo)."""
@@ -1222,13 +1375,8 @@ def _load_audit_settings(db: Session):
             and now - _AUDIT_SETTINGS_CACHE_AT < _AUDIT_SETTINGS_CACHE_TTL_SECONDS
         ):
             return _AUDIT_SETTINGS_CACHE
-    defaults = {
-        "enabled": True,
-        "methods": {"POST", "PUT", "PATCH", "DELETE"},
-        "skip_paths": ["/static", "/web", "/health"],
-        "read_trigger_header": "x-audit-read",
-        "read_trigger_query": "audit",
-    }
+    defaults = _default_audit_settings()
+    _set_audit_settings_refresh_timeout(db)
     rows = (
         db.query(DomainSetting)
         .filter(DomainSetting.domain == SettingDomain.audit)

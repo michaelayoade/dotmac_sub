@@ -7,15 +7,14 @@ import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
-from typing import cast
-from urllib.parse import urlparse, urlunparse
+from typing import Any, cast
 
 from fastapi import HTTPException
 from sqlalchemy import and_, bindparam, create_engine, func, or_, text
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import Session, selectinload
 
-from app.models.billing import Invoice, InvoiceLine, InvoiceStatus, TaxApplication
+from app.models.billing import Invoice, InvoiceStatus, TaxApplication
 from app.models.catalog import (
     AccessCredential,
     AddOn,
@@ -39,6 +38,7 @@ from app.models.usage import (
     UsageRatingRunStatus,
     UsageRecord,
 )
+from app.schemas.billing import InvoiceCreate, SystemInvoiceLineCreate
 from app.schemas.usage import (
     QuotaBucketCreate,
     QuotaBucketUpdate,
@@ -51,11 +51,18 @@ from app.schemas.usage import (
     UsageRecordCreate,
     UsageRecordUpdate,
 )
+from app.services import control_registry, settings_spec
 from app.services import domain_settings as domain_settings_service
-from app.services import settings_spec
-from app.services.common import apply_ordering, apply_pagination, validate_enum
+from app.services.billing.invoices import InvoiceLines, Invoices
+from app.services.common import (
+    apply_ordering,
+    apply_pagination,
+    coerce_uuid,
+    validate_enum,
+)
 from app.services.events import emit_event
 from app.services.events.types import EventType
+from app.services.radius_accounting_health import assess_freshness, stale_after_seconds
 from app.services.response import ListResponseMixin, list_response
 
 logger = logging.getLogger(__name__)
@@ -205,38 +212,17 @@ def _write_subscription_ips_from_accounting(
         subscription.ipv6_address = ipv6
 
 
-def _normalize_radius_db_url(value: str | None) -> str | None:
-    if not value:
-        return None
-    db_url = value.strip()
-    if not db_url:
-        return None
-    if db_url.startswith("postgresql://"):
-        db_url = "postgresql+psycopg://" + db_url[len("postgresql://") :]
-    parsed = urlparse(db_url)
-    hostname = parsed.hostname or ""
-    if hostname in {"localhost", "127.0.0.1"} and parsed.port == 5437:
-        db_url = urlunparse(
-            parsed._replace(
-                netloc="radius:l2f3clS-Ws9WgTXcsW3HoznBnEq3n7N-@radius-db:5432"
-            )
-        )
-    return db_url
+def _radius_accounting_target(db: Session) -> dict[str, Any] | None:
+    """Resolve the singular DB-configured accounting authority and schema."""
+    from app.services.external_radius_targets import authoritative_accounting_target
+
+    return authoritative_accounting_target(db)
 
 
-def _radius_accounting_db_url() -> str | None:
-    dsn = _normalize_radius_db_url(os.getenv("RADIUS_DB_DSN"))
-    if dsn:
-        return dsn
-    host = (os.getenv("RADIUS_DB_HOST") or "radius-db").strip()
-    database = (os.getenv("RADIUS_DB_NAME") or "radius").strip()
-    username = (os.getenv("RADIUS_DB_USER") or "radius").strip()
-    password = (
-        os.getenv("RADIUS_DB_PASS") or "l2f3clS-Ws9WgTXcsW3HoznBnEq3n7N-"
-    ).strip()
-    if not all([host, database, username, password]):
-        return None
-    return f"postgresql+psycopg://{username}:{password}@{host}:5432/{database}"
+def _radius_accounting_db_url(db: Session) -> str | None:
+    """Compatibility reader for callers that only need the configured URL."""
+    target = _radius_accounting_target(db)
+    return str(target["db_url"]) if target else None
 
 
 def _get_radius_accounting_cursor(db: Session) -> int:
@@ -306,7 +292,7 @@ def _status_from_radacct(row: dict[str, object]) -> AccountingStatus:
 # Building a fresh client (and its connection pool) each call leaked sockets
 # for the life of the prefork child — the second leak behind the 2026-06-10
 # ingestion worker OOM loop. The leak was dormant until the open-session
-# refresh pass (PR #142) made interim re-reads routine.
+# refresh pass made interim re-reads routine.
 _BANDWIDTH_REDIS: tuple[str, object] | None = None
 
 
@@ -623,9 +609,30 @@ _RADACCT_OPTIONAL_COLUMNS = (
 )
 
 
-def _radacct_select_list(conn) -> str:
+def _release_postgres_read_transaction(db: Session) -> None:
+    bind = db.get_bind()
+    if bind.dialect.name.startswith("postgres"):
+        db.rollback()
+
+
+def _quoted_table_identifier(conn, table_name: str) -> str:
+    from app.services.external_radius_targets import sanitize_table_identifier
+
+    safe_name = sanitize_table_identifier(table_name, "radacct")
+    quote = conn.dialect.identifier_preparer.quote
+    return ".".join(quote(part) for part in safe_name.split("."))
+
+
+def _radacct_select_list(conn, table_name: str) -> str:
+    from app.services.external_radius_targets import sanitize_table_identifier
+
+    safe_name = sanitize_table_identifier(table_name, "radacct")
+    parts = safe_name.split(".")
+    schema = ".".join(parts[:-1]) or None
     try:
-        available = {c["name"] for c in sa_inspect(conn).get_columns("radacct")}
+        available = {
+            c["name"] for c in sa_inspect(conn).get_columns(parts[-1], schema=schema)
+        }
     except Exception:
         available = set()
     extras = [c for c in _RADACCT_OPTIONAL_COLUMNS if c in available]
@@ -636,6 +643,7 @@ def _refresh_open_sessions_from_radacct(
     db: Session,
     conn,
     select_list: str,
+    table_sql: str,
     *,
     batch: int = _RADIUS_REFRESH_BATCH,
 ) -> tuple[int, int]:
@@ -683,18 +691,19 @@ def _refresh_open_sessions_from_radacct(
     if not candidates:
         return 0, 0
 
-    db.query(RadiusAccountingSession).filter(
-        RadiusAccountingSession.id.in_([row_id for row_id, _, _ in candidates])
-    ).update({"refresh_attempted_at": now}, synchronize_session=False)
-
+    candidate_ids = [row_id for row_id, _, _ in candidates]
     session_ids = sorted({sid for _, sid, _ in candidates})
     usernames = sorted({username for _, _, username in candidates if username})
+    _release_postgres_read_transaction(db)
     if not usernames:
+        db.query(RadiusAccountingSession).filter(
+            RadiusAccountingSession.id.in_(candidate_ids)
+        ).update({"refresh_attempted_at": now}, synchronize_session=False)
         return len(candidates), 0
     stmt = text(
         f"""
                 SELECT {select_list}
-                FROM radacct
+                FROM {table_sql}
                 WHERE acctsessionid IN :session_ids
                   AND username IN :usernames
                 ORDER BY radacctid ASC
@@ -704,9 +713,13 @@ def _refresh_open_sessions_from_radacct(
         bindparam("usernames", expanding=True),
     )
     result = conn.execute(stmt, {"session_ids": session_ids, "usernames": usernames})
+    rows = [dict(row._mapping) for row in result]
+    db.query(RadiusAccountingSession).filter(
+        RadiusAccountingSession.id.in_(candidate_ids)
+    ).update({"refresh_attempted_at": now}, synchronize_session=False)
     updated = 0
-    for row in result:
-        if _upsert_accounting_row(db, dict(row._mapping)):
+    for row in rows:
+        if _upsert_accounting_row(db, row):
             updated += 1
     return len(candidates), updated
 
@@ -715,25 +728,37 @@ def import_radius_accounting(
     db: Session,
     *,
     limit: int | None = None,
-) -> dict[str, int | bool]:
-    db_url = _radius_accounting_db_url()
-    if not db_url:
-        return {"ok": False, "processed": 0, "created_or_updated": 0, "cursor": 0}
+) -> dict[str, int | bool | str | None]:
+    target = _radius_accounting_target(db)
+    if not target:
+        return {
+            "ok": False,
+            "processed": 0,
+            "created_or_updated": 0,
+            "cursor": 0,
+            "source_status": "unconfigured",
+            "source_latest_at": None,
+            "source_age_seconds": None,
+        }
 
+    db_url = str(target["db_url"])
+    radacct_table = str(target["radacct_table"])
     batch_size = max(limit or 500, 1)
     last_radacctid = _get_radius_accounting_cursor(db)
+    _release_postgres_read_transaction(db)
     processed = 0
     created_or_updated = 0
     refreshed = 0
     cursor = last_radacctid
     engine = _radacct_engine(db_url)
     with engine.begin() as conn:
-        select_list = _radacct_select_list(conn)
+        table_sql = _quoted_table_identifier(conn, radacct_table)
+        select_list = _radacct_select_list(conn, radacct_table)
         result = conn.execute(
             text(
                 f"""
                 SELECT {select_list}
-                FROM radacct
+                FROM {table_sql}
                 WHERE radacctid > :cursor
                 ORDER BY radacctid ASC
                 LIMIT :limit
@@ -747,15 +772,27 @@ def import_radius_accounting(
             if _upsert_accounting_row(db, row):
                 created_or_updated += 1
             cursor = max(cursor, int(row.get("radacctid") or 0))
+        if cursor > last_radacctid:
+            _set_radius_accounting_cursor(db, cursor)
+        db.commit()
         # New rows first (a fresh Stop may close a session and shrink the
         # refresh set), then re-read radacct for whatever is still open.
-        db.flush()
         refresh_checked, refreshed = _refresh_open_sessions_from_radacct(
-            db, conn, select_list, batch=_RADIUS_REFRESH_BATCH
+            db,
+            conn,
+            select_list,
+            table_sql,
+            batch=_RADIUS_REFRESH_BATCH,
+        )
+        source_latest_at = _coerce_radacct_ts(
+            conn.execute(
+                text(
+                    "SELECT MAX(COALESCE(acctstoptime, acctupdatetime, "  # nosec B608  # noqa: S608 -- sanitized identifier
+                    f"acctstarttime)) FROM {table_sql}"
+                )
+            ).scalar()
         )
 
-    if cursor > last_radacctid:
-        _set_radius_accounting_cursor(db, cursor)
     db.commit()
     if refreshed:
         logger.info(
@@ -763,12 +800,24 @@ def import_radius_accounting(
             refreshed,
             refresh_checked,
         )
+    freshness = assess_freshness(
+        source_latest_at,
+        stale_seconds=stale_after_seconds(db),
+    )
     return {
-        "ok": True,
+        "ok": freshness.fresh,
         "processed": processed,
         "created_or_updated": created_or_updated,
         "refreshed": refreshed,
         "cursor": cursor,
+        "source_status": freshness.state.value,
+        "source_latest_at": (
+            freshness.observed_at.isoformat()
+            if freshness.observed_at is not None
+            else None
+        ),
+        "source_age_seconds": freshness.age_seconds,
+        "source_stale_after_seconds": freshness.stale_after_seconds,
     }
 
 
@@ -837,6 +886,11 @@ def reap_stale_radius_sessions(
             stale_after_seconds,
         )
     return {"reaped": reaped, "stale_after_seconds": stale_after_seconds}
+
+
+# Single source of truth for the FUP warn ratio fallback (matches the first
+# value of the usage_warning_thresholds spec default "0.8,0.9").
+DEFAULT_FUP_WARN_RATIO = 0.8
 
 
 def _parse_warning_thresholds(value: str | None) -> list[Decimal]:
@@ -1040,15 +1094,7 @@ def _emit_usage_events(
     previous_used: Decimal,
     new_used: Decimal,
 ) -> None:
-    warning_enabled = settings_spec.resolve_value(
-        db, SettingDomain.usage, "usage_warning_enabled"
-    )
-    if warning_enabled is not None and str(warning_enabled).lower() in {
-        "0",
-        "false",
-        "no",
-        "off",
-    }:
+    if not control_registry.is_enabled(db, "usage.warnings"):
         return
     included = Decimal(str(bucket.included_gb or 0))
     if included <= 0:
@@ -1148,19 +1194,21 @@ def _resolve_or_create_invoice(
         if default_status
         else InvoiceStatus.draft
     )
-    invoice = Invoice(
-        account_id=account_id,
-        status=status_value,
-        currency=currency,
-        subtotal=Decimal("0.00"),
-        tax_total=Decimal("0.00"),
-        total=Decimal("0.00"),
-        balance_due=Decimal("0.00"),
-        billing_period_start=period_start,
-        billing_period_end=period_end,
+    invoice = Invoices.stage_system_invoice(
+        db,
+        InvoiceCreate(
+            account_id=coerce_uuid(account_id),
+            status=status_value,
+            currency=currency,
+            subtotal=Decimal("0.00"),
+            tax_total=Decimal("0.00"),
+            total=Decimal("0.00"),
+            balance_due=Decimal("0.00"),
+            billing_period_start=period_start,
+            billing_period_end=period_end,
+        ),
+        reason="usage_charge_posting",
     )
-    db.add(invoice)
-    db.flush()
     return invoice
 
 
@@ -1584,17 +1632,19 @@ class UsageCharges(ListResponseMixin):
                 charge.period_end,
                 charge.currency,
             )
-        line = InvoiceLine(
-            invoice_id=invoice.id,
-            subscription_id=charge.subscription_id,
-            description="Usage overage",
-            quantity=Decimal("1.000"),
-            unit_price=_round_money(charge.amount),
-            amount=_round_money(charge.amount),
-            tax_application=TaxApplication.exclusive,
+        line = InvoiceLines.stage_system_line(
+            db,
+            SystemInvoiceLineCreate(
+                invoice_id=invoice.id,
+                subscription_id=charge.subscription_id,
+                description="Usage overage",
+                quantity=Decimal("1.000"),
+                unit_price=_round_money(charge.amount),
+                amount=_round_money(charge.amount),
+                tax_application=TaxApplication.exclusive,
+            ),
+            reason="usage_charge_posting",
         )
-        db.add(line)
-        db.flush()
         charge.invoice_line_id = line.id
         charge.status = UsageChargeStatus.posted
         db.flush()

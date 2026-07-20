@@ -175,6 +175,9 @@ class SystemUserRole(Base):
     # See SubscriberRole.scope_type / scope_id. Empty = global grant.
     scope_type: Mapped[str] = mapped_column(String(20), default="", server_default="")
     scope_id: Mapped[str] = mapped_column(String(64), default="", server_default="")
+    source: Mapped[str] = mapped_column(
+        String(40), nullable=False, default="local", server_default="local"
+    )
     assigned_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )

@@ -2,6 +2,8 @@
 
 from datetime import time
 
+import pytest
+from fastapi import HTTPException
 from starlette.datastructures import FormData
 
 from app.models.catalog import AccessType, PriceBasis, ServiceType
@@ -166,3 +168,61 @@ def test_clone_rules_preserves_extended_rule_fields(db_session):
     assert cloned_warning.is_active is False
     assert cloned_throttle.cooldown_minutes == 30
     assert str(cloned_throttle.enabled_by_rule_id) == str(cloned_warning.id)
+
+
+def _rule_form(threshold: str, **overrides) -> FormData:
+    fields = {
+        "name": "Guard Rule",
+        "consumption_period": "monthly",
+        "direction": "up_down",
+        "threshold_amount": threshold,
+        "threshold_unit": "gb",
+        "action": "notify",
+    }
+    fields.update(overrides)
+    return FormData(list(fields.items()))
+
+
+@pytest.mark.parametrize("bad", ["1O0", "", "0", "-5", "nan", "inf"])
+def test_add_rule_rejects_non_positive_threshold(db_session, catalog_offer, bad):
+    # A typo must 400, never silently coerce to a 0-GB threshold that would
+    # throttle/block every customer on the offer.
+    with pytest.raises(HTTPException) as exc:
+        handle_add_rule(db_session, str(catalog_offer.id), _rule_form(bad))
+    assert exc.value.status_code == 400
+    policy = fup_policies.get_or_create(db_session, str(catalog_offer.id))
+    assert fup_policies.list_rules(db_session, str(policy.id)) == []
+
+
+def test_update_rule_rejects_bad_threshold(db_session, catalog_offer):
+    handle_add_rule(db_session, str(catalog_offer.id), _rule_form("100"))
+    policy = fup_policies.get_or_create(db_session, str(catalog_offer.id))
+    rule = fup_policies.list_rules(db_session, str(policy.id))[0]
+
+    with pytest.raises(HTTPException) as exc:
+        handle_update_rule(
+            db_session, str(rule.id), FormData([("threshold_amount", "2O0")])
+        )
+    assert exc.value.status_code == 400
+    db_session.refresh(rule)
+    assert float(rule.threshold_amount) == 100.0
+
+
+def test_add_rule_rejects_out_of_range_speed_reduction(db_session, catalog_offer):
+    with pytest.raises(HTTPException) as exc:
+        handle_add_rule(
+            db_session,
+            str(catalog_offer.id),
+            _rule_form("100", action="reduce_speed", speed_reduction_percent="150"),
+        )
+    assert exc.value.status_code == 400
+
+
+def test_add_rule_rejects_non_numeric_sort_order(db_session, catalog_offer):
+    with pytest.raises(HTTPException) as exc:
+        handle_add_rule(
+            db_session,
+            str(catalog_offer.id),
+            _rule_form("100", sort_order="first"),
+        )
+    assert exc.value.status_code == 400

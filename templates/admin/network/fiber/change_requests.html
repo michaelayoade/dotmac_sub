@@ -74,7 +74,7 @@
                         {{ req.requested_by.first_name if req.requested_by else "-" }}
                     </td>
                     <td class="px-4 py-3 text-slate-600 dark:text-slate-300">
-                        {{ req.created_at.strftime("%Y-%m-%d %H:%M") if req.created_at else "-" }}
+                        {{ req.created_at | app_datetime('%Y-%m-%d %H:%M', '-') }}
                     </td>
                 </tr>
                 {% else %}

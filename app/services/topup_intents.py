@@ -33,6 +33,13 @@ class TopupIntentStatus(str, Enum):
     completed = "completed"
     expired = "expired"
     canceled = "canceled"
+    # A charge the gateway declined. Distinct from ``canceled`` (the customer
+    # walked away) and ``expired`` (we gave up waiting). The saved-card path was
+    # already passing "failed" — it just was not a member, so the write raised
+    # ValueError, the surrounding commit never ran, and the idempotency-key
+    # release was rolled back: a declined card locked the customer out of
+    # retrying with a different one.
+    failed = "failed"
 
 
 _VALID_TOPUP_STATUSES: frozenset[str] = frozenset(s.value for s in TopupIntentStatus)
@@ -40,6 +47,9 @@ _TOPUP_TERMINAL_STATUSES: frozenset[str] = frozenset(
     {
         TopupIntentStatus.expired.value,
         TopupIntentStatus.canceled.value,
+        # A declined charge that later settles is a late recovery worth seeing,
+        # exactly like the other two.
+        TopupIntentStatus.failed.value,
     }
 )
 

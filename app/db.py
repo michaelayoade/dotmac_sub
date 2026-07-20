@@ -1,6 +1,7 @@
+import re
 from collections.abc import Generator
 from contextlib import contextmanager
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
@@ -10,9 +11,30 @@ from app.config import settings
 if TYPE_CHECKING:
     from app.services.unit_of_work import UnitOfWork
 
+T = TypeVar("T")
+
 
 class Base(DeclarativeBase):
     pass
+
+
+_LOCK_TIMEOUT_RE = re.compile(r"\d+(ms|s|min)?")
+
+
+def resolve_migration_lock_timeout(raw: str | None = None) -> str:
+    """Validated Postgres ``lock_timeout`` for the migration connection.
+
+    Bounds how long a migration waits to ACQUIRE a lock (NOT statement
+    runtime), so a schema-locking ``ALTER`` fails fast instead of queuing behind
+    the live app and piling every subsequent query behind it. Defaults to
+    ``5s``; override via ``ALEMBIC_LOCK_TIMEOUT`` (e.g. ``30s`` for a
+    maintenance window, ``0`` to disable). Malformed input falls back to the
+    default — the value is interpolated into a ``SET`` statement. The raw value
+    is owned by ``settings.alembic_lock_timeout`` (the config owner reads
+    ``ALEMBIC_LOCK_TIMEOUT``), not read here directly.
+    """
+    value = (raw if raw is not None else settings.alembic_lock_timeout).strip()
+    return value if _LOCK_TIMEOUT_RE.fullmatch(value) else "5s"
 
 
 def get_engine():
@@ -63,6 +85,29 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def finish_read_transaction(db: Session) -> None:
+    """Release a Postgres read transaction after all response data is materialized."""
+    bind = db.get_bind()
+    if bind.dialect.name != "postgresql":
+        return
+    if not db.in_transaction() or db.in_nested_transaction():
+        return
+    if db.new or db.dirty or db.deleted:
+        return
+    original_expire_on_commit = db.expire_on_commit
+    db.expire_on_commit = False
+    try:
+        db.commit()
+    finally:
+        db.expire_on_commit = original_expire_on_commit
+
+
+def finish_read_response(db: Session, value: T) -> T:
+    """Return an already-materialized read response after releasing its DB transaction."""
+    finish_read_transaction(db)
+    return value
 
 
 @contextmanager

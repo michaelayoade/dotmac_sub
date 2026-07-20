@@ -299,6 +299,18 @@ class TestAuditHelpers:
         result = format_changes(changes)
         assert result == "status: pending -> active"
 
+    def test_format_changes_created_snapshot_shape(self):
+        """ "created" events store {field: value} snapshots, not from/to pairs
+        (prod regression: the offer detail page 500'd on such rows)."""
+        changes = {"name": "50mbps plan (NCDC)", "billing_cycle": "annual"}
+        result = format_changes(changes)
+        assert result == "name: 50mbps plan (NCDC); billing_cycle: annual"
+
+    def test_format_changes_mixed_shapes(self):
+        changes = {"status": {"from": "pending", "to": "active"}, "code": "X1"}
+        result = format_changes(changes)
+        assert result == "status: pending -> active; code: X1"
+
     def test_format_changes_truncated(self):
         changes = {
             "a": {"from": 1, "to": 2},
@@ -425,18 +437,12 @@ class TestNumbering:
         assert result == "99"
 
     def test_next_sequence_value_creates_new(self, db_session):
-        from app.models.sequence import DocumentSequence  # noqa: F401
-
-        DocumentSequence.__table__.create(db_session.get_bind(), checkfirst=True)
         from app.services.numbering import _next_sequence_value
 
         value = _next_sequence_value(db_session, "test_seq_new", 100)
         assert value == 100
 
     def test_next_sequence_value_increments(self, db_session):
-        from app.models.sequence import DocumentSequence  # noqa: F401
-
-        DocumentSequence.__table__.create(db_session.get_bind(), checkfirst=True)
         from app.services.numbering import _next_sequence_value
 
         v1 = _next_sequence_value(db_session, "test_seq_inc", 1)
@@ -467,9 +473,6 @@ class TestNumbering:
 
     def test_generate_number_enabled(self, db_session):
         from app.models.domain_settings import SettingDomain
-        from app.models.sequence import DocumentSequence  # noqa: F401
-
-        DocumentSequence.__table__.create(db_session.get_bind(), checkfirst=True)
         from app.services.numbering import generate_number
 
         settings_map = {

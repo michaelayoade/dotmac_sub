@@ -37,6 +37,14 @@ class NasDevices(ListResponseMixin):
     }
 
     @staticmethod
+    def list_for_lifecycle(db: Session, *, lock: bool = False) -> list[NasDevice]:
+        """Return the authoritative NAS lifecycle inventory."""
+        query = select(NasDevice).order_by(NasDevice.id)
+        if lock:
+            query = query.with_for_update()
+        return list(db.scalars(query).all())
+
+    @staticmethod
     def create(db: Session, payload: NasDeviceCreate) -> NasDevice:
         """Create a new NAS device."""
         data = payload.model_dump(exclude_unset=True)
@@ -162,6 +170,29 @@ class NasDevices(ListResponseMixin):
         device.is_active = False
         device.status = NasDeviceStatus.decommissioned
         db.commit()
+
+    @staticmethod
+    def stage_lifecycle_state(
+        db: Session,
+        device_id: str | UUID,
+        *,
+        is_active: bool,
+        status: NasDeviceStatus,
+    ) -> NasDevice:
+        """Stage a lifecycle transition in the caller-owned transaction."""
+        device_uuid = coerce_uuid(device_id)
+        device = db.scalar(
+            select(NasDevice).where(NasDevice.id == device_uuid).with_for_update()
+        )
+        if device is None:
+            raise ValueError("NAS device not found")
+        if is_active and status == NasDeviceStatus.decommissioned:
+            raise ValueError("Active NAS cannot be decommissioned")
+        if not is_active and status != NasDeviceStatus.decommissioned:
+            raise ValueError("Inactive NAS must be decommissioned")
+        device.is_active = is_active
+        device.status = status
+        return device
 
     @staticmethod
     def update_last_seen(db: Session, device_id: str | UUID) -> NasDevice:

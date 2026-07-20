@@ -7,7 +7,7 @@ import uuid
 from app.models.project_mirror import ProjectMirror
 from app.models.quote_mirror import QuoteMirror
 from app.models.subscriber import Reseller, Subscriber
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from app.services import reseller_crm_views
 
 
@@ -87,7 +87,7 @@ def test_projects_and_work_orders_scoped(db_session):
         )
     )
     db_session.add(
-        WorkOrderMirror(
+        WorkOrder(
             crm_work_order_id="woA",
             subscriber_id=mine.id,
             title="Repair",
@@ -95,7 +95,7 @@ def test_projects_and_work_orders_scoped(db_session):
         )
     )
     db_session.add(
-        WorkOrderMirror(
+        WorkOrder(
             crm_work_order_id="woOther",
             subscriber_id=other.id,
             title="Y",

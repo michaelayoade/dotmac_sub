@@ -29,7 +29,7 @@
         color2="gray"
     ) %}
         <span class="text-xs text-slate-400 dark:text-slate-500">
-            Updated {{ health.generated_at.strftime('%Y-%m-%d %H:%M') if health.generated_at else '' }}
+            Updated {{ health.generated_at | app_datetime('%Y-%m-%d %H:%M', '') }}
         </span>
     {% endcall %}
 

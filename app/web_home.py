@@ -1,32 +1,31 @@
+"""Public landing page — the ISP's customer front door.
+
+Thin adapter per the UI information/action standard: the route resolves the
+canonical brand (brand_profiles, platform scope — the owner of identity and
+support contact) and renders. This page is public and unauthenticated, so the
+context must carry no customer or operational data; the template renders only
+brand-owned values and static task navigation.
+"""
+
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.services import subscriber as subscriber_service
-
-templates = Jinja2Templates(directory="templates")
+from app.services import brand_profiles
+from app.web.templates import templates
 
 router = APIRouter()
 
 
 @router.get("/", tags=["web"], response_class=HTMLResponse)
 def home(request: Request, db: Session = Depends(get_db)):
-    subscribers = subscriber_service.subscribers.list(
-        db=db,
-        business_account_id=None,
-        subscriber_type=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=25,
-        offset=0,
-    )
+    landing_brand = brand_profiles.resolve_brand(db)
     return templates.TemplateResponse(
         "index.html",
         {
             "request": request,
-            "title": "DotMac Subs - Subscription Management Platform",
-            "subscribers": subscribers,
+            "title": landing_brand.name,
+            "landing_brand": landing_brand,
         },
     )

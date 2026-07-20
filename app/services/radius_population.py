@@ -17,10 +17,11 @@ from __future__ import annotations
 
 import logging
 import sys
+from collections.abc import Iterable, Mapping
 from typing import cast
 
 import psycopg
-from sqlalchemy import select
+from sqlalchemy import Boolean, Column, Integer, String, delete, insert, select, text
 from sqlalchemy.orm import joinedload
 
 from app.db import SessionLocal
@@ -35,17 +36,45 @@ from app.services.credential_crypto import (
     decrypt_credential_with_key,
     get_encryption_key,
 )
+from app.services.external_radius_targets import (
+    active_external_radius_targets,
+    assert_legacy_target_alignment,
+    external_radius_table,
+    get_external_engine,
+)
 from app.services.radius_address_lists import (
     DEFAULT_SUSPENDED_ADDRESS_LIST,
     suspended_address_list,
 )
-from app.services.radius_dsn import radius_dsn_libpq
+from app.services.radius_projection_planner import plan_radius_projection
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
 ACCT_INTERIM_SECONDS = 300  # 5 min Acct-Interim-Update cadence
 SUSPENDED_ADDRESS_LIST = DEFAULT_SUSPENDED_ADDRESS_LIST
+
+
+def _result_count(result: Mapping[str, object], key: str) -> int:
+    """Read an integer counter from a structured projection result."""
+    value = result.get(key, 0)
+    return value if isinstance(value, int) else 0
+
+
+def _increment_result_count(
+    result: dict[str, object], key: str, amount: int = 1
+) -> None:
+    result[key] = _result_count(result, key) + amount
+
+
+def _captive_redirect_allowed(subscriber: object | None) -> bool:
+    """Compatibility adapter to the canonical captive eligibility owner."""
+    if subscriber is None:
+        return False
+    from app.models.subscriber import Subscriber
+    from app.services.walled_garden_policy import captive_account_eligible
+
+    return captive_account_eligible(cast(Subscriber, subscriber))
 
 
 def _rate_limit(offer: CatalogOffer, profile: RadiusProfile | None) -> str | None:
@@ -55,6 +84,29 @@ def _rate_limit(offer: CatalogOffer, profile: RadiusProfile | None) -> str | Non
     if offer and offer.speed_download_mbps and offer.speed_upload_mbps:
         return f"{offer.speed_download_mbps}M/{offer.speed_upload_mbps}M"
     return None
+
+
+def _effective_profile(
+    cred: AccessCredential | None,
+    subscription_profile: RadiusProfile | None,
+    profiles_by_id: dict,
+) -> RadiusProfile | None:
+    """Resolve the RADIUS profile that should shape a credential's radreply.
+
+    A dunning/FUP throttle is applied by setting ``AccessCredential.
+    radius_profile_id``; that credential-level override must win over the
+    subscription profile, otherwise the authoritative populate() sweep rebuilds
+    radreply from the offer/subscription speed and silently reverts the throttle
+    (SP-2). Mirrors the credential>subscription precedence in
+    ``enforcement.resolve_radius_profile``. Falls back to the subscription
+    profile when the credential carries no override (the normal, non-throttled
+    case — behaviour unchanged), or when the referenced profile can't be found.
+    """
+    if cred is not None and cred.radius_profile_id:
+        override = profiles_by_id.get(cred.radius_profile_id)
+        if override is not None:
+            return override
+    return subscription_profile
 
 
 def _radreply_attrs(
@@ -154,14 +206,154 @@ def _radreply_attrs(
     return attrs
 
 
-def populate(dry_run: bool = True) -> dict[str, int]:
-    # Single authority (shared with radius.py's event-time sync) so both writers
-    # target the same radius DB and cannot split-brain.
-    radius_dsn = radius_dsn_libpq()
-    if not radius_dsn:
-        raise RuntimeError("RADIUS database DSN not configured")
+class RadiusProjectionIncomplete(RuntimeError):
+    """At least one target failed; callers must not issue customer CoA."""
 
-    stats = {
+    def __init__(self, outcomes: list[dict[str, object]]) -> None:
+        self.outcomes = outcomes
+        failed = [str(item["target_name"]) for item in outcomes if not item["ok"]]
+        super().__init__(
+            "External RADIUS projection incomplete for target(s): " + ", ".join(failed)
+        )
+
+
+def _projection_tables(config: dict):
+    radcheck = external_radius_table(
+        config["radcheck_table"],
+        Column("username", String),
+        Column("attribute", String),
+        Column("op", String),
+        Column("value", String),
+    )
+    radreply = external_radius_table(
+        config["radreply_table"],
+        Column("username", String),
+        Column("attribute", String),
+        Column("op", String),
+        Column("value", String),
+    )
+    radusergroup = external_radius_table(
+        config["radusergroup_table"],
+        Column("username", String),
+        Column("groupname", String),
+        Column("priority", Integer),
+    )
+    return radcheck, radreply, radusergroup
+
+
+def _write_radius_projection(
+    conn,
+    config: dict,
+    work,
+    delete_usernames,
+    *,
+    access_groups: dict[str, str],
+    access_group_priority: int,
+    group_routing_enabled: bool,
+) -> dict[str, int]:
+    """Idempotently project auth, reply, and owned group rows to one target."""
+    if conn.dialect.name == "postgresql":
+        conn.execute(text("SELECT pg_advisory_xact_lock(3281601275)"))
+    radcheck, radreply, radusergroup = _projection_tables(config)
+    delete_list = sorted({str(name) for name in delete_usernames if name})
+    counts = {
+        "radcheck_written": 0,
+        "radreply_written": 0,
+        "radusergroup_written": 0,
+    }
+    if delete_list:
+        conn.execute(delete(radcheck).where(radcheck.c.username.in_(delete_list)))
+        conn.execute(delete(radreply).where(radreply.c.username.in_(delete_list)))
+        group_delete = delete(radusergroup).where(
+            radusergroup.c.username.in_(delete_list)
+        )
+        delete_group_rows = True
+        if not config["use_group"]:
+            owned_names = sorted({name for name in access_groups.values() if name})
+            if owned_names:
+                group_delete = group_delete.where(
+                    radusergroup.c.groupname.in_(owned_names)
+                )
+            else:
+                delete_group_rows = False
+        if delete_group_rows:
+            conn.execute(group_delete)
+
+    for item in work:
+        username, cleartext, attrs, _blocked, _status, mode, profile_group = item
+        if mode == "reject":
+            conn.execute(
+                insert(radcheck).values(
+                    username=username,
+                    attribute="Auth-Type",
+                    op=":=",
+                    value="Reject",
+                )
+            )
+            counts["radcheck_written"] += 1
+        else:
+            conn.execute(
+                insert(radcheck).values(
+                    username=username,
+                    attribute=config["password_attribute"],
+                    op=config["password_op"],
+                    value=cleartext,
+                )
+            )
+            counts["radcheck_written"] += 1
+            reply_rows = [
+                {
+                    "username": username,
+                    "attribute": attribute,
+                    "op": op or config["default_reply_op"],
+                    "value": value,
+                }
+                for attribute, op, value in attrs
+            ]
+            if reply_rows:
+                conn.execute(insert(radreply), reply_rows)
+                counts["radreply_written"] += len(reply_rows)
+
+        group_rows: list[dict[str, object]] = []
+        if config["use_group"] and profile_group and mode == "active":
+            group_rows.append(
+                {
+                    "username": username,
+                    "groupname": profile_group,
+                    "priority": config["group_priority"],
+                }
+            )
+        if group_routing_enabled:
+            access_key = (
+                "captive"
+                if mode == "captive"
+                else "suspended"
+                if mode == "reject"
+                else "active"
+            )
+            access_group = access_groups.get(access_key)
+            if access_group:
+                group_rows.append(
+                    {
+                        "username": username,
+                        "groupname": access_group,
+                        "priority": access_group_priority,
+                    }
+                )
+        if group_rows:
+            conn.execute(insert(radusergroup), group_rows)
+            counts["radusergroup_written"] += len(group_rows)
+    return counts
+
+
+def populate(
+    dry_run: bool = True,
+    only_usernames: set[str] | None = None,
+    *,
+    source_db=None,
+) -> dict[str, object]:
+    """Project the authoritative subscriber state to every configured target."""
+    stats: dict[str, object] = {
         "subscriptions_considered": 0,
         "skipped_no_credential": 0,
         "skipped_no_password": 0,
@@ -169,12 +361,53 @@ def populate(dry_run: bool = True) -> dict[str, int]:
         "radcheck_upserts": 0,
         "radreply_upserts": 0,
         "blocked_users_written": 0,
+        "captive_ineligible_optins": 0,
     }
 
     enc_key = get_encryption_key()
-    db = SessionLocal()
+    db = source_db or SessionLocal()
+    owns_db = source_db is None
     try:
+        projection_targets = active_external_radius_targets(db, capability="users")
+        if not projection_targets:
+            raise RuntimeError("No DB-configured external RADIUS user target")
+        alignment = assert_legacy_target_alignment(db)
+        stats["projection_targets"] = len(projection_targets)
+        stats["legacy_targets_verified"] = len(alignment)
+
+        from app.models.domain_settings import SettingDomain
+        from app.services import enforcement_event_policy, settings_spec
+
+        group_routing_enabled = enforcement_event_policy.group_routing_enabled(db)
+        access_groups = {
+            "active": str(
+                settings_spec.resolve_value(
+                    db, SettingDomain.radius, "active_group_name"
+                )
+                or "dotmac-active"
+            ),
+            "suspended": str(
+                settings_spec.resolve_value(
+                    db, SettingDomain.radius, "suspended_group_name"
+                )
+                or "dotmac-suspended"
+            ),
+            "captive": str(
+                settings_spec.resolve_value(
+                    db, SettingDomain.radius, "captive_group_name"
+                )
+                or "dotmac-captive"
+            ),
+        }
+        access_group_priority = int(
+            settings_spec.resolve_value(
+                db, SettingDomain.radius, "access_group_priority"
+            )
+            or 0
+        )
         suspended_list_name = suspended_address_list(db)
+        from app.models.subscriber import Subscriber
+
         # Active, blocked, or suspended subs with a login — blocked/suspended
         # subs get a walled-garden radreply so suspension actually takes
         # effect at the BNG (hard-deleting their rows would fail-closed but
@@ -185,6 +418,7 @@ def populate(dry_run: bool = True) -> dict[str, int]:
                 .options(
                     joinedload(Subscription.offer),
                     joinedload(Subscription.radius_profile),
+                    joinedload(Subscription.subscriber).joinedload(Subscriber.reseller),
                 )
                 .where(
                     Subscription.status.in_(
@@ -214,148 +448,197 @@ def populate(dry_run: bool = True) -> dict[str, int]:
             ).all()
         }
 
-        # Pre-fetch blocked subscriber IDs. Customer-level block triggers
-        # walled-garden regardless of subscription status.
-        from app.models.subscriber import Subscriber, SubscriberStatus
-
-        blocked_subscriber_ids: set = {
-            sid
-            for (sid,) in db.execute(
-                select(Subscriber.id).where(
-                    Subscriber.status == SubscriberStatus.blocked
-                )
-            ).all()
+        # Pre-fetch RadiusProfiles by id so a credential-level profile override
+        # (a dunning/FUP throttle sets AccessCredential.radius_profile_id) can be
+        # resolved in memory. Without this, populate() rebuilds radreply purely
+        # from the subscription/offer profile and silently reverts every throttle
+        # within one sweep — the throttle never reaches the router (SP-2). This
+        # mirrors the credential>subscription precedence in
+        # enforcement.resolve_radius_profile; the offer-derived fallback below is
+        # unchanged, so a non-throttled customer's speed is untouched.
+        radius_profiles_by_id: dict = {
+            p.id: p for p in db.scalars(select(RadiusProfile)).all()
         }
-        logger.info(
-            "%d subscribers in blocked state",
-            len(blocked_subscriber_ids),
-        )
-
-        # Per-customer opt-in for the soft captive redirect. Blocked subscribers
-        # NOT in this set are hard-rejected (Auth-Type := Reject) instead of
-        # walled-gardened — the captive redirect is opt-in, not every account.
-        captive_optin_ids: set = {
-            sid
-            for (sid,) in db.execute(
-                select(Subscriber.id).where(
-                    Subscriber.captive_redirect_enabled.is_(True)
-                )
-            ).all()
-        }
-        logger.info(
-            "%d subscribers opted into captive redirect", len(captive_optin_ids)
-        )
 
         # Pre-fetch additional routed IP blocks,
         # keyed by subscriber_id, so each user's Framed-Routes are O(1) in the
         # sweep loop below.
         from app.models.network import SubscriberAdditionalRoute
 
-        routes_by_subscriber: dict = {}
+        subscriber_service_counts: dict = {}
+        for row in rows:
+            subscriber_service_counts[row.subscriber_id] = (
+                subscriber_service_counts.get(row.subscriber_id, 0) + 1
+            )
+
+        routes_by_subscription: dict = {}
+        legacy_routes_by_subscriber: dict = {}
         for r in db.scalars(
             select(SubscriberAdditionalRoute).where(
                 SubscriberAdditionalRoute.is_active.is_(True)
             )
         ).all():
-            routes_by_subscriber.setdefault(r.subscriber_id, []).append(
-                (r.cidr, r.metric)
+            target = (
+                routes_by_subscription.setdefault(r.subscription_id, [])
+                if getattr(r, "subscription_id", None)
+                else legacy_routes_by_subscriber.setdefault(r.subscriber_id, [])
             )
+            target.append((r.cidr, r.metric))
         logger.info(
-            "%d subscribers with additional routed IP blocks",
-            len(routes_by_subscriber),
+            "%d subscriptions with additional routed IP blocks",
+            len(routes_by_subscription),
         )
 
         # Fallback IPv4 from the active IPAssignment so a stale/cleared
         # subscriptions.ipv4_address doesn't silently drop Framed-IP-Address (which
         # de-IPs the customer -> BNG teardown -> reconnect flap). One query, keyed
-        # by subscriber_id.
+        # by subscription_id. Legacy unbound assignments are used only for a
+        # subscriber with one projected subscription.
         from app.models.network import IPAssignment, IPv4Address, IPVersion
 
-        ipv4_by_subscriber: dict = {}
-        for sid, addr in db.execute(
-            select(IPAssignment.subscriber_id, IPv4Address.address)
+        ipv4_by_subscription: dict = {}
+        legacy_ipv4_by_subscriber: dict = {}
+        for sid, subscription_id, addr in db.execute(
+            select(
+                IPAssignment.subscriber_id,
+                IPAssignment.subscription_id,
+                IPv4Address.address,
+            )
             .join(IPv4Address, IPAssignment.ipv4_address_id == IPv4Address.id)
             .where(IPAssignment.is_active.is_(True))
             .where(IPAssignment.ip_version == IPVersion.ipv4)
         ).all():
             if sid and addr:
-                ipv4_by_subscriber.setdefault(sid, str(addr))
+                if subscription_id:
+                    ipv4_by_subscription.setdefault(subscription_id, str(addr))
+                else:
+                    legacy_ipv4_by_subscriber.setdefault(sid, str(addr))
 
-        # IPv6 PD: the subscriber's assigned delegated prefix, emitted as
+        # IPv6 PD: the subscription's assigned delegated prefix, emitted as
         # Delegated-IPv6-Prefix. Flag-gated (inert until IPv6 PD is turned on).
-        pd_by_subscriber: dict = {}
+        pd_by_subscription: dict = {}
+        legacy_pd_by_subscriber: dict = {}
         from app.services.ipv6_pd import pd_enabled
 
         if pd_enabled():
             from app.models.network import Ipv6DelegatedPrefix, Ipv6PrefixState
 
-            for sid, prefix, plen in db.execute(
+            for sid, subscription_id, prefix, plen in db.execute(
                 select(
                     Ipv6DelegatedPrefix.subscriber_id,
+                    Ipv6DelegatedPrefix.subscription_id,
                     Ipv6DelegatedPrefix.prefix,
                     Ipv6DelegatedPrefix.prefix_length,
                 ).where(Ipv6DelegatedPrefix.state == Ipv6PrefixState.assigned)
             ).all():
                 if sid and prefix:
-                    pd_by_subscriber.setdefault(sid, f"{prefix}/{plen}")
+                    value = f"{prefix}/{plen}"
+                    if subscription_id:
+                        pd_by_subscription.setdefault(subscription_id, value)
+                    else:
+                        legacy_pd_by_subscriber.setdefault(sid, value)
 
         # Compute the full work list in memory while the dotmac session is
         # alive, then release it BEFORE the radius writes — holding the read
         # transaction through the write phase trips the app's 120s
         # idle-in-transaction timeout on large fleets.
-        by_login: dict[str, tuple[str, str, list, bool, SubscriptionStatus, str]] = {}
+        by_login: dict[
+            str,
+            tuple[str, str, list, bool, SubscriptionStatus, str, str | None],
+        ] = {}
+        preserve_usernames: set[str] = set()
         for sub in rows:
             login = cast(str | None, sub.login)
             if not login:
-                stats["skipped_no_credential"] += 1
+                _increment_result_count(stats, "skipped_no_credential")
                 continue
             cred = creds_by_username.get(login)
             if cred is None:
-                stats["skipped_no_credential"] += 1
+                _increment_result_count(stats, "skipped_no_credential")
                 continue
             if not cred.secret_hash:
-                stats["skipped_no_password"] += 1
+                _increment_result_count(stats, "skipped_no_password")
+                preserve_usernames.add(login)
                 continue
             try:
                 cleartext = decrypt_credential_with_key(cred.secret_hash, enc_key)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("decrypt failed for %s: %s", login, exc)
-                stats["skipped_decrypt_failed"] += 1
+                _increment_result_count(stats, "skipped_decrypt_failed")
+                preserve_usernames.add(login)
                 continue
             if not cleartext:
-                stats["skipped_no_password"] += 1
+                _increment_result_count(stats, "skipped_no_password")
+                preserve_usernames.add(login)
                 continue
 
-            sub_blocked = sub.subscriber_id in blocked_subscriber_ids
-            captive = sub.subscriber_id in captive_optin_ids
+            from app.models.enforcement_lock import AccessRestrictionMode
+            from app.services.walled_garden_policy import (
+                resolve_subscription_restriction,
+            )
+
+            restriction = resolve_subscription_restriction(
+                db,
+                sub,
+                account=sub.subscriber,
+            )
+            captive = bool(
+                restriction
+                and restriction.effective_mode == AccessRestrictionMode.captive
+            )
+            if (
+                getattr(sub.subscriber, "captive_redirect_enabled", False)
+                and not captive
+            ):
+                _increment_result_count(stats, "captive_ineligible_optins")
+            projection = plan_radius_projection(
+                sub,
+                restriction_mode=(restriction.effective_mode if restriction else None),
+            )
+            sub_blocked = projection.blocked
             eff_ipv4 = sub.ipv4_address
             if not eff_ipv4 or eff_ipv4 == "0.0.0.0":  # nosec B104  # noqa: S104
-                eff_ipv4 = ipv4_by_subscriber.get(sub.subscriber_id)
+                eff_ipv4 = ipv4_by_subscription.get(sub.id)
+                if (
+                    eff_ipv4 is None
+                    and subscriber_service_counts.get(sub.subscriber_id) == 1
+                ):
+                    eff_ipv4 = legacy_ipv4_by_subscriber.get(sub.subscriber_id)
+            delegated_ipv6 = pd_by_subscription.get(sub.id)
+            if (
+                delegated_ipv6 is None
+                and subscriber_service_counts.get(sub.subscriber_id) == 1
+            ):
+                delegated_ipv6 = legacy_pd_by_subscriber.get(sub.subscriber_id)
+            additional_routes = routes_by_subscription.get(sub.id)
+            if (
+                additional_routes is None
+                and subscriber_service_counts.get(sub.subscriber_id) == 1
+            ):
+                additional_routes = legacy_routes_by_subscriber.get(sub.subscriber_id)
+            # Credential-level profile (throttle/FUP) takes precedence over the
+            # subscription profile, so an applied throttle actually shapes the
+            # radreply instead of being reverted to full offer speed each sweep.
+            effective_profile = _effective_profile(
+                cred, sub.radius_profile, radius_profiles_by_id
+            )
             attrs = _radreply_attrs(
                 sub,
                 sub.offer,
-                sub.radius_profile,
+                effective_profile,
                 sub_blocked,
                 captive_redirect_enabled=captive,
-                additional_routes=routes_by_subscriber.get(sub.subscriber_id),
+                additional_routes=additional_routes,
                 framed_ipv4=eff_ipv4,
-                delegated_ipv6=pd_by_subscriber.get(sub.subscriber_id),
+                delegated_ipv6=delegated_ipv6,
                 suspended_list_name=suspended_list_name,
             )
-            blocked_flag = sub_blocked or sub.status in (
-                SubscriptionStatus.blocked,
-                SubscriptionStatus.suspended,
-            )
+            blocked_flag = projection.blocked
             # Enforcement mode for the radcheck write: active subs and opted-in
             # blocked subs keep a usable password (captive subs are walled via
             # the radreply Address-List); non-opted blocked subs are hard
             # rejected (Auth-Type := Reject, offline).
-            if blocked_flag and not captive:
-                mode = "reject"
-            elif blocked_flag:
-                mode = "captive"
-            else:
-                mode = "active"
+            mode = projection.mode
             # Duplicate logins (migration duplicates): the ACTIVE sub wins the
             # slot — subscriber-level block still dominates via sub_blocked,
             # so a blocked customer stays enforced either way.
@@ -369,91 +652,326 @@ def populate(dry_run: bool = True) -> dict[str, int]:
                 blocked_flag,
                 sub.status,
                 mode,
+                effective_profile.name if effective_profile else None,
             )
 
         active_usernames = {sub.login for sub in rows if sub.login}
     finally:
-        db.close()
+        if owns_db:
+            db.close()
 
     work = list(by_login.values())
-    stats["radcheck_upserts"] = len(work)
-    stats["radreply_upserts"] = sum(len(w[2]) for w in work)
+    # A scoped reconcile writes only the requested usernames. The projection is
+    # still computed fleet-wide above, so the subscriber service-count and
+    # duplicate-login dedup stay identical to the full sweep; only the write set
+    # narrows. A requested username absent from `work` has no active/blocked
+    # subscription and is deleted (removal), never reinserted.
+    scoped = only_usernames is not None
+    if only_usernames is not None:
+        work = [w for w in work if w[0] in only_usernames]
+        stats["scoped_targets"] = len(only_usernames)
+    stats["radcheck_upserts"] = len(work) * len(projection_targets)
+    stats["radreply_upserts"] = sum(len(w[2]) for w in work) * len(projection_targets)
     stats["blocked_users_written"] = sum(1 for w in work if w[3])
     stats["captive_users_written"] = sum(1 for w in work if w[5] == "captive")
     stats["rejected_users_written"] = sum(1 for w in work if w[5] == "reject")
 
+    delete_usernames = (
+        (set(only_usernames or set()) - preserve_usernames)
+        if scoped
+        else {w[0] for w in work}
+    )
     if dry_run:
+        stats["target_outcomes"] = [
+            {
+                "target_name": target["target_name"],
+                "target_fingerprint": target["target_fingerprint"],
+                "ok": True,
+                "dry_run": True,
+            }
+            for target in projection_targets
+        ]
         logger.info("DRY RUN — no writes (orphan cleanup also skipped)")
         logger.info("done: %s", stats)
         return stats
 
-    rconn = psycopg.connect(radius_dsn)
-    rconn.autocommit = False
-    try:
-        with rconn.cursor() as cur:
-            usernames = [w[0] for w in work]
-            cur.execute("DELETE FROM radcheck WHERE username = ANY(%s)", (usernames,))
-            # Non-rejected users authenticate with their Cleartext-Password
-            # (active normally, opted-in-blocked into the captive walled-garden
-            # via radreply). Hard-rejected users get a single Auth-Type := Reject
-            # row so FreeRADIUS refuses them — no password, fully offline.
-            password_rows = [(w[0], w[1]) for w in work if w[5] != "reject"]
-            reject_rows = [(w[0],) for w in work if w[5] == "reject"]
-            if password_rows:
-                cur.executemany(
-                    "INSERT INTO radcheck (username, attribute, op, value) "
-                    "VALUES (%s, 'Cleartext-Password', ':=', %s)",
-                    password_rows,
+    outcomes: list[dict[str, object]] = []
+    for target in projection_targets:
+        outcome: dict[str, object] = {
+            "target_name": target["target_name"],
+            "target_fingerprint": target["target_fingerprint"],
+            "ok": False,
+        }
+        try:
+            engine = get_external_engine(str(target["db_url"]))
+            with engine.begin() as conn:
+                counts = _write_radius_projection(
+                    conn,
+                    target,
+                    work,
+                    delete_usernames,
+                    access_groups=access_groups,
+                    access_group_priority=access_group_priority,
+                    group_routing_enabled=group_routing_enabled,
                 )
-            if reject_rows:
-                cur.executemany(
-                    "INSERT INTO radcheck (username, attribute, op, value) "
-                    "VALUES (%s, 'Auth-Type', ':=', 'Reject')",
-                    reject_rows,
-                )
-            cur.execute("DELETE FROM radreply WHERE username = ANY(%s)", (usernames,))
-            # Hard-rejected users get no radreply (they never authenticate).
-            cur.executemany(
-                "INSERT INTO radreply (username, attribute, op, value) "
-                "VALUES (%s, %s, %s, %s)",
-                [
-                    (w[0], a, o, v)
-                    for w in work
-                    if w[5] != "reject"
-                    for (a, o, v) in w[2]
-                ],
-            )
-
-            # --- orphan cleanup: drop radcheck/radreply rows whose username ---
-            # is not in the active+blocked set (e.g. subs that have since been
-            # cancelled/disabled). Keeps the radius DB lean and prevents stale
-            # auth surface from accumulating.
-            if active_usernames:
-                cur.execute("SELECT DISTINCT username FROM radcheck")
-                radcheck_users = {r[0] for r in cur.fetchall()}
-                orphans = list(radcheck_users - active_usernames)
-                if orphans:
-                    cur.execute(
-                        "DELETE FROM radcheck WHERE username = ANY(%s)", (orphans,)
+                if not scoped:
+                    counts.update(
+                        _reap_radius_orphans(
+                            conn,
+                            target,
+                            active_usernames,
+                            access_groups=access_groups,
+                        )
                     )
-                    stats["radcheck_orphans_deleted"] = cur.rowcount
-                    cur.execute(
-                        "DELETE FROM radreply WHERE username = ANY(%s)", (orphans,)
+                    counts["probe_identity_synced"] = _ensure_probe_identity(
+                        conn, target
                     )
-                    stats["radreply_orphans_deleted"] = cur.rowcount
-                    logger.info(
-                        "orphan cleanup: %d radcheck + %d radreply rows",
-                        stats["radcheck_orphans_deleted"],
-                        stats["radreply_orphans_deleted"],
-                    )
-
-        rconn.commit()
-        logger.info("committed RADIUS DB writes")
-    finally:
-        rconn.close()
+            outcome.update(counts)
+            outcome["ok"] = True
+        except Exception as exc:  # noqa: BLE001
+            # Do not include exception text: DB errors can echo secret binds.
+            outcome["error_type"] = type(exc).__name__
+        outcomes.append(outcome)
+    stats["target_outcomes"] = outcomes
+    if any(not outcome["ok"] for outcome in outcomes):
+        raise RadiusProjectionIncomplete(outcomes)
 
     logger.info("done: %s", stats)
     return stats
+
+
+def reconcile_usernames(
+    usernames: Iterable[str], dry_run: bool = True, *, source_db=None
+) -> dict[str, object]:
+    """Scoped `access.radius_projection` reconcile for a bounded username set.
+
+    Computes the same fleet-wide projection as the full sweep — so the
+    subscriber service-count and duplicate-login dedup stay identical — then
+    writes only the requested usernames. A requested username with no active/
+    blocked/suspended subscription is deleted (removal); one still present is
+    rewritten. No global orphan reap and no probe sync.
+
+    This is the entry point per-user callers (event-time enforcement, credential
+    add/remove/block) request instead of writing radcheck/radreply directly.
+    The full-fleet ``refresh_radius_from_subs`` remains the sweep. Thin wrapper
+    over ``populate(only_usernames=...)`` so both share one write path and DSN.
+    """
+    targets = {u for u in usernames if u}
+    if not targets:
+        return {"scoped_targets": 0, "radcheck_upserts": 0, "radreply_upserts": 0}
+    return populate(dry_run=dry_run, only_usernames=targets, source_db=source_db)
+
+
+def restore_projection_snapshot(db, snapshots: list[dict]) -> dict[str, object]:
+    """Restore an operator-approved backup through the projection owner.
+
+    This is intentionally separate from normal desired-state reconciliation:
+    it consumes an auditable backup transport, but retains the same DB target
+    resolution, cutover guard, per-target transaction, and ownership boundary.
+    """
+    targets = active_external_radius_targets(db, capability="users")
+    if not targets:
+        raise RuntimeError("No DB-configured external RADIUS user target")
+    assert_legacy_target_alignment(db)
+    by_id = {target["target_id"]: target for target in targets}
+    outcomes: list[dict[str, object]] = []
+    totals = {
+        "radcheck_restored": 0,
+        "radreply_restored": 0,
+        "radusergroup_restored": 0,
+    }
+    for snapshot in snapshots:
+        target_id = snapshot.get("target_id")
+        fingerprint = snapshot.get("target_fingerprint")
+        target = by_id.get(target_id) if target_id else None
+        if target is None and fingerprint:
+            matches = [
+                candidate
+                for candidate in targets
+                if candidate["target_fingerprint"] == fingerprint
+            ]
+            target = matches[0] if len(matches) == 1 else None
+        if target is None and len(targets) == 1 and len(snapshots) == 1:
+            target = targets[0]
+        if target is None:
+            outcomes.append(
+                {
+                    "target_name": snapshot.get("target_name") or "unmatched",
+                    "target_fingerprint": fingerprint or "legacy",
+                    "ok": False,
+                    "error_type": "TargetNotConfigured",
+                }
+            )
+            continue
+        outcome: dict[str, object] = {
+            "target_name": target["target_name"],
+            "target_fingerprint": target["target_fingerprint"],
+            "ok": False,
+        }
+        try:
+            restored_counts = {
+                "radcheck_restored": 0,
+                "radreply_restored": 0,
+                "radusergroup_restored": 0,
+            }
+            radcheck, radreply, radusergroup = _projection_tables(target)
+            usernames = sorted(
+                {
+                    str(username)
+                    for username in snapshot.get("usernames", [])
+                    if username
+                }
+                | {
+                    str(row["username"])
+                    for key in ("radcheck", "radreply", "radusergroup")
+                    for row in snapshot.get(key, [])
+                    if row.get("username")
+                }
+            )
+            engine = get_external_engine(str(target["db_url"]))
+            with engine.begin() as conn:
+                if conn.dialect.name == "postgresql":
+                    conn.execute(text("SELECT pg_advisory_xact_lock(3281601275)"))
+                if usernames:
+                    conn.execute(
+                        delete(radcheck).where(radcheck.c.username.in_(usernames))
+                    )
+                    conn.execute(
+                        delete(radreply).where(radreply.c.username.in_(usernames))
+                    )
+                    conn.execute(
+                        delete(radusergroup).where(
+                            radusergroup.c.username.in_(usernames)
+                        )
+                    )
+                for key, table, columns in (
+                    (
+                        "radcheck",
+                        radcheck,
+                        ("username", "attribute", "op", "value"),
+                    ),
+                    (
+                        "radreply",
+                        radreply,
+                        ("username", "attribute", "op", "value"),
+                    ),
+                    (
+                        "radusergroup",
+                        radusergroup,
+                        ("username", "groupname", "priority"),
+                    ),
+                ):
+                    rows = [
+                        {column: row.get(column) for column in columns}
+                        for row in snapshot.get(key, [])
+                    ]
+                    if rows:
+                        conn.execute(insert(table), rows)
+                    restored_counts[f"{key}_restored"] = len(rows)
+            for key, value in restored_counts.items():
+                totals[key] += value
+                outcome[key] = value
+            outcome["ok"] = True
+        except Exception as exc:  # noqa: BLE001
+            outcome["error_type"] = type(exc).__name__
+        outcomes.append(outcome)
+    if any(not outcome["ok"] for outcome in outcomes):
+        raise RadiusProjectionIncomplete(outcomes)
+    return {**totals, "target_outcomes": outcomes}
+
+
+def _reap_radius_orphans(
+    conn,
+    config: dict,
+    active_usernames: set[str],
+    *,
+    access_groups: dict[str, str],
+) -> dict[str, int]:
+    from app.services.radius_probe import probe_username
+
+    radcheck, radreply, radusergroup = _projection_tables(config)
+    radcheck_users = set(conn.scalars(select(radcheck.c.username).distinct()).all())
+    orphans = sorted(radcheck_users - active_usernames - {probe_username()})
+    counts = {
+        "radcheck_orphans_deleted": 0,
+        "radreply_orphans_deleted": 0,
+        "radusergroup_orphans_deleted": 0,
+    }
+    if not orphans:
+        return counts
+    result = conn.execute(delete(radcheck).where(radcheck.c.username.in_(orphans)))
+    counts["radcheck_orphans_deleted"] = result.rowcount or 0
+    result = conn.execute(delete(radreply).where(radreply.c.username.in_(orphans)))
+    counts["radreply_orphans_deleted"] = result.rowcount or 0
+    group_delete = delete(radusergroup).where(radusergroup.c.username.in_(orphans))
+    delete_group_rows = True
+    if not config["use_group"]:
+        owned_names = sorted({name for name in access_groups.values() if name})
+        if owned_names:
+            group_delete = group_delete.where(radusergroup.c.groupname.in_(owned_names))
+        else:
+            delete_group_rows = False
+    if delete_group_rows:
+        result = conn.execute(group_delete)
+        counts["radusergroup_orphans_deleted"] = result.rowcount or 0
+    return counts
+
+
+def _ensure_probe_identity(conn, target: dict) -> int:
+    """Upsert the synthetic auth-probe's radcheck user and nas client.
+
+    Returns 1 when synced, 0 when the probe is unconfigured. Env-sourced
+    (``RADIUS_PROBE_*``) — no secret lives in the app DB. The nas client is
+    loaded by FreeRADIUS at startup (``read_clients``), so a first-time client
+    add needs a FreeRADIUS restart; the user row takes effect immediately.
+    """
+    import os
+
+    from app.services.radius_probe import probe_config, probe_username
+
+    probe = probe_config()
+    if not probe["configured"]:
+        return 0
+    username = probe_username()
+    radcheck, _radreply, _radusergroup = _projection_tables(target)
+    conn.execute(
+        delete(radcheck).where(
+            radcheck.c.username == username,
+            radcheck.c.attribute == target["password_attribute"],
+        )
+    )
+    conn.execute(
+        insert(radcheck).values(
+            username=username,
+            attribute=target["password_attribute"],
+            op=target["password_op"],
+            value=probe["password"],
+        )
+    )
+
+    # nas client covering the worker source range (compose bridge by default).
+    client_subnet = os.getenv("RADIUS_PROBE_CLIENT_SUBNET", "172.20.0.0/16").strip()
+    nas = external_radius_table(
+        target["nas_table"],
+        Column("nasname", String),
+        Column("shortname", String),
+        Column("type", String),
+        Column("secret", String),
+        Column("description", String),
+        Column("require_message_authenticator", Boolean),
+    )
+    conn.execute(delete(nas).where(nas.c.shortname == username))
+    conn.execute(
+        insert(nas).values(
+            nasname=client_subnet,
+            shortname=username,
+            type="other",
+            secret=probe["secret"],
+            description="synthetic health probe",
+            require_message_authenticator=True,
+        )
+    )
+    return 1
 
 
 if __name__ == "__main__":
@@ -467,6 +985,70 @@ if __name__ == "__main__":
 # ---------------------------------------------------------------------------
 # Staff device-login RADIUS projection
 # ---------------------------------------------------------------------------
+
+DEVICE_LOGIN_SYNC_STATUS_KEY = "device_login_last_sync"
+
+
+def get_device_login_sync_status(db) -> dict | None:
+    """Return the last staff router-login RADIUS sync status, if recorded."""
+    from app.models.domain_settings import DomainSetting, SettingDomain
+
+    row = (
+        db.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.radius)
+        .filter(DomainSetting.key == DEVICE_LOGIN_SYNC_STATUS_KEY)
+        .filter(DomainSetting.is_active.is_(True))
+        .first()
+    )
+    if not row or not isinstance(row.value_json, dict):
+        return None
+    return row.value_json
+
+
+def record_device_login_sync_status(
+    db,
+    *,
+    status: str,
+    result: dict | None = None,
+    error: str | None = None,
+) -> dict:
+    """Persist the last staff router-login RADIUS sync result."""
+    from datetime import UTC, datetime
+
+    from app.models.domain_settings import DomainSetting, SettingDomain
+    from app.models.subscription_engine import SettingValueType
+
+    payload = {
+        "status": status,
+        "synced_at": datetime.now(UTC).isoformat(),
+        "result": dict(result or {}),
+    }
+    if error:
+        payload["error"] = error
+
+    row = (
+        db.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.radius)
+        .filter(DomainSetting.key == DEVICE_LOGIN_SYNC_STATUS_KEY)
+        .first()
+    )
+    if row is None:
+        row = DomainSetting(
+            domain=SettingDomain.radius,
+            key=DEVICE_LOGIN_SYNC_STATUS_KEY,
+            value_type=SettingValueType.json,
+            value_json=payload,
+            is_active=True,
+        )
+        db.add(row)
+    else:
+        row.value_type = SettingValueType.json
+        row.value_json = payload
+        row.value_text = None
+        row.is_secret = False
+        row.is_active = True
+    db.commit()
+    return payload
 
 
 def effective_roles(db, system_user_id) -> set[str]:
@@ -531,7 +1113,8 @@ def populate_device_login(
     *,
     dry_run: bool = False,
     _conn_factory=None,
-) -> dict[str, int]:
+    _target_config=None,
+) -> dict[str, object]:
     """Project device-login-enabled staff into the admin RADIUS auth set.
 
     Writes ONLY to radcheck_admin / radreply_admin — never touches radcheck /
@@ -549,16 +1132,84 @@ def populate_device_login(
         _conn_factory: Optional zero-arg callable that returns a DB-API 2
             connection to the RADIUS DB.  Used by tests to inject an in-memory
             SQLite connection in place of the real psycopg Postgres connection.
-            When None (production), connects to the resolved radius DSN
-            (radius_dsn.radius_dsn_libpq()).
+            When None (production), connects to the DB-configured authoritative
+            accounting target.
 
     Returns:
         dict with keys: considered, radcheck_upserts, radreply_upserts,
         removed, skipped_ineligible.
     """
+    from datetime import UTC, datetime
+
     from app.models.system_user import SystemUser
     from app.services.credential_crypto import decrypt_credential
     from app.services.device_login import derive_router_tier
+
+    if _conn_factory is None and _target_config is None:
+        targets = active_external_radius_targets(db, capability="users")
+        if not targets:
+            raise RuntimeError("No DB-configured external RADIUS user target")
+        assert_legacy_target_alignment(db)
+        aggregate: dict[str, object] = {
+            "considered": 0,
+            "radcheck_upserts": 0,
+            "radreply_upserts": 0,
+            "removed": 0,
+            "skipped_ineligible": 0,
+            "app_disabled": 0,
+            "projection_targets": len(targets),
+            "target_outcomes": [],
+        }
+        outcomes: list[dict[str, object]] = []
+        for target_config in targets:
+
+            def _factory(config=target_config):
+                url = str(config["db_url"]).replace(
+                    "postgresql+psycopg://", "postgresql://", 1
+                )
+                connection = psycopg.connect(url)
+                connection.autocommit = False
+                return connection
+
+            try:
+                result = populate_device_login(
+                    db,
+                    dry_run=dry_run,
+                    _conn_factory=_factory,
+                    _target_config=target_config,
+                )
+            except Exception as exc:  # noqa: BLE001
+                outcomes.append(
+                    {
+                        "target_name": target_config["target_name"],
+                        "target_fingerprint": target_config["target_fingerprint"],
+                        "ok": False,
+                        "error_type": type(exc).__name__,
+                    }
+                )
+                continue
+            for key in ("radcheck_upserts", "radreply_upserts", "removed"):
+                aggregate[key] = _result_count(aggregate, key) + _result_count(
+                    result, key
+                )
+            for key in ("considered", "skipped_ineligible"):
+                aggregate[key] = max(
+                    _result_count(aggregate, key), _result_count(result, key)
+                )
+            aggregate["app_disabled"] = _result_count(
+                aggregate, "app_disabled"
+            ) + _result_count(result, "app_disabled")
+            outcomes.append(
+                {
+                    "target_name": target_config["target_name"],
+                    "target_fingerprint": target_config["target_fingerprint"],
+                    "ok": True,
+                }
+            )
+        aggregate["target_outcomes"] = outcomes
+        if any(not outcome["ok"] for outcome in outcomes):
+            raise RadiusProjectionIncomplete(outcomes)
+        return aggregate
 
     stats: dict[str, int] = {
         "considered": 0,
@@ -566,6 +1217,7 @@ def populate_device_login(
         "radreply_upserts": 0,
         "removed": 0,
         "skipped_ineligible": 0,
+        "app_disabled": 0,
     }
 
     # Fetch all active SystemUsers from the app DB while we still hold the
@@ -573,11 +1225,13 @@ def populate_device_login(
     # (avoids holding the app transaction open during RADIUS writes).
     staff = db.query(SystemUser).filter(SystemUser.is_active.is_(True)).all()
 
-    # Build work list: (username, cleartext|None, tier|None, eligible)
-    # tier=None + eligible=True  → skipped_ineligible
-    # tier=None + eligible=False → removed
-    # tier set               → upsert
-    work: list[tuple[str, str | None, str | None, bool]] = []
+    # Build work list: (username, cleartext|None, tier|None, reason)
+    # tier=None + reason="inactive"                → removed
+    # tier=None + reason="permission_ineligible"   → skipped + app flag cleanup
+    # tier=None + reason="secret_unusable"         → skipped only
+    # tier set                                     → upsert
+    work: list[tuple[str, str | None, str | None, str]] = []
+    permission_ineligible_user_ids = []
     for u in staff:
         stats["considered"] += 1
         eligible = bool(
@@ -586,7 +1240,7 @@ def populate_device_login(
             and u.device_login_secret
         )
         if not eligible:
-            work.append((u.email, None, None, False))
+            work.append((u.email, None, None, "inactive"))
             continue
 
         roles = effective_roles(db, u.id)
@@ -594,7 +1248,8 @@ def populate_device_login(
         tier = derive_router_tier(roles, perms)
 
         if tier is None:
-            work.append((u.email, None, None, True))
+            permission_ineligible_user_ids.append(u.id)
+            work.append((u.email, None, None, "permission_ineligible"))
             continue
 
         try:
@@ -603,54 +1258,125 @@ def populate_device_login(
             logger.warning(
                 "populate_device_login: decrypt failed for %s — skipping", u.email
             )
-            work.append((u.email, None, None, True))
+            work.append((u.email, None, None, "secret_unusable"))
             continue
 
         if not cleartext:
-            work.append((u.email, None, None, True))
+            work.append((u.email, None, None, "secret_unusable"))
             continue
 
-        work.append((u.email, cleartext, tier, True))
+        work.append((u.email, cleartext, tier, "eligible"))
 
     # Open RADIUS connection
+    target = _target_config
     if _conn_factory is not None:
         conn = _conn_factory()
-    else:
-        radius_dsn = radius_dsn_libpq()
-        if not radius_dsn:
-            raise RuntimeError("RADIUS database DSN not configured")
-        conn = psycopg.connect(radius_dsn)
-        conn.autocommit = False
+    else:  # pragma: no cover - production fan-out above supplies a factory
+        raise RuntimeError("RADIUS connection factory not configured")
 
     try:
         cur = conn.cursor()
-        for uname, cleartext, tier, ineligible_flag in work:
-            # Always clean old rows first — idempotent regardless of outcome.
-            cur.execute("DELETE FROM radcheck_admin WHERE username=%s", (uname,))
-            cur.execute("DELETE FROM radreply_admin WHERE username=%s", (uname,))
 
-            if tier is None:
-                if ineligible_flag:
-                    # Also counts enabled-but-unusable users (decrypt failure / empty secret), not only permission-ineligible ones
-                    stats["skipped_ineligible"] += 1
-                else:
-                    stats["removed"] += 1
-                continue
+        def _admin_query(template: str, *table_keys: str):
+            defaults = {
+                "radcheck_admin_table": "radcheck_admin",
+                "radreply_admin_table": "radreply_admin",
+            }
+            names = [
+                str(target[key]) if target else defaults[key] for key in table_keys
+            ]
+            if target is None:
+                return template.format(*names)
+            from psycopg import sql
 
-            # Upsert
+            return sql.SQL(template).format(
+                *(sql.Identifier(*name.split(".")) for name in names)
+            )
+
+        # Desired end-state: eligible active users with a derivable tier.
+        desired = {
+            uname: (cleartext, tier)
+            for (uname, cleartext, tier, _reason) in work
+            if tier is not None
+        }
+        # Eligible (device-login enabled, not revoked, secret present) but with
+        # no usable tier — permission-ineligible, decrypt failure, or empty.
+        stats["skipped_ineligible"] = sum(
+            1
+            for (_u, _c, tier, reason) in work
+            if tier is None and reason != "inactive"
+        )
+
+        # Authoritative removal: delete ANY admin RADIUS row whose username is
+        # not in the desired set. This is driven off the RADIUS side (not the
+        # active work list) so it also revokes staff who were DEACTIVATED,
+        # DELETED, or RENAMED (email change) after being projected — none of
+        # which appear in `work` (which only scans active users). Without this,
+        # router login can survive staff deactivation.
+        cur.execute(
+            _admin_query(
+                "SELECT username FROM {} UNION SELECT username FROM {}",
+                "radcheck_admin_table",
+                "radreply_admin_table",
+            )
+        )
+        existing = {row[0] for row in cur.fetchall()}
+        for uname in existing - set(desired):
             cur.execute(
-                "INSERT INTO radcheck_admin (username, attribute, op, value) "
-                "VALUES (%s, 'Cleartext-Password', ':=', %s)",
-                (uname, cleartext),
+                _admin_query(
+                    "DELETE FROM {} WHERE username=%s", "radcheck_admin_table"
+                ),
+                (uname,),
             )
             cur.execute(
-                "INSERT INTO radreply_admin (username, attribute, op, value) "
-                "VALUES (%s, 'Mikrotik-Group', ':=', %s)",
+                _admin_query(
+                    "DELETE FROM {} WHERE username=%s", "radreply_admin_table"
+                ),
+                (uname,),
+            )
+            stats["removed"] += 1
+
+        # Upsert desired users (DELETE+INSERT keeps it idempotent).
+        for uname, (cleartext, tier) in desired.items():
+            cur.execute(
+                _admin_query(
+                    "DELETE FROM {} WHERE username=%s", "radcheck_admin_table"
+                ),
+                (uname,),
+            )
+            cur.execute(
+                _admin_query(
+                    "DELETE FROM {} WHERE username=%s", "radreply_admin_table"
+                ),
+                (uname,),
+            )
+            cur.execute(
+                _admin_query(
+                    "INSERT INTO {} (username, attribute, op, value) "
+                    "VALUES (%s, %s, %s, %s)",
+                    "radcheck_admin_table",
+                ),
+                (
+                    uname,
+                    target["password_attribute"] if target else "Cleartext-Password",
+                    target["password_op"] if target else ":=",
+                    cleartext,
+                ),
+            )
+            cur.execute(
+                _admin_query(
+                    "INSERT INTO {} (username, attribute, op, value) "
+                    "VALUES (%s, 'Mikrotik-Group', ':=', %s)",
+                    "radreply_admin_table",
+                ),
                 (uname, tier),
             )
             cur.execute(
-                "INSERT INTO radreply_admin (username, attribute, op, value) "
-                "VALUES (%s, 'Service-Type', ':=', 'Administrative-User')",
+                _admin_query(
+                    "INSERT INTO {} (username, attribute, op, value) "
+                    "VALUES (%s, 'Service-Type', ':=', 'Administrative-User')",
+                    "radreply_admin_table",
+                ),
                 (uname,),
             )
             stats["radcheck_upserts"] += 1
@@ -660,11 +1386,25 @@ def populate_device_login(
             conn.rollback()
         else:
             conn.commit()
+            if permission_ineligible_user_ids:
+                now = datetime.now(UTC)
+                stale_users = (
+                    db.query(SystemUser)
+                    .filter(SystemUser.id.in_(permission_ineligible_user_ids))
+                    .all()
+                )
+                for user in stale_users:
+                    if user.device_login_enabled:
+                        user.device_login_enabled = False
+                        user.device_login_revoked_at = now
+                        stats["app_disabled"] += 1
+                if stats["app_disabled"]:
+                    db.commit()
     finally:
         conn.close()
 
     logger.info("populate_device_login done (dry_run=%s): %s", dry_run, stats)
-    return stats
+    return cast(dict[str, object], stats)
 
 
 # -----------------------------------------------------------------------------

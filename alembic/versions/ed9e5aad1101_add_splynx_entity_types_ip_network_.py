@@ -6,6 +6,8 @@ Create Date: 2026-04-11 13:30:31.486412
 
 """
 
+import sqlalchemy as sa
+
 from alembic import op
 
 revision = "ed9e5aad1101"
@@ -15,9 +17,18 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Add new values to the splynxentitytype enum
-    # PostgreSQL requires ALTER TYPE ... ADD VALUE for each new value
-    # Note: ADD VALUE cannot be run inside a transaction block, so we commit each separately
+    # Add new values to the splynxentitytype enum.
+    # The Splynx models were retired (revision 330), so on a fresh database
+    # built from the current models (001_squashed runs create_all) the enum no
+    # longer exists — skip the ALTER TYPE rather than fail. Databases created
+    # before the retirement still carry the type and receive the new values.
+    bind = op.get_bind()
+    if bind.dialect.name != "postgresql":
+        return
+    if not bind.execute(
+        sa.text("SELECT 1 FROM pg_type WHERE typname = 'splynxentitytype'")
+    ).scalar():
+        return
     op.execute("ALTER TYPE splynxentitytype ADD VALUE IF NOT EXISTS 'ip_network'")
     op.execute("ALTER TYPE splynxentitytype ADD VALUE IF NOT EXISTS 'radius_profile'")
 

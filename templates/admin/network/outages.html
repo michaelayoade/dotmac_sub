@@ -1,4 +1,5 @@
 {% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import status_presentation_badge %}
 
 {% block title %}Outage Console - Admin{% endblock %}
 
@@ -7,17 +8,35 @@
     <div>
         <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Outage Console</h1>
         <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
-            Declare an outage against a basestation (manual — no auto-detection). The affected subscriber count is snapshotted at declare time.
+            Declare an outage against a basestation, network node, or FDH cabinet (manual — no auto-detection). The affected subscriber count is snapshotted at declare time.
         </p>
     </div>
 
     <form method="post" action="/admin/network/outages/declare" class="flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
         <div>
             <label class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Basestation</label>
-            <select name="basestation_id" required class="mt-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200">
+            <select name="basestation_id" class="mt-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200">
                 <option value="">— select —</option>
                 {% for bs in basestations %}
                 <option value="{{ bs.id }}">{{ bs.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div>
+            <label class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Network Node</label>
+            <select name="node_id" class="mt-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200">
+                <option value="">— select —</option>
+                {% for node in network_nodes %}
+                <option value="{{ node.id }}">{{ node.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div>
+            <label class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">FDH Cabinet</label>
+            <select name="fdh_id" class="mt-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200">
+                <option value="">— select —</option>
+                {% for fdh in fdh_cabinets %}
+                <option value="{{ fdh.id }}">{{ fdh.code or fdh.name }}{% if fdh.code and fdh.name %} — {{ fdh.name }}{% endif %}</option>
                 {% endfor %}
             </select>
         </div>
@@ -28,18 +47,66 @@
         <button type="submit" class="rounded-lg bg-rose-600 px-4 py-2 text-sm font-medium text-white hover:bg-rose-500">Declare outage</button>
     </form>
 
+    {% if reachability %}
+    <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Down now — root-cause view</h3>
+        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Native polling follows the site hierarchy, so devices behind a down parent read as down too. Unreachable rows are symptoms of their root cause, not separate outages.</p>
+        <table class="mt-4 w-full text-sm">
+            <thead><tr class="text-left text-xs uppercase text-slate-400">
+                <th class="py-2">Device</th><th>Classification</th><th>Root cause</th>
+            </tr></thead>
+            <tbody>
+            {% for row in reachability %}
+                <tr class="border-t border-slate-100 dark:border-slate-700">
+                    <td class="py-2 text-slate-700 dark:text-slate-200">{{ row.device.name }}</td>
+                    <td>
+                        {% if row.classification == 'down' %}
+                        <span class="rounded bg-rose-100 px-1.5 py-0.5 text-xs font-medium text-rose-700 dark:bg-rose-900/40 dark:text-rose-300">down (root cause)</span>
+                        {% else %}
+                        <span class="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">unreachable upstream</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-slate-500">{{ row.root_cause.name if row.root_cause else '—' }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+
     <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
         <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Open outages</h3>
         <table class="mt-4 w-full text-sm">
             <thead><tr class="text-left text-xs uppercase text-slate-400">
-                <th class="py-2">Target</th><th>Affected</th><th>Declared</th><th>By</th><th>Note</th><th></th>
+                <th class="py-2">Target</th><th>Status</th><th>Affected</th><th>Deliveries</th><th>Declared</th><th>By</th><th>Note</th><th></th>
             </tr></thead>
             <tbody>
             {% for row in incidents %}
                 <tr class="border-t border-slate-100 dark:border-slate-700">
                     <td class="py-2 text-slate-700 dark:text-slate-200">{{ row.target }}{% if row.stale %} <span class="ml-1 rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300" title="Open longer than 36h — review and resolve if the outage is over">stale</span>{% endif %}</td>
+                    <td>{{ status_presentation_badge(row.status_presentation, size="sm") }}</td>
                     <td class="font-semibold text-slate-900 dark:text-white">{{ row.incident.affected_count }}</td>
-                    <td class="text-slate-500">{{ row.incident.started_at.strftime('%Y-%m-%d %H:%M') if row.incident.started_at else '—' }}</td>
+                    <td class="min-w-[14rem] text-xs text-slate-500">
+                        {% set counts = row.delivery_audit.counts %}
+                        {% if row.delivery_audit.total %}
+                        <div class="flex flex-wrap gap-1">
+                            <span class="rounded bg-slate-100 px-1.5 py-0.5 text-slate-600 dark:bg-slate-700 dark:text-slate-200">pending {{ counts.pending }}</span>
+                            <span class="rounded bg-emerald-100 px-1.5 py-0.5 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">sent {{ counts.sent }}</span>
+                            <span class="rounded bg-rose-100 px-1.5 py-0.5 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300">failed {{ counts.failed }}</span>
+                            <span class="rounded bg-amber-100 px-1.5 py-0.5 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">suppressed {{ counts.suppressed }}</span>
+                        </div>
+                        {% if row.delivery_audit.recent %}
+                        <div class="mt-1 space-y-0.5">
+                            {% for delivery in row.delivery_audit.recent %}
+                            <div>{{ delivery.channel }} · {{ delivery.recipient_type }} · {{ delivery.delivery_status }}</div>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+                        {% else %}
+                        —
+                        {% endif %}
+                    </td>
+                    <td class="text-slate-500">{{ row.incident.started_at | app_datetime('%Y-%m-%d %H:%M', '—') }}</td>
                     <td class="text-slate-500">{{ row.incident.declared_by or '—' }}</td>
                     <td class="text-slate-500">{{ row.incident.note or '' }}</td>
                     <td>
@@ -49,7 +116,7 @@
                     </td>
                 </tr>
             {% else %}
-                <tr><td colspan="6" class="py-4 text-slate-400">No open outages.</td></tr>
+                <tr><td colspan="8" class="py-4 text-slate-400">No open outages.</td></tr>
             {% endfor %}
             </tbody>
         </table>

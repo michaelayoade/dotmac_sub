@@ -1,13 +1,4 @@
-{% from "components/ui/macros.html" import status_badge %}
-{% set status_variants = {
-    'draft': 'draft',
-    'submitted': 'info',
-    'scheduled': 'warning',
-    'provisioning': 'pending',
-    'active': 'active',
-    'canceled': 'inactive',
-    'failed': 'error'
-} %}
+{% from "components/ui/macros.html" import status_presentation_badge %}
 
 {% set orders_list = orders if orders is defined else recent_orders|default([]) %}
 
@@ -44,10 +35,11 @@
                     {{ (order.order_type or '-')|replace('_', ' ')|title }}
                 </td>
                 <td class="whitespace-nowrap px-6 py-4 text-sm">
-                    {{ status_badge(order.status.value|replace('_', ' ')|title, variant=status_variants.get(order.status.value, 'default')) }}
+                    {# Status semantics from the service-order status presentation owner. #}
+                    {{ status_presentation_badge(service_order_status_presentation(order.status), size="sm") }}
                 </td>
                 <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
-                    {{ order.created_at.strftime('%Y-%m-%d %H:%M') if order.created_at else '-' }}
+                    {{ order.created_at | app_datetime('%Y-%m-%d %H:%M', '-') }}
                 </td>
                 <td class="whitespace-nowrap px-6 py-4 text-right text-sm">
                     <a href="/admin/provisioning/orders/{{ order.id }}" class="text-primary-600 hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300">View</a>

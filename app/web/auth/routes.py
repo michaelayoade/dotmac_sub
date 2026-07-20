@@ -11,9 +11,14 @@ router = APIRouter(prefix="/auth", tags=["web-auth"])
 
 
 @router.get("/login", response_class=HTMLResponse)
-def login_page(request: Request, error: str | None = None, next: str | None = None):
+def login_page(
+    request: Request,
+    error: str | None = None,
+    next: str | None = None,
+    db: Session = Depends(get_db),
+):
     """Display the login page."""
-    return web_auth_service.login_page(request, error, next)
+    return web_auth_service.login_page(request, error, next, db)
 
 
 @router.post("/login", response_class=HTMLResponse)
@@ -96,18 +101,23 @@ def forgot_password_submit(
 @router.get("/reset-password", response_class=HTMLResponse)
 def reset_password_page(
     request: Request,
-    token: str,
+    token: str | None = None,
     error: str | None = None,
     next_login: str | None = None,
+    db: Session = Depends(get_db),
 ):
-    """Display the password reset page."""
-    return web_auth_service.reset_password_page(request, token, error, next_login)
+    """Display the password reset page.
+
+    ``token`` is optional: the forced-reset-at-login flow supplies it via an
+    HttpOnly cookie rather than the URL.
+    """
+    return web_auth_service.reset_password_page(request, db, token, error, next_login)
 
 
 @router.post("/reset-password", response_class=HTMLResponse)
 def reset_password_submit(
     request: Request,
-    token: str = Form(...),
+    token: str = Form(""),
     password: str = Form(...),
     password_confirm: str = Form(...),
     next_login: str | None = Form(None),
@@ -122,4 +132,10 @@ def reset_password_submit(
 @router.get("/logout")
 def logout(request: Request, db: Session = Depends(get_db)):
     """Log out the current user."""
+    return web_auth_service.logout(request, db)
+
+
+@router.post("/logout")
+def logout_submit(request: Request, db: Session = Depends(get_db)):
+    """Log out from forms without relying on a state-changing GET."""
     return web_auth_service.logout(request, db)

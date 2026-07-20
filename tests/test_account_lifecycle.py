@@ -1,6 +1,7 @@
 """Scenario tests for subscription/account lifecycle state machine."""
 
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy.orm import Session
@@ -22,6 +23,7 @@ from app.services.account_lifecycle import (
     has_active_lock,
     restore_subscription,
     suspend_subscription,
+    transition_account_status,
 )
 from app.services.events import emit_event
 from app.services.events.types import EventType
@@ -71,6 +73,52 @@ def _make_subscription(
     db.add(sub)
     db.flush()
     return sub
+
+
+@pytest.mark.parametrize(
+    "target_status",
+    (SubscriberStatus.disabled, SubscriberStatus.canceled),
+)
+def test_terminal_account_transition_clears_prepaid_timers(
+    db_session: Session,
+    target_status: SubscriberStatus,
+) -> None:
+    subscriber = _make_subscriber(
+        db_session,
+        prepaid_low_balance_at=datetime.now(UTC),
+        prepaid_deactivation_at=datetime.now(UTC),
+    )
+    offer = _make_offer(db_session)
+    _make_subscription(db_session, subscriber, offer)
+
+    result = transition_account_status(
+        db_session,
+        str(subscriber.id),
+        target_status,
+        reason="operator terminal transition",
+        source="test:terminal-prepaid-timers",
+        emit=False,
+    )
+
+    assert result == target_status
+    assert subscriber.prepaid_low_balance_at is None
+    assert subscriber.prepaid_deactivation_at is None
+
+
+def test_last_subscription_expiry_clears_prepaid_timers(db_session: Session) -> None:
+    subscriber = _make_subscriber(
+        db_session,
+        prepaid_low_balance_at=datetime.now(UTC),
+        prepaid_deactivation_at=datetime.now(UTC),
+    )
+    offer = _make_offer(db_session)
+    subscription = _make_subscription(db_session, subscriber, offer)
+
+    expire_subscription(db_session, str(subscription.id), emit=False)
+
+    assert subscriber.status == SubscriberStatus.canceled
+    assert subscriber.prepaid_low_balance_at is None
+    assert subscriber.prepaid_deactivation_at is None
 
 
 class TestSuspendSubscription:
@@ -576,6 +624,106 @@ class TestComputeAccountStatus:
         status = compute_account_status(db_session, str(subscriber.id))
         assert status == SubscriberStatus.active
 
+    def _add_open_ar_and_credit(self, db_session, subscriber, ar, credit):
+        from decimal import Decimal
+
+        from app.models.billing import (
+            Invoice,
+            InvoiceStatus,
+            LedgerEntry,
+            LedgerEntryType,
+            LedgerSource,
+        )
+
+        db_session.add(
+            Invoice(
+                account_id=subscriber.id,
+                currency="NGN",
+                subtotal=Decimal(str(ar)),
+                tax_total=Decimal("0"),
+                total=Decimal(str(ar)),
+                balance_due=Decimal(str(ar)),
+                status=InvoiceStatus.overdue,
+                is_active=True,
+            )
+        )
+        db_session.add(
+            LedgerEntry(
+                account_id=subscriber.id,
+                invoice_id=None,
+                entry_type=LedgerEntryType.credit,
+                source=LedgerSource.payment,
+                amount=Decimal(str(credit)),
+                currency="NGN",
+                is_active=True,
+            )
+        )
+        db_session.flush()
+
+    def test_open_dunning_but_credit_covers_ar_is_active(self, db_session):
+        """Open dunning case but available credit covers open AR → active, not
+        delinquent. Status must not diverge from enforcement (which skips these
+        as prepaid_balance_available)."""
+        from app.models.collections import DunningCase, DunningCaseStatus
+
+        subscriber = _make_subscriber(db_session)
+        offer = _make_offer(db_session)
+        _make_subscription(db_session, subscriber, offer)
+        self._add_open_ar_and_credit(db_session, subscriber, ar=5000, credit=8000)
+        db_session.add(
+            DunningCase(account_id=subscriber.id, status=DunningCaseStatus.open)
+        )
+        db_session.flush()
+
+        assert (
+            compute_account_status(db_session, str(subscriber.id))
+            == SubscriberStatus.active
+        )
+
+    def test_open_dunning_with_insufficient_credit_is_delinquent(self, db_session):
+        """Credit present but does NOT cover open AR → still delinquent."""
+        from app.models.collections import DunningCase, DunningCaseStatus
+
+        subscriber = _make_subscriber(db_session)
+        offer = _make_offer(db_session)
+        _make_subscription(db_session, subscriber, offer)
+        self._add_open_ar_and_credit(db_session, subscriber, ar=5000, credit=2000)
+        db_session.add(
+            DunningCase(account_id=subscriber.id, status=DunningCaseStatus.open)
+        )
+        db_session.flush()
+
+        assert (
+            compute_account_status(db_session, str(subscriber.id))
+            == SubscriberStatus.delinquent
+        )
+
+    def test_prepaid_status_uses_threshold_not_nonnegative_net(self, db_session):
+        """A positive net below the access threshold is still underfunded."""
+        from decimal import Decimal
+
+        from app.models.collections import DunningCase, DunningCaseStatus
+
+        subscriber = _make_subscriber(
+            db_session,
+            billing_mode=BillingMode.prepaid,
+            min_balance=Decimal("5000.00"),
+        )
+        offer = _make_offer(db_session)
+        _make_subscription(db_session, subscriber, offer)
+        # Net financial position is +1000: the old >= 0 criterion passed, but
+        # the canonical prepaid threshold is 5000.
+        self._add_open_ar_and_credit(db_session, subscriber, ar=5000, credit=6000)
+        db_session.add(
+            DunningCase(account_id=subscriber.id, status=DunningCaseStatus.open)
+        )
+        db_session.flush()
+
+        assert (
+            compute_account_status(db_session, str(subscriber.id))
+            == SubscriberStatus.delinquent
+        )
+
     def test_suspended_takes_precedence_over_dunning(self, db_session):
         """A suspended subscription outranks delinquent even with open dunning."""
         from app.models.collections import DunningCase, DunningCaseStatus
@@ -854,3 +1002,10 @@ class TestAllowedRestorers:
         """Admin trigger can resolve every enforcement reason."""
         for reason, triggers in ALLOWED_RESTORERS.items():
             assert "admin" in triggers, f"Admin cannot restore {reason}"
+
+    def test_payment_cannot_clear_prepaid_lock(self):
+        """Prepaid restoration requires the funding-gated top-up owner."""
+        triggers = ALLOWED_RESTORERS[EnforcementReason.prepaid]
+
+        assert "payment" not in triggers
+        assert "top_up" in triggers

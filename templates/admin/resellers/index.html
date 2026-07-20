@@ -21,6 +21,17 @@
     {# Resellers Table #}
     <div class="animate-fade-in-up" style="animation-delay: 50ms;">
     {% call card("Resellers", color="indigo") %}
+        {% if notice %}
+        <div class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-800 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-300">{{ notice }}</div>
+        {% endif %}
+        <div class="mb-4 flex flex-wrap items-center gap-2">
+            {% for option, label in [('active', 'Active'), ('inactive', 'Inactive'), ('all', 'All')] %}
+            <a href="/admin/resellers?status={{ option }}&page=1&per_page={{ per_page }}"
+               class="inline-flex items-center rounded-lg border px-3 py-1.5 text-xs font-semibold {{ 'border-indigo-500 bg-indigo-50 text-indigo-700 dark:border-indigo-400 dark:bg-indigo-900/30 dark:text-indigo-300' if status_filter == option else 'border-slate-300 text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700' }}">
+                {{ label }}
+            </a>
+            {% endfor %}
+        </div>
         {% if resellers %}
         {% call data_table() %}
             {{ table_head(["Reseller", "Subscribers", "Status", ""]) }}
@@ -42,6 +53,17 @@
                         {% call row_actions() %}
                             {{ row_action("/admin/resellers/" ~ reseller.id, icon_view(), "View") }}
                             {{ row_action("/admin/resellers/" ~ reseller.id ~ "/edit", '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>', "Edit") }}
+                            <form method="post" action="/admin/resellers/{{ reseller.id }}/status" class="inline-flex"
+                                  onsubmit="return confirm('{{ 'Deactivate' if reseller.is_active else 'Reactivate' }} this reseller?');">
+                                {% include "components/forms/csrf_input.html" %}
+                                <input type="hidden" name="status" value="{{ 'inactive' if reseller.is_active else 'active' }}">
+                                <input type="hidden" name="return_status" value="{{ status_filter }}">
+                                <input type="hidden" name="page" value="{{ page }}">
+                                <input type="hidden" name="per_page" value="{{ per_page }}">
+                                <button type="submit" class="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium {{ 'text-amber-700 hover:bg-amber-50 dark:text-amber-300 dark:hover:bg-amber-900/20' if reseller.is_active else 'text-emerald-700 hover:bg-emerald-50 dark:text-emerald-300 dark:hover:bg-emerald-900/20' }}">
+                                    {{ 'Deactivate' if reseller.is_active else 'Reactivate' }}
+                                </button>
+                            </form>
                         {% endcall %}
                     </td>
                 {% endcall %}
@@ -57,17 +79,17 @@
             <div class="flex items-center gap-2">
                 <span class="text-xs text-slate-500 dark:text-slate-400">Rows</span>
                 {% for size in [10, 25, 50, 100] %}
-                <a href="/admin/resellers?page=1&per_page={{ size }}"
+                <a href="/admin/resellers?status={{ status_filter }}&page=1&per_page={{ size }}"
                    class="inline-flex items-center rounded-md border px-2 py-1 text-xs {{ 'border-primary-500 bg-primary-50 text-primary-700 dark:border-primary-400 dark:bg-primary-900/20 dark:text-primary-300' if per_page == size else 'border-slate-300 text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700' }}">
                     {{ size }}
                 </a>
                 {% endfor %}
-                <a href="/admin/resellers?page={{ page - 1 if page > 1 else 1 }}&per_page={{ per_page }}"
+                <a href="/admin/resellers?status={{ status_filter }}&page={{ page - 1 if page > 1 else 1 }}&per_page={{ per_page }}"
                    class="inline-flex items-center rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700 {% if page <= 1 %}pointer-events-none opacity-50{% endif %}">
                     Prev
                 </a>
                 <span class="px-1 text-xs text-slate-500 dark:text-slate-400">Page {{ page }} / {{ total_pages }}</span>
-                <a href="/admin/resellers?page={{ page + 1 }}&per_page={{ per_page }}"
+                <a href="/admin/resellers?status={{ status_filter }}&page={{ page + 1 }}&per_page={{ per_page }}"
                    class="inline-flex items-center rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700 {% if page >= total_pages %}pointer-events-none opacity-50{% endif %}">
                     Next
                 </a>

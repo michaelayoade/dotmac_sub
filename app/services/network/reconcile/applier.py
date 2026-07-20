@@ -29,6 +29,8 @@ Action → adapter call mapping:
       AcsSetPppoe               → client.set_parameter_values (6 params)
       AcsSetWifiSsid            → client.set_parameter_values (1 param)
       AcsSetWifiPassword        → client.set_parameter_values (1 param)
+      AcsSetWifiConfig          → client.set_parameter_values (changed fields)
+      AcsSetRemoteAccess        → client.set_parameter_values (SSH + Telnet guard)
       AcsSetNatEnabled          → client.set_parameter_values (1 param)
       AcsSetDhcpServer          → client.set_parameter_values (4 params)
       AcsSetManagementServer    → client.set_parameter_values (3 params)
@@ -59,14 +61,20 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+from app.services.network.huawei_cli_response import project_huawei_result_evidence
+
 from .actions import (
     AcsAction,
     AcsAddObject,
     AcsDeleteObject,
     AcsSetDhcpServer,
+    AcsSetIpv6,
     AcsSetManagementServer,
     AcsSetNatEnabled,
     AcsSetPppoe,
+    AcsSetRemoteAccess,
+    AcsSetWanIp,
+    AcsSetWifiConfig,
     AcsSetWifiPassword,
     AcsSetWifiSsid,
     Action,
@@ -145,10 +153,18 @@ class ApplyError(Exception):
     """One action's write failed. Carries the action + failure reason so the
     applier can attach it to the ``ApplyResult``."""
 
-    def __init__(self, action: Action, reason: str, message: str):
+    def __init__(
+        self,
+        action: Action,
+        reason: str,
+        message: str,
+        *,
+        evidence: dict[str, Any] | None = None,
+    ):
         self.action = action
         self.reason = reason
         self.message = message
+        self.evidence = evidence
         super().__init__(f"{type(action).__name__}: {message}")
 
 
@@ -191,12 +207,17 @@ def apply_plan(
                     "reason": exc.reason,
                     # `message` is reserved by logging.LogRecord — use `detail`.
                     "detail": exc.message,
+                    "evidence": exc.evidence,
                 },
             )
             return ApplyResult(
                 success=False,
                 actions_applied=tuple(applied),
-                halted_by=ReconcileFailure(reason=exc.reason, message=exc.message),
+                halted_by=ReconcileFailure(
+                    reason=exc.reason,
+                    message=exc.message,
+                    evidence=exc.evidence,
+                ),
             )
 
     return ApplyResult(
@@ -230,8 +251,15 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
                 service_profile_id=action.service_profile_id,
                 description=action.description,
             )
-            _olt_check(action, result)
-            return _ok(action, "olt_authorize", None, action.serial_number, started)
+            evidence = _olt_check(action, result)
+            return _ok(
+                action,
+                "olt_authorize",
+                None,
+                action.serial_number,
+                started,
+                evidence=evidence,
+            )
 
         case OltModifyDescription():
             result = ctx.olt_adapter.set_ont_description(
@@ -239,13 +267,14 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
                 action.ont_id,
                 action.description,
             )
-            _olt_check(action, result)
+            evidence = _olt_check(action, result)
             return _ok(
                 action,
                 "olt_description",
                 None,
                 action.description,
                 started,
+                evidence=evidence,
             )
 
         case OltModifyLineProfile():
@@ -254,13 +283,14 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
                 action.ont_id,
                 line_profile_id=action.line_profile_id,
             )
-            _olt_check(action, result)
+            evidence = _olt_check(action, result)
             return _ok(
                 action,
                 "olt_line_profile_id",
                 None,
                 action.line_profile_id,
                 started,
+                evidence=evidence,
             )
 
         case OltModifyServiceProfile():
@@ -269,13 +299,14 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
                 action.ont_id,
                 service_profile_id=action.service_profile_id,
             )
-            _olt_check(action, result)
+            evidence = _olt_check(action, result)
             return _ok(
                 action,
                 "olt_service_profile_id",
                 None,
                 action.service_profile_id,
                 started,
+                evidence=evidence,
             )
 
         case OltClearIphost():
@@ -284,13 +315,14 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
                 action.ont_id,
                 ip_index=action.ip_index,
             )
-            _olt_check(action, result)
+            evidence = _olt_check(action, result)
             return _ok(
                 action,
                 f"iphost[{action.ip_index}]",
                 None,
                 None,
                 started,
+                evidence=evidence,
             )
 
         case OltIpconfig():
@@ -305,8 +337,15 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
                 subnet_mask=action.subnet_mask,
                 gateway=action.gateway,
             )
-            _olt_check(action, result)
-            return _ok(action, "olt_mgmt_ip", None, action.ip_address, started)
+            evidence = _olt_check(action, result)
+            return _ok(
+                action,
+                "olt_mgmt_ip",
+                None,
+                action.ip_address,
+                started,
+                evidence=evidence,
+            )
 
         case OltTr069ServerConfig():
             result = ctx.olt_adapter.bind_tr069_profile(
@@ -314,13 +353,14 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
                 action.ont_id,
                 profile_id=action.profile_id,
             )
-            _olt_check(action, result)
+            evidence = _olt_check(action, result)
             return _ok(
                 action,
                 "olt_tr069_profile_id",
                 None,
                 action.profile_id,
                 started,
+                evidence=evidence,
             )
 
         case OltCreateServicePort():
@@ -332,24 +372,26 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
                 user_vlan=action.vlan,
                 port_index=action.service_port_index,
             )
-            _olt_check(action, result)
+            evidence = _olt_check(action, result)
             return _ok(
                 action,
                 f"service_port[{action.slot}]",
                 None,
                 action.service_port_index,
                 started,
+                evidence=evidence,
             )
 
         case OltDeleteServicePort():
             result = ctx.olt_adapter.delete_service_port(action.service_port_index)
-            _olt_check(action, result)
+            evidence = _olt_check(action, result)
             return _ok(
                 action,
                 f"service_port[{action.service_port_index}]",
                 action.service_port_index,
                 None,
                 started,
+                evidence=evidence,
             )
 
         case OltOmciPppoe():
@@ -362,13 +404,14 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
                 username=action.username,
                 password=password,
             )
-            _olt_check(action, result)
+            evidence = _olt_check(action, result)
             return _ok(
                 action,
                 "omci_pppoe",
                 None,
                 action.username,
                 started,
+                evidence=evidence,
             )
 
         case OltOmciInternetConfig():
@@ -377,13 +420,14 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
                 action.ont_id,
                 ip_index=action.ip_index,
             )
-            _olt_check(action, result)
+            evidence = _olt_check(action, result)
             return _ok(
                 action,
                 "omci_internet_config",
                 None,
                 action.ip_index,
                 started,
+                evidence=evidence,
             )
 
         case OltOmciWanConfig():
@@ -393,19 +437,27 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
                 ip_index=action.ip_index,
                 profile_id=action.profile_id,
             )
-            _olt_check(action, result)
+            evidence = _olt_check(action, result)
             return _ok(
                 action,
                 "omci_wan_config",
                 None,
                 action.profile_id,
                 started,
+                evidence=evidence,
             )
 
         case OltReset():
             result = ctx.olt_adapter.reboot_ont(action.fsp, action.ont_id)
-            _olt_check(action, result)
-            return _ok(action, "ont_reset", None, None, started)
+            evidence = _olt_check(action, result)
+            return _ok(
+                action,
+                "ont_reset",
+                None,
+                None,
+                started,
+                evidence=evidence,
+            )
 
         # ── ACS actions ───────────────────────────────────────────────────
         case AcsAddObject():
@@ -491,6 +543,68 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
             # Don't include the password in the AppliedAction — log the field name only.
             return _ok(action, "acs_wifi_password", None, "[redacted]", started)
 
+        case AcsSetWifiConfig():
+            wifi_params: dict[str, object] = {}
+            changed: list[str] = []
+            if action.enabled is not None:
+                wifi_params[action.paths.enabled] = action.enabled
+                changed.append("enabled")
+            if action.ssid is not None:
+                wifi_params[action.paths.ssid] = action.ssid
+                changed.append("ssid")
+            if action.channel is not None:
+                wifi_params[action.paths.channel] = action.channel
+                changed.append("channel")
+            if action.security_mode is not None:
+                wifi_params[action.paths.security_mode] = action.security_mode
+                changed.append("security_mode")
+            if action.password_ref is not None:
+                wifi_params[action.paths.psk_path] = _resolve_or_fail(
+                    ctx, action, action.password_ref
+                )
+                changed.append("password")
+            if not wifi_params:
+                raise ApplyError(
+                    action,
+                    ReconcileFailureReason.INVALID_CHANGE,
+                    "WiFi action contained no changed fields",
+                )
+            _acs_set(action, ctx, wifi_params)
+            return _ok(
+                action,
+                "acs_wifi_config",
+                None,
+                ",".join(changed),
+                started,
+            )
+
+        case AcsSetRemoteAccess():
+            remote_params: dict[str, object] = {}
+            remote_changed: list[str] = []
+            if action.ssh_enabled is not None:
+                remote_params[action.paths.ssh_enabled] = action.ssh_enabled
+                remote_changed.append("ssh_enabled")
+            if action.ssh_port is not None:
+                remote_params[action.paths.ssh_port] = action.ssh_port
+                remote_changed.append("ssh_port")
+            if action.telnet_enabled is not None:
+                remote_params[action.paths.telnet_enabled] = action.telnet_enabled
+                remote_changed.append("telnet_enabled")
+            if not remote_params:
+                raise ApplyError(
+                    action,
+                    ReconcileFailureReason.INVALID_CHANGE,
+                    "remote-access action contained no changed fields",
+                )
+            _acs_set(action, ctx, remote_params)
+            return _ok(
+                action,
+                "acs_remote_access",
+                None,
+                ",".join(remote_changed),
+                started,
+            )
+
         case AcsSetNatEnabled():
             inst = ctx.wan_ppp_instances.get(action.wcd_index, action.instance_index)
             params = {
@@ -498,6 +612,76 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
             }
             _acs_set(action, ctx, params)
             return _ok(action, "acs_nat_enabled", None, action.enabled, started)
+
+        case AcsSetIpv6():
+            params = {
+                f"Device.IP.Interface.{action.interface_index}.IPv6Enable": action.enabled,
+                f"Device.DHCPv6.Client.{action.interface_index}.Enable": action.enabled,
+                f"Device.DHCPv6.Client.{action.interface_index}.RequestPrefixes": (
+                    action.enabled and action.request_prefixes
+                ),
+                f"Device.RouterAdvertisement.InterfaceSettings.{action.interface_index}.Enable": action.enabled,
+            }
+            _acs_set(action, ctx, params)
+            return _ok(action, "acs_ipv6_enabled", None, action.enabled, started)
+
+        case AcsSetWanIp():
+            if action.data_model_root == "Device":
+                paths = action.tr181_paths
+                if paths is None:
+                    raise ApplyError(
+                        action,
+                        ReconcileFailureReason.ACS_WRITE_FAULTED,
+                        "TR-181 WAN requires a resolved vendor/model parameter map",
+                    )
+                params = {
+                    paths.ip_enable: True,
+                    paths.dhcp_enable: action.mode == "dhcp",
+                    paths.vlan_enable: True,
+                    paths.vlan_id: action.vlan,
+                    paths.nat_enable: action.nat_enabled,
+                }
+                if action.mode == "static":
+                    params.update(
+                        {
+                            paths.ip_address: action.ip_address,
+                            paths.subnet_mask: action.subnet_mask,
+                            paths.gateway: action.gateway,
+                        }
+                    )
+                    dns_primary, dns_secondary = _split_dns_servers(action.dns_servers)
+                    if dns_primary:
+                        params[paths.dns_primary] = dns_primary
+                    if dns_secondary:
+                        params[paths.dns_secondary] = dns_secondary
+            else:
+                base = (
+                    "InternetGatewayDevice.WANDevice.1."
+                    f"WANConnectionDevice.{action.wcd_index}."
+                    f"WANIPConnection.{action.instance_index}"
+                )
+                params = {
+                    f"{base}.Enable": True,
+                    f"{base}.NATEnabled": action.nat_enabled,
+                    f"{base}.ConnectionType": "IP_Routed",
+                    f"{base}.AddressingType": (
+                        "DHCP" if action.mode == "dhcp" else "Static"
+                    ),
+                    f"{base}.X_HW_VLAN": action.vlan,
+                    f"{base}.X_HW_SERVICELIST": "INTERNET",
+                }
+                if action.mode == "static":
+                    params.update(
+                        {
+                            f"{base}.ExternalIPAddress": action.ip_address,
+                            f"{base}.SubnetMask": action.subnet_mask,
+                            f"{base}.DefaultGateway": action.gateway,
+                        }
+                    )
+                    if action.dns_servers:
+                        params[f"{base}.DNSServers"] = action.dns_servers
+            _acs_set(action, ctx, params)
+            return _ok(action, "acs_wan_ip_mode", None, action.mode, started)
 
         case AcsSetDhcpServer():
             params = {
@@ -511,12 +695,26 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
 
         case AcsSetManagementServer():
             cr_password = _resolve_or_fail(ctx, action, action.cr_password_ref)
-            params = {
-                "InternetGatewayDevice.ManagementServer.ConnectionRequestUsername": action.cr_username,
-                "InternetGatewayDevice.ManagementServer.ConnectionRequestPassword": cr_password,
-                "InternetGatewayDevice.ManagementServer.PeriodicInformInterval": action.inform_interval_sec,
+            root = f"{action.data_model_root}.ManagementServer"
+            connection_params = {
+                f"{root}.ConnectionRequestUsername": action.cr_username,
+                f"{root}.ConnectionRequestPassword": cr_password,
+                f"{root}.PeriodicInformEnable": True,
+                f"{root}.PeriodicInformInterval": action.inform_interval_sec,
             }
-            _acs_set(action, ctx, params)
+            _acs_set(action, ctx, connection_params)
+            if action.acs_url:
+                acs_password = _resolve_or_fail(
+                    ctx, action, action.acs_password_ref or ""
+                )
+                endpoint_params = {
+                    f"{root}.URL": action.acs_url,
+                    f"{root}.Username": action.acs_username or "",
+                    f"{root}.Password": acs_password,
+                }
+                # Move the endpoint last: changing URL first can sever the
+                # current ACS session before CR credentials are established.
+                _acs_set(action, ctx, endpoint_params)
             return _ok(
                 action,
                 "acs_management_server",
@@ -534,6 +732,13 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
+
+
+def _split_dns_servers(value: str | None) -> tuple[str | None, str | None]:
+    servers = [item for item in re.split(r"[\s,]+", value or "") if item]
+    primary = servers[0] if servers else None
+    secondary = servers[1] if len(servers) > 1 else None
+    return primary, secondary
 
 
 def _resolve_or_fail(ctx: ApplyContext, action: Action, ref: str) -> str:
@@ -566,18 +771,21 @@ def _resolve_or_fail(ctx: ApplyContext, action: Action, ref: str) -> str:
     return value
 
 
-def _olt_check(action: Action, result: Any) -> None:
+def _olt_check(action: Action, result: Any) -> dict[str, Any] | None:
     """Raise ApplyError if the adapter reported failure.
 
     Per ``OltProtocolAdapter``'s contract, all writes return
     ``OltOperationResult`` with a ``success`` boolean and a ``message``.
     """
+    evidence = project_huawei_result_evidence(result)
     if not getattr(result, "success", False):
         raise ApplyError(
             action,
             ReconcileFailureReason.OLT_WRITE_REJECTED,
             str(getattr(result, "message", "OLT rejected the write")),
+            evidence=evidence,
         )
+    return evidence
 
 
 def _acs_set(action: AcsAction, ctx: ApplyContext, params: dict) -> None:
@@ -632,6 +840,8 @@ def _ok(
     old_value: Any,
     new_value: Any,
     started_monotonic: float,
+    *,
+    evidence: dict[str, Any] | None = None,
 ) -> AppliedAction:
     return AppliedAction(
         field=field,
@@ -639,6 +849,7 @@ def _ok(
         old_value=old_value,
         new_value=new_value,
         duration_ms=int((time.monotonic() - started_monotonic) * 1000),
+        evidence=evidence,
     )
 
 

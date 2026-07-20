@@ -61,6 +61,7 @@ def test_invoice_generate_batch_redirects_back_to_full_page(db_session, monkeypa
         request=None,
         billing_cycle=None,
         billing_date=None,
+        confirmed="1",
         db=db_session,
     )
 
@@ -68,6 +69,33 @@ def test_invoice_generate_batch_redirects_back_to_full_page(db_session, monkeypa
     assert response.headers["location"].startswith(
         "/admin/billing/invoices/batch?note="
     )
+
+
+def test_invoice_generate_batch_requires_confirmation(db_session, monkeypatch):
+    called = False
+
+    def _fake_run_batch_with_date(db, *, billing_cycle, billing_date):
+        nonlocal called
+        called = True
+        return "Batch run completed."
+
+    monkeypatch.setattr(
+        batch_routes.web_billing_invoice_batch_service,
+        "run_batch_with_date",
+        _fake_run_batch_with_date,
+    )
+
+    response = batch_routes.invoice_generate_batch(
+        request=None,
+        billing_cycle=None,
+        billing_date=None,
+        confirmed=None,
+        db=db_session,
+    )
+
+    assert response.status_code == 303
+    assert called is False
+    assert "Batch+run+was+not+started" in response.headers["location"]
 
 
 def test_preview_error_payload_includes_safe_defaults():

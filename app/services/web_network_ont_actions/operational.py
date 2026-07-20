@@ -570,22 +570,9 @@ def reconcile_operational_state(
 
     messages: list[str] = []
     success = False
-    try:
-        from app.services.queue_adapter import enqueue_task
-
-        dispatch = enqueue_task(
-            "app.tasks.zabbix_ingestion.ingest_olt_signals_from_zabbix",
-            correlation_id=f"ont_signal_ingest:{ont_id}",
-            source="reconcile_operational_state",
-        )
-        if dispatch.queued:
-            messages.append("Queued ONT telemetry refresh from monitoring data.")
-            success = True
-        else:
-            messages.append(f"Failed to queue ONT telemetry refresh: {dispatch.error}")
-    except Exception as exc:
-        logger.exception("Failed to queue ONT telemetry refresh for ONT %s", ont_id)
-        messages.append(f"Telemetry refresh queue failed: {exc}")
+    # The Zabbix telemetry ingest this action used to queue was retired with
+    # the native monitoring cutover; only the ACS reconciliation below remains.
+    messages.append("ONT telemetry refresh skipped: monitoring ingest retired.")
 
     if getattr(ont, "tr069_acs_server_id", None) or getattr(
         olt, "tr069_acs_server_id", None
@@ -616,8 +603,8 @@ def reconcile_operational_state(
 def fetch_olt_side_config(db: Session, ont_id: str) -> ActionResult:
     """Fetch ONT config/state from OLT side via SSH-backed services.
 
-    Uses Zabbix for monitoring status, with live SSH queries for detailed
-    OLT-side diagnostic configuration.
+    Uses the ONT status adapter for monitoring status, with live SSH queries
+    for detailed OLT-side diagnostic configuration.
     """
     ont, olt, fsp, ont_id_on_olt = _resolve_return_olt_context(db, ont_id)
     if not ont:
@@ -635,7 +622,7 @@ def fetch_olt_side_config(db: Session, ont_id: str) -> ActionResult:
     service_ports_text = ""
 
     try:
-        # Use adapter for Zabbix-backed monitoring status.
+        # Use the adapter for monitoring status.
         adapter_status: OntStatusResult = get_adapter_status(
             db, ont, include_optical=True
         )
@@ -727,7 +714,7 @@ def fetch_olt_side_config(db: Session, ont_id: str) -> ActionResult:
 
 
 def fetch_olt_status(db: Session, ont_id: str) -> dict[str, Any]:
-    """Query ONT registration diagnostics with Zabbix monitoring status.
+    """Query ONT registration diagnostics with adapter monitoring status.
 
     Returns a dict with success, message, and optional entry data.
     """
@@ -742,7 +729,7 @@ def fetch_olt_status(db: Session, ont_id: str) -> dict[str, Any]:
             "message": "ONT is missing a usable F/S/P or OLT ONT-ID.",
         }
 
-    # Get monitoring status from Zabbix-backed adapter.
+    # Get monitoring status from the status adapter.
     adapter_status: OntStatusResult = get_adapter_status(db, ont, include_optical=True)
 
     # Also get live SSH status for GPON layer details

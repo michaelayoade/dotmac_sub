@@ -2,33 +2,23 @@
 
 import logging
 import os
-from datetime import UTC, datetime
+from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
 from threading import Lock
 from time import monotonic
+from urllib.parse import urlencode
 
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from app.metrics import (
-    observe_cache_refresh,
-    record_cache_fallback,
-    record_cache_lookup,
-)
-from app.models.audit import AuditActorType
 from app.models.domain_settings import DomainSetting, SettingDomain
-from app.models.network import OLTDevice, OntUnit, OnuOnlineStatus
-from app.models.network_monitoring import (
-    DeviceInterface,
-    InterfaceStatus,
-    NetworkDevice,
-)
-from app.models.ont_autofind import OltAutofindCandidate
-from app.models.subscriber import Subscriber
+from app.schemas.status_presentation import StatusTone
 from app.services import admin_alerts as admin_alerts_service
+from app.services import admin_attention as admin_attention_service
 from app.services import admin_whats_new as admin_whats_new_service
-from app.services import app_cache
+from app.services import infrastructure_health as infrastructure_health_service
+from app.services import settings_spec
 from app.services import (
     subscriber as subscriber_service,
 )
@@ -38,6 +28,7 @@ from app.services import (
 from app.services import (
     web_admin as web_admin_service,
 )
+from app.services import web_system_health as web_system_health_service
 from app.services.audit_adapter import audit_adapter
 from app.services.audit_helpers import (
     build_recent_activity_feed,
@@ -46,17 +37,14 @@ from app.services.audit_helpers import (
     format_changes,
     humanize_action,
     humanize_entity,
+    load_audit_actor_subscribers,
     resolve_actor_name,
 )
+from app.services.ui_contracts import Kpi, StateValue
 
 logger = logging.getLogger(__name__)
 
 templates = Jinja2Templates(directory="templates")
-_DASHBOARD_STATS_CACHE_TTL_SECONDS = max(
-    60, int(os.getenv("DASHBOARD_STATS_CACHE_TTL_SECONDS", "180"))
-)
-_DASHBOARD_STATS_CACHE_KEY = app_cache.cache_key("dashboard", "stats-summary")
-
 # In-process cache for the main /admin/dashboard global context.
 # Contains SQLAlchemy ORM rows (recent_activity, recent_subscribers, active_alarms)
 # that can't be JSON-serialized to Redis, hence the in-process cache.
@@ -66,6 +54,29 @@ _DASHBOARD_GLOBAL_TTL_SECONDS = float(
 _dashboard_global_lock = Lock()
 _dashboard_global_cached_at = 0.0
 _dashboard_global_cache: dict[str, object] | None = None
+
+_DASHBOARD_INFRASTRUCTURE_TTL_SECONDS = max(
+    5.0, float(os.getenv("DASHBOARD_INFRASTRUCTURE_CACHE_TTL_SECONDS", "60"))
+)
+_dashboard_infrastructure_lock = Lock()
+_dashboard_infrastructure_cached_at = 0.0
+_dashboard_infrastructure_cache: (
+    tuple[
+        list[infrastructure_health_service.ServiceStatus],
+        dict[str, object],
+        dict[str, int],
+    ]
+    | None
+) = None
+
+
+def _network_monitoring_int_setting(db: Session, key: str, default: int) -> int:
+    raw = settings_spec.resolve_value(db, SettingDomain.network_monitoring, key)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
 
 
 def _invoice_total(inv) -> float:
@@ -92,134 +103,20 @@ def _rollback_after_failed_query(db: Session) -> None:
         logger.debug("Failed to roll back dashboard session", exc_info=True)
 
 
-def _is_user_actor(actor_type) -> bool:
-    return actor_type in {AuditActorType.user, AuditActorType.user.value, "user"}
-
-
-def _build_pon_interface_summary(db: Session) -> dict[str, int]:
-    """Return dashboard-friendly counts for PON-related monitoring interfaces.
-
-    Uses SQL-level filtering and aggregation for performance.
-    """
-    # SQL ILIKE patterns for PON interfaces
-    pon_pattern = or_(
-        func.lower(func.coalesce(DeviceInterface.name, "")).like("%pon%"),
-        func.lower(func.coalesce(DeviceInterface.name, "")).like("%gpon%"),
-        func.lower(func.coalesce(DeviceInterface.name, "")).like("%epon%"),
-        func.lower(func.coalesce(DeviceInterface.name, "")).like("%xgpon%"),
-        func.lower(func.coalesce(DeviceInterface.name, "")).like("%xgs%"),
-        func.lower(func.coalesce(DeviceInterface.description, "")).like("%pon%"),
-        func.lower(func.coalesce(DeviceInterface.description, "")).like("%gpon%"),
-        func.lower(func.coalesce(DeviceInterface.description, "")).like("%epon%"),
-        func.lower(func.coalesce(DeviceInterface.description, "")).like("%xgpon%"),
-        func.lower(func.coalesce(DeviceInterface.description, "")).like("%xgs%"),
-    )
-
-    counts = (
-        db.query(
-            func.count(DeviceInterface.id).label("total"),
-            func.count(DeviceInterface.id)
-            .filter(DeviceInterface.status == InterfaceStatus.up)
-            .label("up"),
-            func.count(DeviceInterface.id)
-            .filter(DeviceInterface.status == InterfaceStatus.down)
-            .label("down"),
-        )
-        .join(NetworkDevice, NetworkDevice.id == DeviceInterface.device_id)
-        .filter(NetworkDevice.is_active.is_(True))
-        .filter(pon_pattern)
-        .one()
-    )
-
-    total = counts.total or 0
-    up = counts.up or 0
-    down = counts.down or 0
-    unknown = total - up - down
-
-    return {"up": up, "down": down, "unknown": unknown, "total": total}
-
-
-def _build_pon_outages(db: Session, limit: int = 10) -> list[dict]:
-    """Return list of PON interfaces that are currently down.
-
-    Returns up to `limit` interfaces with OLT name and last updated time.
-    """
-    pon_pattern = or_(
-        func.lower(func.coalesce(DeviceInterface.name, "")).like("%pon%"),
-        func.lower(func.coalesce(DeviceInterface.name, "")).like("%gpon%"),
-        func.lower(func.coalesce(DeviceInterface.name, "")).like("%epon%"),
-        func.lower(func.coalesce(DeviceInterface.name, "")).like("%xgpon%"),
-        func.lower(func.coalesce(DeviceInterface.name, "")).like("%xgs%"),
-        func.lower(func.coalesce(DeviceInterface.description, "")).like("%pon%"),
-        func.lower(func.coalesce(DeviceInterface.description, "")).like("%gpon%"),
-        func.lower(func.coalesce(DeviceInterface.description, "")).like("%epon%"),
-        func.lower(func.coalesce(DeviceInterface.description, "")).like("%xgpon%"),
-        func.lower(func.coalesce(DeviceInterface.description, "")).like("%xgs%"),
-    )
-
-    rows = (
-        db.query(
-            DeviceInterface.id,
-            DeviceInterface.name,
-            DeviceInterface.description,
-            DeviceInterface.updated_at,
-            NetworkDevice.id.label("device_id"),
-            NetworkDevice.name.label("device_name"),
-        )
-        .join(NetworkDevice, NetworkDevice.id == DeviceInterface.device_id)
-        .filter(NetworkDevice.is_active.is_(True))
-        .filter(pon_pattern)
-        .filter(DeviceInterface.status == InterfaceStatus.down)
-        .order_by(DeviceInterface.updated_at.desc())
-        .limit(limit)
-        .all()
-    )
-
-    outages = []
-    for row in rows:
-        outages.append(
-            {
-                "id": str(row.id),
-                "name": row.name,
-                "description": row.description or "",
-                "olt_id": str(row.device_id),
-                "olt_name": row.device_name or "Unknown OLT",
-                "down_since": row.updated_at,
-            }
-        )
-    return outages
-
-
 def _build_cached_ont_status_summary(db: Session) -> dict[str, int]:
     """Return ONT status from locally persisted monitoring fields.
 
-    The dashboard must not synchronously poll Zabbix per OLT during initial
+    The dashboard must not synchronously poll monitoring per OLT during initial
     render. Background ingestion keeps these columns fresh enough for overview
     counts, while live diagnostics pages can still query Zabbix directly.
     """
-    counts = (
-        db.query(
-            func.count(OntUnit.id).label("total"),
-            func.count(OntUnit.id)
-            .filter(OntUnit.olt_status == OnuOnlineStatus.online)
-            .label("online"),
-            func.count(OntUnit.id)
-            .filter(OntUnit.olt_rx_signal_dbm.is_not(None))
-            .filter(OntUnit.olt_rx_signal_dbm < -25)
-            .label("low_signal"),
-        )
-        .filter(OntUnit.is_active.is_(True))
-        .one()
+    from app.services.network.ont_status import ont_status_summary
+
+    thresholds = _build_health_thresholds(db)
+    return ont_status_summary(
+        db,
+        low_signal_threshold_dbm=float(thresholds.get("ont_signal_warning_dbm") or -25),
     )
-    total = counts.total or 0
-    online = counts.online or 0
-    low_signal = counts.low_signal or 0
-    return {
-        "total": total,
-        "online": online,
-        "offline": max(total - online, 0),
-        "low_signal": low_signal,
-    }
 
 
 def _build_health_thresholds(db: Session) -> dict:
@@ -233,6 +130,7 @@ def _build_health_thresholds(db: Session) -> dict:
         "server_health_load_crit": "load_crit",
         "network_health_warn_pct": "network_warn_pct",
         "network_health_crit_pct": "network_crit_pct",
+        "ont_signal_warning_dbm": "ont_signal_warning_dbm",
     }
     rows = (
         db.query(DomainSetting)
@@ -245,54 +143,57 @@ def _build_health_thresholds(db: Session) -> dict:
     return {field: values.get(field) for field in keys.values()}
 
 
-def _build_dashboard_billing_summary(db: Session) -> dict[str, float]:
-    """Return the small billing aggregate needed by the admin overview."""
-    from sqlalchemy import text as sa_text
+def _build_dashboard_billing_summary(db: Session) -> dict[str, float] | None:
+    """Return the small billing aggregate needed by the admin overview.
+
+    Revenue this month comes from the billing reporting read owner
+    (BillingReporting.get_overview_stats); this service no longer sums payments
+    itself. Pending/overdue receivables stay on the invoice_collectibility owner
+    so the value matches the Overdue KPI exactly. Returns ``None`` when the read
+    owner is unavailable so the KPI renders "Unknown" rather than a lying ₦0.
+    """
+    from app.services.billing.reporting import BillingReporting
+    from app.services.invoice_collectibility import (
+        invoice_balance_sum,
+        open_invoice_filters,
+        overdue_debt_filters,
+    )
 
     try:
-        row = db.execute(
-            sa_text(
-                """
-                SELECT
-                    COALESCE((
-                        SELECT SUM(amount)
-                        FROM payments
-                        WHERE is_active = true
-                          AND status = 'succeeded'
-                          AND paid_at >= date_trunc('month', NOW())
-                          AND paid_at < date_trunc('month', NOW()) + INTERVAL '1 month'
-                    ), 0) AS payments_this_month,
-                    COALESCE((
-                        SELECT SUM(balance_due)
-                        FROM invoices
-                        WHERE is_active = true
-                          AND status != 'void'
-                          AND balance_due > 0
-                    ), 0) AS pending_amount,
-                    COALESCE((
-                        SELECT SUM(balance_due)
-                        FROM invoices
-                        WHERE is_active = true
-                          AND status != 'void'
-                          AND balance_due > 0
-                          AND due_at < NOW()
-                    ), 0) AS overdue_amount
-                """
-            )
-        ).one()
+        now = datetime.now(UTC)
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        month_end = (month_start + timedelta(days=32)).replace(day=1)
+        overview = BillingReporting.get_overview_stats(
+            db, period_start=month_start, period_end=month_end
+        )
         return {
-            "payments_this_month": float(row.payments_this_month or 0),
-            "pending_amount": float(row.pending_amount or 0),
-            "overdue_amount": float(row.overdue_amount or 0),
+            "payments_this_month": float(overview["total_revenue"]),
+            "pending_amount": float(invoice_balance_sum(db, open_invoice_filters())),
+            "overdue_amount": float(
+                invoice_balance_sum(db, overdue_debt_filters(now=now))
+            ),
         }
     except Exception:
         logger.debug("Failed to load dashboard billing summary", exc_info=True)
         _rollback_after_failed_query(db)
-        return {
-            "payments_this_month": 0.0,
-            "pending_amount": 0.0,
-            "overdue_amount": 0.0,
-        }
+        return None
+
+
+def _build_online_customer_summary(db: Session) -> dict[str, int] | None:
+    """Return active-session counts focused on customers, not raw sessions.
+
+    Delegates to the radius_sessions read owner (online_summary); this service no
+    longer queries RadiusActiveSession directly. Returns ``None`` when the read
+    owner is unavailable so the KPI renders "Unknown" rather than a false 0.
+    """
+    try:
+        from app.services.network import radius_sessions
+
+        return radius_sessions.online_summary(db)
+    except Exception:
+        logger.debug("Failed to load online customer summary", exc_info=True)
+        _rollback_after_failed_query(db)
+        return None
 
 
 def _build_recent_activities(
@@ -335,6 +236,78 @@ def _build_recent_activities(
     return recent_activities
 
 
+def build_dashboard_kpis(
+    *,
+    total_subscribers: int,
+    online_sessions_value: StateValue,
+    devices_online: int,
+    devices_total: int,
+    payments_this_month: float,
+    overdue_amount: float,
+    total_alarms: int,
+    billing_ok: bool,
+) -> dict[str, Kpi]:
+    """Project the dashboard headline tiles as Kpi contracts.
+
+    Each ``cohort_url`` drills into the exact admin list that produced the number
+    (KPI-parity), so a headline and its list can never diverge. The money tiles
+    carry ``StateValue.unknown()`` when the billing read owner is down, so a
+    decimal 0 never stands in for an unresolved value; the online tile carries
+    whatever state the RADIUS read owner resolved.
+    """
+    money = (
+        (lambda amount: StateValue.present(f"₦{amount:,.0f}"))
+        if billing_ok
+        else (lambda amount: StateValue.unknown())
+    )
+    return {
+        "total_subscribers": Kpi(
+            label="Subscribers",
+            value=StateValue.present(total_subscribers),
+            cohort_url="/admin/customers",
+        ),
+        "online": Kpi(
+            # The destination lists session rows, so this headline counts the
+            # exact same entity instead of distinct customers.
+            label="Online Sessions",
+            value=online_sessions_value,
+            cohort_url="/admin/network/sessions",
+            tone=StatusTone.positive,
+        ),
+        "network_devices": Kpi(
+            label="Network Devices",
+            value=StateValue.present(f"{devices_online} / {devices_total}"),
+            cohort_url="/admin/network/monitoring",
+            tone=StatusTone.info,
+        ),
+        "collections": Kpi(
+            label="Collections This Month",
+            value=money(payments_this_month),
+            # This is the billing-overview collected figure (invoice settled
+            # value over the calendar month) — the same number /admin/billing
+            # displays. No itemized list sums to exactly that invoice-settled,
+            # calendar-month aggregate (the payments list is a different entity
+            # on a rolling window), so the drill-down is the overview that shows
+            # the identical figure — KPI-parity by same-number, not a mismatched
+            # list.
+            cohort_url="/admin/billing",
+            tone=StatusTone.positive,
+        ),
+        "overdue": Kpi(
+            label="Overdue",
+            value=money(overdue_amount),
+            cohort_url="/admin/billing/invoices?" + urlencode({"status": "overdue"}),
+            tone=StatusTone.warning,
+        ),
+        "alarms": Kpi(
+            label="Alarms",
+            value=StateValue.present(total_alarms),
+            cohort_url="/admin/network/alarms",
+            tone=StatusTone.negative,
+        ),
+    }
+
+
 def _build_dashboard_global_context(db: Session) -> dict[str, object]:
     """Build the heavy, non-user-specific portion of the dashboard context.
 
@@ -353,88 +326,63 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
     sub_stats = subscriber_service.subscribers.get_dashboard_stats(db)
     net_stats = network_monitoring_service.network_devices.get_dashboard_stats(db)
     billing_summary = _build_dashboard_billing_summary(db)
+    billing_ok = billing_summary is not None
+    billing_values = billing_summary or {
+        "payments_this_month": 0.0,
+        "pending_amount": 0.0,
+        "overdue_amount": 0.0,
+    }
 
-    # --- OLT/ONT inventory counts (kept for network health ring) ---
-    olt_total = db.query(func.count(OLTDevice.id)).scalar() or 0
-    olt_online = (
-        db.query(func.count(OLTDevice.id))
-        .filter(OLTDevice.is_active.is_(True))
-        .scalar()
-        or 0
+    # --- Network health (counts + ring status from the monitoring read owner) ---
+    warn_pct = int(thresholds.get("network_warn_pct") or 90)
+    crit_pct = int(thresholds.get("network_crit_pct") or 70)
+    network_health = network_monitoring_service.network_health_summary(
+        db,
+        warn_pct=warn_pct,
+        crit_pct=crit_pct,
+        fallback_stats=net_stats,
     )
-    ont_total = db.query(func.count(OntUnit.id)).scalar() or 0
-    ont_active = (
-        db.query(func.count(OntUnit.id)).filter(OntUnit.is_active.is_(True)).scalar()
-        or 0
-    )
-    # Fall back to monitoring devices if no OLTs are defined
-    if olt_total == 0 and net_stats["total_count"] > 0:
-        olts_total = net_stats["total_count"]
-        olts_online = (
-            net_stats["online_count"]
-            + net_stats["degraded_count"]
-            + net_stats["maintenance_count"]
-        )
-    else:
-        olts_total = olt_total
-        olts_online = olt_online
-
-    # --- Network health status ---
-    health_pct = int((olts_online / olts_total) * 100) if olts_total > 0 else 0
-    warn_pct = thresholds.get("network_warn_pct") or 90
-    crit_pct = thresholds.get("network_crit_pct") or 70
-    if health_pct >= warn_pct:
-        health_status = "healthy"
-    elif health_pct >= crit_pct:
-        health_status = "warning"
-    else:
-        health_status = "critical"
+    olt_total = network_health["olt_total"]
+    olt_online = network_health["olt_online"]
+    ont_total = network_health["ont_total"]
+    ont_active = network_health["ont_active"]
+    olts_total = network_health["olts_total"]
+    olts_online = network_health["olts_online"]
+    health_pct = network_health["health_pct"]
+    health_status = network_health["health_status"]
 
     # --- Billing summary ---
-    payments_this_month = billing_summary["payments_this_month"]
-    pending_amount = billing_summary["pending_amount"]
-    overdue_amount = billing_summary["overdue_amount"]
+    payments_this_month = billing_values["payments_this_month"]
+    pending_amount = billing_values["pending_amount"]
+    overdue_amount = billing_values["overdue_amount"]
     active_subscribers = sub_stats["active_count"]
     arpu = payments_this_month / active_subscribers if active_subscribers > 0 else 0
 
-    # --- AR aging breakdown ---
+    # --- AR aging breakdown (canonical buckets from the billing read owner) ---
     ar_30 = 0.0
     ar_60 = 0.0
     try:
-        from sqlalchemy import text as sa_text
+        from app.services.billing.reporting import BillingReporting
 
-        ar_row = db.execute(
-            sa_text(
-                "SELECT "
-                "COALESCE(SUM(balance_due) FILTER (WHERE balance_due > 0 "
-                "  AND due_at >= NOW() - INTERVAL '30 days'), 0) as ar_30, "
-                "COALESCE(SUM(balance_due) FILTER (WHERE balance_due > 0 "
-                "  AND due_at < NOW() - INTERVAL '30 days' "
-                "  AND due_at >= NOW() - INTERVAL '60 days'), 0) as ar_60 "
-                "FROM invoices WHERE is_active = true AND status != 'void'"
-            )
-        ).one()
-        ar_30 = float(ar_row.ar_30)
-        ar_60 = float(ar_row.ar_60)
+        aging_totals = BillingReporting.get_ar_aging_buckets(db)["totals"]
+        ar_30 = float(aging_totals.get("1_30", 0) or 0)
+        ar_60 = float(aging_totals.get("31_60", 0) or 0)
     except Exception:
         logger.debug("Failed to compute AR aging", exc_info=True)
         _rollback_after_failed_query(db)
 
-    # --- Bandwidth from device metrics ---
+    # --- Bandwidth from the network monitoring read owner ---
     bw_current = "0"
     bw_peak = "0"
     try:
-        from sqlalchemy import text as sa_text
+        from app.services import network_monitoring as network_monitoring_service
 
-        bw_row = db.execute(
-            sa_text(
-                "SELECT COALESCE(SUM(value), 0) as total_bps "
-                "FROM device_metrics "
-                "WHERE metric_type = 'rx_bps' "
-                "AND recorded_at > NOW() - INTERVAL '10 minutes' AND value > 0"
-            )
-        ).one()
-        total_bps = float(bw_row.total_bps)
+        total_bps = network_monitoring_service.bandwidth_summary(
+            db,
+            window_seconds=_network_monitoring_int_setting(
+                db, "dashboard_bandwidth_window_seconds", 600
+            ),
+        )["total_bps"]
         if total_bps > 1e9:
             bw_current = f"{total_bps / 1e9:.1f} Gbps"
         elif total_bps > 1e6:
@@ -496,58 +444,18 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
         offset=0,
     )
 
-    actor_ids = {
-        event.actor_id
-        for event in recent_activity
-        if event.actor_id and _is_user_actor(getattr(event, "actor_type", None))
-    }
-    subscribers_lookup = {}
-    if actor_ids:
-        subscribers_lookup = {
-            str(subscriber.id): subscriber
-            for subscriber in db.query(Subscriber)
-            .filter(Subscriber.id.in_(actor_ids))
-            .all()
-        }
+    # Actor identities resolved by the audit helper (the same owner the audit
+    # page uses); the dashboard no longer queries Subscriber directly.
+    subscribers_lookup = load_audit_actor_subscribers(db, recent_activity)
 
     recent_activities = _build_recent_activities(recent_activity, subscribers_lookup)
 
-    # --- Who's Online (RADIUS active sessions) ---
-    try:
-        from app.models.radius_active_session import RadiusActiveSession
-
-        online_count = db.query(func.count(RadiusActiveSession.id)).scalar() or 0
-    except Exception:
-        online_count = 0
-
-    # --- Sync status ---
-    try:
-        from app.models.splynx_mapping import SplynxIdMapping
-
-        last_sync = db.query(func.max(SplynxIdMapping.created_at)).scalar()
-        total_mappings = db.query(func.count(SplynxIdMapping.id)).scalar() or 0
-        sync_status = {
-            "last_sync": last_sync,
-            "total_mappings": total_mappings,
-            "is_healthy": (
-                last_sync is not None
-                and (
-                    datetime.now(UTC)
-                    - (
-                        last_sync
-                        if last_sync.tzinfo is not None
-                        else last_sync.replace(tzinfo=UTC)
-                    )
-                ).total_seconds()
-                < 7200
-            )
-            if last_sync
-            else False,
-        }
-    except Exception:
-        logger.debug("Failed to load sync status for dashboard", exc_info=True)
-        _rollback_after_failed_query(db)
-        sync_status = {"last_sync": None, "total_mappings": 0, "is_healthy": False}
+    # --- Who's Online (distinct customers with active RADIUS sessions) ---
+    online_summary = _build_online_customer_summary(db)
+    online_ok = online_summary is not None
+    online_values = online_summary or {"customers": 0, "sessions": 0}
+    online_customers = online_values["customers"]
+    online_sessions = online_values["sessions"]
 
     # --- Monitoring device summary (for operations dashboard) ---
     monitoring_summary = {
@@ -567,15 +475,12 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
         ont_service_summary = {"online": 0, "offline": 0, "low_signal": 0, "total": 0}
         ont_olt_link_summary = {"online": 0, "offline": 0, "total": 0}
 
-    # --- Unconfigured ONTs (autofind candidates) ---
+    # --- Unconfigured ONTs (autofind read owner) ---
     unconfigured_ont_count = 0
     try:
-        unconfigured_ont_count = (
-            db.query(func.count(OltAutofindCandidate.id))
-            .filter(OltAutofindCandidate.is_active.is_(True))
-            .scalar()
-            or 0
-        )
+        from app.services.network import olt_autofind as olt_autofind_service
+
+        unconfigured_ont_count = olt_autofind_service.pending_candidate_count(db)
     except Exception:
         logger.debug(
             "Failed to load unconfigured ONT count for dashboard", exc_info=True
@@ -584,7 +489,7 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
 
     # --- PON interface status summary ---
     try:
-        pon_interface_summary = _build_pon_interface_summary(db)
+        pon_interface_summary = network_monitoring_service.pon_interface_summary(db)
     except Exception:
         logger.debug(
             "Failed to load PON interface summary for dashboard", exc_info=True
@@ -595,128 +500,32 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
     # --- PON outages (interfaces currently down) ---
     pon_outages: list[dict] = []
     try:
-        pon_outages = _build_pon_outages(db, limit=10)
+        pon_outages = network_monitoring_service.pon_outages(db, limit=10)
     except Exception:
         logger.debug("Failed to load PON outages for dashboard", exc_info=True)
         _rollback_after_failed_query(db)
 
-    # --- Pending service orders ---
+    # --- Pending service orders (provisioning read owner) ---
     pending_orders = 0
     try:
-        from app.models.provisioning import ServiceOrder, ServiceOrderStatus
+        from app.services.provisioning_managers import service_order_dashboard_counts
 
-        order_counts = db.query(
-            func.count(ServiceOrder.id)
-            .filter(
-                ServiceOrder.status.in_(
-                    (ServiceOrderStatus.submitted, ServiceOrderStatus.scheduled)
-                )
-            )
-            .label("pending"),
-            func.count(ServiceOrder.id)
-            .filter(ServiceOrder.status == ServiceOrderStatus.provisioning)
-            .label("in_progress"),
-            func.count(ServiceOrder.id)
-            .filter(ServiceOrder.status == ServiceOrderStatus.active)
-            .label("completed"),
-        ).one()
-        pending = order_counts.pending or 0
-        in_progress = order_counts.in_progress or 0
-        pending_orders = pending + in_progress
-        stats["orders_new"] = pending
-        stats["orders_in_progress"] = in_progress
-        stats["orders_completed_today"] = order_counts.completed or 0
+        order_counts = service_order_dashboard_counts(db)
+        pending_orders = order_counts["pending"] + order_counts["in_progress"]
+        stats["orders_new"] = order_counts["pending"]
+        stats["orders_in_progress"] = order_counts["in_progress"]
+        stats["orders_completed_today"] = order_counts["completed"]
     except Exception:
         logger.error("Failed to load service order stats for dashboard", exc_info=True)
         _rollback_after_failed_query(db)
 
-    # --- Attention items (things needing action) ---
-    attention_items: list[dict] = []
-    network_attention_items: list[dict] = []
+    # --- Attention items (admin_attention owns inclusion/severity/order) ---
     total_alarms = (
         net_stats["alarms_critical"]
         + net_stats["alarms_major"]
         + net_stats["alarms_minor"]
         + net_stats["alarms_warning"]
     )
-    if net_stats["alarms_critical"] > 0:
-        item = {
-            "label": f"{net_stats['alarms_critical']} critical alarm{'s' if net_stats['alarms_critical'] != 1 else ''}",
-            "href": "/admin/network/alarms",
-            "severity": "critical",
-        }
-        attention_items.append(item)
-        network_attention_items.append(item)
-    if net_stats["alarms_major"] > 0:
-        item = {
-            "label": f"{net_stats['alarms_major']} major alarm{'s' if net_stats['alarms_major'] != 1 else ''}",
-            "href": "/admin/network/alarms",
-            "severity": "major",
-        }
-        attention_items.append(item)
-        network_attention_items.append(item)
-    if net_stats.get("offline_count", 0) > 0:
-        item = {
-            "label": f"{net_stats['offline_count']} device{'s' if net_stats['offline_count'] != 1 else ''} offline",
-            "href": "/admin/network/monitoring",
-            "severity": "warning",
-        }
-        attention_items.append(item)
-        network_attention_items.append(item)
-    if overdue_amount > 0:
-        attention_items.append(
-            {
-                "label": f"₦{overdue_amount:,.0f} overdue receivables",
-                "href": "/admin/billing",
-                "severity": "warning",
-            }
-        )
-    if sub_stats["suspended_count"] > 0:
-        attention_items.append(
-            {
-                "label": f"{sub_stats['suspended_count']} suspended account{'s' if sub_stats['suspended_count'] != 1 else ''}",
-                "href": "/admin/customers",
-                "severity": "info",
-            }
-        )
-    if pending_orders > 0:
-        attention_items.append(
-            {
-                "label": f"{pending_orders} pending service order{'s' if pending_orders != 1 else ''}",
-                "href": "/admin/provisioning",
-                "severity": "info",
-            }
-        )
-
-    # --- ONT attention items ---
-    ont_low_signal = ont_service_summary.get("low_signal", 0)
-    ont_offline = ont_service_summary.get("offline", 0)
-    if ont_low_signal > 0:
-        item = {
-            "label": f"{ont_low_signal} ONT{'s' if ont_low_signal != 1 else ''} with low signal",
-            "href": "/admin/network/onts?view=diagnostics&signal_quality=warning&order_by=signal&order_dir=asc",
-            "severity": "warning",
-        }
-        attention_items.append(item)
-        network_attention_items.append(item)
-    if ont_offline > 5:
-        # Only show if significant number of offline ONTs
-        item = {
-            "label": f"{ont_offline} ONT{'s' if ont_offline != 1 else ''} offline",
-            "href": "/admin/network/onts?view=list&olt_status=offline",
-            "severity": "warning",
-        }
-        attention_items.append(item)
-        network_attention_items.append(item)
-    if unconfigured_ont_count > 0:
-        item = {
-            "label": f"{unconfigured_ont_count} unconfigured ONT{'s' if unconfigured_ont_count != 1 else ''} awaiting authorization",
-            "href": "/admin/network/onts?view=unconfigured",
-            "severity": "info",
-        }
-        attention_items.append(item)
-        network_attention_items.append(item)
-
     try:
         pending_location_requests = web_admin_service._count_pending_location_requests(
             db
@@ -727,28 +536,67 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
         )
         _rollback_after_failed_query(db)
         pending_location_requests = 0
-    if pending_location_requests > 0:
-        attention_items.append(
-            {
-                "label": (
-                    f"{pending_location_requests} pending pin "
-                    f"correction{'s' if pending_location_requests != 1 else ''}"
-                ),
-                "href": "/admin/gis?tab=customer-requests&status=pending",
-                "severity": "info",
-            }
+    admin_alert_summary = admin_alerts_service.dashboard_alert_summary(db)
+    by_category = admin_alert_summary.get("by_category")
+    infrastructure_alerts = (
+        by_category.get("infrastructure") if isinstance(by_category, dict) else None
+    ) or {}
+    attention_items, network_attention_items = (
+        admin_attention_service.build_attention_items(
+            net_stats=net_stats,
+            overdue_amount=overdue_amount,
+            suspended_count=sub_stats["suspended_count"],
+            pending_orders=pending_orders,
+            ont_summary=ont_service_summary,
+            unconfigured_ont_count=unconfigured_ont_count,
+            pending_location_requests=pending_location_requests,
+            pon_outage_count=len(pon_outages),
+            infrastructure_alerts=infrastructure_alerts,
+            ont_offline_threshold=_network_monitoring_int_setting(
+                db, "dashboard_attention_ont_offline_threshold", 5
+            ),
         )
+    )
 
+    online_pct = (
+        round((online_customers / active_subscribers) * 100, 1)
+        if active_subscribers > 0
+        else 0
+    )
     whats_new_items = admin_whats_new_service.serialize_for_dashboard(
         admin_whats_new_service.get_visible_items(db, limit=4)
     )
-    admin_alert_summary = admin_alerts_service.dashboard_alert_summary(db)
+
+    # Freshness of this snapshot travels with the cached context so the header
+    # and any staleness signal reflect build time, not render time.
+    refreshed_at = datetime.now(UTC)
+
+    # Whos-online counts carry their own state: a failed RADIUS read renders
+    # "Unknown", never a 0 that would read as "nobody online".
+    online_customers_state = (
+        StateValue.present(online_customers) if online_ok else StateValue.unknown()
+    )
+    online_sessions_state = (
+        StateValue.present(online_sessions) if online_ok else StateValue.unknown()
+    )
+
+    dashboard_kpis = build_dashboard_kpis(
+        total_subscribers=sub_stats["total_count"],
+        online_sessions_value=online_sessions_state,
+        devices_online=monitoring_summary["devices_online"],
+        devices_total=monitoring_summary["devices_total"],
+        payments_this_month=payments_this_month,
+        overdue_amount=overdue_amount,
+        total_alarms=total_alarms,
+        billing_ok=billing_ok,
+    )
 
     return {
         "stats": stats,
         "subscriber_stats": sub_stats,
         "network_stats": net_stats,
-        "billing_stats": {"stats": billing_summary},
+        "billing_stats": {"stats": billing_values},
+        "dashboard_kpis": dashboard_kpis,
         "network_health": {
             "percent": health_pct,
             "status": health_status,
@@ -767,8 +615,12 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
         "sidebar_stats": web_admin_service.get_sidebar_stats(db),
         "server_health": server_health,
         "server_health_status": server_health_status,
-        "online_count": online_count,
-        "sync_status": sync_status,
+        "online_count": online_customers,
+        "online_customers": online_customers,
+        "online_sessions": online_sessions,
+        "online_customers_state": online_customers_state,
+        "online_sessions_state": online_sessions_state,
+        "online_customer_pct": online_pct,
         "monitoring_summary": monitoring_summary,
         "ont_service_summary": ont_service_summary,
         "ont_olt_link_summary": ont_olt_link_summary,
@@ -777,6 +629,11 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
         "vpn_tunnels": [],
         "whats_new_items": whats_new_items,
         "unconfigured_ont_count": unconfigured_ont_count,
+        # Wall-clock time this snapshot was built. Travels with the cached
+        # context so the header shows real freshness, not render time.
+        "refreshed_at": refreshed_at,
+        # Same instant as a freshness-bearing StateValue for the header.
+        "data_freshness": StateValue.present(refreshed_at, as_of=refreshed_at),
     }
 
 
@@ -825,24 +682,22 @@ def _resolve_dashboard_permissions(
         return (
             _has("billing:invoice:read")
             or _has("billing:payment:read")
-            or _has("reports:billing"),
+            or _has("reports:billing:read"),
             _has("network:device:read")
             or _has("network:olt:read")
             or _has("network:ont:read")
             or _has("monitoring:read")
-            or _has("reports:network"),
+            or _has("reports:network:read"),
             _has("customer:read"),
         )
     if user:
         try:
-            from app.models.system_user import SystemUser
+            from app.services.auth_dependencies import user_role_names
 
-            sys_user = db.get(
-                SystemUser, str(user.get("subscriber_id") or user.get("id", ""))
+            role_names = user_role_names(
+                db, user.get("subscriber_id") or user.get("id", "")
             )
-            roles = getattr(sys_user, "roles", None)
-            if sys_user and roles is not None:
-                role_names = {getattr(r, "name", "") for r in roles} if roles else set()
+            if role_names is not None:
                 is_admin = "admin" in role_names or "super_admin" in role_names
                 return (
                     is_admin or "finance" in role_names or "billing" in role_names,
@@ -873,7 +728,9 @@ def dashboard(request: Request, db: Session):
         "admin/dashboard/index.html",
         {
             "request": request,
-            "now": datetime.now(),
+            "now": datetime.now(UTC),
+            # Real freshness of the cached snapshot, not render time.
+            "data_as_of": global_ctx.get("refreshed_at") or datetime.now(UTC),
             "active_page": "dashboard",
             "current_user": current_user,
             "show_financials": show_financials,
@@ -884,95 +741,124 @@ def dashboard(request: Request, db: Session):
     )
 
 
-def dashboard_server_health_partial(request: Request, db: Session):
+def dashboard_server_health_partial(
+    request: Request,
+    db: Session,
+    worker_action_notice: dict[str, str] | None = None,
+):
     server_health = system_health_service.get_system_health()
     thresholds = _build_health_thresholds(db)
     server_health_status = system_health_service.evaluate_health(
         server_health, thresholds
     )
+    try:
+        (
+            infrastructure_services,
+            worker_health,
+            service_summary,
+        ) = _load_dashboard_infrastructure_health(db)
+    except Exception:
+        logger.exception("Failed to load dashboard infrastructure health")
+        infrastructure_services = []
+        worker_health = web_system_health_service._build_worker_health([])
+        service_summary = {
+            "total": 0,
+            "up": 0,
+            "degraded": 0,
+            "down": 0,
+            "unknown": 0,
+        }
     return templates.TemplateResponse(
         "admin/dashboard/_server_health.html",
         {
             "request": request,
             "server_health": server_health,
             "server_health_status": server_health_status,
+            "infrastructure_services": infrastructure_services,
+            "worker_health": worker_health,
+            "service_summary": service_summary,
+            "worker_action_notice": worker_action_notice,
         },
     )
 
 
-def _build_dashboard_stats_summary(db: Session) -> dict:
-    sub_stats = subscriber_service.subscribers.get_dashboard_stats(db)
-    pon_interface_summary = _build_pon_interface_summary(db)
-
-    monthly_revenue = 0
-    try:
-        from app.services import billing as _billing_svc
-
-        b_stats = _billing_svc.billing_reporting.get_dashboard_stats(db)
-        monthly_revenue = b_stats.get("stats", {}).get("payments_amount", 0)
-    except Exception:
-        logger.debug("Failed to load billing dashboard stats", exc_info=True)
-
-    system_uptime = 0.0
-    try:
-        from app.services import network_monitoring as _net_mon_svc
-
-        n_stats = _net_mon_svc.network_devices.get_dashboard_stats(db)
-        system_uptime = n_stats.get("uptime_percentage", 0.0)
-    except Exception:
-        logger.debug("Failed to load network monitoring dashboard stats", exc_info=True)
-
-    return {
-        "total_subscribers": sub_stats["total_count"],
-        "active_subscribers": sub_stats["active_count"],
-        "subscribers_change": sub_stats.get("new_this_month", 0),
-        "monthly_revenue": monthly_revenue,
-        "revenue_change": 0,
-        "system_uptime": system_uptime,
-        "pon_interfaces_up": pon_interface_summary["up"],
-        "pon_interfaces_down": pon_interface_summary["down"],
-        "pon_interfaces_unknown": pon_interface_summary["unknown"],
-        "pon_interfaces_total": pon_interface_summary["total"],
-    }
+def clear_dashboard_infrastructure_cache() -> None:
+    global _dashboard_infrastructure_cached_at, _dashboard_infrastructure_cache
+    with _dashboard_infrastructure_lock:
+        _dashboard_infrastructure_cache = None
+        _dashboard_infrastructure_cached_at = 0.0
 
 
-def refresh_dashboard_stats_cache(db: Session) -> dict:
-    started_at = monotonic()
-    try:
-        stats = _build_dashboard_stats_summary(db)
-        app_cache.set_json(
-            _DASHBOARD_STATS_CACHE_KEY,
-            stats,
-            _DASHBOARD_STATS_CACHE_TTL_SECONDS,
-        )
-        observe_cache_refresh(
-            "dashboard_stats_summary",
-            "success",
-            monotonic() - started_at,
-        )
-        return stats
-    except Exception:
-        observe_cache_refresh(
-            "dashboard_stats_summary",
-            "failure",
-            monotonic() - started_at,
-        )
-        raise
+def _load_dashboard_infrastructure_health(
+    db: Session,
+) -> tuple[
+    list[infrastructure_health_service.ServiceStatus],
+    dict[str, object],
+    dict[str, int],
+]:
+    """Return the infrastructure dashboard snapshot with a short process cache."""
+    global _dashboard_infrastructure_cached_at, _dashboard_infrastructure_cache
 
-
-def _get_cached_dashboard_stats(db: Session) -> dict:
-    cached = app_cache.get_json(_DASHBOARD_STATS_CACHE_KEY)
-    if isinstance(cached, dict):
-        record_cache_lookup("dashboard_stats_summary", "hit")
+    now = monotonic()
+    cached = _dashboard_infrastructure_cache
+    if (
+        cached is not None
+        and now - _dashboard_infrastructure_cached_at
+        < _DASHBOARD_INFRASTRUCTURE_TTL_SECONDS
+    ):
         return cached
 
-    record_cache_lookup("dashboard_stats_summary", "miss")
-    record_cache_fallback("dashboard_stats_summary", "sync_recompute")
-    try:
-        return refresh_dashboard_stats_cache(db)
-    except Exception:
-        logger.debug("Dashboard cache refresh failed", exc_info=True)
-        return _build_dashboard_stats_summary(db)
+    with _dashboard_infrastructure_lock:
+        now = monotonic()
+        cached = _dashboard_infrastructure_cache
+        if (
+            cached is not None
+            and now - _dashboard_infrastructure_cached_at
+            < _DASHBOARD_INFRASTRUCTURE_TTL_SECONDS
+        ):
+            return cached
+
+        infrastructure_services = infrastructure_health_service.check_all_services(db)
+        worker_health = web_system_health_service._build_worker_health(
+            infrastructure_services
+        )
+        service_summary = _build_infrastructure_service_summary(infrastructure_services)
+        snapshot = (
+            infrastructure_services,
+            worker_health,
+            service_summary,
+        )
+        _dashboard_infrastructure_cache = snapshot
+        _dashboard_infrastructure_cached_at = now
+        return snapshot
+
+
+def _build_infrastructure_service_summary(
+    services: Sequence[object],
+) -> dict[str, int]:
+    from app.schemas.status_presentation import StatusTone
+    from app.services.status_presentation import (
+        infrastructure_service_status_presentation,
+    )
+
+    summary = {
+        "total": len(services),
+        "up": 0,
+        "degraded": 0,
+        "down": 0,
+        "unknown": 0,
+    }
+    _tone_bucket = {
+        StatusTone.positive: "up",
+        StatusTone.warning: "degraded",
+        StatusTone.negative: "down",
+    }
+    for service in services:
+        tone = infrastructure_service_status_presentation(
+            getattr(service, "status", None)
+        ).tone
+        summary[_tone_bucket.get(tone, "unknown")] += 1
+    return summary
 
 
 def dashboard_stats_partial(request: Request, db: Session):

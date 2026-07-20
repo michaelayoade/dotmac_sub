@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -142,6 +143,7 @@ class RouterConfigTemplateCreate(BaseModel):
     template_body: str = Field(min_length=1)
     category: str = "custom"
     variables: dict = Field(default_factory=dict)
+    is_active: bool = True
 
 
 class RouterConfigTemplateUpdate(BaseModel):
@@ -167,11 +169,39 @@ class RouterConfigTemplateRead(BaseModel):
     updated_at: datetime
 
 
+class RouterSotIntentInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    resource: Literal[
+        "firewall_address_list",
+        "firewall_filter",
+        "firewall_nat",
+        "simple_queue",
+        "ipv4_address",
+        "ipv6_address",
+        "ipv4_route",
+        "ipv6_route",
+        "bgp_connection",
+        "ospf_instance",
+        "ospf_area",
+        "ospf_interface_template",
+        "routing_filter_rule",
+    ]
+    key: str = Field(min_length=1, max_length=127)
+    state: Literal["present", "absent"] = "present"
+    values: dict[str, str | int | bool] = Field(default_factory=dict)
+
+
 class RouterConfigPushCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     template_id: uuid.UUID | None = None
-    commands: list[str] = Field(min_length=1)
+    desired_state: list[RouterSotIntentInput] = Field(min_length=1)
     variable_values: dict | None = None
     router_ids: list[uuid.UUID] = Field(min_length=1)
+    dry_run: bool = False
+    failure_policy: Literal["continue", "abort"] = "continue"
+    allow_dangerous_commands: bool = False
 
 
 class RouterConfigPushRead(BaseModel):
@@ -180,8 +210,13 @@ class RouterConfigPushRead(BaseModel):
     id: uuid.UUID
     template_id: uuid.UUID | None
     commands: list
+    desired_state: list[dict]
     variable_values: dict | None
+    dry_run: bool
+    failure_policy: str
+    allow_dangerous_commands: bool
     initiated_by: uuid.UUID
+    operation_id: uuid.UUID | None
     status: str
     created_at: datetime
     completed_at: datetime | None
@@ -193,8 +228,9 @@ class RouterConfigPushResultRead(BaseModel):
     id: uuid.UUID
     push_id: uuid.UUID
     router_id: uuid.UUID
+    operation_id: uuid.UUID | None
     status: str
-    response_data: dict | None
+    response_data: dict | list | None
     error_message: str | None
     pre_snapshot_id: uuid.UUID | None
     post_snapshot_id: uuid.UUID | None

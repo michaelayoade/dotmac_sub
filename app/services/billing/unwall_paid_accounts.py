@@ -6,11 +6,11 @@ many invoices were paid from the account deposit with no invoice-linked
 allocation, and recomputing locally manufactures phantom debt).
 
 Instead of trusting per-invoice balances, this keys on the authoritative
-account-level net: ``get_available_balance`` (the imported deposit for migrated
-accounts, the local ledger for native ones). An account that is walled
-(``suspended``/``blocked``) but whose available balance is ``>= 0`` is paid up
-and should not be walled for non-payment — so we re-evaluate enforcement and
-restore service.
+account-level net. Prepaid accounts must meet the canonical prepaid access
+threshold; a zero-balance rule here would disagree with the suspension sweep
+and make service oscillate. Postpaid legacy repair retains its non-negative
+account-net cohort, while the restore owner separately refuses to clear an
+overdue lock until collectible debt is gone.
 
 NO ledger / money writes. Pure service-state correction:
   - ``restore_account_services`` — reason-scoped, lifts only payment/collections
@@ -31,7 +31,10 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.catalog import BillingMode
 from app.models.subscriber import Subscriber, SubscriberStatus
+from app.services.access_resolution import resolve_prepaid_funding
+from app.services.billing_profile import resolve_billing_profile
 from app.services.common import coerce_uuid
 from app.services.notification_suppression import suppress_notifications
 
@@ -50,15 +53,26 @@ class UnwallResult:
     error: str | None = None
 
 
+def _funding_allows_restore(db: Session, account_id: str) -> bool:
+    """Use the same prepaid funding decision as live access reconciliation."""
+    from app.services.collections import get_available_balance
+
+    account = db.get(Subscriber, coerce_uuid(account_id))
+    if account is None:
+        return False
+    profile = resolve_billing_profile(db, account)
+    if profile.effective_mode == BillingMode.prepaid:
+        return profile.automation_safe and resolve_prepaid_funding(db, account).funded
+    return get_available_balance(db, account_id) >= 0
+
+
 def find_walled_paid_account_ids(db: Session, *, limit: int | None = None) -> list[str]:
-    """Walled (suspended/blocked) subscribers whose available balance is >= 0.
+    """Walled subscribers whose canonical access funding gate passes.
 
     Keyed on the account-level net (deposit/ledger via ``get_available_balance``),
     never per-invoice balance_due. These are paid up yet walled — the cohort to
     restore.
     """
-    from app.services.collections import get_available_balance
-
     candidate_ids = [
         str(r[0])
         for r in db.execute(
@@ -67,7 +81,7 @@ def find_walled_paid_account_ids(db: Session, *, limit: int | None = None) -> li
     ]
     out: list[str] = []
     for account_id in candidate_ids:
-        if get_available_balance(db, account_id) >= 0:
+        if _funding_allows_restore(db, account_id):
             out.append(account_id)
             if limit is not None and len(out) >= limit:
                 break
@@ -164,12 +178,10 @@ def unwall_cohort(
     ``notify`` defaults False (bulk catch-up — suppress the "service resumed"
     burst). ``extra_subscription_ids`` forces RADIUS + CoA onto extra subscriptions.
     """
-    from app.services.collections import get_available_balance
-
     targeted = account_ids is not None
     if account_ids is not None:
-        # Paid-up gate still applies — never restore an account that genuinely owes.
-        targets = [a for a in account_ids if get_available_balance(db, a) >= 0]
+        # The canonical funding gate still applies in targeted mode.
+        targets = [a for a in account_ids if _funding_allows_restore(db, a)]
     else:
         targets = find_walled_paid_account_ids(db, limit=limit)
     summary = UnwallSummary(candidates=len(targets), dry_run=dry_run)

@@ -1,0 +1,58 @@
+{% extends "layouts/customer.html" %}
+
+{% block title %}Payment Status - Customer Portal{% endblock %}
+
+{% block content %}
+{% set is_pending = status_kind == 'pending' %}
+<div class="space-y-6">
+    <div>
+        <nav class="mb-2 flex items-center gap-2 text-sm text-stone-500 dark:text-stone-400">
+            <a href="/portal/billing" class="hover:text-[var(--color-brand-600)]">Billing</a>
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            <span class="text-stone-900 dark:text-white">Payment Status</span>
+        </nav>
+    </div>
+
+    <div class="mx-auto max-w-2xl rounded-xl border border-stone-200 bg-white p-6 text-center shadow-sm dark:border-stone-700 dark:bg-stone-800">
+        <div class="mx-auto flex h-16 w-16 items-center justify-center rounded-full {{ 'bg-amber-100 dark:bg-amber-900/30' if is_pending else 'bg-red-100 dark:bg-red-900/30' }}">
+            {% if is_pending %}
+            <svg class="h-8 w-8 text-amber-600 dark:text-amber-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2m6-2a10 10 0 11-20 0 10 10 0 0120 0z"/>
+            </svg>
+            {% else %}
+            <svg class="h-8 w-8 text-red-600 dark:text-red-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v3.75m0 3.75h.007v.008H12v-.008zM21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            {% endif %}
+        </div>
+        <h1 class="mt-5 text-2xl font-bold text-stone-900 dark:text-white">{{ title }}</h1>
+        <p class="mt-2 text-sm text-stone-600 dark:text-stone-300">{{ message }}</p>
+
+        <div class="mt-6 rounded-lg border border-stone-200 bg-stone-50 p-4 text-left dark:border-stone-700 dark:bg-stone-900/30">
+            <dl class="space-y-3 text-sm">
+                <div class="flex items-center justify-between gap-4">
+                    <dt class="text-stone-500 dark:text-stone-400">Reference</dt>
+                    <dd class="font-mono text-stone-900 dark:text-white">{{ reference }}</dd>
+                </div>
+                {% if provider %}
+                <div class="flex items-center justify-between gap-4">
+                    <dt class="text-stone-500 dark:text-stone-400">Provider</dt>
+                    <dd class="text-stone-900 dark:text-white">{{ provider | title }}</dd>
+                </div>
+                {% endif %}
+            </dl>
+        </div>
+
+        <div class="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-center">
+            <a href="/portal/billing" class="inline-flex items-center justify-center rounded-lg bg-[var(--color-brand-600)] px-6 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-[var(--color-brand-700)]">
+                Back to Billing
+            </a>
+            {% if flow == 'account_topup' %}
+            <a href="/portal/billing/topup" class="inline-flex items-center justify-center rounded-lg border border-stone-200 bg-white px-6 py-2.5 text-sm font-semibold text-stone-700 shadow-sm hover:border-stone-300 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-300">
+                Try Again
+            </a>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

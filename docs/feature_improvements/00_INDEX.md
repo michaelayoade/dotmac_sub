@@ -1,5 +1,7 @@
 # Feature Improvements Index
 
+> **Status: historical product research, not an approved backlog.** Screenshot-derived ideas require a current page contract, domain owner, and revalidation against `docs/UI_INFORMATION_AND_ACTION_STANDARD.md` before implementation.
+
 ## Source Material
 Screenshots from **legacy BSS** and **SmartOLT** reviewed on 2026-02-24 to identify feature gaps and improvements for DotMac Sub.
 

@@ -1,9 +1,4 @@
-"""Schemas for the live-chat broker endpoints.
-
-The sub never exposes the CRM's conversation internals; it hands the client an
-opaque visitor token plus the URLs needed to talk to the CRM chat_widget
-channel directly (REST for send/history, WebSocket for real-time).
-"""
+"""Schemas for the native team-inbox live-chat broker endpoints."""
 
 from __future__ import annotations
 
@@ -11,11 +6,11 @@ from pydantic import BaseModel
 
 
 class ChatSessionResponse(BaseModel):
-    """Everything a client needs to drive the CRM chat widget for one session."""
+    """Everything a client needs to drive one native team-inbox chat session."""
 
     session_id: str
     visitor_token: str
     conversation_id: str | None = None
-    # CRM endpoints the client talks to directly with X-Visitor-Token.
+    # Native widget endpoints the client calls with X-Visitor-Token.
     ws_url: str
     api_base: str

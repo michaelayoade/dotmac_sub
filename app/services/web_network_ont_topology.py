@@ -23,6 +23,7 @@ from app.models.network import (
     Splitter,
     SplitterPort,
 )
+from app.services.network.ont_status import resolve_effective_ont_status
 
 logger = logging.getLogger(__name__)
 
@@ -114,11 +115,7 @@ def build_ont_fiber_path(db: Session, ont_id: str) -> FiberPathTopology:
     nodes: list[TopologyNode] = []
     links: list[TopologyLink] = []
 
-    # Start with the ONT node. Zabbix is the source of truth for runtime state.
-    from app.services.zabbix_ont_status import get_ont_signal_from_zabbix
-
-    ont_snapshot = get_ont_signal_from_zabbix(ont)
-    ont_status = "online" if ont_snapshot.online else "offline"
+    ont_status = resolve_effective_ont_status(ont).status.value
 
     ont_node = TopologyNode(
         node_type="ont",

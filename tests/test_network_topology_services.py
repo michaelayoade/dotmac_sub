@@ -1,4 +1,6 @@
+from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 from starlette.routing import Match
 
@@ -6,19 +8,25 @@ from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.network import OLTDevice, OntAssignment, OntUnit
 from app.models.network_monitoring import (
     DeviceInterface,
+    DeviceMetric,
     DeviceRole,
     DeviceStatus,
     DeviceType,
+    MetricType,
     NetworkDevice,
+    NetworkWeathermapView,
     PopSite,
     TopologyLinkMedium,
     TopologyLinkRole,
 )
 from app.models.subscriber import Address
 from app.services import network_topology as topology_service
+from app.services import web_network_topology as web_topology_service
 from app.services.topology.customer_path import GAP_NO_NODE
 from app.services.topology.gaps import topology_gaps
+from app.timezone import DisplayObject
 from app.web.admin import network_weathermap as topology_routes
+from app.web.admin import router as admin_router
 
 
 def _matched_route(router, path: str, method: str = "GET"):
@@ -38,6 +46,54 @@ def _matched_route(router, path: str, method: str = "GET"):
         if match == Match.FULL:
             return route
     return None
+
+
+def test_topology_link_form_renders_display_object_edit_link() -> None:
+    link = DisplayObject(
+        SimpleNamespace(
+            id="link-1",
+            source_device_id="source-device",
+            source_interface_id="source-iface",
+            target_device_id="target-device",
+            target_interface_id="target-iface",
+            link_role="uplink",
+            medium="fiber",
+            capacity_bps=1_000_000_000,
+            admin_status="enabled",
+            bundle_key="",
+            topology_group="",
+            notes="",
+        )
+    )
+
+    html = topology_routes.templates.env.get_template(
+        "admin/network/topology/link_form.html"
+    ).render(
+        {
+            "request": SimpleNamespace(
+                state=SimpleNamespace(csrf_token="csrf-token"), query_params={}
+            ),
+            "current_user": {"name": "Admin", "email": "admin@example.test"},
+            "sidebar_stats": {},
+            "active_page": "topology",
+            "active_menu": "network",
+            "link": link,
+            "action_url": "/admin/network/topology/links/link-1/edit",
+            "error": None,
+            "devices": [
+                {"id": "source-device", "name": "Source Device"},
+                {"id": "target-device", "name": "Target Device"},
+            ],
+            "link_roles": ["unknown", "uplink"],
+            "mediums": ["unknown", "fiber"],
+            "admin_statuses": ["enabled", "disabled"],
+        }
+    )
+
+    assert 'value="source-device" selected' in html
+    assert 'value="target-device" selected' in html
+    assert 'id="sourceInterfaceSelected" value="source-iface"' in html
+    assert 'id="targetInterfaceSelected" value="target-iface"' in html
 
 
 def test_topology_link_update_can_change_endpoints(db_session):
@@ -205,6 +261,55 @@ def test_topology_graph_falls_back_to_active_inventory_when_no_links(db_session)
     assert graph["stats"]["node_count"] == 2
 
 
+def test_topology_graph_includes_saved_node_position(db_session):
+    device = NetworkDevice(
+        name="Positioned Core",
+        role=DeviceRole.core,
+        device_type=DeviceType.router,
+        status=DeviceStatus.online,
+        is_active=True,
+        topology_x=123.45,
+        topology_y=678.9,
+    )
+    db_session.add(device)
+    db_session.commit()
+
+    graph = topology_service.list_nodes_and_edges(db_session)
+
+    node = next(item for item in graph["nodes"] if item["id"] == str(device.id))
+    assert node["position"] == {"x": 123.45, "y": 678.9}
+
+
+def test_save_node_positions_updates_devices(db_session):
+    device = NetworkDevice(
+        name="Dragged Node",
+        role=DeviceRole.edge,
+        device_type=DeviceType.switch,
+        status=DeviceStatus.online,
+        is_active=True,
+    )
+    db_session.add(device)
+    db_session.commit()
+
+    result = topology_service.save_node_positions(
+        db_session,
+        [{"id": str(device.id), "x": 42.126, "y": -18.555}],
+    )
+
+    db_session.refresh(device)
+    assert result == {"saved": 1}
+    assert device.topology_x == 42.13
+    assert device.topology_y == -18.55
+
+
+def test_topology_template_exposes_layout_save_controls() -> None:
+    template = Path("templates/admin/network/topology/index.html").read_text()
+
+    assert 'id="topologySaveLayout"' in template
+    assert "/admin/network/topology/api/node-positions" in template
+    assert "'X-CSRF-Token': csrfToken()" in template
+
+
 def test_topology_gaps_respects_subscription_service_address(
     db_session,
     subscriber,
@@ -362,6 +467,52 @@ def test_topology_graph_aggregates_and_filters_by_pop_site(db_session):
     assert {node["pop_site_name"] for node in filtered_graph["nodes"]} == {"POP A"}
 
 
+def test_topology_graph_pop_filter_keeps_boundary_uplink(db_session):
+    site_a = PopSite(name="POP A", is_active=True)
+    site_b = PopSite(name="POP B", is_active=True)
+    db_session.add_all([site_a, site_b])
+    db_session.flush()
+
+    local = NetworkDevice(
+        name="Access A",
+        pop_site_id=site_a.id,
+        role=DeviceRole.access,
+        device_type=DeviceType.switch,
+        status=DeviceStatus.online,
+        is_active=True,
+    )
+    upstream = NetworkDevice(
+        name="Core B",
+        pop_site_id=site_b.id,
+        role=DeviceRole.core,
+        device_type=DeviceType.router,
+        status=DeviceStatus.online,
+        is_active=True,
+    )
+    db_session.add_all([local, upstream])
+    db_session.flush()
+    topology_service.topology_links.create(
+        db_session,
+        data={
+            "source_device_id": str(local.id),
+            "target_device_id": str(upstream.id),
+            "link_role": "uplink",
+            "medium": "fiber",
+        },
+    )
+
+    graph = topology_service.list_nodes_and_edges(
+        db_session, pop_site_id=str(site_a.id)
+    )
+
+    assert {node["id"] for node in graph["nodes"]} == {str(local.id), str(upstream.id)}
+    assert graph["stats"]["edge_count"] == 1
+    assert graph["stats"]["boundary_node_count"] == 1
+    assert {node["name"] for node in graph["nodes"] if node["is_external"]} == {
+        "Core B"
+    }
+
+
 def test_get_device_interfaces_returns_full_inventory(db_session):
     device = NetworkDevice(
         name="Dense Switch",
@@ -388,10 +539,34 @@ def test_get_device_interfaces_returns_full_inventory(db_session):
     assert len(interfaces) == 205
 
 
-def test_legacy_weathermap_redirect_route_exists():
+def test_topology_form_options_include_full_device_inventory(db_session):
+    db_session.add_all(
+        [
+            NetworkDevice(
+                name=f"Device {index:03d}",
+                role=DeviceRole.edge,
+                device_type=DeviceType.router,
+                is_active=True,
+            )
+            for index in range(205)
+        ]
+    )
+    db_session.flush()
+
+    options = topology_service.get_form_options(db_session)
+
+    assert len(options["devices"]) >= 205
+
+
+def test_weathermap_route_exists():
     route = _matched_route(topology_routes.router, "/network/weathermap")
     assert route is not None
-    assert route.endpoint is topology_routes.network_weathermap_redirect
+    assert route.endpoint is topology_routes.network_weathermap
+
+
+def test_admin_router_mounts_topology_and_weathermap_routes():
+    assert _matched_route(admin_router, "/admin/network/topology") is not None
+    assert _matched_route(admin_router, "/admin/network/weathermap") is not None
 
 
 def test_topology_routes_include_ajax_endpoints():
@@ -407,6 +582,20 @@ def test_topology_routes_include_ajax_endpoints():
         _matched_route(topology_routes.router, "/network/topology/api/graph")
         is not None
     )
+    assert (
+        _matched_route(topology_routes.router, "/network/weathermap/api/graph")
+        is not None
+    )
+    assert (
+        _matched_route(topology_routes.router, "/network/weathermap/api/layout", "POST")
+        is not None
+    )
+    assert (
+        _matched_route(
+            topology_routes.router, "/network/weathermap/api/layout/reset", "POST"
+        )
+        is not None
+    )
 
 
 def test_topology_link_form_restores_selected_interfaces():
@@ -414,6 +603,7 @@ def test_topology_link_form_restores_selected_interfaces():
     assert 'id="sourceInterfaceSelected"' in template
     assert 'id="targetInterfaceSelected"' in template
     assert "if (deviceSelect.value)" in template
+    assert 'formaction="/admin/network/topology/links/{{ link.id }}/delete"' in template
 
 
 def test_legacy_weathermap_assets_removed():
@@ -425,8 +615,226 @@ def test_admin_labels_switched_to_topology():
     layout = Path("templates/layouts/admin.html").read_text()
     network_hub = Path("templates/admin/network/index.html").read_text()
     design_system = Path("templates/admin/design_system/modules.html").read_text()
-    assert "'topology': 'Network Topology'" in layout
-    assert '"href": "/admin/network/topology"' in network_hub
+    assert "'weathermap': 'Network Weather Map'" in layout
+    assert (
+        '"label": "Topology Editor", "href": "/admin/network/topology"' in network_hub
+    )
+    assert '"label": "Weather Map", "href": "/admin/network/weathermap"' in network_hub
     assert (
         '"label": "Network Topology", "url": "/admin/network/topology"' in design_system
+    )
+    assert (
+        '"label": "Network Weather Map", "url": "/admin/network/weathermap"'
+        in design_system
+    )
+
+
+def test_weathermap_canvas_uses_explicit_height():
+    template = Path("templates/admin/network/weathermap.html").read_text()
+
+    assert 'id="weatherCanvas" style="height:' in template
+
+
+def test_weathermap_template_exposes_noc_layout_controls():
+    template = Path("templates/admin/network/weathermap.html").read_text()
+
+    assert 'id="viewFilter"' in template
+    assert 'id="openNocWindow"' in template
+    assert 'id="weatherAutoRefresh"' in template
+    assert 'id="saveWeatherLayout"' in template
+    assert 'id="resetWeatherLayout"' in template
+    assert "/admin/network/weathermap/api/layout" in template
+
+
+def test_weathermap_context_creates_default_view_and_applies_layout(db_session):
+    device = NetworkDevice(
+        name="NOC Router",
+        role=DeviceRole.core,
+        device_type=DeviceType.router,
+        status=DeviceStatus.online,
+        is_active=True,
+    )
+    db_session.add(device)
+    db_session.flush()
+
+    saved = web_topology_service.save_weathermap_layout(
+        db_session,
+        view_slug="default",
+        payload={"nodes": {str(device.id): {"x": 120.1234, "y": 240.9876}}},
+    )
+    context = web_topology_service.weathermap_page_context(db_session)
+    node = next(n for n in context["graph"]["nodes"] if n["id"] == str(device.id))
+
+    assert saved["slug"] == "default"
+    assert context["weathermap_view"]["name"] == "Default NOC Map"
+    assert context["selected_view"] == "default"
+    assert node["weathermap_positioned"] is True
+    assert node["weathermap_position"] == {"x": 120.12, "y": 240.99}
+
+
+def test_weathermap_layout_reset_clears_saved_positions(db_session):
+    device = NetworkDevice(
+        name="Distribution Switch",
+        role=DeviceRole.distribution,
+        device_type=DeviceType.switch,
+        status=DeviceStatus.online,
+        is_active=True,
+    )
+    db_session.add(device)
+    db_session.flush()
+
+    web_topology_service.save_weathermap_layout(
+        db_session,
+        view_slug="default",
+        payload={"nodes": {str(device.id): {"x": 80, "y": 90}}},
+    )
+    reset = web_topology_service.reset_weathermap_layout(
+        db_session, view_slug="default"
+    )
+    context = web_topology_service.weathermap_page_context(db_session)
+    node = next(n for n in context["graph"]["nodes"] if n["id"] == str(device.id))
+
+    assert reset["layout"] == {"nodes": {}, "viewport": {}}
+    assert "weathermap_positioned" not in node
+
+
+def test_weathermap_context_can_use_named_view_filters(db_session):
+    site = PopSite(name="NOC POP")
+    db_session.add(site)
+    db_session.flush()
+    db_session.add(
+        NetworkWeathermapView(
+            slug="core-noc",
+            name="Core NOC",
+            topology_group="core",
+            pop_site_id=site.id,
+            settings={"refresh_seconds": 30},
+            layout={"nodes": {}, "viewport": {}},
+        )
+    )
+    db_session.commit()
+
+    context = web_topology_service.weathermap_page_context(
+        db_session, view_slug="core-noc"
+    )
+
+    assert context["selected_view"] == "core-noc"
+    assert context["selected_group"] == "core"
+    assert context["selected_site"] == str(site.id)
+    assert context["weathermap_view"]["settings"]["refresh_seconds"] == 30
+
+
+def test_topology_graph_edges_carry_status_and_nodes_carry_live_status(db_session):
+    src = NetworkDevice(
+        name="Core X",
+        role=DeviceRole.core,
+        status=DeviceStatus.online,
+        live_status="down",
+        is_active=True,
+    )
+    dst = NetworkDevice(
+        name="Edge X", role=DeviceRole.edge, status=DeviceStatus.online, is_active=True
+    )
+    db_session.add_all([src, dst])
+    db_session.flush()
+    topology_service.topology_links.create(
+        db_session,
+        data={
+            "source_device_id": str(src.id),
+            "target_device_id": str(dst.id),
+            "link_role": "uplink",
+            "medium": "fiber",
+        },
+    )
+
+    graph = topology_service.list_nodes_and_edges(db_session)
+
+    assert graph["edges"], "expected the created link to appear as an edge"
+    assert graph["edges"][0]["status"] == "up"  # enabled, active, no stale signal
+    nodes = {node["name"]: node for node in graph["nodes"]}
+    assert nodes["Core X"]["status"] == "down"
+    assert nodes["Core X"]["inventory_status"] == "online"
+    assert nodes["Core X"]["live_status"] == "down"
+    assert {node["role"] for node in graph["nodes"]} >= {"core", "edge"}
+
+
+def test_link_utilization_uses_dominant_direction_not_rx_plus_tx(db_session):
+    src = NetworkDevice(name="Source", role=DeviceRole.core, is_active=True)
+    dst = NetworkDevice(name="Target", role=DeviceRole.edge, is_active=True)
+    db_session.add_all([src, dst])
+    db_session.flush()
+    src_iface = DeviceInterface(device_id=src.id, name="xe-0/0/0")
+    dst_iface = DeviceInterface(device_id=dst.id, name="xe-0/0/1")
+    db_session.add_all([src_iface, dst_iface])
+    db_session.flush()
+    link = topology_service.topology_links.create(
+        db_session,
+        data={
+            "source_device_id": str(src.id),
+            "source_interface_id": str(src_iface.id),
+            "target_device_id": str(dst.id),
+            "target_interface_id": str(dst_iface.id),
+            "link_role": "uplink",
+            "medium": "fiber",
+            "capacity_bps": "1000000000",
+        },
+    )
+    db_session.add_all(
+        [
+            DeviceMetric(
+                device_id=src.id,
+                interface_id=src_iface.id,
+                metric_type=MetricType.rx_bps,
+                value=600_000_000,
+                recorded_at=datetime(2026, 7, 7, tzinfo=UTC),
+            ),
+            DeviceMetric(
+                device_id=src.id,
+                interface_id=src_iface.id,
+                metric_type=MetricType.tx_bps,
+                value=600_000_000,
+                recorded_at=datetime(2026, 7, 7, tzinfo=UTC),
+            ),
+        ]
+    )
+    db_session.flush()
+
+    util = topology_service.compute_link_utilization(db_session, link)
+
+    assert util["utilization_pct"] == 60.0
+    assert util["utilization_basis"] == "max_direction"
+    assert util["dominant_direction"] == "rx"
+
+
+def test_derive_link_status_covers_admin_and_staleness():
+    from datetime import UTC, datetime, timedelta
+    from types import SimpleNamespace
+
+    from app.models.network_monitoring import TopologyLinkAdminStatus
+    from app.services.network_topology import _LINK_STALE_SECONDS, _derive_link_status
+
+    now = datetime(2026, 7, 5, 12, 0, tzinfo=UTC)
+
+    def link(admin, *, active=True, seen=now):
+        return SimpleNamespace(admin_status=admin, is_active=active, last_seen_at=seen)
+
+    assert _derive_link_status(link(TopologyLinkAdminStatus.enabled), now) == "up"
+    assert _derive_link_status(link(TopologyLinkAdminStatus.disabled), now) == "down"
+    assert (
+        _derive_link_status(link(TopologyLinkAdminStatus.enabled, active=False), now)
+        == "down"
+    )
+    assert (
+        _derive_link_status(link(TopologyLinkAdminStatus.maintenance), now)
+        == "degraded"
+    )
+    stale = now - timedelta(seconds=_LINK_STALE_SECONDS + 60)
+    assert (
+        _derive_link_status(link(TopologyLinkAdminStatus.enabled, seen=stale), now)
+        == "degraded"
+    )
+    # manual links (no last_seen_at) are never stale-degraded
+    assert (
+        _derive_link_status(link(TopologyLinkAdminStatus.enabled, seen=None), now)
+        == "up"
     )

@@ -41,6 +41,7 @@ def accounts_list(
     reseller_id: str | None = Query(None),
     search: str | None = Query(None),
     status: str | None = Query(None),
+    balance_filter: str | None = Query(None),
     db: Session = Depends(get_db),
 ):
     state = web_billing_accounts_service.build_accounts_list_data(
@@ -51,6 +52,7 @@ def accounts_list(
         reseller_id=reseller_id,
         search=search,
         status=status,
+        balance_filter=balance_filter,
     )
     from app.web.admin import get_current_user, get_sidebar_stats
 

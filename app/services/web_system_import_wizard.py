@@ -17,11 +17,17 @@ from typing import Any
 from uuid import UUID
 from xml.etree import ElementTree as ET  # nosec
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.orm import Session
 
 from app.models.billing import Invoice, InvoiceStatus, Payment, PaymentStatus
-from app.models.catalog import NasDevice, NasVendor, Subscription, SubscriptionStatus
+from app.models.catalog import (
+    BillingMode,
+    NasDevice,
+    NasVendor,
+    Subscription,
+    SubscriptionStatus,
+)
 from app.models.domain_settings import SettingDomain
 from app.models.network import IPAssignment, IpPool, IPVersion
 from app.models.network_monitoring import (
@@ -60,12 +66,19 @@ class SubscriptionImportRow(BaseModel):
     subscriber_id: uuid.UUID
     offer_id: uuid.UUID
     status: SubscriptionStatus = SubscriptionStatus.pending
+    billing_mode: BillingMode | None = None
+    start_at: datetime | None = None
+    end_at: datetime | None = None
+    next_billing_at: datetime | None = None
+    canceled_at: datetime | None = None
+    cancel_reason: str | None = None
 
 
 class InvoiceImportRow(BaseModel):
     account_id: uuid.UUID
     invoice_number: str | None = None
     status: InvoiceStatus = InvoiceStatus.draft
+    billing_mode: BillingMode | None = None
     currency: str = "NGN"
     subtotal: Decimal = Decimal("0.00")
     tax_total: Decimal = Decimal("0.00")
@@ -80,7 +93,8 @@ class PaymentImportRow(BaseModel):
     currency: str = "NGN"
     status: PaymentStatus = PaymentStatus.succeeded
     memo: str | None = None
-    external_id: str | None = None
+    external_id: str = Field(min_length=1, max_length=255)
+    invoice_number: str | None = None
 
 
 class NasDeviceImportRow(BaseModel):
@@ -128,7 +142,17 @@ ENTITY_CONFIG: dict[str, dict[str, Any]] = {
     "subscriptions": {
         "label": "Subscriptions",
         "model": SubscriptionImportRow,
-        "headers": ["subscriber_id", "offer_id", "status"],
+        "headers": [
+            "subscriber_id",
+            "offer_id",
+            "status",
+            "billing_mode",
+            "start_at",
+            "end_at",
+            "next_billing_at",
+            "canceled_at",
+            "cancel_reason",
+        ],
     },
     "invoices": {
         "label": "Invoices",
@@ -137,6 +161,7 @@ ENTITY_CONFIG: dict[str, dict[str, Any]] = {
             "account_id",
             "invoice_number",
             "status",
+            "billing_mode",
             "currency",
             "subtotal",
             "tax_total",
@@ -155,6 +180,7 @@ ENTITY_CONFIG: dict[str, dict[str, Any]] = {
             "status",
             "memo",
             "external_id",
+            "invoice_number",
         ],
     },
     "nas_devices": {
@@ -410,7 +436,27 @@ def _validate_rows(
     return valid_rows, errors
 
 
-def _persist_row(db: Session, module: str, parsed_row: Any) -> Any:
+def _persist_row(
+    db: Session,
+    module: str,
+    parsed_row: Any,
+    *,
+    source_name: str | None = None,
+    with_provenance: bool = False,
+) -> Any:
+    from app.services.financial_imports import (
+        FINANCIAL_IMPORT_MODULES,
+        persist_import_row,
+    )
+
+    if module in FINANCIAL_IMPORT_MODULES:
+        return persist_import_row(
+            db,
+            module,
+            parsed_row,
+            source_name=source_name or "import",
+            with_provenance=with_provenance,
+        )
     if module == "subscribers":
         obj = Subscriber(
             first_name=parsed_row.first_name,
@@ -419,39 +465,6 @@ def _persist_row(db: Session, module: str, parsed_row: Any) -> Any:
             phone=parsed_row.phone,
             status=parsed_row.status,
             is_active=parsed_row.is_active,
-        )
-        db.add(obj)
-        return obj
-    if module == "subscriptions":
-        obj = Subscription(
-            subscriber_id=parsed_row.subscriber_id,
-            offer_id=parsed_row.offer_id,
-            status=parsed_row.status,
-        )
-        db.add(obj)
-        return obj
-    if module == "invoices":
-        obj = Invoice(
-            account_id=parsed_row.account_id,
-            invoice_number=parsed_row.invoice_number,
-            status=parsed_row.status,
-            currency=parsed_row.currency,
-            subtotal=parsed_row.subtotal,
-            tax_total=parsed_row.tax_total,
-            total=parsed_row.total,
-            balance_due=parsed_row.balance_due,
-            memo=parsed_row.memo,
-        )
-        db.add(obj)
-        return obj
-    if module == "payments":
-        obj = Payment(
-            account_id=parsed_row.account_id,
-            amount=parsed_row.amount,
-            currency=parsed_row.currency,
-            status=parsed_row.status,
-            memo=parsed_row.memo,
-            external_id=parsed_row.external_id,
         )
         db.add(obj)
         return obj
@@ -620,6 +633,13 @@ def execute_import(
     file_bytes: bytes | None = None,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
+    from app.services.financial_imports import FINANCIAL_IMPORT_MODULES
+
+    if module in FINANCIAL_IMPORT_MODULES and not dry_run:
+        raise ValueError(
+            "Financial and subscription imports require a durable dry run. "
+            "Apply the validated run from Import Runs."
+        )
     parsed = parse_payload(
         data_format=data_format,
         raw_text=raw_text,
@@ -652,7 +672,9 @@ def execute_import(
         for idx, row in enumerate(valid_rows, start=1):
             nested = db.begin_nested()
             try:
-                persisted = _persist_row(db, module, row)
+                persisted = _persist_row(
+                    db, module, row, source_name=parsed.source_name
+                )
                 db.flush()
                 persisted_id = getattr(persisted, "id", None)
                 if persisted_id is not None:
@@ -773,6 +795,15 @@ def rollback_import(
         raise ValueError("Import record not found")
 
     entry = history[entry_idx]
+    from app.services.financial_imports import FINANCIAL_IMPORT_MODULES
+
+    if str(entry.get("module") or "") in FINANCIAL_IMPORT_MODULES:
+        raise ValueError(
+            "Legacy financial and subscription import history cannot be raw-deleted. "
+            "Payment batches with durable creation provenance use the Import Runs "
+            "previewed batch-reversal owner; other financial modules use their "
+            "named append-only lifecycle owners."
+        )
     if bool(entry.get("dry_run")):
         raise ValueError("Dry-run imports cannot be rolled back")
     if entry.get("rolled_back_at"):
@@ -802,6 +833,9 @@ def rollback_import(
 
     deleted_rows = 0
     missing_rows = 0
+
+    # Financial modules were rejected above. Legacy settings-history rollback is
+    # intentionally limited to nonfinancial records that can still be removed.
     for record in created_records:
         if not isinstance(record, dict):
             continue
@@ -824,6 +858,7 @@ def rollback_import(
         if obj is None:
             missing_rows += 1
             continue
+
         db.delete(obj)
         deleted_rows += 1
 

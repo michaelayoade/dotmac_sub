@@ -29,6 +29,7 @@ no production code path calls it yet.
 
 from __future__ import annotations
 
+import ipaddress
 import re
 import uuid
 from datetime import UTC, datetime
@@ -39,14 +40,20 @@ from sqlalchemy.orm import Session
 
 from app.models.network import OntUnit
 from app.models.ont_observation import OntObservation
+from app.services.network.acs_resolution import resolve_acs_for_ont
 from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.serial_utils import parse_ont_id_on_olt
+from app.services.network.tr069_paths import Tr069PathError, tr069_path_resolver
+from app.services.network.vendor_capabilities import VendorCapabilities
 
 from .state import (
     AcsObservedFields,
     OltObservedFields,
     OntDesiredState,
     OntObservedState,
+    Tr069RemoteAccessParameterPaths,
+    Tr069WifiParameterPaths,
+    Tr181WanParameterPaths,
 )
 
 _FSP_RE = re.compile(r"^\d+/\d+/\d+$")
@@ -81,6 +88,20 @@ def desired_from_ont_unit(db: Session, ont: OntUnit) -> OntDesiredState:
     # the ONU operating mode (``routing``/``bridging``). Either being "bridge"
     # or "bridging" means the reconciler treats the WAN as bridged.
     wan_mode = _normalise_wan_mode(values.get("wan_mode"), values.get("onu_mode"))
+    acs_resolution = resolve_acs_for_ont(db, ont)
+    acs_server = acs_resolution.server
+    tr181_wan_paths = _resolve_tr181_wan_paths(db, ont, wan_mode, values)
+    tr069_data_model_root = _resolve_tr069_root(db, ont, tr181_wan_paths)
+    wifi_paths = _resolve_wifi_paths(db, ont, tr069_data_model_root)
+    remote_access_paths = _resolve_remote_access_paths(db, ont, tr069_data_model_root)
+    access = dict((ont.desired_config or {}).get("access") or {})
+    remote_expires_at = _datetime_or_none(access.get("wan_remote_expires_at"))
+    remote_requested = _bool_or_default(
+        access.get("wan_remote", values.get("wan_remote_access")), default=False
+    )
+    remote_enabled = remote_requested and (
+        remote_expires_at is not None and remote_expires_at > datetime.now(UTC)
+    )
 
     return OntDesiredState(
         ont_unit_id=str(ont.id),
@@ -107,11 +128,12 @@ def desired_from_ont_unit(db: Session, ont: OntUnit) -> OntDesiredState:
         # iphost_priority.resolve_management_iphost_priority and is plan-time.
         mgmt_iphost_priority=2,
         tr069_profile_id=int(values.get("tr069_olt_profile_id") or 0),
-        acs_server_id=str(ont.tr069_acs_server_id) if ont.tr069_acs_server_id else None,
+        acs_server_id=acs_resolution.server_id,
         cr_username=values.get("cr_username"),
         cr_password_ref=values.get("cr_password"),
-        # DEFAULT: interval not carried; fleet standard is 300s.
-        periodic_inform_interval_sec=300,
+        periodic_inform_interval_sec=int(
+            getattr(acs_server, "periodic_inform_interval", None) or 300
+        ),
         wan_mode=wan_mode,
         wan_vlan=_int_or_none(values.get("wan_vlan")),
         wan_gem_index=_int_or_none(values.get("wan_gem_index")),
@@ -126,10 +148,8 @@ def desired_from_ont_unit(db: Session, ont: OntUnit) -> OntDesiredState:
         wan_internet_config_ip_index=_int_or_none(
             values.get("internet_config_ip_index")
         ),
-        # DEFAULT: nat/ipv6/dhcp explicit toggles aren't on every ONT today;
-        # routed mode implies NAT+DHCP on (fleet convention from feedback_ont_setup_defaults).
-        nat_enabled=wan_mode == "pppoe",
-        ipv6_enabled=False,
+        nat_enabled=_resolve_nat_enabled(wan_mode, values),
+        ipv6_enabled=str(values.get("ip_protocol") or "ipv4").lower() == "dual_stack",
         dhcp_enabled=_bool_or_default(values.get("lan_dhcp_enabled"), default=True),
         dhcp_pool_min=values.get("lan_dhcp_start") or "192.168.100.2",
         dhcp_pool_max=values.get("lan_dhcp_end") or "192.168.100.254",
@@ -150,10 +170,218 @@ def desired_from_ont_unit(db: Session, ont: OntUnit) -> OntDesiredState:
         subscriber_external_id=ont.external_id,
         wan_uprate_kbps=None,
         wan_downrate_kbps=None,
+        tr069_data_model_root=tr069_data_model_root,
+        wan_static_ip=values.get("wan_static_ip"),
+        wan_static_subnet=values.get("wan_static_subnet"),
+        wan_static_gateway=values.get("wan_static_gateway"),
+        wan_static_dns=values.get("wan_static_dns"),
+        wan_static_ip_is_public=_static_ip_is_public(values.get("wan_static_ip")),
+        tr181_wan_paths=tr181_wan_paths,
+        acs_url=getattr(acs_server, "cwmp_url", None),
+        acs_username=getattr(acs_server, "cwmp_username", None),
+        acs_password_ref=getattr(acs_server, "cwmp_password", None),
+        wifi_enabled=_bool_or_none(values.get("wifi_enabled")),
+        wifi_channel=_wifi_channel_or_none(values.get("wifi_channel")),
+        wifi_security_mode=_str_or_none(values.get("wifi_security_mode")),
+        wifi_paths=wifi_paths,
+        wan_remote_access_enabled=remote_enabled,
+        wan_remote_access_expires_at=remote_expires_at,
+        wan_remote_access_source_cidrs=tuple(
+            str(value) for value in access.get("wan_remote_source_cidrs") or ()
+        ),
+        wan_remote_access_ssh_port=22,
+        remote_access_paths=remote_access_paths,
     )
 
 
-def apply_proposed_change(ont: OntUnit, target: OntDesiredState) -> None:
+def _resolve_nat_enabled(wan_mode: str, values: dict[str, Any]) -> bool:
+    if wan_mode == "bridge":
+        return False
+    explicit = values.get("nat_enabled")
+    if explicit is not None:
+        return _bool_or_default(explicit, default=True)
+    return True
+
+
+def _static_ip_is_public(value: object) -> bool | None:
+    try:
+        address = ipaddress.ip_address(str(value or "").strip())
+    except ValueError:
+        return None
+    return address.is_global if isinstance(address, ipaddress.IPv4Address) else None
+
+
+def _resolve_tr181_wan_paths(
+    db: Session,
+    ont: OntUnit,
+    wan_mode: str,
+    values: dict[str, Any],
+) -> Tr181WanParameterPaths | None:
+    if wan_mode not in {"dhcp", "static"}:
+        return None
+    vendor = str(getattr(ont, "vendor", "") or "").strip()
+    model = str(getattr(ont, "model", "") or "").strip()
+    firmware = str(
+        getattr(ont, "firmware_version", None)
+        or getattr(ont, "software_version", None)
+        or ""
+    ).strip()
+    if not vendor or not model:
+        return None
+    capability = VendorCapabilities.resolve_capability(
+        db,
+        vendor=vendor,
+        model=model,
+        firmware=firmware or None,
+    )
+    explicit_root = getattr(ont, "tr069_data_model", None)
+    if explicit_root not in (None, "Device"):
+        return None
+    if capability is None or capability.tr069_root != "Device":
+        return None
+
+    instance_index = int(values.get("wan_instance_index") or 1)
+    canonical = {
+        "ip_enable": "wan.ip.enable",
+        "dhcp_enable": "wan.dhcp.enable",
+        "ip_address": "wan.ip.static_address",
+        "subnet_mask": "wan.ip.static_subnet",
+        "gateway": "wan.gateway",
+        "dns_primary": "wan.dns_primary",
+        "dns_secondary": "wan.dns_secondary",
+        "nat_enable": "wan.nat.enable",
+        "vlan_enable": "wan.vlan.enable",
+        "vlan_id": "wan.vlan.id",
+    }
+    try:
+        resolved = {
+            field: tr069_path_resolver.resolve(
+                "Device",
+                name,
+                db=db,
+                vendor=vendor,
+                model=model,
+                firmware=firmware or None,
+                instance_index=instance_index,
+            )
+            for field, name in canonical.items()
+        }
+    except Tr069PathError:
+        return None
+    return Tr181WanParameterPaths(**resolved)
+
+
+def _resolve_tr069_root(
+    db: Session,
+    ont: OntUnit,
+    tr181_wan_paths: Tr181WanParameterPaths | None,
+) -> str:
+    explicit = str(getattr(ont, "tr069_data_model", None) or "").strip()
+    if explicit in {"Device", "InternetGatewayDevice"}:
+        return explicit
+    if explicit.lower() == "tr181":
+        return "Device"
+    if explicit.lower() == "tr098":
+        return "InternetGatewayDevice"
+    if tr181_wan_paths is not None:
+        return "Device"
+
+    vendor = str(getattr(ont, "vendor", "") or "").strip()
+    model = str(getattr(ont, "model", "") or "").strip()
+    firmware = _str_or_none(
+        getattr(ont, "firmware_version", None) or getattr(ont, "software_version", None)
+    )
+    if vendor and model:
+        capability = VendorCapabilities.resolve_capability(
+            db,
+            vendor=vendor,
+            model=model,
+            firmware=firmware,
+        )
+        if capability and capability.tr069_root in {
+            "Device",
+            "InternetGatewayDevice",
+        }:
+            return str(capability.tr069_root)
+    # Existing Huawei fleet is TR-098 unless device inventory or the model
+    # catalog says otherwise. Keeping this explicit preserves current behavior.
+    return "InternetGatewayDevice"
+
+
+def _resolve_wifi_paths(
+    db: Session,
+    ont: OntUnit,
+    root: str,
+) -> Tr069WifiParameterPaths | None:
+    vendor = _str_or_none(getattr(ont, "vendor", None))
+    model = _str_or_none(getattr(ont, "model", None))
+    firmware = _str_or_none(
+        getattr(ont, "firmware_version", None) or getattr(ont, "software_version", None)
+    )
+    canonical = {
+        "enabled": "wifi.enabled",
+        "ssid": "wifi.ssid",
+        "psk_path": "wifi.psk",
+        "channel": "wifi.channel",
+        "security_mode": "wifi.security_mode",
+    }
+    try:
+        resolved = {
+            field: tr069_path_resolver.resolve(
+                root,
+                name,
+                db=db,
+                vendor=vendor,
+                model=model,
+                firmware=firmware,
+                instance_index=1,
+            )
+            for field, name in canonical.items()
+        }
+    except Tr069PathError:
+        return None
+    return Tr069WifiParameterPaths(**resolved)
+
+
+def _resolve_remote_access_paths(
+    db: Session,
+    ont: OntUnit,
+    root: str,
+) -> Tr069RemoteAccessParameterPaths | None:
+    vendor = _str_or_none(getattr(ont, "vendor", None))
+    model = _str_or_none(getattr(ont, "model", None))
+    firmware = _str_or_none(
+        getattr(ont, "firmware_version", None) or getattr(ont, "software_version", None)
+    )
+    canonical = {
+        "ssh_enabled": "remote_access.ssh_enabled",
+        "ssh_port": "remote_access.ssh_port",
+        "telnet_enabled": "remote_access.telnet_enabled",
+        "telnet_port": "remote_access.telnet_port",
+    }
+    try:
+        resolved = {
+            field: tr069_path_resolver.resolve(
+                root,
+                name,
+                db=db,
+                vendor=vendor,
+                model=model,
+                firmware=firmware,
+            )
+            for field, name in canonical.items()
+        }
+    except Tr069PathError:
+        return None
+    return Tr069RemoteAccessParameterPaths(**resolved)
+
+
+def apply_proposed_change(
+    ont: OntUnit,
+    target: OntDesiredState,
+    *,
+    changed_fields: frozenset[str] = frozenset(),
+) -> None:
     """Write a successful proposed_change back to ``OntUnit``.
 
     Identity fields are not mutated (validator rejects identity changes before
@@ -170,13 +398,55 @@ def apply_proposed_change(ont: OntUnit, target: OntDesiredState) -> None:
 
     if hasattr(ont, "mgmt_ip_address"):
         ont.mgmt_ip_address = target.mgmt_ip
+    if "tr069_profile_id" in changed_fields:
+        ont.desired_tr069_profile_id = target.tr069_profile_id
 
     _set_desired_value(ont, "wifi", "ssid", target.wifi_ssid)
     _set_desired_value(ont, "wifi", "password", target.wifi_password_ref)
+    existing_wifi = dict((ont.desired_config or {}).get("wifi") or {})
+    for key, field, value in (
+        ("enabled", "wifi_enabled", target.wifi_enabled),
+        ("channel", "wifi_channel", target.wifi_channel),
+        ("security_mode", "wifi_security_mode", target.wifi_security_mode),
+    ):
+        if key in existing_wifi or field in changed_fields:
+            _set_desired_value(ont, "wifi", key, value)
+
+    existing_access = dict((ont.desired_config or {}).get("access") or {})
+    access_values: tuple[tuple[str, str, Any], ...] = (
+        ("wan_remote", "wan_remote_access_enabled", target.wan_remote_access_enabled),
+        (
+            "wan_remote_expires_at",
+            "wan_remote_access_expires_at",
+            (
+                target.wan_remote_access_expires_at.isoformat()
+                if target.wan_remote_access_expires_at
+                else None
+            ),
+        ),
+        (
+            "wan_remote_source_cidrs",
+            "wan_remote_access_source_cidrs",
+            list(target.wan_remote_access_source_cidrs),
+        ),
+    )
+    for key, field, value in access_values:
+        if key in existing_access or field in changed_fields:
+            _set_desired_value(ont, "access", key, value)
 
     _set_desired_value(ont, "lan", "dhcp_enabled", target.dhcp_enabled)
     _set_desired_value(ont, "lan", "dhcp_start", target.dhcp_pool_min)
     _set_desired_value(ont, "lan", "dhcp_end", target.dhcp_pool_max)
+    _set_desired_value(
+        ont,
+        "wan",
+        "ip_protocol",
+        "dual_stack" if target.ipv6_enabled else "ipv4",
+    )
+    _set_desired_value(ont, "wan", "static_ip", target.wan_static_ip)
+    _set_desired_value(ont, "wan", "static_subnet", target.wan_static_subnet)
+    _set_desired_value(ont, "wan", "static_gateway", target.wan_static_gateway)
+    _set_desired_value(ont, "wan", "static_dns", target.wan_static_dns)
     _set_desired_value(ont, "lan", "subnet", target.dhcp_subnet_mask)
 
     _set_desired_value(ont, "wan", "onu_mode", target.wan_mode)
@@ -232,6 +502,7 @@ def observed_from_ont_observation(
             olt_mgmt_vlan=obs.olt_mgmt_vlan,
             olt_line_profile_id=obs.olt_line_profile_id,
             olt_service_profile_id=obs.olt_service_profile_id,
+            olt_tr069_profile_id=obs.olt_tr069_profile_id,
             olt_service_ports=tuple(obs.olt_service_ports or ()),
         ),
         acs=AcsObservedFields(
@@ -248,6 +519,14 @@ def observed_from_ont_observation(
             acs_observed_nat_enabled=obs.acs_observed_nat_enabled,
             acs_observed_dhcp_enabled=obs.acs_observed_dhcp_enabled,
             acs_observed_ssid=obs.acs_observed_ssid,
+            acs_observed_wifi_enabled=obs.acs_observed_wifi_enabled,
+            acs_observed_wifi_channel=obs.acs_observed_wifi_channel,
+            acs_observed_wifi_security_mode=obs.acs_observed_wifi_security_mode,
+            acs_observed_wifi_instance_index=obs.acs_observed_wifi_instance_index,
+            acs_observed_remote_ssh_enabled=(obs.acs_observed_remote_ssh_enabled),
+            acs_observed_remote_ssh_port=obs.acs_observed_remote_ssh_port,
+            acs_observed_remote_telnet_enabled=(obs.acs_observed_remote_telnet_enabled),
+            acs_observed_remote_telnet_port=obs.acs_observed_remote_telnet_port,
             acs_observed_periodic_inform_interval_sec=(
                 obs.acs_observed_periodic_inform_interval_sec
             ),
@@ -257,6 +536,24 @@ def observed_from_ont_observation(
             acs_observed_wan_wcd_index=obs.acs_observed_wan_wcd_index,
             acs_observed_wan_instance_index=obs.acs_observed_wan_instance_index,
             acs_observed_wan_ppp_locations=(),
+            acs_data_model_root=obs.acs_data_model_root,
+            acs_observed_ipv6_enabled=obs.acs_observed_ipv6_enabled,
+            acs_observed_wan_ip_enable=obs.acs_observed_wan_ip_enable,
+            acs_observed_wan_addressing_type=obs.acs_observed_wan_addressing_type,
+            acs_observed_wan_ip_address=obs.acs_observed_wan_ip_address,
+            acs_observed_wan_subnet_mask=obs.acs_observed_wan_subnet_mask,
+            acs_observed_wan_gateway=obs.acs_observed_wan_gateway,
+            acs_observed_wan_dns_servers=obs.acs_observed_wan_dns_servers,
+            acs_observed_dhcpv6_enabled=obs.acs_observed_dhcpv6_enabled,
+            acs_observed_dhcpv6_request_prefixes=(
+                obs.acs_observed_dhcpv6_request_prefixes
+            ),
+            acs_observed_ra_enabled=obs.acs_observed_ra_enabled,
+            # ManagementServer endpoint fields are read live on every pass;
+            # the current observation schema does not persist credentials.
+            acs_observed_url=None,
+            acs_observed_username=None,
+            acs_observed_password_set=None,
         ),
     )
 
@@ -297,6 +594,7 @@ def upsert_ont_observation(
     row.olt_mgmt_vlan = observed.olt.olt_mgmt_vlan
     row.olt_line_profile_id = observed.olt.olt_line_profile_id
     row.olt_service_profile_id = observed.olt.olt_service_profile_id
+    row.olt_tr069_profile_id = observed.olt.olt_tr069_profile_id
     row.olt_service_ports = list(observed.olt.olt_service_ports)
 
     row.acs_present = observed.acs.acs_present
@@ -314,6 +612,16 @@ def upsert_ont_observation(
     row.acs_observed_nat_enabled = observed.acs.acs_observed_nat_enabled
     row.acs_observed_dhcp_enabled = observed.acs.acs_observed_dhcp_enabled
     row.acs_observed_ssid = observed.acs.acs_observed_ssid
+    row.acs_observed_wifi_enabled = observed.acs.acs_observed_wifi_enabled
+    row.acs_observed_wifi_channel = observed.acs.acs_observed_wifi_channel
+    row.acs_observed_wifi_security_mode = observed.acs.acs_observed_wifi_security_mode
+    row.acs_observed_wifi_instance_index = observed.acs.acs_observed_wifi_instance_index
+    row.acs_observed_remote_ssh_enabled = observed.acs.acs_observed_remote_ssh_enabled
+    row.acs_observed_remote_ssh_port = observed.acs.acs_observed_remote_ssh_port
+    row.acs_observed_remote_telnet_enabled = (
+        observed.acs.acs_observed_remote_telnet_enabled
+    )
+    row.acs_observed_remote_telnet_port = observed.acs.acs_observed_remote_telnet_port
     row.acs_observed_periodic_inform_interval_sec = (
         observed.acs.acs_observed_periodic_inform_interval_sec
     )
@@ -321,6 +629,19 @@ def upsert_ont_observation(
     row.acs_observed_cr_password_set = observed.acs.acs_observed_cr_password_set
     row.acs_observed_wan_wcd_index = observed.acs.acs_observed_wan_wcd_index
     row.acs_observed_wan_instance_index = observed.acs.acs_observed_wan_instance_index
+    row.acs_data_model_root = observed.acs.acs_data_model_root
+    row.acs_observed_ipv6_enabled = observed.acs.acs_observed_ipv6_enabled
+    row.acs_observed_wan_ip_enable = observed.acs.acs_observed_wan_ip_enable
+    row.acs_observed_wan_addressing_type = observed.acs.acs_observed_wan_addressing_type
+    row.acs_observed_wan_ip_address = observed.acs.acs_observed_wan_ip_address
+    row.acs_observed_wan_subnet_mask = observed.acs.acs_observed_wan_subnet_mask
+    row.acs_observed_wan_gateway = observed.acs.acs_observed_wan_gateway
+    row.acs_observed_wan_dns_servers = observed.acs.acs_observed_wan_dns_servers
+    row.acs_observed_dhcpv6_enabled = observed.acs.acs_observed_dhcpv6_enabled
+    row.acs_observed_dhcpv6_request_prefixes = (
+        observed.acs.acs_observed_dhcpv6_request_prefixes
+    )
+    row.acs_observed_ra_enabled = observed.acs.acs_observed_ra_enabled
 
     db.flush()  # Establish row.id before the caller commits.
     return row
@@ -355,7 +676,9 @@ def _default_description(ont: OntUnit) -> str:
     return f"{ont.serial_number}_authd_{datetime.now(UTC).strftime('%Y%m%d')}"
 
 
-def _normalise_wan_mode(ip_mode: Any, onu_mode: Any) -> Literal["pppoe", "bridge"]:
+def _normalise_wan_mode(
+    ip_mode: Any, onu_mode: Any
+) -> Literal["pppoe", "dhcp", "static", "bridge"]:
     """Reduce the effective config's two related fields to the reconciler's
     single ``pppoe`` / ``bridge`` contract.
 
@@ -368,6 +691,11 @@ def _normalise_wan_mode(ip_mode: Any, onu_mode: Any) -> Literal["pppoe", "bridge
         return "bridge"
     if str(onu_mode or "").strip().lower() in bridge_signals:
         return "bridge"
+    normalized = str(ip_mode or "").strip().lower()
+    if normalized == "dhcp":
+        return "dhcp"
+    if normalized in {"static", "static_ip"}:
+        return "static"
     return "pppoe"
 
 
@@ -391,6 +719,38 @@ def _bool_or_default(value: Any, *, default: bool) -> bool:
     if text in {"false", "0", "no", "off"}:
         return False
     return default
+
+
+def _bool_or_none(value: Any) -> bool | None:
+    if value is None:
+        return None
+    return _bool_or_default(value, default=False)
+
+
+def _wifi_channel_or_none(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    if str(value).strip().lower() == "auto":
+        return 0
+    return _int_or_none(value)
+
+
+def _str_or_none(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _datetime_or_none(value: Any) -> datetime | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        try:
+            parsed = datetime.fromisoformat(str(value))
+        except ValueError:
+            return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 def _subnet_mask_from_lan_subnet(raw: Any) -> str:

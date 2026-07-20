@@ -13,7 +13,7 @@ Design rules (from the original architecture discussion):
   ONT, the sweeper does a ~100ms mgmt-IP ping. If the ONT is unreachable
   the sweeper increments ``consecutive_sweep_unreachable`` on the row and
   skips the detailed reconcile. After N consecutive unreachable sweeps
-  the operator gets an alert (Phase 2 — alert escalation isn't wired in
+  the operator gets an alert. Alert escalation is not wired in
   this commit, just the counter).
 * **Process, not Celery.** Single instance, deterministic, no per-task
   queue depth to debug. Deploys as a systemd-managed process alongside
@@ -37,10 +37,11 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.network import DeviceStatus, OLTDevice, OntUnit
+from app.models.ont_observation import OntObservation
 from app.services.network.reconcile.readers.reachability import (
     PingFunction,
     is_pingable,
@@ -49,7 +50,6 @@ from app.services.network.reconcile.readers.reachability import (
 from . import reconcile_ont
 from .adapters import desired_from_ont_unit
 from .alerts import (
-    ZabbixTrapper,
     default_threshold_from_env,
     escalate_sweep_unreachable,
 )
@@ -71,6 +71,7 @@ class SweepStats:
     skipped_unreachable: int = 0
     succeeded: int = 0
     failed: int = 0
+    deferred: int = 0
     errors: list[str] = field(default_factory=list)
 
     @property
@@ -91,7 +92,6 @@ def _sweep_one(
     ping_function: PingFunction | None,
     reconcile_fn: Callable = reconcile_ont,
     alert_threshold: int = 0,
-    trapper: ZabbixTrapper | None = None,
 ) -> tuple[bool, bool]:
     """Reconcile one ONT in sweep mode. Returns ``(reachable, success)``.
 
@@ -106,8 +106,7 @@ def _sweep_one(
     When ``alert_threshold`` is positive, calls
     ``escalate_sweep_unreachable`` after incrementing the counter so the
     operator's monitoring stack learns about the unreachable ONT on the
-    cycle the threshold is crossed. ``trapper`` is forwarded as the
-    Zabbix push target (None disables Zabbix; structured logs still fire).
+    cycle the threshold is crossed (structured log line).
     """
     ont = db.execute(select(OntUnit).where(OntUnit.id == ont_id)).scalar_one_or_none()
     if ont is None:
@@ -130,8 +129,6 @@ def _sweep_one(
                 before=before,
                 after=after,
                 threshold=alert_threshold,
-                trapper=trapper,
-                zabbix_host=desired.mgmt_ip,
             )
         return False, False
 
@@ -154,7 +151,8 @@ def run_sweep_once(
     reconcile_fn: Callable = reconcile_ont,
     only_active: bool = True,
     alert_threshold: int | None = None,
-    trapper: ZabbixTrapper | None = None,
+    max_onts: int | None = None,
+    max_duration_sec: float | None = None,
 ) -> SweepStats:
     """Sweep every active ONT once and return aggregated stats.
 
@@ -163,28 +161,31 @@ def run_sweep_once(
     DB connection timeouts.
     """
     started = datetime.now(UTC)
+    started_monotonic = time.monotonic()
     stats = SweepStats(started_at=started)
     effective_threshold = (
         alert_threshold if alert_threshold is not None else default_threshold_from_env()
     )
-    effective_trapper = trapper if trapper is not None else ZabbixTrapper.from_env()
 
     # First pass: collect target IDs (with a short-lived session).
     with db_factory() as catalog_db:
         stmt = select(OntUnit.id)
         if only_active:
             stmt = stmt.where(OntUnit.is_active.is_(True))
-        # Skip ONTs whose parent OLT is not active (maintenance / draining /
-        # retired / inactive). An operator who took the OLT down expects the
-        # reconciler to stop touching it — previously the sweep ran full
-        # SSH/NBI reconciles against a device in maintenance. ONTs with no
-        # parent OLT (olt_device_id NULL) are still swept.
-        stmt = stmt.outerjoin(OLTDevice, OLTDevice.id == OntUnit.olt_device_id).where(
-            or_(
-                OntUnit.olt_device_id.is_(None),
-                OLTDevice.status == DeviceStatus.active,
-            )
+        # This is the Huawei reconciler. Ownership is explicit so UISP-managed
+        # UFiber ONUs and other vendors can never enter Huawei SSH/ACS paths.
+        stmt = (
+            stmt.join(OLTDevice, OLTDevice.id == OntUnit.olt_device_id)
+            .outerjoin(OntObservation, OntObservation.ont_unit_id == OntUnit.id)
+            .where(OntUnit.uisp_device_id.is_(None))
+            .where(OLTDevice.uisp_device_id.is_(None))
+            .where(OLTDevice.is_active.is_(True))
+            .where(OLTDevice.status == DeviceStatus.active)
+            .where(func.lower(OLTDevice.vendor) == "huawei")
+            .order_by(OntObservation.last_reconciled_at.asc().nullsfirst(), OntUnit.id)
         )
+        if max_onts is not None:
+            stmt = stmt.limit(max(1, int(max_onts)))
         ont_ids = [row[0] for row in catalog_db.execute(stmt).all()]
 
     stats.total_onts = len(ont_ids)
@@ -193,7 +194,19 @@ def run_sweep_once(
         extra={"total_onts": stats.total_onts, "started_at": started.isoformat()},
     )
 
-    for ont_id in ont_ids:
+    for index, ont_id in enumerate(ont_ids):
+        if max_duration_sec is not None and time.monotonic() - started_monotonic >= max(
+            0.0, max_duration_sec
+        ):
+            stats.deferred = len(ont_ids) - index
+            logger.warning(
+                "sweep_cycle_budget_exhausted",
+                extra={
+                    "deferred": stats.deferred,
+                    "max_duration_sec": max_duration_sec,
+                },
+            )
+            break
         try:
             with db_factory() as ont_db:
                 reachable, success = _sweep_one(
@@ -203,7 +216,6 @@ def run_sweep_once(
                     ping_function=ping_function,
                     reconcile_fn=reconcile_fn,
                     alert_threshold=effective_threshold,
-                    trapper=effective_trapper,
                 )
                 ont_db.commit()
         except Exception as exc:  # noqa: BLE001 — defensive per-ONT
@@ -232,6 +244,7 @@ def run_sweep_once(
             "skipped_unreachable": stats.skipped_unreachable,
             "succeeded": stats.succeeded,
             "failed": stats.failed,
+            "deferred": stats.deferred,
             "errors": len(stats.errors),
             "duration_sec": stats.duration_sec,
         },

@@ -1,7 +1,7 @@
 {% extends "layouts/admin.html" %}
 {% from "components/ui/macros.html" import
     ambient_background, page_header, stats_card,
-    table_head, table_row, row_actions, row_action, status_badge,
+    table_head, table_row, row_actions, row_action, status_presentation_badge,
     empty_state, action_button, animation_styles,
     icon_plus, icon_view, icon_invoice
 %}
@@ -87,6 +87,15 @@
                     <option value="canceled" {% if status_filter == "canceled" %}selected{% endif %}>Canceled</option>
                 </select>
             </div>
+            <div class="w-full sm:w-48">
+                <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Balance</label>
+                <select name="balance_filter" class="block w-full rounded-xl border-0 bg-slate-100 py-3 pl-4 pr-10 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:focus:bg-slate-600">
+                    <option value="" {% if not balance_filter %}selected{% endif %}>Any Balance</option>
+                    <option value="positive" {% if balance_filter == "positive" %}selected{% endif %}>Has Balance Due</option>
+                    <option value="zero" {% if balance_filter == "zero" %}selected{% endif %}>Zero Balance</option>
+                    <option value="credit" {% if balance_filter == "credit" %}selected{% endif %}>Credit Balance</option>
+                </select>
+            </div>
             <button type="submit" class="inline-flex justify-center rounded-xl bg-amber-600 px-4 py-3 text-sm font-semibold text-white hover:bg-amber-700">Apply</button>
         </form>
     </div>
@@ -124,15 +133,8 @@
                             </a>
                         </td>
                         <td class="whitespace-nowrap px-6 py-4">
-                            {% set status = account.status | default('active') %}
-                            {% set status_val = status.value if status is not string else status %}
-                            {% if status_val == 'active' %}
-                            {{ status_badge("Active", variant="active") }}
-                            {% elif status_val == 'suspended' %}
-                            {{ status_badge("Blocked", variant="warning") }}
-                            {% else %}
-                            {{ status_badge(status_val | default('Unknown') | title, variant="default") }}
-                            {% endif %}
+                            {# Status semantics from the account status presentation owner. #}
+                            {{ status_presentation_badge(account_status_presentation(account.status | default('active')), size="sm") }}
                         </td>
                         <td class="whitespace-nowrap px-6 py-4">
                             {% set balance = account.balance | default(0) %}
@@ -147,7 +149,7 @@
                             {% endif %}
                         </td>
                         <td class="whitespace-nowrap px-6 py-4">
-                            <span class="text-sm text-slate-600 dark:text-slate-400">{{ account.created_at.strftime('%b %d, %Y') if account.created_at else 'N/A' }}</span>
+                            <span class="text-sm text-slate-600 dark:text-slate-400">{{ account.created_at | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }}</span>
                         </td>
                         <td class="whitespace-nowrap px-6 py-4 text-right">
                             <div class="flex items-center justify-end gap-2 opacity-0 transition-opacity group-hover:opacity-100">

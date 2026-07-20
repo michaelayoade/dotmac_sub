@@ -363,20 +363,53 @@ class TestRestrictedContextHelpers:
         result = get_restricted_since(subscriber)
         assert result == datetime(2026, 3, 10, 12, 0, tzinfo=UTC)
 
-    def test_total_outstanding_balance_queries_positive_active_balances(self) -> None:
+    def test_total_outstanding_balance_uses_negative_available_balance(self) -> None:
         from app.services.customer_portal_context import get_total_outstanding_balance
 
-        scalar_query = MagicMock()
-        scalar_query.filter.return_value = scalar_query
-        scalar_query.scalar.return_value = 125.5
         db = MagicMock()
-        db.query.return_value = scalar_query
-
-        total = get_total_outstanding_balance(
-            db, "00000000-0000-0000-0000-000000000001"
-        )
+        with patch(
+            "app.services.customer_portal_context.get_available_balance",
+            return_value=-125.5,
+        ):
+            total = get_total_outstanding_balance(
+                db, "00000000-0000-0000-0000-000000000001"
+            )
 
         assert total == 125.5
+
+    def test_total_outstanding_balance_excludes_reconciliation_hold(
+        self, db_session, subscriber
+    ) -> None:
+        from decimal import Decimal
+
+        from app.models.billing import Invoice, InvoiceStatus
+        from app.services.customer_portal_context import get_total_outstanding_balance
+
+        db_session.add_all(
+            [
+                Invoice(
+                    account_id=subscriber.id,
+                    status=InvoiceStatus.overdue,
+                    total=Decimal("100.00"),
+                    balance_due=Decimal("100.00"),
+                    is_active=True,
+                    metadata_={},
+                ),
+                Invoice(
+                    account_id=subscriber.id,
+                    status=InvoiceStatus.overdue,
+                    total=Decimal("75.00"),
+                    balance_due=Decimal("75.00"),
+                    is_active=True,
+                    metadata_={"reconciliation_hold": True},
+                ),
+            ]
+        )
+        db_session.commit()
+
+        total = get_total_outstanding_balance(db_session, str(subscriber.id))
+
+        assert total == 100.0
 
 
 class TestPlanChangeUiHelpers:
@@ -414,7 +447,7 @@ class TestPlanChangeUiHelpers:
             SimpleNamespace(billing_mode=SimpleNamespace(value="prepaid"))
         )
 
-        assert "wallet" in copy["billing_message"]
+        assert "prepaid funding" in copy["billing_message"]
         assert "prorated difference" in copy["billing_message"]
 
     def test_get_fup_status_uses_nearest_rule_threshold_and_quota_bucket(
@@ -559,7 +592,6 @@ class TestPortalServiceVisibility:
         customer = {"subscription_id": str(subscription.id)}
 
         with (
-            patch("app.services.zabbix_engine.get_zabbix_engine") as get_engine,
             patch(
                 "app.services.customer_portal_flow_services._daily_bandwidth_usage"
             ) as daily_bandwidth_usage,
@@ -570,8 +602,6 @@ class TestPortalServiceVisibility:
                 "app.services.customer_portal_flow_services._get_fup_status"
             ) as get_fup_status,
         ):
-            get_engine.return_value.get_cached_customer_usage.return_value = None
-
             page = get_usage_page(
                 db_session,
                 customer,
@@ -620,7 +650,6 @@ class TestPortalServiceVisibility:
         ]
 
         with (
-            patch("app.services.zabbix_engine.get_zabbix_engine") as get_engine,
             patch(
                 "app.services.customer_portal_flow_services._daily_bandwidth_usage_records",
                 return_value=chart_source_records,
@@ -639,8 +668,6 @@ class TestPortalServiceVisibility:
                 return_value=None,
             ),
         ):
-            get_engine.return_value.get_cached_customer_usage.return_value = None
-
             page = get_usage_page(
                 db_session,
                 customer,
@@ -912,6 +939,37 @@ class TestAdminUsageTemplateDefaults:
         assert "Bandwidth Overview" in partial
         assert "NAS Throughput" in partial
 
+    def test_admin_monitoring_bandwidth_partial_renders_nas_items(self) -> None:
+        from app.web.templates import templates
+
+        template = templates.env.get_template(
+            "admin/network/monitoring/_bandwidth_partial.html"
+        )
+
+        html = template.render(
+            bandwidth={
+                "has_data": False,
+                "total_rx_formatted": "0 bps",
+                "total_tx_formatted": "0 bps",
+                "top_users": [],
+            },
+            nas_throughput={
+                "has_data": True,
+                "items": [
+                    {
+                        "name": "NAS A",
+                        "rx_bps": 10.0,
+                        "tx_bps": 5.0,
+                        "rx_formatted": "10 bps",
+                        "tx_formatted": "5 bps",
+                    }
+                ],
+            },
+        )
+
+        assert "NAS A" in html
+        assert "10 bps" in html
+
 
 class TestPortalNotificationsPage:
     def test_notifications_page_merges_event_queue_and_customer_notification_events(
@@ -1176,6 +1234,7 @@ class TestPaymentSuccessBanner:
             "invoice": SimpleNamespace(id="inv-1", invoice_number="INV-1"),
             "amount": 5000,
             "reference": "ref-1",
+            "provider_type": "paystack",
         }
 
         template_response = MagicMock(name="template_response")
@@ -1224,6 +1283,7 @@ class TestPaymentSuccessBanner:
             "invoice": SimpleNamespace(id="inv-2", invoice_number="INV-2"),
             "amount": 1000,
             "reference": "ref-2",
+            "provider_type": "paystack",
         }
 
         template_response = MagicMock(name="template_response")
@@ -1277,7 +1337,7 @@ class TestPaymentArrangementRouteErrors:
                 side_effect=HTTPException(
                     status_code=400, detail="Invalid arrangement"
                 ),
-            ),
+            ) as submit,
             patch(
                 "app.web.customer.routes.customer_portal.get_arrangement_error_context",
                 return_value={"invoices": [], "outstanding_balance": 0},
@@ -1295,6 +1355,7 @@ class TestPaymentArrangementRouteErrors:
                 start_date="2025-01-31",
                 invoice_id=None,
                 notes=None,
+                terms="on",
                 db=MagicMock(),
             )
 
@@ -1303,6 +1364,7 @@ class TestPaymentArrangementRouteErrors:
         assert render.call_args.kwargs["status_code"] == 400
         context = render.call_args.args[1]
         assert context["error"] == "Invalid arrangement"
+        assert submit.call_args.kwargs["terms_accepted"] is True
 
 
 class TestCustomerTopupRoutes:
@@ -1407,6 +1469,7 @@ class TestCustomerTopupRoutes:
             "credit_added": 5000,
             "available_balance": 5000,
             "policy_warnings": [],
+            "provider_type": "paystack",
         }
 
         template_response = MagicMock(name="template_response")

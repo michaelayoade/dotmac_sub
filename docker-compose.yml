@@ -7,11 +7,11 @@ x-observability-extra-hosts: &observability_extra_hosts
 - observability.dotmac.io:75.119.128.247
 services:
   app:
-    image: ${APP_IMAGE:-dotmac_sub:latest}
+    image: ${APP_IMAGE:?APP_IMAGE must be set in .env to an immutable app image}
     container_name: dotmac_sub_app
     restart: unless-stopped
-    mem_limit: 5g
-    mem_reservation: 512m
+    mem_limit: 8g
+    mem_reservation: 1g
     cpus: 4.0
     pids_limit: 256
     logging: *id001
@@ -36,7 +36,7 @@ services:
       # pinned 172.20.255.0/24 subnet rather than the unresolvable "genieacs".
       GENIEACS_NBI_URL: ${GENIEACS_NBI_URL:-http://172.20.255.1:7557}
       WIREGUARD_USE_NSENTER: '1'
-      VPN_BLOCKED_LAN_SUBNETS: 172.20.255.0/24
+      VPN_BLOCKED_LAN_SUBNETS: ${VPN_BLOCKED_LAN_SUBNETS:-172.20.255.0/24}
       S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
@@ -61,6 +61,7 @@ services:
       net.ipv4.ip_forward: '1'
     volumes:
     - /etc/wireguard:/etc/wireguard
+    - /var/run/docker.sock:/var/run/docker.sock:ro
     - ./uploads:/app/uploads
     # Migrations are NOT run on boot: a half-applied / multi-head migration
     # state must never crash-loop the live app. Apply them as a controlled,
@@ -75,13 +76,13 @@ services:
     container_name: dotmac_redis_local
     restart: unless-stopped
     mem_limit: 1g
-    command: ["sh", "-c", "redis-server --appendonly yes --maxmemory 768mb --maxmemory-policy noeviction --requirepass $$REDIS_LOCAL_PASSWORD"]
+    command: ["sh", "-c", "redis-server --appendonly yes --maxmemory 768mb --maxmemory-policy noeviction --requirepass \"$${REDIS_LOCAL_PASSWORD}\""]
     environment:
       REDIS_LOCAL_PASSWORD: ${REDIS_LOCAL_PASSWORD}
     volumes:
     - /var/lib/dotmac-redis-local:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_LOCAL_PASSWORD}\" ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -106,6 +107,12 @@ services:
     - work_mem=32MB
     - -c
     - maintenance_work_mem=512MB
+    - -c
+    - statement_timeout=120000
+    - -c
+    - lock_timeout=10000
+    - -c
+    - idle_in_transaction_session_timeout=120000
     - -c
     - wal_level=replica
     - -c
@@ -135,7 +142,7 @@ services:
       retries: 5
 
   celery-worker:
-    image: ${APP_IMAGE:-dotmac_sub:latest}
+    image: ${APP_IMAGE:?APP_IMAGE must be set in .env to an immutable app image}
     container_name: dotmac_sub_celery_worker
     restart: unless-stopped
     mem_limit: 2g
@@ -157,6 +164,9 @@ services:
       CELERY_LONG_TASK_SOFT_TIME_LIMIT: ${CELERY_LONG_TASK_SOFT_TIME_LIMIT:-1740}
       CELERY_LONG_TASK_TIME_LIMIT: ${CELERY_LONG_TASK_TIME_LIMIT:-1800}
       REDIS_URL: ${REDIS_URL}
+      RADIUS_PROBE_SECRET: ${RADIUS_PROBE_SECRET:-}
+      RADIUS_PROBE_PASSWORD: ${RADIUS_PROBE_PASSWORD:-}
+      RADIUS_PROBE_CLIENT_SUBNET: ${RADIUS_PROBE_CLIENT_SUBNET:-172.20.0.0/16}
       S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
@@ -167,10 +177,19 @@ services:
       APP_RELEASE: ${APP_RELEASE:-}
       GIT_SHA: ${GIT_SHA:-}
       NETWORK_MONITORING_MAX_WORKERS: ${NETWORK_MONITORING_MAX_WORKERS:-4}
+      # Persist router SSH known_hosts on a named volume so first-seen host keys
+      # (TOFU) survive container recreation; a CHANGED key is then rejected as an
+      # MITM guard. On the ephemeral container layer this would re-pin each
+      # deploy and lose that cross-restart protection.
+      ROUTER_CONFIG_SSH_KNOWN_HOSTS_PATH: /var/lib/dotmac/router_known_hosts
     env_file:
     - .env
     volumes:
     - ./uploads:/app/uploads
+    # dotmac-ops SSH key for RouterOS config-snapshot export (SSH /export).
+    # Place the key at ./secrets/dotmac-ops.key on the host (gitignored).
+    - ${ROUTER_CONFIG_SSH_KEY_HOST:-./secrets/dotmac-ops.key}:/etc/dotmac/dotmac-ops.key:ro
+    - dotmac_router_ssh:/var/lib/dotmac
     command:
     - celery
     - -A
@@ -185,7 +204,7 @@ services:
     - -Q
     - celery,nin,crm
   celery-worker-tr069:
-    image: ${APP_IMAGE:-dotmac_sub:latest}
+    image: ${APP_IMAGE:?APP_IMAGE must be set in .env to an immutable app image}
     container_name: dotmac_sub_celery_worker_tr069
     restart: unless-stopped
     mem_limit: 1g
@@ -219,6 +238,7 @@ services:
       OPENBAO_TOKEN: ${OPENBAO_TOKEN}
       APP_RELEASE: ${APP_RELEASE:-}
       GIT_SHA: ${GIT_SHA:-}
+      NETWORK_MONITORING_MAX_WORKERS: ${NETWORK_MONITORING_MAX_WORKERS:-4}
     env_file:
     - .env
     volumes:
@@ -234,11 +254,11 @@ services:
     - -Q
     - tr069,acs
   celery-worker-bandwidth:
-    image: ${APP_IMAGE:-dotmac_sub:latest}
+    image: ${APP_IMAGE:?APP_IMAGE must be set in .env to an immutable app image}
     container_name: dotmac_sub_celery_worker_bandwidth
     restart: unless-stopped
-    mem_limit: 768m
-    mem_reservation: 256m
+    mem_limit: 2g
+    mem_reservation: 512m
     cpus: 0.5
     pids_limit: 64
     logging: *id001
@@ -250,6 +270,9 @@ services:
       CELERY_WORKER_PREFETCH_MULTIPLIER: ${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
       REDIS_URL: ${REDIS_URL}
       VICTORIAMETRICS_URL: http://victoriametrics:8428
+      RADIUS_PROBE_SECRET: ${RADIUS_PROBE_SECRET:-}
+      RADIUS_PROBE_PASSWORD: ${RADIUS_PROBE_PASSWORD:-}
+      RADIUS_PROBE_HOST: ${RADIUS_PROBE_HOST:-freeradius}
       S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
@@ -272,10 +295,58 @@ services:
     - app.celery_app.celery_app
     - worker
     - --loglevel=info
-    - --concurrency=3
+    - --concurrency=2
     - --max-tasks-per-child=100
     - -Q
-    - bandwidth,ingestion
+    - bandwidth
+
+  celery-worker-ingestion:
+    image: ${APP_IMAGE:?APP_IMAGE must be set in .env to an immutable app image}
+    container_name: dotmac_sub_celery_worker_ingestion
+    restart: unless-stopped
+    mem_limit: 2g
+    mem_reservation: 512m
+    cpus: 0.5
+    pids_limit: 64
+    logging: *id001
+    extra_hosts: *observability_extra_hosts
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND}
+      CELERY_WORKER_PREFETCH_MULTIPLIER: ${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
+      REDIS_URL: ${REDIS_URL}
+      VICTORIAMETRICS_URL: http://victoriametrics:8428
+      RADIUS_PROBE_SECRET: ${RADIUS_PROBE_SECRET:-}
+      RADIUS_PROBE_PASSWORD: ${RADIUS_PROBE_PASSWORD:-}
+      RADIUS_PROBE_HOST: ${RADIUS_PROBE_HOST:-freeradius}
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME:-dotmac-private}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      OPENBAO_ADDR: ${OPENBAO_ADDR}
+      OPENBAO_TOKEN: ${OPENBAO_TOKEN}
+      APP_RELEASE: ${APP_RELEASE:-}
+      GIT_SHA: ${GIT_SHA:-}
+      NETWORK_MONITORING_MAX_WORKERS: ${NETWORK_MONITORING_MAX_WORKERS:-4}
+    env_file:
+    - .env
+    depends_on:
+      victoriametrics:
+        condition: service_started
+    volumes:
+    - ./uploads:/app/uploads
+    command:
+    - celery
+    - -A
+    - app.celery_app.celery_app
+    - worker
+    - --loglevel=info
+    - --concurrency=1
+    - --max-tasks-per-child=50
+    - -Q
+    - ingestion
 
   # Consumer for the `billing` queue (daily invoice cycle,
   # dunning, autopay, payment-topup reconciliation, usage/FUP, expiry,
@@ -284,7 +355,7 @@ services:
   # gated by `billing_enabled` and no-op until cutover; this worker simply
   # ensures the queue is consumed (previously it had no consumer → all dropped).
   celery-worker-billing:
-    image: ${APP_IMAGE:-dotmac_sub:latest}
+    image: ${APP_IMAGE:?APP_IMAGE must be set in .env to an immutable app image}
     container_name: dotmac_sub_celery_worker_billing
     restart: unless-stopped
     mem_limit: 768m
@@ -319,7 +390,7 @@ services:
     - -Q
     - billing
   celery-beat:
-    image: ${APP_IMAGE:-dotmac_sub:latest}
+    image: ${APP_IMAGE:?APP_IMAGE must be set in .env to an immutable app image}
     container_name: dotmac_sub_celery_beat
     restart: unless-stopped
     mem_limit: 512m
@@ -372,9 +443,9 @@ services:
     image: freeradius/freeradius-server:3.2.7
     container_name: dotmac_sub_freeradius
     restart: unless-stopped
-    mem_limit: 256m
-    mem_reservation: 64m
-    cpus: 0.5
+    mem_limit: 512m
+    mem_reservation: 128m
+    cpus: 1.0
     pids_limit: 64
     logging: *id001
     ports:
@@ -383,6 +454,7 @@ services:
     - 1822:1822/udp
     - 1823:1823/udp
     volumes:
+    - ./config/freeradius/radiusd.conf:/etc/freeradius/radiusd.conf:ro
     - ./config/freeradius/mods-enabled/sql:/etc/raddb/mods-enabled/sql:ro
     - ./config/freeradius/mods-enabled/sql_admin:/etc/raddb/mods-enabled/sql_admin:ro
     - ./config/freeradius/sites-enabled/default:/etc/raddb/sites-enabled/default:ro
@@ -390,11 +462,14 @@ services:
     - ./config/freeradius/dictionary.mikrotik:/etc/raddb/dictionary.mikrotik
     - ./config/freeradius/dictionary:/etc/raddb/dictionary
     environment:
-    - RADIUS_DB_HOST=${RADIUS_DB_HOST:-radius-db}
-    - RADIUS_DB_PORT=${RADIUS_DB_PORT:-5432}
-    - RADIUS_DB_NAME=${RADIUS_DB_NAME:-radius}
-    - RADIUS_DB_USER=${RADIUS_DB_USER:-postgres}
-    - RADIUS_DB_PASS=${RADIUS_DB_PASS}
+    - FREERADIUS_DB_HOST=${FREERADIUS_DB_HOST:?FREERADIUS_DB_HOST must be set}
+    - FREERADIUS_DB_PORT=${FREERADIUS_DB_PORT:-5432}
+    - FREERADIUS_DB_NAME=${FREERADIUS_DB_NAME:?FREERADIUS_DB_NAME must be set}
+    - FREERADIUS_DB_USER=${FREERADIUS_DB_USER:?FREERADIUS_DB_USER must be set}
+    - FREERADIUS_DB_PASS=${FREERADIUS_DB_PASS:?FREERADIUS_DB_PASS must be set}
+    # Shared secret for the admin-login realm (1822/1823) clients; each router's
+    # /radius service=login entry must use the same value.
+    - ADMIN_RADIUS_SECRET=${ADMIN_RADIUS_SECRET:?ADMIN_RADIUS_SECRET must be set}
   genieacs:
     build:
       context: .
@@ -474,7 +549,7 @@ services:
     - /var/lib/docker/containers:/var/lib/docker/containers:ro
     command: -config.file=/etc/promtail/config.yml
   bandwidth-poller:
-    image: ${APP_IMAGE:-dotmac_sub:latest}
+    image: ${APP_IMAGE:?APP_IMAGE must be set in .env to an immutable app image}
     container_name: dotmac_sub_bandwidth_poller
     restart: unless-stopped
     mem_limit: 512m
@@ -515,7 +590,7 @@ services:
     - -m
     - app.poller
   syslog-listener:
-    image: ${APP_IMAGE:-dotmac_sub:latest}
+    image: ${APP_IMAGE:?APP_IMAGE must be set in .env to an immutable app image}
     container_name: dotmac_sub_syslog_listener
     restart: unless-stopped
     mem_limit: 256m
@@ -545,99 +620,53 @@ services:
     - python
     - -m
     - app.syslog
-  zabbix-db:
-    image: postgres:16-alpine
-    container_name: dotmac_zabbix_db
-    restart: unless-stopped
-    mem_limit: 1g
-    mem_reservation: 512m
-    cpus: 1.0
-    pids_limit: 128
-    environment:
-      POSTGRES_DB: zabbix
-      POSTGRES_USER: zabbix
-      POSTGRES_PASSWORD_FILE: /run/secrets/zabbix_db_password
-    secrets:
-    - zabbix_db_password
-    volumes:
-    - zabbix_db_data:/var/lib/postgresql/data
-    healthcheck:
-      test:
-      - CMD-SHELL
-      - pg_isready -U zabbix
-      interval: 10s
-      timeout: 5s
-      retries: 5
-  zabbix-server:
-    image: zabbix/zabbix-server-pgsql:7.0-alpine-latest
-    container_name: dotmac_zabbix_server
-    restart: unless-stopped
-    mem_limit: 5g
-    mem_reservation: 1g
-    cpus: 2
-    pids_limit: 512
-    logging: *id001
-    depends_on:
-    - zabbix-db
-    environment:
-      DB_SERVER_HOST: zabbix-db
-      POSTGRES_USER: zabbix
-      POSTGRES_PASSWORD_FILE: /run/secrets/zabbix_db_password
-      ZBX_STARTPOLLERS: 10
-      ZBX_STARTPINGERS: 5
-      ZBX_CACHESIZE: 2048M
-      ZBX_HISTORYCACHESIZE: 256M
-      ZBX_TRENDCACHESIZE: 64M
-      ZBX_VALUECACHESIZE: 128M
-    secrets:
-    - zabbix_db_password
-    ports:
-    - 10051:10051
-    volumes:
-    - ./config/zabbix/alertscripts:/usr/lib/zabbix/alertscripts:ro
-    - ./config/zabbix/externalscripts:/usr/lib/zabbix/externalscripts:ro
-    healthcheck:
-      test:
-      - CMD-SHELL
-      - nc -z localhost 10051 || exit 1
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-  zabbix-web:
-    image: zabbix/zabbix-web-nginx-pgsql:7.0-alpine-latest
-    container_name: dotmac_zabbix_web
-    restart: unless-stopped
-    mem_limit: 512m
-    mem_reservation: 256m
-    cpus: 0.5
-    pids_limit: 96
-    depends_on:
-    - zabbix-server
-    environment:
-      DB_SERVER_HOST: zabbix-db
-      POSTGRES_USER: zabbix
-      POSTGRES_PASSWORD_FILE: /run/secrets/zabbix_db_password
-      ZBX_SERVER_HOST: zabbix-server
-      PHP_TZ: Africa/Lagos
-    secrets:
-    - zabbix_db_password
-    ports:
-    - 8085:8080
-  zabbix-agent:
-    image: zabbix/zabbix-agent2:7.0-alpine-latest
-    container_name: dotmac_zabbix_agent
+  team-inbox-smtp:
+    profiles:
+    - smtp-inbound
+    image: ${APP_IMAGE:?APP_IMAGE must be set in .env to an immutable app image}
+    container_name: dotmac_sub_team_inbox_smtp
     restart: unless-stopped
     mem_limit: 256m
     mem_reservation: 64m
-    cpus: 0.5
-    pids_limit: 64
+    cpus: 0.25
+    pids_limit: 32
+    logging: *id001
+    extra_hosts: *observability_extra_hosts
     environment:
-      ZBX_SERVER_HOST: zabbix-server
-      ZBX_HOSTNAME: dotmac-app-server
-    volumes:
-    - /var/run/docker.sock:/var/run/docker.sock:ro
-    privileged: true
+      DATABASE_URL: ${DATABASE_URL}
+      OPENBAO_ADDR: ${OPENBAO_ADDR}
+      OPENBAO_TOKEN: ${OPENBAO_TOKEN}
+      APP_RELEASE: ${APP_RELEASE:-}
+      GIT_SHA: ${GIT_SHA:-}
+      TEAM_INBOX_SMTP_INBOUND_ENABLED: 'true'
+      TEAM_INBOX_SMTP_INBOUND_HOST: 0.0.0.0
+      TEAM_INBOX_SMTP_INBOUND_PORT: '2525'
+      TEAM_INBOX_SMTP_INBOUND_RECIPIENTS: ${TEAM_INBOX_SMTP_INBOUND_RECIPIENTS:-}
+      TEAM_INBOX_SMTP_FALLBACK_SERVICE_TEAM_ID: ${TEAM_INBOX_SMTP_FALLBACK_SERVICE_TEAM_ID:-}
+      TEAM_INBOX_SMTP_PROBE_RECIPIENT: ${TEAM_INBOX_SMTP_PROBE_RECIPIENT:-}
+      TEAM_INBOX_SMTP_PROBE_INTERVAL_SECONDS: ${TEAM_INBOX_SMTP_PROBE_INTERVAL_SECONDS:-900}
+      TEAM_INBOX_SMTP_PROBE_TIMEOUT_SECONDS: ${TEAM_INBOX_SMTP_PROBE_TIMEOUT_SECONDS:-120}
+    env_file:
+    - .env
+    ports:
+    - "127.0.0.1:${TEAM_INBOX_SMTP_INBOUND_PUBLISH_PORT:-2525}:2525"
+    volumes: []
+    command:
+    - python
+    - -m
+    - app.team_inbox_smtp
+    - serve
+    healthcheck:
+      test:
+      - CMD
+      - python
+      - -m
+      - app.team_inbox_smtp
+      - readiness
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 10s
   vmagent:
     image: victoriametrics/vmagent:v1.96.0
     container_name: dotmac_vmagent
@@ -654,10 +683,7 @@ services:
     depends_on:
       victoriametrics:
         condition: service_started
-      zabbix-server:
-        condition: service_started
 volumes:
-  zabbix_db_data: null
   dotmac_sub_db_data: null
   nominatim_data: null
   nominatim_flatnode: null
@@ -665,12 +691,19 @@ volumes:
   genieacs_mongodb_data: null
   victoriametrics_data: null
   promtail_positions: null
-secrets:
-  zabbix_db_password:
-    file: ${ZABBIX_DB_PASSWORD_FILE:-./secrets/zabbix_db_password}
+  dotmac_router_ssh: null
 networks:
   default:
     name: dotmac_sub_default
     ipam:
       config:
-      - subnet: 172.20.255.0/24
+      # Pinned, and deliberately inside 172.20.0.0/16: FreeRADIUS only accepts
+      # probe requests from clients in RADIUS_PROBE_CLIENT_SUBNET (which defaults
+      # to 172.20.0.0/16 -- see app/services/radius_population.py). Put the app
+      # containers outside that range and RADIUS silently stops recognising them.
+      #
+      # It is configurable because a host running more than one Dotmac stack will
+      # collide: dotmac_crm's compose also wants 172.20.255.0/24. On such a host
+      # set DOCKER_SUBNET to another /24 *within 172.20.0.0/16* -- not an
+      # arbitrary range, or you trade a collision for a broken RADIUS probe.
+      - subnet: ${DOCKER_SUBNET:-172.20.255.0/24}

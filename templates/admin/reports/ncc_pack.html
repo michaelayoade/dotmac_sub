@@ -1,0 +1,54 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header %}
+
+{% block title %}NCC Regulatory Pack - Reports{% endblock %}
+
+{% block content %}
+{{ ambient_background("amber", "orange") }}
+
+<div class="relative space-y-8">
+  {% call page_header(
+      title="NCC Regulatory Pack",
+      subtitle="All three NCC returns assembled into one filing view",
+      color="amber",
+      color2="orange"
+  ) %}{% endcall %}
+
+  <div class="flex flex-wrap gap-2">
+    <a href="/admin/reports/ncc-regulatory-pack?date_from={{ date_from }}&date_to={{ date_to }}"
+       class="rounded-lg border border-slate-300 px-4 py-2 text-sm dark:border-slate-600">View JSON</a>
+    <a href="/admin/reports/ncc-regulatory-pack.pdf?date_from={{ date_from }}&date_to={{ date_to }}"
+       class="rounded-lg border border-slate-300 px-4 py-2 text-sm dark:border-slate-600">Download PDF</a>
+  </div>
+
+  {% set meta = pack.meta %}
+  <div class="rounded-2xl border {{ 'border-emerald-200 bg-emerald-50 dark:border-emerald-900/40 dark:bg-emerald-900/10' if meta.complete else 'border-amber-200 bg-amber-50 dark:border-amber-900/40 dark:bg-amber-900/10' }} p-6 text-sm">
+    <p><strong>Status:</strong> {{ "COMPLETE" if meta.complete else "INCOMPLETE — one or more upstream sources unreachable" }}</p>
+    <p class="mt-1 text-slate-500">Window: {{ meta.period.start }} → {{ meta.period.end }}</p>
+  </div>
+
+  <div class="overflow-x-auto rounded-2xl border border-slate-200/70 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+    <table class="min-w-full text-left text-sm">
+      <thead class="border-b border-slate-200 text-xs uppercase text-slate-500 dark:border-slate-700">
+        <tr><th class="px-4 py-2">Return</th><th class="px-4 py-2">Status</th><th class="px-4 py-2">Detail</th></tr>
+      </thead>
+      <tbody>
+        {% for label, section in [
+            ("① Quarterly complaints", pack.complaints),
+            ("② Quarterly subscribers", pack.subscribers),
+            ("③ Annual financials", pack.financials),
+            ("③ Annual staff", pack.staff)] %}
+        <tr class="border-b border-slate-100 dark:border-slate-700/50">
+          <td class="px-4 py-2">{{ label }}</td>
+          <td class="px-4 py-2">
+            {% if section.available %}<span class="text-emerald-600">available</span>
+            {% else %}<span class="text-amber-600">unavailable</span>{% endif %}
+          </td>
+          <td class="px-4 py-2 text-slate-500">{{ section.error or "" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

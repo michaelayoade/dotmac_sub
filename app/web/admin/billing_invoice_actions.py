@@ -1,5 +1,6 @@
 """Admin billing invoice action/detail routes."""
 
+import secrets
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Form, Query, Request
@@ -132,6 +133,61 @@ def invoice_line_create(
 
 
 @router.post(
+    "/invoices/{invoice_id:uuid}/apply-credit/preview",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:invoice:update"))],
+)
+def invoice_apply_credit_preview(
+    request: Request,
+    invoice_id: UUID,
+    credit_note_id: str = Form(...),
+    amount: str | None = Form(None),
+    memo: str | None = Form(None),
+    idempotency_key: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    try:
+        preview = web_billing_invoices_service.preview_credit_note_application(
+            db,
+            invoice_id=str(invoice_id),
+            credit_note_id=credit_note_id,
+            amount=amount,
+        )
+    except Exception as exc:
+        detail_data = web_billing_invoices_service.load_invoice_detail_data(
+            db,
+            invoice_id=str(invoice_id),
+        )
+        from app.web.admin import get_current_user, get_sidebar_stats
+
+        return templates.TemplateResponse(
+            "admin/billing/invoice_detail.html",
+            {
+                "request": request,
+                **(detail_data or {}),
+                "error": str(exc),
+                "current_user": get_current_user(request),
+                "sidebar_stats": get_sidebar_stats(db),
+            },
+            status_code=400,
+        )
+
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    return templates.TemplateResponse(
+        "admin/billing/credit_apply_confirm.html",
+        {
+            "request": request,
+            "preview": preview,
+            "memo": memo.strip() if memo else None,
+            "idempotency_key": idempotency_key,
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+        },
+    )
+
+
+@router.post(
     "/invoices/{invoice_id:uuid}/apply-credit",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("billing:invoice:update"))],
@@ -140,8 +196,10 @@ def invoice_apply_credit(
     request: Request,
     invoice_id: UUID,
     credit_note_id: str = Form(...),
-    amount: str | None = Form(None),
+    amount: str = Form(...),
     memo: str | None = Form(None),
+    preview_fingerprint: str = Form(...),
+    idempotency_key: str = Form(...),
     db: Session = Depends(get_db),
 ):
     try:
@@ -153,6 +211,8 @@ def invoice_apply_credit(
             credit_note_id=credit_note_id,
             amount=amount,
             memo=memo,
+            preview_fingerprint=preview_fingerprint,
+            idempotency_key=idempotency_key,
         )
     except Exception as exc:
         detail_data = web_billing_invoices_service.load_invoice_detail_data(
@@ -306,6 +366,111 @@ def invoice_void(request: Request, invoice_id: UUID, db: Session = Depends(get_d
         invoice_id=str(invoice_id),
     )
     return HTMLResponse(web_billing_invoice_actions_service.void_message(invoice_id))
+
+
+@router.post(
+    "/invoices/{invoice_id:uuid}/void/preview",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:invoice:delete"))],
+)
+def invoice_void_preview(
+    request: Request, invoice_id: UUID, db: Session = Depends(get_db)
+):
+    preview = web_billing_invoices_service.preview_invoice_void_web(
+        db, invoice_id=str(invoice_id)
+    )
+    return templates.TemplateResponse(
+        "admin/billing/invoice_closure_confirm.html",
+        {
+            "request": request,
+            "preview": preview,
+            "action_label": "Void invoice",
+            "action_explanation": (
+                "Use void only when the invoice should never have existed."
+            ),
+            "confirm_url": f"/admin/billing/invoices/{invoice_id}/void/confirm",
+            "idempotency_key": secrets.token_urlsafe(24),
+        },
+    )
+
+
+@router.post(
+    "/invoices/{invoice_id:uuid}/void/confirm",
+    dependencies=[Depends(require_permission("billing:invoice:delete"))],
+)
+def invoice_void_confirm(
+    request: Request,
+    invoice_id: UUID,
+    preview_fingerprint: str = Form(...),
+    idempotency_key: str = Form(...),
+    memo: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    web_billing_invoices_service.confirm_invoice_void_web(
+        db,
+        request=request,
+        actor_id=_actor_id(request),
+        invoice_id=str(invoice_id),
+        preview_fingerprint=preview_fingerprint,
+        idempotency_key=idempotency_key,
+        memo=memo,
+    )
+    return RedirectResponse(
+        url=f"/admin/billing/invoices/{invoice_id}", status_code=303
+    )
+
+
+@router.post(
+    "/invoices/{invoice_id:uuid}/write-off/preview",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:invoice:update"))],
+)
+def invoice_write_off_preview(
+    request: Request, invoice_id: UUID, db: Session = Depends(get_db)
+):
+    preview = web_billing_invoices_service.preview_invoice_write_off_web(
+        db, invoice_id=str(invoice_id)
+    )
+    return templates.TemplateResponse(
+        "admin/billing/invoice_closure_confirm.html",
+        {
+            "request": request,
+            "preview": preview,
+            "action_label": "Write off receivable",
+            "action_explanation": (
+                "Use write-off for collectible postpaid debt that will not be "
+                "collected; it is not payment and not invoice void."
+            ),
+            "confirm_url": f"/admin/billing/invoices/{invoice_id}/write-off/confirm",
+            "idempotency_key": secrets.token_urlsafe(24),
+        },
+    )
+
+
+@router.post(
+    "/invoices/{invoice_id:uuid}/write-off/confirm",
+    dependencies=[Depends(require_permission("billing:invoice:update"))],
+)
+def invoice_write_off_confirm(
+    request: Request,
+    invoice_id: UUID,
+    preview_fingerprint: str = Form(...),
+    idempotency_key: str = Form(...),
+    memo: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    web_billing_invoices_service.confirm_invoice_write_off_web(
+        db,
+        request=request,
+        actor_id=_actor_id(request),
+        invoice_id=str(invoice_id),
+        preview_fingerprint=preview_fingerprint,
+        idempotency_key=idempotency_key,
+        memo=memo,
+    )
+    return RedirectResponse(
+        url=f"/admin/billing/invoices/{invoice_id}", status_code=303
+    )
 
 
 @router.post(

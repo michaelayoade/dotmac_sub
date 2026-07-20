@@ -22,10 +22,10 @@
     {# KPI Cards #}
     {% if catalog_stats %}
     <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 animate-fade-in-up" style="animation-delay: 50ms;">
-        {{ stats_card("Active Offers", catalog_stats.active_count, icon=icon_check_circle(), color="violet", color2="purple") }}
-        {{ stats_card("Total Plans", catalog_stats.total_count, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>', color="blue", color2="indigo") }}
-        {{ stats_card("Active Subscriptions", catalog_stats.total_subscriptions, icon=icon_users(), color="emerald", color2="teal") }}
-        {{ stats_card("Archived", catalog_stats.archived_count, icon=icon_archive(), color="slate", color2="gray") }}
+        {{ stats_card(catalog_stats.kpis.active_offers.label, catalog_stats.kpis.active_offers.value.value, icon=icon_check_circle(), color="violet", color2="purple", href=catalog_stats.kpis.active_offers.cohort_url, tone=catalog_stats.kpis.active_offers.tone) }}
+        {{ stats_card(catalog_stats.kpis.total_plans.label, catalog_stats.kpis.total_plans.value.value, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>', color="blue", color2="indigo", href=catalog_stats.kpis.total_plans.cohort_url, tone=catalog_stats.kpis.total_plans.tone) }}
+        {{ stats_card(catalog_stats.kpis.active_subscriptions.label, catalog_stats.kpis.active_subscriptions.value.value, icon=icon_users(), color="emerald", color2="teal", href=catalog_stats.kpis.active_subscriptions.cohort_url, tone=catalog_stats.kpis.active_subscriptions.tone) }}
+        {{ stats_card(catalog_stats.kpis.archived.label, catalog_stats.kpis.archived.value.value, icon=icon_archive(), color="slate", color2="gray", href=catalog_stats.kpis.archived.cohort_url, tone=catalog_stats.kpis.archived.tone) }}
     </div>
     {% endif %}
 

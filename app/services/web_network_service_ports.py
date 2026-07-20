@@ -600,6 +600,7 @@ def handle_clone(
         return False, "No imported service-ports found for reference ONT"
 
     created = 0
+    failures: list[str] = []
     for ref_port in ref_ports:
         user_vlan: int | str | None = None
         flow_para = str(getattr(ref_port, "flow_para", "") or "")
@@ -623,9 +624,19 @@ def handle_clone(
             service_type=service_type_for_vlan(db, ref_port.vlan_id),
         )
         if not ok:
-            return False, message
+            failures.append(f"VLAN {ref_port.vlan_id}: {message}")
+            continue
         created += 1
 
+    total = len(ref_ports)
+    if failures:
+        failed_preview = "; ".join(failures[:3])
+        if len(failures) > 3:
+            failed_preview = f"{failed_preview}; +{len(failures) - 3} more"
+        return (
+            False,
+            f"Created {created} of {total} service-port(s); failed on {failed_preview}",
+        )
     return True, f"Created {created} service-port(s) from reference ONT"
 
 

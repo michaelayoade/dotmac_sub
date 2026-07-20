@@ -1,14 +1,53 @@
 {# Config Snapshot Detail — rendered inside slide-over panel #}
+{% macro snapshot_value(key, value) -%}
+{% set normalized = key | lower %}
+{{ '[redacted]' if ('password' in normalized or 'passphrase' in normalized or 'presharedkey' in normalized or 'pre_shared_key' in normalized or 'secret' in normalized) else (value if value is not none else '—') }}
+{%- endmacro %}
 <div class="space-y-6">
     {# Metadata #}
     <div class="flex items-center justify-between">
         <div>
-            <p class="text-lg font-semibold text-slate-900 dark:text-white">{{ snapshot.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</p>
+            <p class="text-lg font-semibold text-slate-900 dark:text-white">{{ snapshot.created_at | app_datetime('%Y-%m-%d %H:%M:%S') }}</p>
             <p class="text-sm text-slate-500 dark:text-slate-400">
                 Source: {{ snapshot.source }}{% if snapshot.label %} &middot; {{ snapshot.label }}{% endif %}
             </p>
+            {% if snapshot_integrity_valid is sameas true %}
+            <p class="mt-1 text-xs font-medium text-emerald-700 dark:text-emerald-400">Integrity verified &middot; schema v{{ snapshot.schema_version }}</p>
+            {% elif snapshot_integrity_valid is sameas false %}
+            <p class="mt-1 text-xs font-medium text-rose-700 dark:text-rose-400">Integrity check failed</p>
+            {% else %}
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Legacy snapshot &middot; no integrity checksum</p>
+            {% endif %}
         </div>
     </div>
+
+    {% if snapshot.provenance %}
+    <details open>
+        <summary class="cursor-pointer text-sm font-semibold text-slate-900 dark:text-white">Evidence provenance</summary>
+        <dl class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {% for key, value in snapshot.provenance.items() %}
+            <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-800/60">
+                <dt class="text-[11px] uppercase tracking-wider font-semibold text-slate-500 dark:text-slate-400">{{ key | replace('_', ' ') }}</dt>
+                <dd class="mt-0.5 text-xs font-mono text-slate-900 dark:text-white break-all">{{ value }}</dd>
+            </div>
+            {% endfor %}
+        </dl>
+    </details>
+    {% endif %}
+
+    {% if snapshot.observed_state %}
+    <details>
+        <summary class="cursor-pointer text-sm font-semibold text-slate-900 dark:text-white">Reconciler observation</summary>
+        <pre class="mt-3 max-h-96 overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800/60 dark:text-white">{{ snapshot.observed_state | tojson(indent=2) }}</pre>
+    </details>
+    {% endif %}
+
+    {% if snapshot.effective_config %}
+    <details>
+        <summary class="cursor-pointer text-sm font-semibold text-slate-900 dark:text-white">Effective intent</summary>
+        <pre class="mt-3 max-h-96 overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800/60 dark:text-white">{{ snapshot.effective_config | tojson(indent=2) }}</pre>
+    </details>
+    {% endif %}
 
     {# Device Info #}
     {% if snapshot.device_info %}
@@ -21,7 +60,7 @@
             {% for key, value in snapshot.device_info.items() %}
             <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-800/60">
                 <dt class="text-[11px] uppercase tracking-wider font-semibold text-slate-500 dark:text-slate-400">{{ key | replace('_', ' ') }}</dt>
-                <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white break-all">{{ value if value is not none else '—' }}</dd>
+                <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white break-all">{{ snapshot_value(key, value) }}</dd>
             </div>
             {% endfor %}
         </dl>
@@ -39,7 +78,7 @@
             {% for key, value in snapshot.wan.items() %}
             <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-800/60">
                 <dt class="text-[11px] uppercase tracking-wider font-semibold text-slate-500 dark:text-slate-400">{{ key | replace('_', ' ') }}</dt>
-                <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white break-all">{{ value if value is not none else '—' }}</dd>
+                <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white break-all">{{ snapshot_value(key, value) }}</dd>
             </div>
             {% endfor %}
         </dl>
@@ -57,7 +96,7 @@
             {% for key, value in snapshot.optical.items() %}
             <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-800/60">
                 <dt class="text-[11px] uppercase tracking-wider font-semibold text-slate-500 dark:text-slate-400">{{ key | replace('_', ' ') }}</dt>
-                <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white break-all">{{ value if value is not none else '—' }}</dd>
+                <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white break-all">{{ snapshot_value(key, value) }}</dd>
             </div>
             {% endfor %}
         </dl>
@@ -75,7 +114,7 @@
             {% for key, value in snapshot.wifi.items() %}
             <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-800/60">
                 <dt class="text-[11px] uppercase tracking-wider font-semibold text-slate-500 dark:text-slate-400">{{ key | replace('_', ' ') }}</dt>
-                <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white break-all">{{ value if value is not none else '—' }}</dd>
+                <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white break-all">{{ snapshot_value(key, value) }}</dd>
             </div>
             {% endfor %}
         </dl>

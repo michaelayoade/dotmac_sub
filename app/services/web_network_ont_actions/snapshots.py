@@ -35,8 +35,14 @@ def config_snapshot_detail_context(
     snapshot_id: str,
 ) -> dict[str, object]:
     """Return context for a single ONT config snapshot detail."""
-    snapshot = _config_snapshot_service().get(db, snapshot_id, ont_id=ont_id)
-    return {"snapshot": snapshot}
+    snapshots_service = _config_snapshot_service()
+    snapshot = snapshots_service.get(db, snapshot_id, ont_id=ont_id)
+    return {
+        "snapshot": snapshot,
+        "snapshot_integrity_valid": snapshots_service.snapshot_integrity_valid(
+            snapshot
+        ),
+    }
 
 
 def list_config_snapshots(db: Session, ont_id: str, *, limit: int = 5) -> list[object]:

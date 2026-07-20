@@ -22,6 +22,8 @@ from app.services.network.serial_utils import parse_ont_id_on_olt
 _AUTHORIZED_SYNC_SOURCES = {
     "olt_ssh_authorize",
     "olt_ssh_readback",
+    # Historical provenance value written by the retired Zabbix data ingest;
+    # existing OntUnit rows keep it, so it still counts as evidence.
     "zabbix_data_ingest",
 }
 

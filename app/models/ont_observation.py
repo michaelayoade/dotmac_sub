@@ -79,6 +79,7 @@ class OntObservation(Base):
     olt_mgmt_vlan: Mapped[int | None] = mapped_column(Integer)
     olt_line_profile_id: Mapped[int | None] = mapped_column(Integer)
     olt_service_profile_id: Mapped[int | None] = mapped_column(Integer)
+    olt_tr069_profile_id: Mapped[int | None] = mapped_column(Integer)
     # List of {index, vlan, gem, state} dicts — JSON because the count is
     # bounded but variable, and we don't query into the structure.
     olt_service_ports: Mapped[list[dict] | None] = mapped_column(JSON)
@@ -99,6 +100,14 @@ class OntObservation(Base):
     acs_observed_nat_enabled: Mapped[bool | None] = mapped_column(Boolean)
     acs_observed_dhcp_enabled: Mapped[bool | None] = mapped_column(Boolean)
     acs_observed_ssid: Mapped[str | None] = mapped_column(String(64))
+    acs_observed_wifi_enabled: Mapped[bool | None] = mapped_column(Boolean)
+    acs_observed_wifi_channel: Mapped[int | None] = mapped_column(Integer)
+    acs_observed_wifi_security_mode: Mapped[str | None] = mapped_column(String(40))
+    acs_observed_wifi_instance_index: Mapped[int | None] = mapped_column(Integer)
+    acs_observed_remote_ssh_enabled: Mapped[bool | None] = mapped_column(Boolean)
+    acs_observed_remote_ssh_port: Mapped[int | None] = mapped_column(Integer)
+    acs_observed_remote_telnet_enabled: Mapped[bool | None] = mapped_column(Boolean)
+    acs_observed_remote_telnet_port: Mapped[int | None] = mapped_column(Integer)
     acs_observed_periodic_inform_interval_sec: Mapped[int | None] = mapped_column(
         Integer
     )
@@ -108,6 +117,17 @@ class OntObservation(Base):
     acs_observed_cr_password_set: Mapped[bool | None] = mapped_column(Boolean)
     acs_observed_wan_wcd_index: Mapped[int | None] = mapped_column(Integer)
     acs_observed_wan_instance_index: Mapped[int | None] = mapped_column(Integer)
+    acs_data_model_root: Mapped[str | None] = mapped_column(String(40))
+    acs_observed_ipv6_enabled: Mapped[bool | None] = mapped_column(Boolean)
+    acs_observed_wan_ip_enable: Mapped[bool | None] = mapped_column(Boolean)
+    acs_observed_wan_addressing_type: Mapped[str | None] = mapped_column(String(20))
+    acs_observed_wan_ip_address: Mapped[str | None] = mapped_column(String(64))
+    acs_observed_wan_subnet_mask: Mapped[str | None] = mapped_column(String(64))
+    acs_observed_wan_gateway: Mapped[str | None] = mapped_column(String(64))
+    acs_observed_wan_dns_servers: Mapped[str | None] = mapped_column(String(200))
+    acs_observed_dhcpv6_enabled: Mapped[bool | None] = mapped_column(Boolean)
+    acs_observed_dhcpv6_request_prefixes: Mapped[bool | None] = mapped_column(Boolean)
+    acs_observed_ra_enabled: Mapped[bool | None] = mapped_column(Boolean)
 
     # ── Audit timestamps ────────────────────────────────────────────────────
     created_at: Mapped[datetime] = mapped_column(

@@ -6,15 +6,22 @@ provider retries. These tests pin that contract for Paystack and Flutterwave.
 """
 
 import json
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
 from app.models.billing import (
+    Payment,
+    PaymentProvider,
+    PaymentProviderEvent,
+    PaymentProviderType,
     PaymentWebhookDeadLetter,
     PaymentWebhookDeadLetterStatus,
 )
+from app.services.account_credit_deposits import AccountCreditDeposits
 from app.services.api_billing_webhooks import (
     list_payment_webhook_dead_letters,
     process_flutterwave_webhook,
@@ -28,6 +35,94 @@ def _dead_letters(db, provider_type=None):
     if provider_type:
         q = q.filter(PaymentWebhookDeadLetter.provider_type == provider_type)
     return q.all()
+
+
+def _typed_deposit(db, subscriber, *, suffix: str):
+    provider = PaymentProvider(
+        name=f"Paystack Deposit {suffix}",
+        provider_type=PaymentProviderType.paystack,
+        is_active=True,
+    )
+    db.add(provider)
+    db.commit()
+    intent, _preview, _replayed = AccountCreditDeposits.create_intent(
+        db,
+        account_id=subscriber.id,
+        amount=Decimal("10000.00"),
+        currency="NGN",
+        minimum=Decimal("1000.00"),
+        maximum=Decimal("500000.00"),
+        reference=f"deposit-webhook-{suffix}",
+        provider_type="paystack",
+        provider_id=provider.id,
+        expires_at=datetime.now(UTC) + timedelta(minutes=30),
+        idempotency_key=f"deposit-webhook-intent-{suffix}",
+        channel="test",
+        created_by="pytest",
+    )
+    payload = {
+        "event": "charge.success",
+        "data": {
+            "id": f"gateway-{suffix}",
+            "reference": intent.reference,
+            "amount": 1_000_000,
+            "currency": "NGN",
+            "metadata": {"topup_intent_id": str(intent.id)},
+        },
+    }
+    return intent, json.dumps(payload).encode()
+
+
+def test_typed_deposit_webhook_and_duplicate_use_one_payment(db_session, subscriber):
+    intent, body = _typed_deposit(db_session, subscriber, suffix="duplicate")
+
+    with patch(
+        "app.services.api_billing_webhooks.verify_paystack_signature",
+        return_value=True,
+    ):
+        first = process_paystack_webhook(db=db_session, body=body, signature="sig")
+        second = process_paystack_webhook(db=db_session, body=body, signature="sig")
+
+    db_session.refresh(intent)
+    payments = db_session.query(Payment).filter_by(account_id=subscriber.id).all()
+    events = db_session.query(PaymentProviderEvent).all()
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert len(payments) == 1
+    assert intent.completed_payment_id == payments[0].id
+    assert len(events) == 1
+    assert events[0].payment_id == payments[0].id
+    assert _dead_letters(db_session, "paystack") == []
+
+
+def test_typed_deposit_dead_letter_replay_reuses_settled_payment(
+    db_session, subscriber
+):
+    intent, body = _typed_deposit(db_session, subscriber, suffix="replay")
+
+    with (
+        patch(
+            "app.services.api_billing_webhooks.verify_paystack_signature",
+            return_value=True,
+        ),
+        patch(
+            "app.services.api_billing_webhooks.billing_service.payment_provider_events.ingest",
+            side_effect=RuntimeError("event projection failed"),
+        ),
+    ):
+        response = process_paystack_webhook(db=db_session, body=body, signature="sig")
+
+    row = _dead_letters(db_session, "paystack")[0]
+    settled_payment_id = intent.completed_payment_id
+    assert response.status_code == 500
+    assert settled_payment_id is not None
+    assert db_session.query(Payment).count() == 1
+
+    replay_payment_webhook_dead_letter(db_session, str(row.id))
+
+    assert db_session.query(Payment).count() == 1
+    assert db_session.query(PaymentProviderEvent).one().payment_id == settled_payment_id
+    assert _dead_letters(db_session, "paystack") == []
 
 
 def test_paystack_webhook_returns_500_and_dead_letters_on_ingest_failure(db_session):
@@ -202,6 +297,49 @@ def test_replay_reprocesses_and_marks_replayed(db_session):
         result = replay_payment_webhook_dead_letter(db_session, str(row.id))
 
     assert result.status == PaymentWebhookDeadLetterStatus.replayed
+    assert result.retry_count == 1
+    assert _dead_letters(db_session, "paystack") == []
+
+
+def test_replay_failure_remains_health_visible_and_records_real_error(db_session):
+    payload = {
+        "event": "charge.success",
+        "data": {
+            "id": "2",
+            "reference": "failed-replay",
+            "amount": 100000,
+            "currency": "NGN",
+            "metadata": {},
+        },
+    }
+    row = PaymentWebhookDeadLetter(
+        provider_type="paystack",
+        event_type="charge.success",
+        external_id="2",
+        idempotency_key="paystack-failed-replay",
+        payload=payload,
+        status=PaymentWebhookDeadLetterStatus.failed,
+    )
+    db_session.add(row)
+    db_session.commit()
+
+    with (
+        patch(
+            "app.services.api_billing_webhooks.billing_service.payment_providers.get_by_type",
+            return_value=MagicMock(id="00000000-0000-0000-0000-000000000001"),
+        ),
+        patch(
+            "app.services.api_billing_webhooks.billing_service.payment_provider_events.ingest",
+            side_effect=RuntimeError("replay write failed"),
+        ),
+        pytest.raises(RuntimeError, match="replay write failed"),
+    ):
+        replay_payment_webhook_dead_letter(db_session, str(row.id))
+
+    db_session.refresh(row)
+    assert row.status == PaymentWebhookDeadLetterStatus.failed
+    assert row.retry_count == 1
+    assert row.error == "replay write failed"
 
 
 def test_replay_missing_row_404(db_session):

@@ -1,0 +1,113 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header %}
+
+{% block title %}{{ 'Edit' if image else 'Add' }} Firmware Image - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("emerald", "blue") }}
+{% set editing = image is not none %}
+{% set locked = usage.used %}
+{% set blocked = usage.active %}
+{% set selected_kind = form_values.kind if form_values else kind %}
+
+<div class="relative mx-auto max-w-5xl space-y-6">
+    {% call page_header(
+        title=("Edit Firmware Image" if editing else "Add Firmware Image"),
+        subtitle=(image.vendor ~ " " ~ (image.model or "") ~ " " ~ image.version if editing else "Register a verified software artifact"),
+        icon='<svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5.5 5.5 0 0116.9 6.5 4.5 4.5 0 1118 16m-6-5v9m0 0l-3-3m3 3l3-3"/></svg>',
+        color="emerald",
+        color2="blue",
+        breadcrumbs=[{"label": "Network", "href": "/admin/network"}, {"label": "Firmware Images", "href": "/admin/network/firmware-images"}, {"label": "Edit" if editing else "Add"}]
+    ) %}{% endcall %}
+
+    {% if error %}
+    <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-200">{{ error }}</div>
+    {% endif %}
+    {% if blocked %}
+    <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-200">This image has an active rollout. Changes are locked until the operation reaches a terminal state.</div>
+    {% elif locked %}
+    <div class="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-200">This image has rollout history. Artifact identity is immutable; release notes and catalog state remain editable.</div>
+    {% endif %}
+
+    <form method="POST" action="{{ action_url }}" class="space-y-6">
+        {% include "components/forms/csrf_input.html" %}
+        <section class="rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-5 py-4 dark:border-slate-700"><h2 class="text-sm font-semibold text-slate-900 dark:text-white">Release identity</h2></div>
+            <div class="grid gap-5 p-5 md:grid-cols-2">
+                <div>
+                    <label for="kind" class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Device type</label>
+                    {% if editing %}
+                    <input type="hidden" name="kind" value="{{ kind }}">
+                    <input value="{{ kind | upper }}" disabled class="w-full rounded-lg border border-slate-300 bg-slate-100 px-3 py-2 text-sm text-slate-600 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-300">
+                    {% else %}
+                    <select id="kind" name="kind" required class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+                        <option value="olt" {% if selected_kind == 'olt' %}selected{% endif %}>OLT</option>
+                        <option value="ont" {% if selected_kind == 'ont' %}selected{% endif %}>ONT</option>
+                    </select>
+                    {% endif %}
+                </div>
+                <div>
+                    <label for="vendor" class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Vendor</label>
+                    <input id="vendor" name="vendor" required maxlength="120" value="{{ form_values.vendor if form_values else (image.vendor if image else '') }}" {% if locked %}readonly{% endif %} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm read-only:bg-slate-100 dark:border-slate-600 dark:bg-slate-900 dark:text-white dark:read-only:bg-slate-950">
+                </div>
+                <div>
+                    <label for="model" class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Model</label>
+                    <input id="model" name="model" maxlength="120" value="{{ form_values.model if form_values else ((image.model or '') if image else '') }}" {% if locked %}readonly{% endif %} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm read-only:bg-slate-100 dark:border-slate-600 dark:bg-slate-900 dark:text-white dark:read-only:bg-slate-950">
+                </div>
+                <div>
+                    <label for="version" class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Version</label>
+                    <input id="version" name="version" required maxlength="120" value="{{ form_values.version if form_values else (image.version if image else '') }}" {% if locked %}readonly{% endif %} class="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm read-only:bg-slate-100 dark:border-slate-600 dark:bg-slate-900 dark:text-white dark:read-only:bg-slate-950">
+                </div>
+            </div>
+        </section>
+
+        <section class="rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-5 py-4 dark:border-slate-700"><h2 class="text-sm font-semibold text-slate-900 dark:text-white">Artifact verification</h2></div>
+            <div class="grid gap-5 p-5 md:grid-cols-2">
+                <div class="md:col-span-2">
+                    <label for="file_url" class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Firmware URL</label>
+                    <input id="file_url" name="file_url" type="url" required maxlength="500" value="{{ form_values.file_url if form_values else (image.file_url if image else '') }}" {% if locked %}readonly{% endif %} placeholder="{{ 'sftp://firmware.example/image.bin' if selected_kind == 'olt' else 'https://firmware.example/image.bin' }}" class="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm read-only:bg-slate-100 dark:border-slate-600 dark:bg-slate-900 dark:text-white dark:read-only:bg-slate-950">
+                </div>
+                <div>
+                    <label for="filename" class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Filename</label>
+                    <input id="filename" name="filename" maxlength="255" value="{{ form_values.filename if form_values else ((image.filename or '') if image else '') }}" {% if locked %}readonly{% endif %} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm read-only:bg-slate-100 dark:border-slate-600 dark:bg-slate-900 dark:text-white dark:read-only:bg-slate-950">
+                </div>
+                <div>
+                    <label for="file_size_bytes" class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">File size (bytes)</label>
+                    <input id="file_size_bytes" name="file_size_bytes" type="number" min="1" value="{{ form_values.file_size_bytes if form_values else ((image.file_size_bytes or '') if image else '') }}" {% if locked %}readonly{% endif %} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm read-only:bg-slate-100 dark:border-slate-600 dark:bg-slate-900 dark:text-white dark:read-only:bg-slate-950">
+                </div>
+                <div class="md:col-span-2">
+                    <label for="checksum" class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">SHA-256</label>
+                    <input id="checksum" name="checksum" required minlength="64" maxlength="71" value="{{ form_values.checksum if form_values else ((image.checksum or '') if image else '') }}" {% if locked %}readonly{% endif %} class="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm read-only:bg-slate-100 dark:border-slate-600 dark:bg-slate-900 dark:text-white dark:read-only:bg-slate-950">
+                </div>
+            </div>
+        </section>
+
+        <section class="rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-5 py-4 dark:border-slate-700"><h2 class="text-sm font-semibold text-slate-900 dark:text-white">Catalog state</h2></div>
+            <div class="space-y-5 p-5">
+                <div>
+                    <label for="release_notes" class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Release notes</label>
+                    <textarea id="release_notes" name="release_notes" rows="4" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">{{ form_values.release_notes if form_values else ((image.release_notes if kind == 'olt' else image.notes) if image else '') or '' }}</textarea>
+                </div>
+                {% if selected_kind == 'olt' %}
+                <div>
+                    <label for="notes" class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Internal notes</label>
+                    <textarea id="notes" name="notes" rows="2" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">{{ form_values.notes if form_values else ((image.notes or '') if image else '') }}</textarea>
+                </div>
+                {% endif %}
+                <label class="flex items-center gap-3">
+                    <input type="hidden" name="is_active" value="false">
+                    <input type="checkbox" name="is_active" value="true" {% if (form_values.is_active if form_values else (image.is_active if image else true)) %}checked{% endif %} {% if blocked %}disabled{% endif %} class="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500">
+                    <span class="text-sm font-medium text-slate-800 dark:text-slate-200">Available for new upgrades</span>
+                </label>
+            </div>
+        </section>
+
+        <div class="flex items-center justify-end gap-3">
+            <a href="/admin/network/firmware-images" class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800">Cancel</a>
+            <button type="submit" {% if blocked %}disabled{% endif %} class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-40">{{ 'Save changes' if editing else 'Add image' }}</button>
+        </div>
+    </form>
+</div>
+{% endblock %}

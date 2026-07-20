@@ -15,6 +15,8 @@ from app.db import get_db
 from app.schemas.auth import MFAMethodRead
 from app.schemas.auth_flow import (
     AvatarUploadResponse,
+    CredentialEnrollmentRequest,
+    CredentialEnrollmentResponse,
     ErrorResponse,
     ForgotPasswordRequest,
     ForgotPasswordResponse,
@@ -41,6 +43,7 @@ from app.schemas.auth_flow import (
     VerifyEmailResponse,
 )
 from app.services import auth_flow as auth_flow_service
+from app.services import customer_credential_enrollment
 from app.services import session_manager as session_manager_service
 from app.services import user_profile as user_profile_service
 from app.services.auth_dependencies import require_user_auth
@@ -390,6 +393,35 @@ def reset_password_endpoint(
     """
     reset_at = auth_flow_service.reset_password(db, payload.token, payload.new_password)
     return ResetPasswordResponse(reset_at=reset_at)
+
+
+@router.post(
+    "/credential-enrollment",
+    response_model=CredentialEnrollmentResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses={
+        400: {"model": ErrorResponse},
+        401: {"model": ErrorResponse},
+        409: {"model": ErrorResponse},
+        422: {"model": ErrorResponse},
+    },
+)
+def credential_enrollment_endpoint(
+    payload: CredentialEnrollmentRequest,
+    db: Session = Depends(get_db),
+) -> CredentialEnrollmentResponse:
+    """Create a local credential from an emailed referral capability."""
+
+    try:
+        result = customer_credential_enrollment.complete_referral_enrollment(
+            db,
+            token=payload.token,
+            new_password=payload.new_password,
+            username=payload.username,
+        )
+    except customer_credential_enrollment.CustomerCredentialEnrollmentError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return CredentialEnrollmentResponse.model_validate(result, from_attributes=True)
 
 
 @router.post(

@@ -143,7 +143,7 @@ class RadiusAccountingSession(Base):
     delegated_ipv6_prefix: Mapped[str | None] = mapped_column(String(128))
     # Physical attachment from radacct: NAS-Port-Id (e.g. PPPoE interface) and
     # Called-Station-Id — enables per-port concurrency / fault correlation.
-    nas_port_id: Mapped[str | None] = mapped_column(String(64))
+    nas_port_id: Mapped[str | None] = mapped_column(String(253))
     called_station_id: Mapped[str | None] = mapped_column(String(64))
     splynx_session_id: Mapped[int | None] = mapped_column(Integer)
 

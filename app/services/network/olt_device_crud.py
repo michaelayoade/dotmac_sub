@@ -42,6 +42,7 @@ def _infer_olt_capabilities(data: dict[str, Any], explicit_fields: set[str]) -> 
     from app.services.adapters.olt_types import olt_type_registry
 
     capabilities = olt_type_registry.get_capabilities(
+        vendor=data.get("vendor"),
         model=data.get("model"),
         firmware=data.get("firmware_version") or data.get("software_version"),
     )

@@ -173,11 +173,11 @@
                             {% if task.status in ["pending", "approved", "scheduled", "failed"] %}
                             <div class="flex flex-col items-end gap-2">
                                 {% if task.status == "pending" %}
-                                <form method="POST" action="/admin/network/profile-sync-tasks/{{ task.id }}/approve">
+                                <form method="POST" action="/admin/network/profile-sync-tasks/{{ task.id }}/approve" data-confirm="Approve this profile sync task for execution?" data-confirm-variant="warning" data-confirm-label="Approve">
                                     {% include "components/forms/csrf_input.html" %}
                                     <button type="submit" class="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 dark:border-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300">Approve</button>
                                 </form>
-                                <form method="POST" action="/admin/network/profile-sync-tasks/{{ task.id }}/approve" class="flex items-center justify-end gap-2">
+                                <form method="POST" action="/admin/network/profile-sync-tasks/{{ task.id }}/approve" class="flex items-center justify-end gap-2" data-confirm="Schedule this profile sync task for execution?" data-confirm-variant="warning" data-confirm-label="Schedule">
                                     {% include "components/forms/csrf_input.html" %}
                                     <input type="datetime-local" name="scheduled_for" class="w-44 rounded-lg border border-slate-300 px-2 py-1.5 text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                                     <button type="submit" class="rounded-lg border border-sky-300 bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 hover:bg-sky-100 dark:border-sky-700 dark:bg-sky-900/20 dark:text-sky-300">Schedule</button>
@@ -190,14 +190,14 @@
                                 </form>
                                 {% endif %}
                                 {% if task.status in ["pending", "approved", "scheduled"] %}
-                                <form method="POST" action="/admin/network/profile-sync-tasks/{{ task.id }}/cancel" class="flex items-center justify-end gap-2" onsubmit="return confirm('Cancel this profile sync task?')">
+                                <form method="POST" action="/admin/network/profile-sync-tasks/{{ task.id }}/cancel" class="flex items-center justify-end gap-2" data-confirm="Cancel this profile sync task?" data-confirm-variant="warning">
                                     {% include "components/forms/csrf_input.html" %}
                                     <input type="hidden" name="reason" value="Cancelled from admin queue">
                                     <button type="submit" class="rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-50 dark:border-rose-700 dark:bg-slate-800 dark:text-rose-300 dark:hover:bg-rose-900/20">Cancel</button>
                                 </form>
                                 {% endif %}
                                 {% if task.status == "failed" %}
-                                <form method="POST" action="/admin/network/profile-sync-tasks/{{ task.id }}/retry" onsubmit="return confirm('Return this failed task to pending review?')">
+                                <form method="POST" action="/admin/network/profile-sync-tasks/{{ task.id }}/retry" data-confirm="Return this failed task to pending review?" data-confirm-variant="warning">
                                     {% include "components/forms/csrf_input.html" %}
                                     <input type="hidden" name="reason" value="Retried from admin queue">
                                     <button type="submit" class="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300">Retry</button>

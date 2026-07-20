@@ -92,4 +92,37 @@ void main() {
     expect(s.series, isEmpty);
     expect(s.isAuthoritative, isTrue);
   });
+
+  test('authoritative total preserves zero instead of treating it as missing',
+      () {
+    final s = UsageSummary.fromJson({
+      'period': 'cycle',
+      'start': '2026-06-01T00:00:00+00:00',
+      'end': '2026-06-30T00:00:00+00:00',
+      'total_bytes': 0,
+      'total_source': 'sessions',
+      'is_authoritative': true,
+      'bucket': 'day',
+      'series': [
+        {'bucket_start': '2026-06-08T00:00:00+00:00', 'bytes': 9999},
+      ],
+    });
+
+    expect(s.authoritativeTotalBytes, 0);
+  });
+
+  test('estimated total is not eligible for an authoritative headline', () {
+    final s = UsageSummary.fromJson({
+      'period': 'cycle',
+      'start': '2026-06-01T00:00:00+00:00',
+      'end': '2026-06-30T00:00:00+00:00',
+      'total_bytes': 9999,
+      'total_source': 'samples',
+      'is_authoritative': false,
+      'bucket': 'day',
+      'series': [],
+    });
+
+    expect(s.authoritativeTotalBytes, isNull);
+  });
 }

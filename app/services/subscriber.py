@@ -47,7 +47,9 @@ from app.services.customer_identity_normalization import (
 )
 from app.services.events import emit_event
 from app.services.events.types import EventType
+from app.services.nin_matching import normalize_nin
 from app.services.response import ListResponseMixin
+from app.services.sync_feeds import apply_sync_page, sync_page_response
 
 logger = logging.getLogger(__name__)
 _UNSPECIFIED_IPV4 = ParsedIPv4Address(0)
@@ -265,12 +267,62 @@ def _validate_tax_rate(db: Session, tax_rate_id: str | None):
     return rate
 
 
+def _apply_validated_lga(data: dict, *, current_region=None, current_lga=None) -> dict:
+    """Validate and canonicalise a captured LGA against its state.
+
+    LGA is an NCC administrative unit that the quarterly complaints return
+    files per row, so a wrong one is a wrong regulatory filing. It is captured,
+    never derived: CRM guessed the LGA from address text and defaulted the
+    unmatched to Abuja, and we do not repeat that. Here an LGA is only accepted
+    when it is a real LGA *of its state*, and it is stored in the reference
+    table's canonical spelling so the return does not have to re-interpret it.
+
+    Validation runs against the MERGED state — the incoming patch over what is
+    already stored — because a partial update can send an LGA without resending
+    its region, and validating the patch alone would let ``{"lga": "Eti-Osa"}``
+    through onto a Kano subscriber.
+
+    Clearing (``lga=None``/``""``) is always allowed: blank is the honest value
+    for "we do not know", and the NCC return reports the gap rather than
+    inventing a location.
+    """
+    if "lga" not in data:
+        return data
+
+    from app.services import ncc_location
+
+    lga = (str(data.get("lga") or "")).strip()
+    if not lga:
+        data["lga"] = None
+        return data
+
+    region = data.get("region", current_region)
+    if not (str(region or "").strip()):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "An LGA cannot be validated without a state: set region alongside lga."
+            ),
+        )
+
+    canonical = ncc_location.canonical_lga(region, lga)
+    if not canonical:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{lga!r} is not a Local Government Area of {region!r}.",
+        )
+    data["lga"] = canonical
+    return data
+
+
 def _normalize_subscriber_identity_fields(data: dict) -> dict:
     normalized = dict(data)
     if "email" in normalized:
         normalized["email"] = normalize_email_identifier(normalized.get("email"))
     if "phone" in normalized:
         normalized["phone"] = normalize_phone_identifier(normalized.get("phone"))
+    if "nin" in normalized:
+        normalized["nin"] = normalize_nin(normalized.get("nin") or "") or None
     return normalized
 
 
@@ -308,6 +360,31 @@ class Resellers(ListResponseMixin):
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
+    def list_for_sync(
+        db: Session,
+        *,
+        is_active: bool | None,
+        updated_since: datetime | None,
+        limit: int,
+        offset: int,
+    ) -> builtins.list[Reseller]:
+        query = db.query(Reseller)
+        if is_active is not None:
+            query = query.filter(Reseller.is_active == is_active)
+        return apply_sync_page(
+            query,
+            Reseller,
+            updated_since=updated_since,
+            limit=limit,
+            offset=offset,
+        ).all()
+
+    @classmethod
+    def sync_list_response(cls, db: Session, **kwargs):
+        items = cls.list_for_sync(db, **kwargs)
+        return sync_page_response(items, limit=kwargs["limit"], offset=kwargs["offset"])
+
+    @staticmethod
     def count(db: Session, is_active: bool | None) -> int:
         query = db.query(func.count(Reseller.id))
         if is_active is None:
@@ -337,8 +414,13 @@ class Resellers(ListResponseMixin):
 
 
 def _apply_billing_defaults(db: Session, subscriber: Subscriber) -> None:
-    """Auto-populate billing_day, payment_due_days, grace_period_days,
-    min_balance from global settings based on subscriber's billing_mode."""
+    """Populate materialized billing defaults that are account-owned.
+
+    ``grace_period_days`` deliberately remains nullable: null means inherit the
+    canonical account -> policy -> billing-mode grace decision. Copying the
+    current default into every new subscriber would silently turn inheritance
+    into a permanent account override.
+    """
     from decimal import Decimal
 
     mode = subscriber.billing_mode.value  # "prepaid" or "postpaid"
@@ -361,13 +443,6 @@ def _apply_billing_defaults(db: Session, subscriber: Subscriber) -> None:
         )
         if val is not None:
             subscriber.payment_due_days = int(str(val))
-
-    if subscriber.grace_period_days is None:
-        val = settings_spec.resolve_value(
-            db, SettingDomain.billing, f"{prefix}_grace_period_days"
-        )
-        if val is not None:
-            subscriber.grace_period_days = int(str(val))
 
     if subscriber.min_balance is None:
         val = settings_spec.resolve_value(
@@ -395,56 +470,24 @@ def _default_reseller_id(db: Session):
 
 class Subscribers(ListResponseMixin):
     @staticmethod
-    def create(db: Session, payload: SubscriberCreate):
+    def prepare_new_account(db: Session, payload: SubscriberCreate) -> Subscriber:
+        """Stage one new Subscriber without committing its transaction.
+
+        Cross-domain account-creation orchestrators use this owner command so
+        Party, Lead, and Referral bindings can be accepted atomically with the
+        account. Existing-row ``person_id`` compatibility updates are not new
+        account creation and are deliberately refused here.
+        """
         from app.services.customer_identity_resolution import (
             rebuild_identity_index_for_subscriber,
         )
 
-        # Backwards-compat: some callers provide `person_id` to target an existing
-        # subscriber row and just apply numbering/defaults.
-        person_id = getattr(payload, "person_id", None)
-        if person_id:
-            subscriber = db.get(Subscriber, str(person_id))
-            if not subscriber:
-                raise HTTPException(status_code=404, detail="Subscriber not found")
-            data = _normalize_subscriber_identity_fields(
-                payload.model_dump(exclude_unset=True, exclude={"person_id"})
-            )
-            category = data.pop("category", None)
-            data.pop("organization_id", None)
-            for key, value in data.items():
-                setattr(subscriber, key, value)
-            if category is not None:
-                subscriber.category = (
-                    category
-                    if isinstance(category, SubscriberCategory)
-                    else str(category)
-                )
-            if not subscriber.subscriber_number:
-                generated = numbering.generate_number(
-                    db,
-                    SettingDomain.subscriber,
-                    "subscriber_number",
-                    "subscriber_number_enabled",
-                    "subscriber_number_prefix",
-                    "subscriber_number_padding",
-                    "subscriber_number_start",
-                )
-                if generated:
-                    subscriber.subscriber_number = generated
-            if not subscriber.account_number:
-                derived_account = account_number_from_subscriber_number(
-                    db, subscriber.subscriber_number
-                )
-                if derived_account:
-                    subscriber.account_number = derived_account
-            _apply_billing_defaults(db, subscriber)
-            rebuild_identity_index_for_subscriber(db, subscriber.id)
-            db.commit()
-            db.refresh(subscriber)
-            return subscriber
-
+        if getattr(payload, "person_id", None):
+            raise ValueError("prepare_new_account cannot target an existing Subscriber")
         data = _normalize_subscriber_identity_fields(payload.model_dump())
+        data = _apply_validated_lga(data)
+        requested_status = data.pop("status", SubscriberStatus.active)
+        data.pop("is_active", None)
         category = data.pop("category", None)
         data.pop("organization_id", None)
         if data.get("user_type") is None:
@@ -479,11 +522,22 @@ class Subscribers(ListResponseMixin):
         _apply_billing_defaults(db, subscriber)
         db.add(subscriber)
         db.flush()
-        rebuild_identity_index_for_subscriber(db, subscriber.id)
-        db.commit()
-        db.refresh(subscriber)
+        from app.services.account_lifecycle import apply_requested_account_status
 
-        # Emit subscriber.created event
+        apply_requested_account_status(
+            db,
+            str(subscriber.id),
+            requested_status,
+            reason="Initial subscriber account state",
+            source="subscriber_service:create",
+        )
+        rebuild_identity_index_for_subscriber(db, subscriber.id)
+        return subscriber
+
+    @staticmethod
+    def commit_prepared_account(db: Session, subscriber: Subscriber) -> Subscriber:
+        """Stage ``subscriber.created`` and commit a prepared account atomically."""
+
         emit_event(
             db,
             EventType.subscriber_created,
@@ -493,8 +547,84 @@ class Subscribers(ListResponseMixin):
             },
             subscriber_id=subscriber.id,
         )
-
+        db.commit()
+        db.refresh(subscriber)
         return subscriber
+
+    @staticmethod
+    def create(db: Session, payload: SubscriberCreate):
+        from app.services.customer_identity_resolution import (
+            rebuild_identity_index_for_subscriber,
+        )
+
+        # Backwards-compat: some callers provide `person_id` to target an existing
+        # subscriber row and just apply numbering/defaults.
+        person_id = getattr(payload, "person_id", None)
+        if person_id:
+            subscriber = db.get(Subscriber, str(person_id))
+            if not subscriber:
+                raise HTTPException(status_code=404, detail="Subscriber not found")
+            data = _normalize_subscriber_identity_fields(
+                payload.model_dump(exclude_unset=True, exclude={"person_id"})
+            )
+            data = _apply_validated_lga(
+                data, current_region=subscriber.region, current_lga=subscriber.lga
+            )
+            requested_status = data.pop("status", None)
+            requested_is_active = data.pop("is_active", None)
+            category = data.pop("category", None)
+            data.pop("organization_id", None)
+            for key, value in data.items():
+                setattr(subscriber, key, value)
+            if category is not None:
+                subscriber.category = (
+                    category
+                    if isinstance(category, SubscriberCategory)
+                    else str(category)
+                )
+            if not subscriber.subscriber_number:
+                generated = numbering.generate_number(
+                    db,
+                    SettingDomain.subscriber,
+                    "subscriber_number",
+                    "subscriber_number_enabled",
+                    "subscriber_number_prefix",
+                    "subscriber_number_padding",
+                    "subscriber_number_start",
+                )
+                if generated:
+                    subscriber.subscriber_number = generated
+            if not subscriber.account_number:
+                derived_account = account_number_from_subscriber_number(
+                    db, subscriber.subscriber_number
+                )
+                if derived_account:
+                    subscriber.account_number = derived_account
+            _apply_billing_defaults(db, subscriber)
+            if requested_status is not None or requested_is_active is not None:
+                from app.services.account_lifecycle import (
+                    apply_requested_account_status,
+                )
+
+                apply_requested_account_status(
+                    db,
+                    str(subscriber.id),
+                    requested_status
+                    or (
+                        SubscriberStatus.active
+                        if requested_is_active
+                        else SubscriberStatus.suspended
+                    ),
+                    reason="Initial subscriber account state",
+                    source="subscriber_service:create_existing",
+                )
+            rebuild_identity_index_for_subscriber(db, subscriber.id)
+            db.commit()
+            db.refresh(subscriber)
+            return subscriber
+
+        subscriber = Subscribers.prepare_new_account(db, payload)
+        return Subscribers.commit_prepared_account(db, subscriber)
 
     @staticmethod
     def get(db: Session, subscriber_id: str):
@@ -510,22 +640,19 @@ class Subscribers(ListResponseMixin):
         return subscriber
 
     @staticmethod
-    def list(
+    def query(
         db: Session,
         person_id: str | None = None,
         business_account_id: str | None = None,
         subscriber_type: str | None = None,
-        order_by: str = "created_at",
-        order_dir: str = "desc",
-        limit: int = 50,
-        offset: int = 0,
         status: str | None = None,
         search: str | None = None,
         include_deleted: bool = False,
+        include_related: bool = True,
     ):
-        query = db.query(Subscriber).options(
-            selectinload(Subscriber.addresses),
-        )
+        query = db.query(Subscriber)
+        if include_related:
+            query = query.options(selectinload(Subscriber.addresses))
         query = query.filter(Subscriber.user_type != UserType.system_user)
         if not include_deleted:
             query = query.filter(not_(splynx_deleted_import_clause()))
@@ -710,6 +837,33 @@ class Subscribers(ListResponseMixin):
                 query = query.filter(_is_business_clause())
             else:
                 raise HTTPException(status_code=400, detail="Invalid subscriber_type")
+        return query
+
+    @classmethod
+    def list(
+        cls,
+        db: Session,
+        person_id: str | None = None,
+        business_account_id: str | None = None,
+        subscriber_type: str | None = None,
+        order_by: str = "created_at",
+        order_dir: str = "desc",
+        limit: int = 50,
+        offset: int = 0,
+        status: str | None = None,
+        search: str | None = None,
+        include_deleted: bool = False,
+    ):
+        query = cls.query(
+            db,
+            person_id=person_id,
+            business_account_id=business_account_id,
+            subscriber_type=subscriber_type,
+            status=status,
+            search=search,
+            include_deleted=include_deleted,
+            include_related=True,
+        )
         query = apply_ordering(
             query,
             order_by,
@@ -720,6 +874,40 @@ class Subscribers(ListResponseMixin):
             },
         )
         return apply_pagination(query, limit, offset).all()
+
+    @staticmethod
+    def list_for_sync(
+        db: Session,
+        *,
+        subscriber_type: str | None,
+        updated_since: datetime | None,
+        limit: int,
+        offset: int,
+    ) -> builtins.list[Subscriber]:
+        query = db.query(Subscriber).filter(
+            Subscriber.user_type != UserType.system_user,
+            not_(splynx_deleted_import_clause()),
+        )
+        if subscriber_type:
+            normalized = subscriber_type.strip().lower()
+            if normalized == "person":
+                query = query.filter(not_(_is_business_clause()))
+            elif normalized == "business":
+                query = query.filter(_is_business_clause())
+            else:
+                raise HTTPException(status_code=400, detail="Invalid subscriber_type")
+        return apply_sync_page(
+            query,
+            Subscriber,
+            updated_since=updated_since,
+            limit=limit,
+            offset=offset,
+        ).all()
+
+    @classmethod
+    def sync_list_response(cls, db: Session, **kwargs):
+        items = cls.list_for_sync(db, **kwargs)
+        return sync_page_response(items, limit=kwargs["limit"], offset=kwargs["offset"])
 
     @staticmethod
     def list_active_by_ids(
@@ -767,13 +955,58 @@ class Subscribers(ListResponseMixin):
         data = _normalize_subscriber_identity_fields(
             payload.model_dump(exclude_unset=True)
         )
+        data = _apply_validated_lga(
+            data, current_region=subscriber.region, current_lga=subscriber.lga
+        )
+        updated_fields = list(data.keys())
+        requested_status = data.pop("status", None)
+        requested_is_active = data.pop("is_active", None)
         category = data.pop("category", None)
         data.pop("organization_id", None)
+        requested_billing_mode = data.get("billing_mode")
+        if requested_billing_mode is not None:
+            from app.services.billing_profile import (
+                plan_billing_mode_transition,
+                resolve_billing_profile,
+            )
+
+            decision = plan_billing_mode_transition(
+                resolve_billing_profile(db, subscriber),
+                requested_billing_mode,
+            )
+            if not decision.allowed or decision.requires_subscription_alignment:
+                reason = (
+                    decision.reason or "collectible_subscriptions_require_alignment"
+                )
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Billing mode cannot be changed through a generic account "
+                        f"update: {reason}"
+                    ),
+                )
         for key, value in data.items():
             setattr(subscriber, key, value)
         if category is not None:
             subscriber.category = (
                 category if isinstance(category, SubscriberCategory) else str(category)
+            )
+        if requested_status is not None or requested_is_active is not None:
+            from app.services.account_lifecycle import apply_requested_account_status
+
+            target_status = requested_status
+            if target_status is None:
+                target_status = (
+                    SubscriberStatus.active
+                    if requested_is_active
+                    else SubscriberStatus.suspended
+                )
+            apply_requested_account_status(
+                db,
+                str(subscriber.id),
+                target_status,
+                reason="Subscriber account updated",
+                source="subscriber_service:update",
             )
         _update_restricted_status_metadata(
             subscriber,
@@ -791,7 +1024,7 @@ class Subscribers(ListResponseMixin):
             {
                 "subscriber_id": str(subscriber.id),
                 "subscriber_number": subscriber.subscriber_number,
-                "updated_fields": list(data.keys()),
+                "updated_fields": updated_fields,
             },
             subscriber_id=subscriber.id,
         )
@@ -1101,7 +1334,7 @@ class Subscribers(ListResponseMixin):
         subscriber_status_chart = {
             "labels": ["Active", "Suspended", "Canceled", "Inactive"],
             "values": [active_count, suspended_count, canceled_count, inactive_count],
-            "colors": ["#10b981", "#f59e0b", "#f43f5e", "#94a3b8"],
+            "tones": ["positive", "warning", "negative", "neutral"],
         }
 
         # Signup trend - last 12 months using SQL GROUP BY
@@ -1243,6 +1476,7 @@ class Addresses(ListResponseMixin):
         if payload.tax_rate_id:
             _validate_tax_rate(db, str(payload.tax_rate_id))
         data = payload.model_dump()
+        data = _apply_validated_lga(data)
         fields_set = payload.model_fields_set
         if "address_type" not in fields_set:
             default_type = settings_spec.resolve_value(
@@ -1298,6 +1532,9 @@ class Addresses(ListResponseMixin):
         if not address:
             raise HTTPException(status_code=404, detail="Address not found")
         data = payload.model_dump(exclude_unset=True)
+        data = _apply_validated_lga(
+            data, current_region=address.region, current_lga=address.lga
+        )
         if "subscriber_id" in data:
             subscriber = db.get(Subscriber, data["subscriber_id"])
             if not subscriber:

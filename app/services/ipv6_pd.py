@@ -111,6 +111,38 @@ def active_delegated_prefix_for_subscriber(db: Session, subscriber_id) -> str | 
     return f"{row[0]}/{row[1]}"
 
 
+def active_delegated_prefix_for_subscription(
+    db: Session,
+    subscription_id,
+    *,
+    subscriber_id=None,
+) -> str | None:
+    """Return the PD bound to one subscription, with safe legacy fallback."""
+    if subscription_id:
+        row = db.execute(
+            select(Ipv6DelegatedPrefix.prefix, Ipv6DelegatedPrefix.prefix_length)
+            .where(Ipv6DelegatedPrefix.subscription_id == subscription_id)
+            .where(Ipv6DelegatedPrefix.state == Ipv6PrefixState.assigned)
+            .order_by(Ipv6DelegatedPrefix.prefix)
+            .limit(1)
+        ).first()
+        if row:
+            return f"{row[0]}/{row[1]}"
+    if not subscriber_id:
+        return None
+    legacy = db.execute(
+        select(Ipv6DelegatedPrefix.prefix, Ipv6DelegatedPrefix.prefix_length)
+        .where(Ipv6DelegatedPrefix.subscriber_id == subscriber_id)
+        .where(Ipv6DelegatedPrefix.subscription_id.is_(None))
+        .where(Ipv6DelegatedPrefix.state == Ipv6PrefixState.assigned)
+        .order_by(Ipv6DelegatedPrefix.prefix)
+        .limit(2)
+    ).all()
+    if len(legacy) != 1:
+        return None
+    return f"{legacy[0][0]}/{legacy[0][1]}"
+
+
 def allocate_delegated_prefix(
     db: Session,
     *,
@@ -128,11 +160,17 @@ def allocate_delegated_prefix(
         return None
     length = pool_delegation_length(pool)
 
-    # Idempotent: the subscriber's existing assigned PD wins (IP stability).
+    # Idempotent per service. Legacy callers without a subscription retain the
+    # previous subscriber-level behavior.
+    owner_clause = (
+        Ipv6DelegatedPrefix.subscription_id == subscription_id
+        if subscription_id is not None
+        else Ipv6DelegatedPrefix.subscriber_id == subscriber_id
+    )
     existing = db.execute(
         select(Ipv6DelegatedPrefix)
         .where(Ipv6DelegatedPrefix.pool_id == pool.id)
-        .where(Ipv6DelegatedPrefix.subscriber_id == subscriber_id)
+        .where(owner_clause)
         .where(Ipv6DelegatedPrefix.state == Ipv6PrefixState.assigned)
         .limit(1)
     ).scalar_one_or_none()
@@ -207,6 +245,24 @@ def release_subscriber_prefixes(db: Session, subscriber_id) -> int:
         db.execute(
             select(Ipv6DelegatedPrefix)
             .where(Ipv6DelegatedPrefix.subscriber_id == subscriber_id)
+            .where(Ipv6DelegatedPrefix.state == Ipv6PrefixState.assigned)
+        )
+        .scalars()
+        .all()
+    )
+    for row in rows:
+        release_delegated_prefix(db, row)
+    return len(rows)
+
+
+def release_subscription_prefixes(db: Session, subscription_id) -> int:
+    """Release all delegated prefixes owned by one subscription."""
+    if not subscription_id:
+        return 0
+    rows = (
+        db.execute(
+            select(Ipv6DelegatedPrefix)
+            .where(Ipv6DelegatedPrefix.subscription_id == subscription_id)
             .where(Ipv6DelegatedPrefix.state == Ipv6PrefixState.assigned)
         )
         .scalars()

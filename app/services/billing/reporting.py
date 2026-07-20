@@ -26,10 +26,12 @@ from app.models.billing import (
     PaymentMethod,
     PaymentStatus,
 )
-from app.models.catalog import Subscription, SubscriptionStatus
+from app.models.catalog import Subscription
 from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber, SubscriberStatus
-from app.services import settings_spec
+from app.services import display_format, settings_spec
+from app.services.invoice_classification import collectible_ar_invoice_filter
+from app.services.subscription_lifecycle_policy import mrr_countable_service_filters
 
 logger = logging.getLogger(__name__)
 
@@ -128,7 +130,9 @@ def _subscriber_location_expr():
 
 
 def _ar_aging_bucket_days(db: Session) -> tuple[int, int, int]:
-    value = settings_spec.resolve_value(db, SettingDomain.billing, "ar_aging_bucket_days")
+    value = settings_spec.resolve_value(
+        db, SettingDomain.billing, "ar_aging_bucket_days"
+    )
     raw_parts = str(value or "").split(",")
     parsed: list[int] = []
     for raw_part in raw_parts:
@@ -141,7 +145,7 @@ def _ar_aging_bucket_days(db: Session) -> tuple[int, int, int]:
         parsed.append(day)
     if len(parsed) != 3 or parsed != sorted(set(parsed)):
         return DEFAULT_AR_AGING_BUCKET_DAYS
-    return tuple(parsed)
+    return (parsed[0], parsed[1], parsed[2])
 
 
 class BillingReporting:
@@ -164,7 +168,7 @@ class BillingReporting:
 
         Returns:
             Dictionary with keys:
-            - total_revenue: Sum of paid invoice totals
+            - total_revenue: Settled value of collectible invoices
             - pending_amount: Sum of pending/sent invoice totals
             - overdue_amount: Sum of overdue invoice totals
             - total_invoices: Total invoice count
@@ -173,20 +177,39 @@ class BillingReporting:
             - overdue_count: Number of overdue invoices
             - draft_count: Number of draft invoices
         """
+        customer_facing_statuses = (
+            InvoiceStatus.issued,
+            InvoiceStatus.partially_paid,
+            InvoiceStatus.overdue,
+            InvoiceStatus.paid,
+        )
+        settled_value = case(
+            (
+                and_(
+                    Invoice.status.in_(customer_facing_statuses),
+                    Invoice.total > Invoice.balance_due,
+                ),
+                Invoice.total - Invoice.balance_due,
+            ),
+            else_=Decimal("0"),
+        )
         stmt = select(
             func.coalesce(
-                func.sum(
-                    case(
-                        (Invoice.status == InvoiceStatus.paid, Invoice.total),
-                        else_=Decimal("0"),
-                    )
-                ),
+                func.sum(settled_value),
                 Decimal("0"),
             ).label("total_revenue"),
             func.coalesce(
                 func.sum(
                     case(
-                        (Invoice.status == InvoiceStatus.issued, Invoice.total),
+                        (
+                            Invoice.status.in_(
+                                (
+                                    InvoiceStatus.issued,
+                                    InvoiceStatus.partially_paid,
+                                )
+                            ),
+                            Invoice.balance_due,
+                        ),
                         else_=Decimal("0"),
                     )
                 ),
@@ -195,26 +218,59 @@ class BillingReporting:
             func.coalesce(
                 func.sum(
                     case(
-                        (Invoice.status == InvoiceStatus.overdue, Invoice.total),
+                        (Invoice.status == InvoiceStatus.overdue, Invoice.balance_due),
                         else_=Decimal("0"),
                     )
                 ),
                 Decimal("0"),
             ).label("overdue_amount"),
             func.count().label("total_invoices"),
-            func.count(case((Invoice.status == InvoiceStatus.paid, 1))).label(
-                "paid_count"
-            ),
-            func.count(case((Invoice.status == InvoiceStatus.issued, 1))).label(
-                "pending_count"
-            ),
-            func.count(case((Invoice.status == InvoiceStatus.overdue, 1))).label(
-                "overdue_count"
-            ),
+            func.count(
+                case(
+                    (
+                        and_(
+                            Invoice.status.in_(customer_facing_statuses),
+                            Invoice.balance_due <= Decimal("0"),
+                        ),
+                        1,
+                    )
+                )
+            ).label("paid_count"),
+            func.count(
+                case(
+                    (
+                        and_(
+                            Invoice.status.in_(
+                                (
+                                    InvoiceStatus.issued,
+                                    InvoiceStatus.partially_paid,
+                                )
+                            ),
+                            Invoice.balance_due > Decimal("0"),
+                        ),
+                        1,
+                    )
+                )
+            ).label("pending_count"),
+            func.count(
+                case(
+                    (
+                        and_(
+                            Invoice.status == InvoiceStatus.overdue,
+                            Invoice.balance_due > Decimal("0"),
+                        ),
+                        1,
+                    )
+                )
+            ).label("overdue_count"),
             func.count(case((Invoice.status == InvoiceStatus.draft, 1))).label(
                 "draft_count"
             ),
-        ).where(Invoice.is_active.is_(True))  # exclude soft-deleted invoices
+        ).where(
+            Invoice.is_active.is_(True),
+            Invoice.is_proforma.is_(False),
+            collectible_ar_invoice_filter(),
+        )
         if partner_id or location:
             stmt = stmt.join(Subscriber, Invoice.account_id == Subscriber.id)
             if partner_id:
@@ -249,14 +305,11 @@ class BillingReporting:
 
         Returns:
             Dictionary with keys:
-            - total_balance: Sum of all account min_balance values
+            - total_balance: Collectible AR in the configured display currency
             - active_count: Number of active accounts
             - suspended_count: Number of suspended accounts
         """
-        stmt = select(
-            func.coalesce(func.sum(Subscriber.min_balance), Decimal("0")).label(
-                "total_balance"
-            ),
+        account_stmt = select(
             func.count(case((Subscriber.status == SubscriberStatus.active, 1))).label(
                 "active_count"
             ),
@@ -264,16 +317,45 @@ class BillingReporting:
                 case((Subscriber.status == SubscriberStatus.suspended, 1))
             ).label("suspended_count"),
         )
+        default_currency = display_format.default_currency(db)
+        balance_stmt = select(
+            func.coalesce(func.sum(Invoice.balance_due), Decimal("0")).label(
+                "total_balance"
+            )
+        ).where(
+            Invoice.is_active.is_(True),
+            Invoice.is_proforma.is_(False),
+            Invoice.status.in_(
+                (
+                    InvoiceStatus.issued,
+                    InvoiceStatus.partially_paid,
+                    InvoiceStatus.overdue,
+                )
+            ),
+            Invoice.balance_due > Decimal("0"),
+            Invoice.currency == default_currency,
+            collectible_ar_invoice_filter(),
+        )
+        if partner_id or location:
+            balance_stmt = balance_stmt.join(
+                Subscriber, Invoice.account_id == Subscriber.id
+            )
         if partner_id:
-            stmt = stmt.where(cast(Subscriber.reseller_id, String) == partner_id)
+            partner_filter = cast(Subscriber.reseller_id, String) == partner_id
+            account_stmt = account_stmt.where(partner_filter)
+            balance_stmt = balance_stmt.where(partner_filter)
         if location:
-            stmt = stmt.where(_subscriber_location_expr() == location.lower())
-        row = db.execute(stmt).one()
+            location_filter = _subscriber_location_expr() == location.lower()
+            account_stmt = account_stmt.where(location_filter)
+            balance_stmt = balance_stmt.where(location_filter)
+        account_row = db.execute(account_stmt).one()
+        balance_row = db.execute(balance_stmt).one()
 
         return {
-            "total_balance": float(row.total_balance),
-            "active_count": row.active_count,
-            "suspended_count": row.suspended_count,
+            "total_balance": float(balance_row.total_balance),
+            "total_balance_currency": default_currency,
+            "active_count": account_row.active_count,
+            "suspended_count": account_row.suspended_count,
         }
 
     @staticmethod
@@ -298,7 +380,10 @@ class BillingReporting:
         stmt = (
             select(Invoice)
             .where(Invoice.is_active.is_(True))  # exclude soft-deleted invoices
+            .where(Invoice.is_proforma.is_(False))
             .where(Invoice.status.in_(unpaid_statuses))
+            .where(Invoice.balance_due > Decimal("0"))
+            .where(collectible_ar_invoice_filter())
             .order_by(Invoice.due_at.asc())
         )
         invoices = db.scalars(stmt).all()
@@ -460,7 +545,13 @@ class BillingReporting:
         unpaid_stmt = select(
             func.count().label("count"),
             func.coalesce(func.sum(Invoice.balance_due), Decimal("0")).label("total"),
-        ).where(Invoice.status.in_(unpaid_statuses))
+        ).where(
+            Invoice.is_active.is_(True),
+            Invoice.is_proforma.is_(False),
+            Invoice.status.in_(unpaid_statuses),
+            Invoice.balance_due > Decimal("0"),
+            collectible_ar_invoice_filter(),
+        )
         if period_start is not None:
             unpaid_stmt = unpaid_stmt.where(Invoice.created_at >= period_start)
         if period_end is not None:
@@ -943,7 +1034,7 @@ class BillingReporting:
                     "active_count"
                 ),
             ).where(
-                Subscription.status == SubscriptionStatus.active,
+                *mrr_countable_service_filters(Subscription),
                 Subscription.next_billing_at >= m_start,
                 Subscription.next_billing_at < m_end,
             )
@@ -979,7 +1070,7 @@ class BillingReporting:
         planned_stmt = select(
             func.coalesce(func.sum(Subscription.unit_price), Decimal("0")),
         ).where(
-            Subscription.status == SubscriptionStatus.active,
+            *mrr_countable_service_filters(Subscription),
             Subscription.next_billing_at >= next_m_start,
             Subscription.next_billing_at < next_m_end,
         )
@@ -1139,3 +1230,330 @@ class BillingReporting:
 
 
 billing_reporting = BillingReporting()
+
+
+# ---------------------------------------------------------------------------
+# Admin report read owners
+#
+# The admin /reports pages render these figures; the web layer composes them
+# and owns presentation only. Payments-basis revenue is deliberately distinct
+# from the invoice settled-value basis used by get_overview_stats — both are
+# owned here so the definitions live in one place.
+# ---------------------------------------------------------------------------
+
+
+def _report_month_starts(months: int = 6) -> list[datetime]:
+    now = datetime.now(UTC)
+    first_this_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    starts: list[datetime] = []
+    year = first_this_month.year
+    month = first_this_month.month - months + 1
+    while month <= 0:
+        month += 12
+        year -= 1
+    for _ in range(months):
+        starts.append(datetime(year, month, 1, tzinfo=UTC))
+        month += 1
+        if month > 12:
+            month = 1
+            year += 1
+    return starts
+
+
+def get_payments_revenue_summary(db: Session, *, months: int = 6) -> dict:
+    """Collections (payments received): lifetime, current/previous month, series.
+
+    Finance decision (Michael, 2026-07-16): figures labelled "Revenue" use the
+    invoice settled-value basis (get_overview_stats); this payments basis is
+    COLLECTIONS — cash received, including unallocated prepaid float — and must
+    be labelled as such on every surface.
+    """
+    now = datetime.now(UTC)
+    current_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    previous_start = (
+        current_start.replace(year=current_start.year - 1, month=12)
+        if current_start.month == 1
+        else current_start.replace(month=current_start.month - 1)
+    )
+
+    def _paid_between(start: datetime | None, end: datetime | None) -> Decimal:
+        stmt = select(func.coalesce(func.sum(Payment.amount), 0)).where(
+            Payment.is_active.is_(True),
+            Payment.status == PaymentStatus.succeeded,
+        )
+        if start is not None:
+            stmt = stmt.where(Payment.paid_at >= start)
+        if end is not None:
+            stmt = stmt.where(Payment.paid_at < end)
+        return db.scalar(stmt) or Decimal("0")
+
+    starts = _report_month_starts(months)
+    labels: list[str] = []
+    series: list[float] = []
+    for idx, start in enumerate(starts):
+        end = starts[idx + 1] if idx + 1 < len(starts) else now
+        labels.append(start.strftime("%b"))
+        series.append(float(_paid_between(start, end)))
+
+    return {
+        "total": _paid_between(None, None),
+        "current_month": _paid_between(current_start, now),
+        "previous_month": _paid_between(previous_start, current_start),
+        "monthly": {"labels": labels, "revenue": series, "collected": list(series)},
+    }
+
+
+def get_outstanding_receivables(db: Session) -> dict:
+    """Open receivables: balance due and invoice count for collectible statuses."""
+    row = db.execute(
+        select(
+            func.coalesce(func.sum(Invoice.balance_due), 0).label("amount"),
+            func.count(Invoice.id).label("count"),
+        ).where(
+            Invoice.is_active.is_(True),
+            Invoice.status.in_(
+                (
+                    InvoiceStatus.issued,
+                    InvoiceStatus.partially_paid,
+                    InvoiceStatus.overdue,
+                )
+            ),
+            Invoice.balance_due > 0,
+        )
+    ).one()
+    return {
+        "amount": row.amount or Decimal("0"),
+        "count": int(row._mapping["count"] or 0),
+    }
+
+
+def get_total_invoiced(db: Session) -> Decimal:
+    """Lifetime invoiced value across non-void active invoices."""
+    return db.scalar(
+        select(func.coalesce(func.sum(Invoice.total), 0)).where(
+            Invoice.is_active.is_(True),
+            Invoice.status != InvoiceStatus.void,
+        )
+    ) or Decimal("0")
+
+
+def get_recurring_revenue(db: Session) -> Decimal:
+    """Recurring revenue on the canonical MRR-countable basis.
+
+    Finance decision (Michael, 2026-07-16): MRR counts only currently-earning
+    subscriptions (mrr_countable_service_filters — the same basis as the MRR
+    trend and snapshots). The former unit_price(active+suspended) basis
+    overstated MRR by suspended, non-earning subscriptions and is retired.
+    """
+    return db.scalar(
+        select(func.coalesce(func.sum(Subscription.unit_price), 0)).where(
+            *mrr_countable_service_filters(Subscription)
+        )
+    ) or Decimal("0")
+
+
+def get_revenue_by_offer(
+    db: Session,
+    *,
+    issued_from: datetime | None = None,
+    issued_before: datetime | None = None,
+) -> list[dict]:
+    """Invoice-line revenue and distinct invoice count per catalog offer."""
+    from app.models.billing import InvoiceLine
+    from app.models.catalog import CatalogOffer
+
+    stmt = (
+        select(
+            CatalogOffer.name,
+            func.count(func.distinct(Invoice.id)).label("invoice_count"),
+            func.coalesce(func.sum(InvoiceLine.amount), 0).label("total_revenue"),
+        )
+        .select_from(CatalogOffer)
+        .join(Subscription, Subscription.offer_id == CatalogOffer.id, isouter=True)
+        .join(InvoiceLine, InvoiceLine.subscription_id == Subscription.id, isouter=True)
+        .join(Invoice, Invoice.id == InvoiceLine.invoice_id, isouter=True)
+        .group_by(CatalogOffer.id, CatalogOffer.name)
+        .order_by(func.coalesce(func.sum(InvoiceLine.amount), 0).desc())
+    )
+    if issued_from:
+        stmt = stmt.where(Invoice.issued_at >= issued_from)
+    if issued_before:
+        stmt = stmt.where(Invoice.issued_at < issued_before)
+    return [
+        {"name": r[0], "invoice_count": r[1], "revenue": r[2]}
+        for r in db.execute(stmt).all()
+    ]
+
+
+def get_revenue_by_service_type(db: Session) -> list[dict]:
+    """Invoice-line revenue and distinct invoice count per offer service type."""
+    from app.models.billing import InvoiceLine
+    from app.models.catalog import CatalogOffer
+
+    stmt = (
+        select(
+            CatalogOffer.service_type,
+            func.count(func.distinct(Invoice.id)).label("invoice_count"),
+            func.coalesce(func.sum(InvoiceLine.amount), 0).label("total"),
+        )
+        .select_from(InvoiceLine)
+        .join(Invoice, Invoice.id == InvoiceLine.invoice_id)
+        .join(
+            Subscription, Subscription.id == InvoiceLine.subscription_id, isouter=True
+        )
+        .join(CatalogOffer, CatalogOffer.id == Subscription.offer_id, isouter=True)
+        .where(Invoice.is_active.is_(True))
+        .group_by(CatalogOffer.service_type)
+        .order_by(func.coalesce(func.sum(InvoiceLine.amount), 0).desc())
+    )
+    return [
+        {"service_type": r[0], "invoice_count": r[1], "total": r[2]}
+        for r in db.execute(stmt).all()
+    ]
+
+
+def get_customer_statement_totals(db: Session, *, limit: int = 200) -> list[dict]:
+    """Per-subscriber document count and lifetime invoiced total."""
+    full_name = (Subscriber.first_name + " " + Subscriber.last_name).label("full_name")
+    stmt = (
+        select(
+            full_name,
+            func.count(Invoice.id).label("doc_count"),
+            func.coalesce(func.sum(Invoice.total), 0).label("total"),
+        )
+        .join(Invoice, Invoice.account_id == Subscriber.id, isouter=True)
+        .group_by(Subscriber.id, full_name)
+        .order_by(full_name)
+        .limit(limit)
+    )
+    return [
+        {"name": r[0], "doc_count": r[1], "total": r[2]} for r in db.execute(stmt).all()
+    ]
+
+
+def get_active_subscription_count(db: Session) -> int:
+    """Count of active/suspended subscriptions (the MRR-countable population)."""
+    from app.models.catalog import SubscriptionStatus
+
+    return int(
+        db.scalar(
+            select(func.count(Subscription.id)).where(
+                Subscription.status.in_(
+                    [SubscriptionStatus.active, SubscriptionStatus.suspended]
+                )
+            )
+        )
+        or 0
+    )
+
+
+def get_subscription_movement(db: Session, *, year: int | None = None) -> list[dict]:
+    """Per-month subscription movement counts for one calendar year.
+
+    Each row carries ``month`` (``YYYY-MM``), ``start_count`` (active,
+    suspended, or pending subscriptions created before the month),
+    ``new`` (created in the month), ``cancellations`` (canceled with an
+    update in the month), ``end_count``, and ``net_change``. Future months
+    are returned as zero rows. Status sets moved verbatim from the admin
+    MRR report; the web layer windows and presents the rows.
+    """
+    from app.models.catalog import SubscriptionStatus
+
+    if not year:
+        year = datetime.now(UTC).year
+
+    months: list[dict] = []
+    now = datetime.now(UTC)
+
+    for m in range(1, 13):
+        month_start = datetime(year, m, 1, tzinfo=UTC)
+        if m < 12:
+            month_end = datetime(year, m + 1, 1, tzinfo=UTC)
+        else:
+            month_end = datetime(year + 1, 1, 1, tzinfo=UTC)
+
+        # Skip future months
+        if month_start > now:
+            months.append(
+                {
+                    "month": f"{year}-{m:02d}",
+                    "start_count": 0,
+                    "new": 0,
+                    "cancellations": 0,
+                    "end_count": 0,
+                    "net_change": 0,
+                }
+            )
+            continue
+
+        # Active at start of month (created before month_start and not canceled before)
+        start_count = (
+            db.scalar(
+                select(func.count(Subscription.id)).where(
+                    Subscription.created_at < month_start,
+                    Subscription.status.in_(
+                        [
+                            SubscriptionStatus.active,
+                            SubscriptionStatus.suspended,
+                            SubscriptionStatus.pending,
+                        ]
+                    ),
+                )
+            )
+            or 0
+        )
+
+        # New subscriptions created this month
+        new_count = (
+            db.scalar(
+                select(func.count(Subscription.id)).where(
+                    Subscription.created_at >= month_start,
+                    Subscription.created_at < month_end,
+                )
+            )
+            or 0
+        )
+
+        # Cancellations this month
+        cancel_count = (
+            db.scalar(
+                select(func.count(Subscription.id)).where(
+                    Subscription.status == SubscriptionStatus.canceled,
+                    Subscription.updated_at >= month_start,
+                    Subscription.updated_at < month_end,
+                )
+            )
+            or 0
+        )
+
+        end_count = start_count + new_count - cancel_count
+
+        months.append(
+            {
+                "month": f"{year}-{m:02d}",
+                "start_count": start_count,
+                "new": new_count,
+                "cancellations": cancel_count,
+                "end_count": max(0, end_count),
+                "net_change": new_count - cancel_count,
+            }
+        )
+
+    return months
+
+
+def get_subscription_count_by_offer(db: Session) -> list[dict]:
+    """Subscription count per catalog offer (all statuses), largest first."""
+    from app.models.catalog import CatalogOffer
+
+    stmt = (
+        select(
+            CatalogOffer.name,
+            func.count(Subscription.id).label("sub_count"),
+        )
+        .join(Subscription, Subscription.offer_id == CatalogOffer.id, isouter=True)
+        .group_by(CatalogOffer.id, CatalogOffer.name)
+        .order_by(func.count(Subscription.id).desc())
+    )
+    rows = db.execute(stmt).all()
+    return [{"name": r[0], "count": r[1]} for r in rows]

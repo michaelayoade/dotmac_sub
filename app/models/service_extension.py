@@ -85,6 +85,12 @@ class ServiceExtensionEntry(Base):
     __table_args__ = (
         Index("ix_service_extension_entries_extension", "extension_id"),
         Index("ix_service_extension_entries_subscription", "subscription_id"),
+        # Dunning-shield lookup path (bulk_extension_shield_reasons).
+        Index(
+            "ix_service_extension_entries_subscriber_created",
+            "subscriber_id",
+            "created_at",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

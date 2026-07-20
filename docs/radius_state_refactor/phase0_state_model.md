@@ -1,8 +1,8 @@
 # Phase 0 — RADIUS Access-State Model
 
-**Status**: draft (phase 0 of the multi-phase refactor)
-**Owner**: TBD
-**Last updated**: 2026-05-26
+**Status**: implemented foundation; cutover gates remain
+**Owner**: `access.walled_garden_policy` / `access.radius_state`
+**Last updated**: 2026-07-15
 **Supersedes**: nothing yet; collapses behaviors currently spread across
 `app/services/radius.py`, `app/services/radius_reject.py`,
 `app/services/enforcement.py`, and
@@ -23,10 +23,16 @@ This is workable but accreted. Blocking touches all four state stores; restoring
 
 ## 2. Target
 
-One source of truth:
+One decision path and one projection:
 
 ```
-subscription.access_state ∈ {active, suspended, captive, terminated}
+subscription.status + active EnforcementLock.access_mode
+            │
+            ▼
+   walled_garden_policy (hard reject default; validates captive exception)
+            │
+            ▼
+subscription.access_state ∈ {active, suspended, captive, terminated} (projection)
             │
             ▼
    radusergroup (one row per user: maps user → group)
@@ -53,8 +59,8 @@ def set_subscription_access_state(db, sub_id, state: AccessState):
 | state | meaning | radusergroup | live session action |
 |---|---|---|---|
 | `active` | normal paying customer | `dotmac-active` | none (no change needed) |
-| `suspended` | hard block (abuse/fraud only — NOT default dunning) | `dotmac-suspended` | CoA-Disconnect → SSH `/ppp active remove` fallback |
-| `captive` | soft block (DEFAULT for payment suspension); can reach portal only | `dotmac-captive` | CoA-Disconnect → re-auth picks up walled-garden attrs |
+| `suspended` | hard reject; default for every restriction | `dotmac-suspended` | CoA-Disconnect → SSH `/ppp active remove` fallback |
+| `captive` | exceptional soft block for eligible explicit residential opt-ins; portal only | `dotmac-captive` | CoA-Disconnect → re-auth picks up walled-garden attrs |
 | `terminated` | cancelled or expired; full removal | (no row) | CoA-Disconnect; user-not-found on re-auth |
 
 Status enum in app code:
@@ -72,15 +78,15 @@ Mapping from existing `SubscriptionStatus`:
 | SubscriptionStatus | AccessState |
 |---|---|
 | `active` | `active` |
-| `suspended`, `blocked`, `stopped` | `captive` by default (decided 2026-06-11; `suspended` only via the explicit `hard_reject` abuse tier) |
+| `suspended`, `blocked`, `stopped` | `suspended` by default; `captive` only from a persisted captive lock revalidated by `walled_garden_policy` |
 | `canceled`, `expired`, `disabled` | `terminated` |
 | `pending`, `hidden`, `archived` | (no radusergroup row; treat as not-yet-provisioned) |
 
-> **2026-06-11 decision** — payment suspension defaults to `captive`: suspended-for-nonpayment
-> customers are the most recoverable revenue and the portal pay-page is the self-cure path.
-> Hard reject means "internet is broken" → support call; it also buys nothing on live-session
-> disconnect (Auth-Type Reject only stops re-auth — the audit proved sessions survive it), so it
-> doesn't win on simplicity either. `dotmac-suspended` stays for abuse/fraud.
+> **2026-07-15 superseding decision** — hard reject is the default. Captive is
+> never inferred from status or a raw flag. It requires persisted captive intent,
+> explicit opt-in, direct-house ownership, explicit residential classification,
+> and a valid enabled portal IP/URL contract. Enterprise/business, reseller,
+> system, uncategorized, and otherwise ineligible accounts always hard reject.
 
 ## 4. Group definitions
 
@@ -216,13 +222,15 @@ def set_subscription_access_state(
 def derive_access_state(
     subscription_status: SubscriptionStatus,
     *,
-    captive_redirect_enabled: bool,
+    restriction_mode: AccessRestrictionMode | None,
 ) -> AccessState:
-    """Pure function; subscription.status → AccessState."""
+    """Pure function; status + owner-resolved restriction → AccessState."""
     ...
 ```
 
-The event handlers stop orchestrating multi-step block sequences and just call `set_subscription_access_state(db, sub_id, derive_access_state(sub.status, captive_redirect_enabled=...))`.
+Event handlers stop orchestrating multi-step block sequences. They resolve the
+persisted restriction through `walled_garden_policy`, derive access state once,
+and request the idempotent projection.
 
 ## 11. Rollback story per phase
 
@@ -235,7 +243,11 @@ Documented in each phase doc. Common pattern:
 
 ## 12. Decisions (formerly open questions)
 
-- **Q1** — `captive` is **derived**, not a `SubscriptionStatus` value. Computed from `subscriber.captive_redirect_enabled + status=suspended`. Keeps `SubscriptionStatus` enum stable and legacy BSS-aligned. Decided 2026-05-26.
+- **Q1** — `captive` is **derived**, not a `SubscriptionStatus` value. The
+  derivation consumes persisted `EnforcementLock.access_mode` after the
+  eligibility/readiness policy revalidates it; a raw subscriber flag is never
+  sufficient. This keeps `SubscriptionStatus` stable and legacy-BSS aligned.
+  Superseded 2026-07-15.
 - **Q2** — Access state is **shared across all credentials** of a subscription. State lives on the subscription, not the credential. Multi-credential subscribers (rare) get one state that applies to all their usernames. Decided 2026-05-26.
 - **Q3** — The existing 5 reject pools **stay running** through phase 8 as belt-and-suspenders. Standing rules at each NAS are cheap to leave in place. Decommissioned in phase 9 only if/when we commit to the IP-pool migration. Decided 2026-05-26.
 - **Q4** — NAS-side pool provisioning is **manual** (per-NAS by the operator), not scripted. Phase 1 doc supplies the exact RouterOS commands as a runbook. Decided 2026-05-26.

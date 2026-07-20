@@ -78,6 +78,33 @@ def test_adapter_result_base_supports_domain_results() -> None:
     assert failure.error_code == "RuntimeError"
 
 
+def test_olt_result_projects_sanitized_huawei_response_evidence() -> None:
+    from app.services.network.olt_protocol_adapters import OltOperationResult
+
+    result = OltOperationResult(
+        success=False,
+        message="% Unknown command secret-value",
+    )
+
+    assert result.error_code == "unknown_command"
+    assert result.data["huawei_cli_response"]["response_code"] == "unknown_command"
+    assert result.data["huawei_cli_response"]["unsupported"] is True
+    assert "secret-value" not in repr(result.data)
+
+
+def test_olt_result_preserves_explicit_transport_error_code() -> None:
+    from app.services.network.olt_protocol_adapters import OltOperationResult
+
+    result = OltOperationResult(
+        success=False,
+        message="% Unknown command",
+        error_code="TimeoutError",
+    )
+
+    assert result.error_code == "TimeoutError"
+    assert result.data["huawei_cli_response"]["response_code"] == "unknown_command"
+
+
 def test_ssh_iphost_timeout_uses_shared_error_result(monkeypatch) -> None:
     from app.services.network.olt_protocol_adapters import OltProtocolAdapter
 
@@ -172,7 +199,6 @@ def test_global_adapter_registry_contains_core_singletons() -> None:
         queue_adapter,
         queue_strategy_adapter,
         rate_limiter_adapter,
-        service_intent_adapter,
         service_intent_ui_adapter,
     )
     from app.services.adapters import adapter_registry
@@ -191,8 +217,7 @@ def test_global_adapter_registry_contains_core_singletons() -> None:
         "payment_gateway": payment_gateway_adapter.payment_gateway_adapter,
         "queue.celery": queue_adapter.queue_adapter,
         "queue.strategy": queue_strategy_adapter.queue_strategy,
-        "rate_limiter.memory": rate_limiter_adapter.rate_limiter_adapter,
-        "service_intent": service_intent_adapter.service_intent_adapter,
+        "rate_limiter.redis": rate_limiter_adapter.rate_limiter_adapter,
         "service_intent.ui": service_intent_ui_adapter.service_intent_ui_adapter,
     }
 
@@ -217,6 +242,21 @@ def test_operation_result_converts_to_shared_adapter_result() -> None:
     assert shared.data["operation_id"] == "op-1"
     assert round_trip.status == ResultStatus.queued
     assert round_trip.message == "queued"
+
+
+def test_operation_result_preserves_adapter_error_code() -> None:
+    from app.services.adapters.base import AdapterResult
+    from app.services.network.result_adapter import OperationResult
+
+    result = OperationResult.from_adapter_result(
+        AdapterResult(
+            success=False,
+            message="rejected",
+            error_code="unknown_command",
+        )
+    )
+
+    assert result.data == {"error_code": "unknown_command"}
 
 
 def test_rate_limiter_adapter_blocks_after_limit_until_window_resets() -> None:
@@ -342,7 +382,7 @@ def test_billing_adapter_uses_default_currency_when_intent_omits_currency(
     fake_billing = SimpleNamespace(invoices=FakeInvoices(), payments=FakePayments())
     adapter = BillingAdapter(billing_service=fake_billing)
     monkeypatch.setattr(
-        "app.services.billing_adapter.settings_spec.resolve_value",
+        "app.services.settings_spec.resolve_value",
         lambda *_args, **_kwargs: "USD",
     )
 
@@ -384,3 +424,54 @@ def test_external_bss_adapter_builds_reference_payload() -> None:
     assert payload.entity_id == entity_id
     assert payload.external_id == "splynx-123"
     assert payload.metadata_ == {"source": "splynx"}
+
+
+def test_redis_rate_limiter_falls_back_to_in_memory_when_redis_down(monkeypatch):
+    from app.services import rate_limiter_adapter as rl
+
+    # Redis unavailable → per-worker in-memory limiter still throttles.
+    monkeypatch.setattr(rl, "InMemoryRateLimiterAdapter", rl.InMemoryRateLimiterAdapter)
+    import app.services.redis_client as redis_client
+
+    monkeypatch.setattr(redis_client, "get_redis", lambda *a, **k: None)
+
+    adapter = rl.RedisRateLimiterAdapter(rl.InMemoryRateLimiterAdapter())
+    rule = rl.RateLimitRule(key="test:fallback", limit=2, window_seconds=900)
+    assert adapter.check(rule).allowed is True
+    assert adapter.check(rule).allowed is True
+    denied = adapter.check(rule)
+    assert denied.allowed is False
+    assert denied.retry_after_seconds and denied.retry_after_seconds > 0
+
+
+def test_redis_rate_limiter_uses_shared_counter(monkeypatch):
+    from app.services import rate_limiter_adapter as rl
+
+    class _FakeRedis:
+        def __init__(self):
+            self.store = {}
+            self.expires = {}
+
+        def incr(self, key):
+            self.store[key] = self.store.get(key, 0) + 1
+            return self.store[key]
+
+        def expire(self, key, seconds):
+            self.expires[key] = seconds
+            return True
+
+    fake = _FakeRedis()
+    import app.services.redis_client as redis_client
+
+    monkeypatch.setattr(redis_client, "get_redis", lambda *a, **k: fake)
+
+    adapter = rl.RedisRateLimiterAdapter(rl.InMemoryRateLimiterAdapter())
+    rule = rl.RateLimitRule(key="test:shared", limit=3, window_seconds=900)
+    # A second adapter instance (simulating another worker) shares the counter.
+    other = rl.RedisRateLimiterAdapter(rl.InMemoryRateLimiterAdapter())
+    assert adapter.check(rule).allowed is True
+    assert other.check(rule).allowed is True
+    assert adapter.check(rule).allowed is True
+    assert other.check(rule).allowed is False  # 4th hit across "workers"
+    # EXPIRE set exactly once, on the first hit.
+    assert len(fake.expires) == 1

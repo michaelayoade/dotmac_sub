@@ -19,7 +19,6 @@ from fastapi import (
     Depends,
     File,
     Form,
-    Header,
     HTTPException,
     Query,
     Request,
@@ -47,6 +46,7 @@ from app.schemas.billing import (
     TopupVerifyRequest,
     TopupVerifyResponse,
 )
+from app.schemas.branding import ResolvedBrandRead
 from app.schemas.catalog import (
     AddonPurchaseRequest,
     AddonPurchaseResponse,
@@ -66,7 +66,9 @@ from app.schemas.gis import (
     MyLocationRequestRead,
 )
 from app.schemas.notification import (
-    NotificationRead,
+    CustomerInboxNotificationRead,
+    CustomerNotificationReadRequest,
+    CustomerNotificationReadResponse,
     PushTokenRead,
     PushTokenRegister,
 )
@@ -84,6 +86,9 @@ from app.schemas.portal import (
     QuoteRequestCreate,
     ReferAFriendRequest,
     ReferAFriendResponse,
+    TechnicianLocation,
+    TechnicianRatingRequest,
+    TechnicianRatingResponse,
 )
 from app.schemas.service_status import ServiceStatusResponse
 from app.schemas.subscriber import (
@@ -102,27 +107,13 @@ from app.schemas.support import (
     TicketCommentRead,
     TicketCreate,
     TicketRead,
+    TicketSatisfactionRequest,
 )
 from app.schemas.usage import (
     DailyUsageHistoryResponse,
     QuotaBucketRead,
     RadiusAccountingSessionRead,
     UsageSummaryResponse,
-)
-from app.schemas.vas import (
-    VasAutoDeductUpdate,
-    VasCategoryRead,
-    VasPayBillRequest,
-    VasPayBillResponse,
-    VasPurchaseRequest,
-    VasTopupInitiateRequest,
-    VasTopupInitiateResponse,
-    VasTopupVerifyRequest,
-    VasTopupVerifyResponse,
-    VasTransactionRead,
-    VasVerifyRequest,
-    VasVerifyResponse,
-    VasWalletOverviewResponse,
 )
 from app.services import account_deletion as account_deletion_service
 from app.services import autopay as autopay_service
@@ -135,30 +126,33 @@ from app.services import customer_portal_flow_addons as customer_addons
 from app.services import customer_portal_flow_changes as customer_changes
 from app.services import customer_portal_flow_payment_methods as customer_cards
 from app.services import customer_portal_flow_payments as customer_payments
+from app.services import customer_portal_notifications as customer_notifications_service
 from app.services import geocoding as geocoding_service
 from app.services import notification as notification_service
 from app.services import portal_session as portal_session_service
+from app.services import projects as projects_service
 from app.services import (
     projects_mirror,
     quote_deposits,
     quotes_mirror,
-    referrals_mirror,
     web_support_tickets,
     work_orders_mirror,
 )
 from app.services import push as push_service
+from app.services import referrals as referrals_service
+from app.services import status_presentation as status_presentation_service
 from app.services import support as support_service
 from app.services import usage as usage_service
 from app.services import usage_summary as usage_summary_service
-from app.services import vas_purchases as vas_purchases_service
-from app.services import vas_wallet as vas_wallet_service
 from app.services.auth_dependencies import require_user_auth
 from app.services.bandwidth import (
     add_directions_to_series,
     bandwidth_samples,
     with_subscriber_directions,
 )
-from app.services.topology import selfcare as topology_selfcare
+from app.services.customer_context import require_customer_account_id
+from app.services.sales import selfserve as selfserve_service
+from app.services.topology import connection_status as connection_status_service
 
 router = APIRouter(prefix="/me", tags=["me"])
 logger = logging.getLogger(__name__)
@@ -190,6 +184,16 @@ def _customer(db: Session, principal: dict) -> dict:
         "subscriber_id": sid,
         "username": getattr(subscriber, "email", "") or "",
     }
+
+
+@router.get("/branding", response_model=ResolvedBrandRead)
+def my_branding(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    from app.services.brand_profiles import resolve_brand
+
+    return resolve_brand(db, subscriber_id=_subscriber_id(principal))
 
 
 @router.get("/invoices", response_model=ListResponse[InvoiceRead])
@@ -319,13 +323,11 @@ def my_balance(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """The caller's wallet/credit balance (positive = credit on file)."""
-    from app.services.billing._common import get_account_credit_balance
+    """The caller's available customer balance (positive = credit on file)."""
+    from app.services.collections import get_available_balance
 
     account_id = _subscriber_id(principal)
-    return AccountBalanceResponse(
-        credit_balance=get_account_credit_balance(db, account_id)
-    )
+    return AccountBalanceResponse(credit_balance=get_available_balance(db, account_id))
 
 
 @router.get("/ledger", response_model=ListResponse[LedgerEntryRead])
@@ -374,6 +376,10 @@ def my_service_status(
     overdue invoices. `next_charge_at` is the next charge/invoice date, never an
     expiry — clients should read this endpoint (and `status`) rather than infer
     expiry from `next_billing_at`.
+
+    `primary_action` and per-service `action` are the customer-action contract:
+    clients must not treat a blocked/suspended status as proof that payment will
+    restore service or derive a restoration amount from their invoice cache.
     """
     from app.services.service_status import build_service_status
 
@@ -431,7 +437,11 @@ def my_plan_change_options(
             ctx.get("current_offer"), ctx.get("current_offer_summary")
         ),
         available_offers=[o for o in available if o is not None],
-        wallet_balance=ctx.get("current_wallet_balance"),
+        prepaid_funding=ctx.get("prepaid_funding"),
+        postpaid_receivables=ctx.get("postpaid_receivables", Decimal("0.00")),
+        collection_blocking_balance=ctx.get(
+            "collection_blocking_balance", Decimal("0.00")
+        ),
         next_billing_date=ctx.get("next_billing_date"),
         billing_message=ctx.get("billing_message"),
     )
@@ -453,23 +463,46 @@ def my_plan_change_quote(
     return quote
 
 
-@router.get("/subscriptions/{subscription_id}/connection")
-def my_connection_status(
-    subscription_id: str,
+# Calm, non-alarming fallback when the caller has no resolvable active service
+# (mirrors the portal /connection surface so the two never disagree).
+_NO_SERVICE_CONNECTION_STATUS = {
+    "state": "connected",
+    "status_presentation": status_presentation_service.connection_health_status_presentation(
+        "connected"
+    ).model_dump(mode="json"),
+    "headline": "No active service",
+    "message": "We couldn't find an active service on your account to check.",
+    "advice": None,
+    "medium": None,
+    "area_outage": False,
+    "checked_at": None,
+}
+
+
+@router.get("/connection-status")
+def my_connection_status_detail(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ) -> dict:
-    """Customer-safe connection status: which basestation + healthy/degraded/
-    outage/unknown. No internal IPs/device/topology details are exposed."""
-    customer = _customer(db, principal)
-    subscription = catalog_service.subscriptions.get(
-        db=db, subscription_id=subscription_id
-    )
-    if not subscription or str(subscription.subscriber_id) != str(
-        customer["account_id"]
-    ):
-        raise HTTPException(status_code=404, detail="Subscription not found")
-    return topology_selfcare.customer_connection_status(db, subscription)
+    """Richer connection status for the caller's active service (outage
+    classifier P4): the per-customer last-mile verdict with area-outage blame
+    suppression, from ``topology.connection_status``.
+
+    Bearer-auth sibling of the portal ``/portal/connection/status.json`` — same
+    customer-safe payload ``{state, status_presentation, headline, message,
+    advice, medium, area_outage, checked_at}`` (no node names / signal values /
+    internals), so the mobile app can reach the richer surface the cookie-only
+    portal route isn't reachable for. Self-scoped: only ever the caller's own
+    subscription.
+    """
+    _subscriber_id(principal)  # enforce a subscriber principal (403 otherwise)
+    try:
+        subscription = bandwidth_samples.get_user_active_subscription(db, principal)
+    except HTTPException:
+        subscription = None
+    if subscription is None:
+        return dict(_NO_SERVICE_CONNECTION_STATUS)
+    return connection_status_service.connection_status(db, subscription)
 
 
 @router.post(
@@ -490,12 +523,11 @@ def my_plan_change_submit(
     verifies ownership, availability, arrears, and prepaid affordability.
     """
     customer = _customer(db, principal)
+    account_id = require_customer_account_id(db, customer)
     subscription = catalog_service.subscriptions.get(
         db=db, subscription_id=subscription_id
     )
-    if not subscription or str(subscription.subscriber_id) != str(
-        customer["account_id"]
-    ):
+    if not subscription or str(subscription.subscriber_id) != str(account_id):
         raise HTTPException(status_code=404, detail="Service not found")
     try:
         result = customer_changes.apply_instant_plan_change(
@@ -504,6 +536,10 @@ def my_plan_change_submit(
             subscription_id=subscription_id,
             offer_id=str(payload.offer_id),
             notes=payload.notes,
+            preview_fingerprint=payload.preview_fingerprint or "",
+            preview_effective_at=payload.preview_effective_at,
+            idempotency_key=payload.idempotency_key or "",
+            confirmation_origin="customer_api",
         )
     except ValueError as exc:
         message = str(exc)
@@ -535,19 +571,25 @@ def my_plan_change_submit(
         raise HTTPException(status_code=400, detail=message) from exc
 
     if not result.get("success", False):
-        # Insufficient prepaid balance for the prorated upgrade.
+        # Insufficient prepaid funding for the prorated upgrade.
         shortfall = result.get("shortfall")
         raise HTTPException(
             status_code=402,
             detail=(
-                f"Insufficient wallet balance — top up {shortfall} to apply this "
+                f"Insufficient prepaid funding — top up {shortfall} to apply this "
                 "upgrade."
                 if shortfall is not None
-                else "Insufficient wallet balance to apply this upgrade."
+                else "Insufficient prepaid funding to apply this upgrade."
             ),
         )
     return PlanChangeSubmitResponse(
-        success=True, status="applied", message="Your plan has been changed."
+        success=True,
+        status="applied",
+        message="Your plan has been changed.",
+        change_request_id=result.get("change_request_id"),
+        account_adjustment_id=result.get("account_adjustment_id"),
+        credit_note_id=result.get("credit_note_id"),
+        ledger_entry_id=result.get("ledger_entry_id"),
     )
 
 
@@ -580,7 +622,7 @@ def my_addon_quote(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """Cost of buying an add-on, against the wallet balance."""
+    """Preview an add-on, distinct funding/receivables, and exact debit."""
     try:
         quote = customer_addons.get_addon_quote(
             db, _customer(db, principal), subscription_id, add_on_id, quantity
@@ -602,7 +644,7 @@ def my_addon_purchase(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """Buy an add-on, charged from the caller's wallet balance."""
+    """Confirm a previewed add-on and its exact account adjustment."""
     try:
         return customer_addons.purchase_addon(
             db,
@@ -610,6 +652,7 @@ def my_addon_purchase(
             subscription_id,
             str(payload.add_on_id),
             payload.quantity,
+            preview_fingerprint=payload.preview_fingerprint,
             idempotency_key=payload.idempotency_key,
         )
     except ValueError as exc:
@@ -638,7 +681,7 @@ def my_topup_page(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """Top-up page context: balance, limits, presets, and the pay-with selector.
+    """Deposit Account Credit context, eligibility, limits, and payment options.
 
     ``payment_options`` mirrors the web chooser (online gateways + a direct
     bank-transfer option) and ``direct_bank_transfer`` carries the admin bank
@@ -671,6 +714,10 @@ def my_topup_page(
         provider_type=ctx["provider_type"],
         provider_public_key=ctx.get("provider_public_key"),
         prepaid_balance=ctx.get("prepaid_balance"),
+        account_credit=ctx.get("account_credit"),
+        deposit_allowed=ctx.get("deposit_allowed", True),
+        eligible_unpaid_total=ctx.get("eligible_unpaid_total", Decimal("0.00")),
+        eligible_unpaid_invoices=ctx.get("eligible_unpaid_invoices", []),
         min_amount=ctx["min_amount"],
         max_amount=ctx["max_amount"],
         preset_amounts=ctx.get("preset_amounts", []),
@@ -686,7 +733,7 @@ def my_topup_initiate(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """Create a top-up checkout intent for the caller's prepaid account."""
+    """Create a Deposit Account Credit intent for the caller's account."""
     customer = _customer(db, principal)
     try:
         result = customer_payments.create_topup_intent(
@@ -717,6 +764,7 @@ def my_topup_initiate(
         customer_email=customer["username"] or None,
         charged=result.get("charged", False),
         checkout_url=result.get("checkout_url"),
+        preview_fingerprint=result["preview_fingerprint"],
     )
 
 
@@ -726,8 +774,9 @@ def my_topup_verify(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """Verify a top-up transaction and credit the account."""
+    """Verify and settle a Deposit Account Credit transaction."""
     customer = _customer(db, principal)
+    account_id = require_customer_account_id(db, customer)
     try:
         result = customer_payments.verify_and_record_topup(
             db, customer, payload.reference
@@ -739,7 +788,7 @@ def my_topup_verify(
     if payload.save_card:
         try:
             customer_cards.capture_card_after_payment(
-                db, customer["account_id"], payload.reference, None
+                db, account_id, payload.reference, result["provider_type"]
             )
             card_saved = True
             card_save_message = CARD_SAVE_SUCCESS_MESSAGE
@@ -753,6 +802,8 @@ def my_topup_verify(
         already_recorded=result.get("already_recorded", False),
         available_balance=result.get("available_balance"),
         credit_added=result.get("credit_added"),
+        allocated_total=result.get("allocated_total", Decimal("0.00")),
+        allocated_to_invoices=result.get("allocated_to_invoices", []),
         card_saved=card_saved,
         card_save_message=card_save_message,
     )
@@ -789,15 +840,22 @@ def my_account_deletion_request(
 def my_chat_session(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
+    ticket_id: str | None = None,
+    project_id: str | None = None,
 ):
     """Open (or resume) a live-chat session with support.
 
     The sub asserts the authenticated subscriber's identity to the CRM and
     returns an opaque visitor token plus the URLs the client uses to talk to the
     CRM chat widget directly (WebSocket for real-time, REST for send/history).
+
+    Pass ``ticket_id`` or ``project_id`` to start the chat about that record —
+    the reference rides in the session so the agent has context.
     """
     subscriber_id = _subscriber_id(principal)
-    return chat_session_service.broker_customer_session(db, subscriber_id)
+    return chat_session_service.broker_customer_session(
+        db, subscriber_id, ticket_id=ticket_id, project_id=project_id
+    )
 
 
 @router.post("/portal/session", response_model=PortalSessionResponse)
@@ -820,10 +878,9 @@ def my_referrals(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """The caller's Refer & Earn summary — code, share link, program terms, and
-    history — served from the local mirror (refreshed from the CRM lazily)."""
+    """The caller's native Sub Refer & Earn summary."""
     subscriber_id = _subscriber_id(principal)
-    return referrals_mirror.read_for_subscriber(db, subscriber_id)
+    return referrals_service.referrals.read_for_subscriber(db, subscriber_id)
 
 
 @router.get("/projects", response_model=MyProjectsResponse)
@@ -831,9 +888,13 @@ def my_projects(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """The caller's installations/projects — stage timeline + progress % —
-    served from the local mirror (refreshed from the CRM lazily)."""
+    """The caller's installations/projects — stage timeline + progress %.
+    Behind the ``projects_native_read_enabled`` read-flip flag:
+    OFF serves the local CRM mirror (refreshed lazily), ON serves the native
+    ``projects`` table — same shape and ids either way."""
     subscriber_id = _subscriber_id(principal)
+    if projects_service.native_read_enabled(db):
+        return projects_service.portal_read_for_subscriber(db, subscriber_id)
     return projects_mirror.read_for_subscriber(db, subscriber_id)
 
 
@@ -848,14 +909,64 @@ def my_work_orders(
     return work_orders_mirror.read_for_subscriber(db, subscriber_id)
 
 
+@router.get(
+    "/work-orders/{work_order_id}/technician-location",
+    response_model=TechnicianLocation,
+)
+def my_work_order_technician_location(
+    work_order_id: str,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Live technician position for an in-progress work order (poll for the
+    'where's my technician' map). Returns available=False when the map should
+    be hidden."""
+    subscriber_id = _subscriber_id(principal)
+    data = work_orders_mirror.technician_location(db, subscriber_id, work_order_id)
+    return TechnicianLocation.model_validate(data)
+
+
+@router.post(
+    "/work-orders/{work_order_id}/rate-technician",
+    response_model=TechnicianRatingResponse,
+)
+def my_rate_technician(
+    work_order_id: str,
+    payload: TechnicianRatingRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Rate the technician after a completed work order (1-5 + optional comment)."""
+    subscriber_id = _subscriber_id(principal)
+    try:
+        data = work_orders_mirror.rate_technician(
+            db,
+            subscriber_id,
+            work_order_id,
+            rating=payload.rating,
+            comment=payload.comment,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="Work order not found") from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409, detail="Work order is not completed"
+        ) from exc
+    return TechnicianRatingResponse.model_validate(data)
+
+
 @router.get("/quotes", response_model=MyQuotesResponse)
 def my_quotes(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
     """The caller's self-serve installation quotes — feasibility, estimate,
-    deposit, status — served from the local mirror (refreshed lazily)."""
+    deposit, status. Behind the ``quotes_native_read_enabled``
+    read-flip flag: OFF serves the local CRM mirror (refreshed lazily),
+    ON serves sub's native ``quotes`` table — same shape either way."""
     subscriber_id = _subscriber_id(principal)
+    if selfserve_service.native_read_enabled(db):
+        return selfserve_service.selfserve_quotes.read_for_subscriber(db, subscriber_id)
     return quotes_mirror.read_for_subscriber(db, subscriber_id)
 
 
@@ -865,10 +976,24 @@ def my_quote_request(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """Request a map-pinned installation quote. The dropped pin drives the CRM's
-    feasibility check (proximity to fiber) + estimate + deposit; the result is
-    mirrored locally and returned."""
+    """Request a map-pinned installation quote. The dropped pin drives the
+    feasibility check (proximity to fiber) + estimate + deposit. Behind the
+    ``quotes_native_write_enabled`` write-flip flag: OFF writes through
+    to the CRM and returns the mirrored item; ON creates the quote in sub's
+    native ``quotes`` table (no CRM link required, so native-only subscribers
+    can quote too) — same payload shape either way."""
     subscriber_id = _subscriber_id(principal)
+    if selfserve_service.native_write_enabled(db):
+        quote = selfserve_service.selfserve_quotes.request_quote(
+            db,
+            subscriber_id,
+            latitude=payload.latitude,
+            longitude=payload.longitude,
+            address=payload.address,
+            region=payload.region,
+            note=payload.note,
+        )
+        return selfserve_service.build_portal_quote_payload(db, quote)
     return quotes_mirror.request_quote(
         db,
         subscriber_id,
@@ -932,22 +1057,21 @@ def my_refer_a_friend(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """Refer a friend: capture in the CRM (source of truth), mirror locally."""
+    """Refer a friend through Sub's Party-first referral owner."""
     subscriber_id = _subscriber_id(principal)
-    try:
-        return referrals_mirror.refer_a_friend(
-            db,
-            subscriber_id,
-            name=payload.name,
-            email=payload.email,
-            phone=payload.phone,
-            note=payload.note,
-        )
-    except referrals_mirror.ReferralError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    return referrals_service.referrals.refer_a_friend(
+        db,
+        subscriber_id,
+        name=payload.name,
+        email=payload.email,
+        phone=payload.phone,
+        note=payload.note,
+    )
 
 
-@router.get("/notifications", response_model=ListResponse[NotificationRead])
+@router.get(
+    "/notifications", response_model=ListResponse[CustomerInboxNotificationRead]
+)
 def my_notifications(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
@@ -956,9 +1080,35 @@ def my_notifications(
 ):
     """The subscriber's own notifications (in-app inbox), newest first."""
     subscriber_id = _subscriber_id(principal)
-    return notification_service.notifications.list_response_for_subscriber(
+    response = notification_service.notifications.list_response_for_subscriber(
         db, subscriber_id, limit, offset
     )
+    customer_notifications_service.apply_notification_read_state(
+        db,
+        subscriber_id=subscriber_id,
+        notifications=response["items"],
+    )
+    return response
+
+
+@router.post(
+    "/notifications/read",
+    response_model=CustomerNotificationReadResponse,
+)
+def my_notifications_mark_read(
+    payload: CustomerNotificationReadRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Mark selected or all visible notifications for the calling subscriber."""
+    subscriber_id = _subscriber_id(principal)
+    marked = customer_notifications_service.mark_api_notifications_read(
+        db,
+        subscriber_id=subscriber_id,
+        notification_ids=payload.notification_ids,
+        all_visible=payload.all_visible,
+    )
+    return CustomerNotificationReadResponse(marked=marked)
 
 
 @router.post("/push-tokens", response_model=PushTokenRead, status_code=201)
@@ -1014,11 +1164,12 @@ async def my_usage_summary(
 ):
     """Time-windowed data-usage total + bucketed series for the caller.
 
-    period: hour | today | yesterday | week | cycle | all. The total is billing-grade for
-    cycle (rated quota) and all (session octets), and throughput-integrated for
-    sub-day windows — see total_source / is_authoritative on the response. The
-    window has a defined start/end (unlike the legacy "last 50 sessions" sum)
-    and counts the live session's current octets.
+    period: hour | today | yesterday | week | cycle | all. The total is
+    billing-grade for cycle (session octets) and all (daily history plus session
+    octets), and throughput-integrated for sub-day windows — see total_source /
+    is_authoritative on the response. Zero is a valid authoritative value, not
+    a missing-data sentinel. The window has a defined start/end (unlike the
+    legacy "last 50 sessions" sum) and counts the live session's current octets.
     """
     subscriber_id = _subscriber_id(principal)
     summary = await usage_summary_service.get_usage_summary(db, subscriber_id, period)
@@ -1203,10 +1354,6 @@ def my_create_ticket(
             ) from exc
         support_service.tickets.add_attachments(db, str(ticket.id), uploaded)
         db.refresh(ticket)
-    from app.services.crm_ticket_push import enqueue_crm_ticket_push
-
-    if getattr(ticket, "id", None):
-        enqueue_crm_ticket_push(ticket.id, source="me_ticket_create")
     return ticket
 
 
@@ -1283,11 +1430,22 @@ def my_add_ticket_comment(
         actor_id=subscriber_id,
         request=request,
     )
-    from app.services.crm_ticket_push import enqueue_crm_comment_push
-
-    if getattr(comment, "id", None):
-        enqueue_crm_comment_push(comment.id, source="me_ticket_comment")
     return comment
+
+
+@router.post("/support/tickets/{ticket_id}/rate", response_model=TicketRead)
+def my_rate_ticket(
+    ticket_id: str,
+    payload: TicketSatisfactionRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Rate the support experience on the caller's own resolved/closed ticket
+    (CSAT, 1-5 + optional comment). Re-rating overwrites the previous score."""
+    ticket = _owned_ticket(db, _subscriber_id(principal), ticket_id)
+    return support_service.tickets.set_satisfaction(
+        db, ticket, rating=payload.rating, comment=payload.comment
+    )
 
 
 # --- Geocoding (self-care helpers) ----------------------------------------------
@@ -1482,175 +1640,3 @@ def my_delete_contact(
         contacts_service.delete_contact(db, customer, contact_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="Contact not found") from exc
-
-
-# --- VAS wallet (feature-flagged: 404 when vas.enabled is off) -------------------
-
-
-@router.get("/wallet", response_model=VasWalletOverviewResponse)
-def my_wallet(
-    db: Session = Depends(get_db),
-    principal: dict = Depends(require_user_auth),
-):
-    """Wallet balance, settings, and recent activity."""
-    subscriber_id = _subscriber_id(principal)
-    overview = vas_wallet_service.wallet_overview(db, subscriber_id)
-    return VasWalletOverviewResponse(**overview)
-
-
-@router.post("/wallet/topup/initiate", response_model=VasTopupInitiateResponse)
-def my_wallet_topup_initiate(
-    payload: VasTopupInitiateRequest,
-    db: Session = Depends(get_db),
-    principal: dict = Depends(require_user_auth),
-):
-    subscriber_id = _subscriber_id(principal)
-    result = vas_wallet_service.initiate_topup(db, subscriber_id, payload.amount)
-    customer = _customer(db, principal)
-    return VasTopupInitiateResponse(
-        **result, customer_email=customer.get("username") or None
-    )
-
-
-@router.post("/wallet/topup/verify", response_model=VasTopupVerifyResponse)
-def my_wallet_topup_verify(
-    payload: VasTopupVerifyRequest,
-    db: Session = Depends(get_db),
-    principal: dict = Depends(require_user_auth),
-):
-    subscriber_id = _subscriber_id(principal)
-    try:
-        result = vas_wallet_service.verify_topup(
-            db, subscriber_id, payload.reference, provider=payload.provider
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return VasTopupVerifyResponse(**result)
-
-
-@router.post("/wallet/pay-bill", response_model=VasPayBillResponse)
-def my_wallet_pay_bill(
-    payload: VasPayBillRequest,
-    db: Session = Depends(get_db),
-    principal: dict = Depends(require_user_auth),
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-):
-    """Pay the caller's DotMac bill from their wallet (the only wallet→billing
-    bridge; allocation matches an ordinary gateway payment).
-
-    Pass an ``Idempotency-Key`` header to make the debit safe against
-    double-submit: a replay returns the original payment, never a second
-    wallet debit."""
-    subscriber_id = _subscriber_id(principal)
-    result = vas_wallet_service.pay_bill(
-        db, subscriber_id, payload.amount, idempotency_key=idempotency_key
-    )
-    return VasPayBillResponse(**result)
-
-
-@router.patch("/wallet/auto-deduct", response_model=VasWalletOverviewResponse)
-def my_wallet_auto_deduct(
-    payload: VasAutoDeductUpdate,
-    db: Session = Depends(get_db),
-    principal: dict = Depends(require_user_auth),
-):
-    subscriber_id = _subscriber_id(principal)
-    vas_wallet_service.set_auto_deduct(db, subscriber_id, payload.enabled)
-    overview = vas_wallet_service.wallet_overview(db, subscriber_id)
-    return VasWalletOverviewResponse(**overview)
-
-
-# --- VAS bill payments (Phase 2, same vas.enabled flag) --------------------------
-
-
-def _txn_read(txn) -> VasTransactionRead:
-    return VasTransactionRead(
-        id=txn.id,
-        status=txn.status,
-        service_name=txn.service.name if txn.service else None,
-        identifier=txn.identifier,
-        variation_code=txn.variation_code,
-        amount=txn.amount,
-        token=vas_purchases_service.transaction_token(txn),
-        error=txn.error,
-        created_at=txn.created_at,
-        delivered_at=txn.delivered_at,
-        refunded_at=txn.refunded_at,
-    )
-
-
-@router.get("/vas/catalog", response_model=list[VasCategoryRead])
-def my_vas_catalog(
-    db: Session = Depends(get_db),
-    principal: dict = Depends(require_user_auth),
-):
-    """Enabled bill-payment categories/services/plans."""
-    _subscriber_id(principal)
-    return vas_purchases_service.customer_catalog(db)
-
-
-@router.post("/vas/verify", response_model=VasVerifyResponse)
-def my_vas_verify(
-    payload: VasVerifyRequest,
-    db: Session = Depends(get_db),
-    principal: dict = Depends(require_user_auth),
-):
-    """Resolve a meter/smartcard/account number to the customer name before
-    any money moves."""
-    _subscriber_id(principal)
-    result = vas_purchases_service.verify_identifier(
-        db,
-        service_id=payload.service_id,
-        identifier=payload.identifier,
-        variation_type=payload.variation_type,
-    )
-    return VasVerifyResponse(
-        customer_name=result.get("customer_name"), address=result.get("address")
-    )
-
-
-@router.post("/vas/purchases", response_model=VasTransactionRead, status_code=201)
-def my_vas_purchase(
-    payload: VasPurchaseRequest,
-    db: Session = Depends(get_db),
-    principal: dict = Depends(require_user_auth),
-):
-    """Buy airtime/data/bills from the wallet (immediate debit, requery-backed
-    delivery, auto-refund to wallet on definitive failure)."""
-    subscriber_id = _subscriber_id(principal)
-    txn = vas_purchases_service.purchase(
-        db,
-        subscriber_id=subscriber_id,
-        service_id=payload.service_id,
-        identifier=payload.identifier,
-        variation_code=payload.variation_code,
-        amount=payload.amount,
-        phone=payload.phone,
-        confirm_duplicate=payload.confirm_duplicate,
-    )
-    return _txn_read(txn)
-
-
-@router.get("/vas/purchases", response_model=list[VasTransactionRead])
-def my_vas_purchases(
-    limit: int = Query(default=50, ge=1, le=200),
-    db: Session = Depends(get_db),
-    principal: dict = Depends(require_user_auth),
-):
-    subscriber_id = _subscriber_id(principal)
-    return [
-        _txn_read(txn)
-        for txn in vas_purchases_service.list_transactions(
-            db, subscriber_id, limit=limit
-        )
-    ]
-
-
-@router.get("/vas/purchases/{txn_id}", response_model=VasTransactionRead)
-def my_vas_purchase_detail(
-    txn_id: str,
-    db: Session = Depends(get_db),
-    principal: dict = Depends(require_user_auth),
-):
-    subscriber_id = _subscriber_id(principal)
-    return _txn_read(vas_purchases_service.get_transaction(db, subscriber_id, txn_id))

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, cast
 
 from fastapi import Request
@@ -669,6 +670,7 @@ def active_sessions_page_data(
         "nas_devices": db.scalars(select(NasDevice).order_by(NasDevice.name)).all(),
         "search": search,
         "nas_filter": nas_filter,
+        "snapshot_at": datetime.now(UTC),
     }
 
 

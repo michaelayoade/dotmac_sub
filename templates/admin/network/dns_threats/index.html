@@ -117,7 +117,7 @@
             <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
                 {% for item in events %}
                 <tr class="hover:bg-slate-50/50 dark:hover:bg-slate-700/30">
-                    <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">{{ item.occurred_at.strftime('%Y-%m-%d %H:%M') if item.occurred_at else '-' }}</td>
+                    <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">{{ item.occurred_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</td>
                     <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300 font-mono">{{ item.queried_domain }}</td>
                     <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">{{ item.source_ip or '-' }}</td>
                     <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">{{ item.threat_category or '-' }}{% if item.threat_feed %} / {{ item.threat_feed }}{% endif %}</td>

@@ -1,15 +1,30 @@
 """Admin reporting web routes."""
 
-from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse, Response
+import csv
+from datetime import UTC, datetime, time, timedelta
+from html import escape
+from io import StringIO
+from urllib.parse import quote_plus
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, Form, Query, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models.catalog import SubscriptionStatus
+from app.models.team_inbox import InboxConversation, InboxConversationStatus
+from app.services import ncc_complaints_report as ncc_complaints_service
+from app.services import ncc_regulatory_pack as ncc_pack_service
+from app.services import ncc_subscriber_report as ncc_report_service
+from app.services import ncc_workbook, team_inbox_assignment, team_inbox_outbound
+from app.services import team_inbox_metrics as team_inbox_metrics_service
+from app.services import ticket_sla_reports as ticket_sla_reports_service
 from app.services import web_reports as web_reports_service
 from app.services import web_reports_extended as web_reports_ext_service
 from app.services.audit_helpers import recent_activity_for_paths
-from app.services.auth_dependencies import require_permission
+from app.services.auth_dependencies import require_any_permission, require_permission
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/reports", tags=["web-admin-reports"])
@@ -25,26 +40,49 @@ REPORT_HUB_SECTIONS: list[dict] = [
                 "name": "Revenue",
                 "url": "/admin/reports/revenue",
                 "description": "Revenue metrics and recent payments",
+                "permission": "reports:billing:read",
             },
             {
-                "name": "Subscribers",
-                "url": "/admin/reports/subscribers",
-                "description": "Subscriber growth and status breakdown",
+                "name": "Customer Report",
+                "url": "/admin/reports/customers",
+                "description": "Customer totals, status filters, and matching exports",
+                "permission": "customer:read",
             },
             {
                 "name": "Churn",
                 "url": "/admin/reports/churn",
                 "description": "Retention, churn reasons, and cancellations",
+                "permission": "customer:read",
             },
             {
                 "name": "Network Usage",
                 "url": "/admin/reports/network",
                 "description": "Network utilization and infrastructure stats",
+                "permission": "reports:network:read",
             },
             {
                 "name": "Technician",
                 "url": "/admin/reports/technician",
                 "description": "Technician performance and jobs",
+                "permission": "reports:support:read",
+            },
+            {
+                "name": "Ticket SLA",
+                "url": "/admin/reports/ticket-sla",
+                "description": "Support ticket SLA breaches and operational cleanup",
+                "permission": "reports:support:read",
+            },
+            {
+                "name": "Inbox Performance",
+                "url": "/admin/reports/inbox-performance",
+                "description": "Team response SLA, queue load, and agent assignments",
+                "permission": "reports:support:read",
+            },
+            {
+                "name": "Inbox Escalations",
+                "url": "/admin/reports/inbox-escalations",
+                "description": "Conversations that need supervisor attention",
+                "permission": "reports:support:read",
             },
         ],
     },
@@ -58,41 +96,49 @@ REPORT_HUB_SECTIONS: list[dict] = [
                 "name": "Usage by Plan",
                 "url": "/admin/reports/usage-by-plan",
                 "description": "Subscriber distribution across plans",
+                "permission": "reports:billing:read",
             },
             {
                 "name": "Revenue per Plan",
                 "url": "/admin/reports/revenue-per-plan",
                 "description": "Revenue split by plan",
+                "permission": "reports:billing:read",
             },
             {
                 "name": "Invoice Report",
                 "url": "/admin/reports/invoices",
                 "description": "Invoice listing and tax details",
+                "permission": "reports:billing:read",
             },
             {
                 "name": "Statements",
                 "url": "/admin/reports/statements",
                 "description": "Customer financial summaries",
+                "permission": "reports:billing:read",
             },
             {
                 "name": "Tax Report",
                 "url": "/admin/reports/tax",
-                "description": "Tax totals and per-invoice tax values",
+                "description": "Net output tax and WHT receivables by currency",
+                "permission": "reports:billing:read",
             },
             {
                 "name": "MRR Net Change",
                 "url": "/admin/reports/mrr",
                 "description": "Monthly recurring revenue movement",
+                "permission": "reports:billing:read",
             },
             {
                 "name": "New Services",
                 "url": "/admin/reports/new-services",
                 "description": "Recently activated subscriptions",
+                "permission": "customer:read",
             },
             {
                 "name": "Upcoming Charges",
                 "url": "/admin/reports/upcoming-charges",
                 "description": "Subscriptions with upcoming billing",
+                "permission": "reports:billing:read",
             },
         ],
     },
@@ -106,21 +152,51 @@ REPORT_HUB_SECTIONS: list[dict] = [
                 "name": "Subscriber Growth (Trend)",
                 "url": "/admin/reports/subscriber-growth",
                 "description": "Time-series subscriber growth trend",
+                "permission": "customer:read",
             },
             {
                 "name": "Custom Pricing & Discounts",
                 "url": "/admin/reports/custom-pricing",
                 "description": "Custom pricing overrides",
+                "permission": "reports:billing:read",
             },
             {
                 "name": "Revenue by Category",
                 "url": "/admin/reports/revenue-categories",
                 "description": "Revenue segmented by category",
+                "permission": "reports:billing:read",
             },
             {
                 "name": "Bandwidth & Usage",
                 "url": "/admin/reports/bandwidth",
                 "description": "Network usage analytics and top consumers",
+                "permission": "reports:network:read",
+            },
+        ],
+    },
+    {
+        "id": "regulatory",
+        "name": "Regulatory",
+        "description": "Returns for the NCC and other regulators.",
+        "color": "amber",
+        "links": [
+            {
+                "name": "NCC Subscriber Data (Quarterly)",
+                "url": "/admin/reports/ncc-subscribers",
+                "description": "Active subscriptions by type, connection, speed, State & region",
+                "permission": "customer:read",
+            },
+            {
+                "name": "NCC Complaints (Quarterly)",
+                "url": "/admin/reports/ncc-complaints",
+                "description": "Complaint records, categories, SLA and the filing workbook",
+                "permission": "provisioning:read",
+            },
+            {
+                "name": "NCC Regulatory Pack",
+                "url": "/admin/reports/ncc-pack",
+                "description": "All three NCC returns assembled into one filing view",
+                "permission": "provisioning:read",
             },
         ],
     },
@@ -146,7 +222,39 @@ def _base_context(
     }
 
 
-@router.get("/hub", response_class=HTMLResponse)
+def _parse_date_start(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.combine(datetime.fromisoformat(value).date(), time.min, UTC)
+    except (ValueError, TypeError):
+        return None
+
+
+def _parse_date_end(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.combine(datetime.fromisoformat(value).date(), time.max, UTC)
+    except (ValueError, TypeError):
+        return None
+
+
+@router.get(
+    "/hub",
+    response_class=HTMLResponse,
+    dependencies=[
+        Depends(
+            require_any_permission(
+                "reports:billing:read",
+                "reports:network:read",
+                "reports:support:read",
+                "customer:read",
+                "provisioning:read",
+            )
+        )
+    ],
+)
 def reports_hub(request: Request, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
 
@@ -164,7 +272,7 @@ def reports_hub(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/revenue",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("reports:billing"))],
+    dependencies=[Depends(require_permission("reports:billing:read"))],
 )
 def reports_revenue(request: Request, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -184,12 +292,16 @@ def reports_revenue(request: Request, db: Session = Depends(get_db)):
         "outstanding_count": report_data["outstanding_count"],
         "collection_rate": report_data["collection_rate"],
         "recent_payments": report_data["recent_payments"],
+        "revenue_data": report_data["revenue_data"],
         "recent_activities": recent_activity_for_paths(db, ["/admin/reports"]),
     }
     return templates.TemplateResponse("admin/reports/revenue.html", context)
 
 
-@router.get("/revenue/export")
+@router.get(
+    "/revenue/export",
+    dependencies=[Depends(require_permission("reports:billing:export"))],
+)
 def reports_revenue_export(days: int | None = None, db: Session = Depends(get_db)):
     content = web_reports_service.build_revenue_export_csv(db=db, days=days)
     return Response(
@@ -200,21 +312,38 @@ def reports_revenue_export(days: int | None = None, db: Session = Depends(get_db
 
 
 @router.get(
+    "/customers",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:read"))],
+)
+@router.get(
     "/subscribers",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("customer:read"))],
 )
-def reports_subscribers(request: Request, db: Session = Depends(get_db)):
+def reports_subscribers(
+    request: Request,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    status: str | None = None,
+    db: Session = Depends(get_db),
+):
     from app.web.admin import get_current_user, get_sidebar_stats
 
-    report_data = web_reports_service.get_subscribers_report_data(db)
+    report_data = web_reports_service.get_subscribers_report_data(
+        db,
+        date_from=date_from,
+        date_to=date_to,
+        status=status,
+    )
 
     context = {
         "request": request,
-        "active_page": "reports-subscribers",
+        "active_page": "reports-customers",
         "active_menu": "reports",
         "current_user": get_current_user(request),
         "sidebar_stats": get_sidebar_stats(db),
+        "subscriber_kpis": report_data["subscriber_kpis"],
         "total_subscribers": report_data["total_subscribers"],
         "subscriber_growth": report_data["subscriber_growth"],
         "new_this_month": report_data["new_this_month"],
@@ -224,21 +353,48 @@ def reports_subscribers(request: Request, db: Session = Depends(get_db)):
         "status_breakdown": report_data["status_breakdown"],
         "recent_subscribers": report_data["recent_subscribers"],
         "recent_activities": recent_activity_for_paths(db, ["/admin/reports"]),
+        "customers": report_data["customers"],
+        "growth_data": report_data["growth_data"],
+        "date_from": report_data["date_from"],
+        "date_to": report_data["date_to"],
+        "status_filter": report_data["status_filter"],
+        "status_options": report_data["status_options"],
     }
     return templates.TemplateResponse("admin/reports/subscribers.html", context)
 
 
-@router.get("/subscribers/export")
-def reports_subscribers_export(days: int | None = None, db: Session = Depends(get_db)):
-    content = web_reports_service.build_subscribers_export_csv(db=db, days=days)
+@router.get(
+    "/customers/export", dependencies=[Depends(require_permission("customer:read"))]
+)
+@router.get(
+    "/subscribers/export", dependencies=[Depends(require_permission("customer:read"))]
+)
+def reports_subscribers_export(
+    days: int | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    status: str | None = None,
+    db: Session = Depends(get_db),
+):
+    content = web_reports_service.build_subscribers_export_csv(
+        db=db,
+        days=days,
+        date_from=date_from,
+        date_to=date_to,
+        status=status,
+    )
     return Response(
         content,
         media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=subscribers.csv"},
+        headers={"Content-Disposition": "attachment; filename=customers.csv"},
     )
 
 
-@router.get("/churn", response_class=HTMLResponse)
+@router.get(
+    "/churn",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:read"))],
+)
 def reports_churn(request: Request, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
 
@@ -250,18 +406,22 @@ def reports_churn(request: Request, db: Session = Depends(get_db)):
         "active_menu": "reports",
         "current_user": get_current_user(request),
         "sidebar_stats": get_sidebar_stats(db),
+        "churn_kpis": report_data["churn_kpis"],
         "churn_rate": report_data["churn_rate"],
         "retention_rate": report_data["retention_rate"],
         "cancelled_count": report_data["cancelled_count"],
         "at_risk_count": report_data["at_risk_count"],
         "churn_reasons": report_data["churn_reasons"],
+        "churn_data": report_data["churn_data"],
         "recent_cancellations": report_data["recent_cancellations"],
         "recent_activities": recent_activity_for_paths(db, ["/admin/reports"]),
     }
     return templates.TemplateResponse("admin/reports/churn.html", context)
 
 
-@router.get("/churn/export")
+@router.get(
+    "/churn/export", dependencies=[Depends(require_permission("customer:read"))]
+)
 def reports_churn_export(days: int | None = None, db: Session = Depends(get_db)):
     content = web_reports_service.build_churn_export_csv(db=db, days=days)
     return Response(
@@ -274,7 +434,7 @@ def reports_churn_export(days: int | None = None, db: Session = Depends(get_db))
 @router.get(
     "/network",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("reports:network"))],
+    dependencies=[Depends(require_permission("reports:network:read"))],
 )
 def reports_network(request: Request, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -303,7 +463,10 @@ def reports_network(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/reports/network.html", context)
 
 
-@router.get("/network/export")
+@router.get(
+    "/network/export",
+    dependencies=[Depends(require_permission("reports:network:export"))],
+)
 def reports_network_export(hours: int | None = None, db: Session = Depends(get_db)):
     report_data = web_reports_service.get_network_report_data(db=db, hours=hours)
     content = web_reports_service.build_network_export_csv(report_data, hours=hours)
@@ -317,7 +480,7 @@ def reports_network_export(hours: int | None = None, db: Session = Depends(get_d
 @router.get(
     "/technician",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("provisioning:read"))],
+    dependencies=[Depends(require_permission("reports:support:read"))],
 )
 def reports_technician(request: Request, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -342,7 +505,10 @@ def reports_technician(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/reports/technician.html", context)
 
 
-@router.get("/technician/export")
+@router.get(
+    "/technician/export",
+    dependencies=[Depends(require_permission("reports:support:read"))],
+)
 def reports_technician_export(days: int | None = None, db: Session = Depends(get_db)):
     content = web_reports_service.build_technician_export_csv(db=db, days=days)
     return Response(
@@ -354,12 +520,547 @@ def reports_technician_export(days: int | None = None, db: Session = Depends(get
     )
 
 
+@router.get(
+    "/ticket-sla",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("reports:support:read"))],
+)
+def reports_ticket_sla(
+    request: Request,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    open_only: bool = False,
+    db: Session = Depends(get_db),
+):
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    start_at = _parse_date_start(date_from)
+    end_at = _parse_date_end(date_to)
+    context = {
+        "request": request,
+        "active_page": "reports-ticket-sla",
+        "active_menu": "reports",
+        "current_user": get_current_user(request),
+        "sidebar_stats": get_sidebar_stats(db),
+        "date_from": date_from or "",
+        "date_to": date_to or "",
+        "open_only": open_only,
+        "summary": ticket_sla_reports_service.summary(db, start_at, end_at),
+        "trend": ticket_sla_reports_service.trend_daily(db, start_at, end_at),
+        "violations": ticket_sla_reports_service.violation_records(
+            db,
+            start_at=start_at,
+            end_at=end_at,
+            open_only=open_only,
+            limit=100,
+        ),
+        "recent_activities": recent_activity_for_paths(db, ["/admin/reports"]),
+    }
+    return templates.TemplateResponse("admin/reports/ticket_sla.html", context)
+
+
+def _seconds_label(value: float | None) -> str:
+    if value is None:
+        return "-"
+    minutes = value / 60
+    if minutes < 60:
+        return f"{minutes:.1f}m"
+    return f"{minutes / 60:.1f}h"
+
+
+def _percent(value: float | None) -> float:
+    return round((value or 0) * 100, 1)
+
+
+def _inbox_team_rows(db: Session, response_sla_seconds: int, include_inactive: bool):
+    rows = team_inbox_metrics_service.team_performance_report(
+        db,
+        response_sla_seconds=response_sla_seconds,
+        include_inactive=include_inactive,
+    )
+    team_rows = []
+    for row in rows:
+        metrics = row.metrics
+        response_rate = (
+            metrics.responded_count / metrics.inbound_message_count
+            if metrics.inbound_message_count
+            else None
+        )
+        breach_rate = (
+            metrics.response_sla_breached_count / metrics.inbound_message_count
+            if metrics.inbound_message_count
+            else None
+        )
+        team_rows.append(
+            {
+                "team_id": row.service_team_id,
+                "name": row.service_team_name,
+                "team_type": row.service_team_type,
+                "response_sla_seconds": row.response_sla_seconds,
+                "conversation_count": metrics.conversation_count,
+                "open_count": metrics.open_count,
+                "unassigned_open_count": metrics.unassigned_open_count,
+                "assigned_open_count": metrics.assigned_open_count,
+                "inbound_message_count": metrics.inbound_message_count,
+                "outbound_message_count": metrics.outbound_message_count,
+                "responded_count": metrics.responded_count,
+                "response_sla_breached_count": metrics.response_sla_breached_count,
+                "response_rate": response_rate,
+                "response_rate_percent": _percent(response_rate),
+                "response_sla_breach_rate": breach_rate,
+                "response_sla_breach_rate_percent": _percent(breach_rate),
+                "average_first_response": _seconds_label(
+                    metrics.average_first_response_seconds
+                ),
+                "average_queue_wait": _seconds_label(
+                    metrics.average_queue_wait_seconds
+                ),
+            }
+        )
+    return team_rows
+
+
+def _inbox_agent_rows(db: Session):
+    rows = team_inbox_metrics_service.agent_performance_report(db)
+    return [
+        {
+            "person_id": row.person_id,
+            "service_team_id": row.service_team_id,
+            "service_team_name": row.service_team_name,
+            "service_team_type": row.service_team_type,
+            "active_assignment_count": row.metrics.active_assignment_count,
+            "handled_conversation_count": row.metrics.handled_conversation_count,
+            "average_queue_wait": _seconds_label(
+                row.metrics.average_queue_wait_seconds
+            ),
+        }
+        for row in rows
+    ]
+
+
+_ESCALATION_REASON_LABELS = {
+    "response_sla_breached": "Response SLA breached",
+    "unassigned_queue_breached": "Unassigned queue breached",
+    "no_available_agent": "No available agent",
+}
+
+
+def _reason_label(reason: str) -> str:
+    return _ESCALATION_REASON_LABELS.get(reason, reason.replace("_", " ").title())
+
+
+def _inbox_escalation_rows(
+    db: Session,
+    response_sla_seconds: int,
+    queue_sla_seconds: int,
+    include_inactive: bool,
+):
+    rows = team_inbox_metrics_service.escalation_candidates(
+        db,
+        response_sla_seconds=response_sla_seconds,
+        queue_sla_seconds=queue_sla_seconds,
+        include_inactive=include_inactive,
+    )
+    return [
+        {
+            "conversation_id": row.conversation_id,
+            "service_team_id": row.service_team_id,
+            "service_team_name": row.service_team_name,
+            "service_team_type": row.service_team_type,
+            "subject": row.subject or "(No subject)",
+            "contact_address": row.contact_address or "-",
+            "status": row.status,
+            "reasons": [_reason_label(reason) for reason in row.reasons],
+            "reason_keys": list(row.reasons),
+            "response_sla": _seconds_label(row.response_sla_seconds),
+            "queue_sla": _seconds_label(row.queue_sla_seconds),
+            "pending_response": _seconds_label(row.pending_response_seconds),
+            "queue_wait": _seconds_label(row.queue_wait_seconds),
+            "assigned_person_id": row.assigned_person_id or "-",
+            "available_agent_count": row.available_agent_count,
+        }
+        for row in rows
+    ]
+
+
+def _active_service_team_options(db: Session):
+    return team_inbox_metrics_service.active_service_team_options(db)
+
+
+def _inbox_escalation_return_url(
+    next_url: str | None,
+    *,
+    status: str,
+    message: str,
+) -> str:
+    target = str(next_url or "").strip()
+    if not target.startswith("/admin/reports/inbox-escalations"):
+        target = "/admin/reports/inbox-escalations"
+    separator = "&" if "?" in target else "?"
+    return (
+        f"{target}{separator}status={quote_plus(status)}&message={quote_plus(message)}"
+    )
+
+
+@router.get(
+    "/inbox-performance",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("reports:support:read"))],
+)
+def reports_inbox_performance(
+    request: Request,
+    response_sla_seconds: int = Query(default=900, ge=60, le=86400),
+    include_inactive: bool = False,
+    db: Session = Depends(get_db),
+):
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    team_rows = _inbox_team_rows(db, response_sla_seconds, include_inactive)
+    agent_rows = _inbox_agent_rows(db)
+    inbound_total = sum(row["inbound_message_count"] for row in team_rows)
+    breached_total = sum(row["response_sla_breached_count"] for row in team_rows)
+    responded_total = sum(row["responded_count"] for row in team_rows)
+    context = {
+        "request": request,
+        "active_page": "reports-inbox-performance",
+        "active_menu": "reports",
+        "current_user": get_current_user(request),
+        "sidebar_stats": get_sidebar_stats(db),
+        "response_sla_seconds": response_sla_seconds,
+        "include_inactive": include_inactive,
+        "team_rows": team_rows,
+        "agent_rows": agent_rows,
+        "team_count": len(team_rows),
+        "open_count": sum(row["open_count"] for row in team_rows),
+        "unassigned_open_count": sum(row["unassigned_open_count"] for row in team_rows),
+        "breached_total": breached_total,
+        "response_rate_percent": _percent(
+            responded_total / inbound_total if inbound_total else None
+        ),
+        "breach_rate_percent": _percent(
+            breached_total / inbound_total if inbound_total else None
+        ),
+        "recent_activities": recent_activity_for_paths(db, ["/admin/reports"]),
+    }
+    return templates.TemplateResponse("admin/reports/inbox_performance.html", context)
+
+
+@router.get(
+    "/inbox-performance/export",
+    dependencies=[Depends(require_permission("reports:support:read"))],
+)
+def reports_inbox_performance_export(
+    response_sla_seconds: int = Query(default=900, ge=60, le=86400),
+    include_inactive: bool = False,
+    db: Session = Depends(get_db),
+):
+    output = StringIO()
+    writer = csv.DictWriter(
+        output,
+        fieldnames=[
+            "name",
+            "team_type",
+            "response_sla_seconds",
+            "conversation_count",
+            "open_count",
+            "unassigned_open_count",
+            "inbound_message_count",
+            "outbound_message_count",
+            "responded_count",
+            "response_sla_breached_count",
+            "response_rate_percent",
+            "response_sla_breach_rate_percent",
+            "average_first_response",
+            "average_queue_wait",
+        ],
+    )
+    writer.writeheader()
+    for row in _inbox_team_rows(db, response_sla_seconds, include_inactive):
+        writer.writerow({field: row[field] for field in writer.fieldnames})
+    return Response(
+        output.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=inbox-performance.csv"},
+    )
+
+
+@router.get(
+    "/inbox-escalations",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("reports:support:read"))],
+)
+def reports_inbox_escalations(
+    request: Request,
+    response_sla_seconds: int = Query(default=900, ge=60, le=86400),
+    queue_sla_seconds: int = Query(default=600, ge=60, le=86400),
+    include_inactive: bool = False,
+    db: Session = Depends(get_db),
+):
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    rows = _inbox_escalation_rows(
+        db,
+        response_sla_seconds,
+        queue_sla_seconds,
+        include_inactive,
+    )
+    context = {
+        "request": request,
+        "active_page": "reports-inbox-escalations",
+        "active_menu": "reports",
+        "current_user": get_current_user(request),
+        "sidebar_stats": get_sidebar_stats(db),
+        "response_sla_seconds": response_sla_seconds,
+        "queue_sla_seconds": queue_sla_seconds,
+        "include_inactive": include_inactive,
+        "rows": rows,
+        "service_team_options": _active_service_team_options(db),
+        "candidate_count": len(rows),
+        "response_breach_count": sum(
+            "response_sla_breached" in row["reason_keys"] for row in rows
+        ),
+        "queue_breach_count": sum(
+            "unassigned_queue_breached" in row["reason_keys"] for row in rows
+        ),
+        "no_agent_count": sum(
+            "no_available_agent" in row["reason_keys"] for row in rows
+        ),
+        "recent_activities": recent_activity_for_paths(db, ["/admin/reports"]),
+    }
+    return templates.TemplateResponse("admin/reports/inbox_escalations.html", context)
+
+
+@router.post(
+    "/inbox-escalations/{conversation_id}/action",
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def reports_inbox_escalation_action(
+    conversation_id: str,
+    request: Request,
+    service_team_id: str = Form(...),
+    action: str = Form("auto_assign"),
+    reason: str = Form(""),
+    next: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+):
+    from app.services import web_admin as web_admin_service
+
+    try:
+        conversation_uuid = UUID(str(conversation_id))
+        team_uuid = UUID(str(service_team_id))
+    except ValueError:
+        return RedirectResponse(
+            _inbox_escalation_return_url(
+                next,
+                status="error",
+                message="Invalid conversation or team.",
+            ),
+            status_code=303,
+        )
+
+    conversation = db.get(InboxConversation, conversation_uuid)
+    if conversation is None or not conversation.is_active:
+        return RedirectResponse(
+            _inbox_escalation_return_url(
+                next,
+                status="error",
+                message="Conversation not found.",
+            ),
+            status_code=303,
+        )
+    if conversation.status == InboxConversationStatus.resolved.value:
+        return RedirectResponse(
+            _inbox_escalation_return_url(
+                next,
+                status="error",
+                message="Resolved conversations cannot be escalated.",
+            ),
+            status_code=303,
+        )
+
+    actor_id = web_admin_service.get_actor_id(request)
+    clean_reason = reason.strip() or None
+    if action == "queue":
+        result = team_inbox_assignment.queue_conversation_for_team(
+            db,
+            conversation=conversation,
+            service_team_id=team_uuid,
+            assigned_by_person_id=actor_id,
+            reason=clean_reason,
+        )
+    else:
+        result = team_inbox_assignment.assign_conversation_to_available_agent(
+            db,
+            conversation=conversation,
+            service_team_id=team_uuid,
+            assigned_by_person_id=actor_id,
+            reason=clean_reason,
+        )
+
+    if result.kind == "invalid_team":
+        return RedirectResponse(
+            _inbox_escalation_return_url(
+                next,
+                status="error",
+                message=result.reason or "Invalid target team.",
+            ),
+            status_code=303,
+        )
+
+    db.commit()
+    if result.kind == "assigned":
+        message = "Conversation assigned to an available agent."
+    else:
+        message = "Conversation moved to the target team queue."
+    return RedirectResponse(
+        _inbox_escalation_return_url(next, status="success", message=message),
+        status_code=303,
+    )
+
+
+@router.post(
+    "/inbox-escalations/{conversation_id}/reply",
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def reports_inbox_escalation_reply(
+    conversation_id: str,
+    request: Request,
+    body_text: str = Form(...),
+    next: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+):
+    from app.services import web_admin as web_admin_service
+
+    try:
+        conversation_uuid = UUID(str(conversation_id))
+    except ValueError:
+        return RedirectResponse(
+            _inbox_escalation_return_url(
+                next,
+                status="error",
+                message="Invalid conversation.",
+            ),
+            status_code=303,
+        )
+
+    clean_body = body_text.strip()
+    if not clean_body:
+        return RedirectResponse(
+            _inbox_escalation_return_url(
+                next,
+                status="error",
+                message="Reply body is required.",
+            ),
+            status_code=303,
+        )
+
+    conversation = db.get(InboxConversation, conversation_uuid)
+    if conversation is None or not conversation.is_active:
+        return RedirectResponse(
+            _inbox_escalation_return_url(
+                next,
+                status="error",
+                message="Conversation not found.",
+            ),
+            status_code=303,
+        )
+
+    body_html = (
+        "<p>" + "<br>".join(escape(line) for line in clean_body.splitlines()) + "</p>"
+    )
+    result = team_inbox_outbound.send_inbox_reply(
+        db,
+        conversation=conversation,
+        payload=team_inbox_outbound.InboxReplyPayload(
+            body_html=body_html,
+            body_text=clean_body,
+            sent_by_person_id=web_admin_service.get_actor_id(request),
+            metadata={"source_route": "admin_inbox_escalation_reply"},
+        ),
+    )
+
+    if result.kind not in {"sent", "queued"}:
+        return RedirectResponse(
+            _inbox_escalation_return_url(
+                next,
+                status="error",
+                message=result.reason or "Reply could not be sent.",
+            ),
+            status_code=303,
+        )
+
+    db.commit()
+    sender = result.from_address or result.sender_key or "team sender"
+    return RedirectResponse(
+        _inbox_escalation_return_url(
+            next,
+            status="success",
+            message=(
+                f"Reply queued from {sender}."
+                if result.kind == "queued"
+                else f"Reply sent from {sender}."
+            ),
+        ),
+        status_code=303,
+    )
+
+
+@router.get(
+    "/inbox-escalations/export",
+    dependencies=[Depends(require_permission("reports:support:read"))],
+)
+def reports_inbox_escalations_export(
+    response_sla_seconds: int = Query(default=900, ge=60, le=86400),
+    queue_sla_seconds: int = Query(default=600, ge=60, le=86400),
+    include_inactive: bool = False,
+    db: Session = Depends(get_db),
+):
+    output = StringIO()
+    writer = csv.DictWriter(
+        output,
+        fieldnames=[
+            "conversation_id",
+            "service_team_name",
+            "service_team_type",
+            "subject",
+            "contact_address",
+            "status",
+            "reasons",
+            "response_sla",
+            "queue_sla",
+            "pending_response",
+            "queue_wait",
+            "assigned_person_id",
+            "available_agent_count",
+        ],
+    )
+    writer.writeheader()
+    for row in _inbox_escalation_rows(
+        db,
+        response_sla_seconds,
+        queue_sla_seconds,
+        include_inactive,
+    ):
+        export_row = {field: row[field] for field in writer.fieldnames}
+        export_row["reasons"] = "; ".join(row["reasons"])
+        writer.writerow(export_row)
+    return Response(
+        output.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=inbox-escalations.csv"},
+    )
+
+
 # ===================================================================
 # Extended Reports (04_administration features)
 # ===================================================================
 
 
-@router.get("/subscriber-growth", response_class=HTMLResponse)
+@router.get(
+    "/subscriber-growth",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:read"))],
+)
 def reports_subscriber_growth(
     request: Request,
     days: int = 30,
@@ -377,7 +1078,11 @@ def reports_subscriber_growth(
     return templates.TemplateResponse("admin/reports/subscriber_growth.html", ctx)
 
 
-@router.get("/usage-by-plan", response_class=HTMLResponse)
+@router.get(
+    "/usage-by-plan",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("reports:billing:read"))],
+)
 def reports_usage_by_plan(request: Request, db: Session = Depends(get_db)):
     data = web_reports_ext_service.get_usage_by_plan_data(db)
     ctx = _base_context(
@@ -391,7 +1096,11 @@ def reports_usage_by_plan(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/reports/usage_by_plan.html", ctx)
 
 
-@router.get("/upcoming-charges", response_class=HTMLResponse)
+@router.get(
+    "/upcoming-charges",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("reports:billing:read"))],
+)
 def reports_upcoming_charges(request: Request, db: Session = Depends(get_db)):
     data = web_reports_ext_service.get_upcoming_charges_data(db)
     ctx = _base_context(
@@ -405,7 +1114,11 @@ def reports_upcoming_charges(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/reports/upcoming_charges.html", ctx)
 
 
-@router.get("/revenue-per-plan", response_class=HTMLResponse)
+@router.get(
+    "/revenue-per-plan",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("reports:billing:read"))],
+)
 def reports_revenue_per_plan(
     request: Request,
     date_from: str | None = None,
@@ -426,7 +1139,11 @@ def reports_revenue_per_plan(
     return templates.TemplateResponse("admin/reports/revenue_per_plan.html", ctx)
 
 
-@router.get("/invoices", response_class=HTMLResponse)
+@router.get(
+    "/invoices",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("reports:billing:read"))],
+)
 def reports_invoices(
     request: Request,
     date_from: str | None = None,
@@ -448,7 +1165,11 @@ def reports_invoices(
     return templates.TemplateResponse("admin/reports/invoices.html", ctx)
 
 
-@router.get("/statements", response_class=HTMLResponse)
+@router.get(
+    "/statements",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("reports:billing:read"))],
+)
 def reports_statements(request: Request, db: Session = Depends(get_db)):
     data = web_reports_ext_service.get_statements_data(db)
     ctx = _base_context(
@@ -458,23 +1179,51 @@ def reports_statements(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/reports/statements.html", ctx)
 
 
-@router.get("/tax", response_class=HTMLResponse)
-def reports_tax(request: Request, db: Session = Depends(get_db)):
-    data = web_reports_ext_service.get_tax_report_data(db)
+@router.get(
+    "/tax",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("reports:billing:read"))],
+)
+def reports_tax(
+    request: Request,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    db: Session = Depends(get_db),
+):
+    data = web_reports_ext_service.get_tax_report_data(
+        db,
+        date_from=date_from,
+        date_to=date_to,
+    )
     ctx = _base_context(
-        request, db, "reports-tax", "Tax Report", "Per-invoice tax details and totals"
+        request,
+        db,
+        "reports-tax",
+        "Tax Accounting Report",
+        "Net output-tax liability and withholding-tax receivables",
     )
     ctx.update(data)
     return templates.TemplateResponse("admin/reports/tax.html", ctx)
 
 
-@router.get("/mrr", response_class=HTMLResponse)
+@router.get(
+    "/mrr",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("reports:billing:read"))],
+)
 def reports_mrr(
     request: Request,
     year: int | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
     db: Session = Depends(get_db),
 ):
-    data = web_reports_ext_service.get_mrr_data(db, year=year)
+    data = web_reports_ext_service.get_mrr_data(
+        db,
+        year=year,
+        date_from=date_from,
+        date_to=date_to,
+    )
     ctx = _base_context(
         request,
         db,
@@ -486,7 +1235,11 @@ def reports_mrr(
     return templates.TemplateResponse("admin/reports/mrr.html", ctx)
 
 
-@router.get("/new-services", response_class=HTMLResponse)
+@router.get(
+    "/new-services",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:read"))],
+)
 def reports_new_services(
     request: Request,
     date_from: str | None = None,
@@ -507,7 +1260,11 @@ def reports_new_services(
     return templates.TemplateResponse("admin/reports/new_services.html", ctx)
 
 
-@router.get("/custom-pricing", response_class=HTMLResponse)
+@router.get(
+    "/custom-pricing",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("reports:billing:read"))],
+)
 def reports_custom_pricing(request: Request, db: Session = Depends(get_db)):
     data = web_reports_ext_service.get_custom_pricing_data(db)
     ctx = _base_context(
@@ -521,7 +1278,11 @@ def reports_custom_pricing(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/reports/custom_pricing.html", ctx)
 
 
-@router.get("/revenue-categories", response_class=HTMLResponse)
+@router.get(
+    "/revenue-categories",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("reports:billing:read"))],
+)
 def reports_revenue_categories(request: Request, db: Session = Depends(get_db)):
     data = web_reports_ext_service.get_revenue_categories_data(db)
     ctx = _base_context(
@@ -535,9 +1296,26 @@ def reports_revenue_categories(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/reports/revenue_categories.html", ctx)
 
 
-@router.get("/bandwidth", response_class=HTMLResponse)
-def reports_bandwidth(request: Request, days: int = 30, db: Session = Depends(get_db)):
-    data = web_reports_ext_service.get_bandwidth_report_data(db, days=days)
+@router.get(
+    "/bandwidth",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("reports:network:read"))],
+)
+def reports_bandwidth(
+    request: Request,
+    days: int | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    show_chart: bool = False,
+    db: Session = Depends(get_db),
+):
+    data = web_reports_ext_service.get_bandwidth_report_data(
+        db,
+        days=days,
+        date_from=date_from,
+        date_to=date_to,
+        show_chart=show_chart,
+    )
     ctx = _base_context(
         request,
         db,
@@ -547,3 +1325,480 @@ def reports_bandwidth(request: Request, days: int = 30, db: Session = Depends(ge
     )
     ctx.update(data)
     return templates.TemplateResponse("admin/reports/bandwidth.html", ctx)
+
+
+@router.get(
+    "/bandwidth/export",
+    dependencies=[Depends(require_permission("reports:network:export"))],
+)
+def reports_bandwidth_export(
+    days: int | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    db: Session = Depends(get_db),
+):
+    data = web_reports_ext_service.get_bandwidth_report_data(
+        db,
+        days=days,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    content = web_reports_ext_service.build_bandwidth_report_export_csv(data)
+    return Response(
+        content,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": "attachment; filename=bandwidth-usage-report.csv"
+        },
+    )
+
+
+# ── NCC quarterly Subscriber & Capacity return ──────────────────────────────
+def _ncc_params(
+    as_of: str | None,
+    statuses: list[str],
+    reseller_id: str | None,
+    access_capacity_gbps: str | None,
+    unutilized_capacity_mbps: str | None,
+    points_of_presence: str | None,
+    data_usage_tb: str | None,
+):
+    return ncc_report_service.parse_report_params(
+        as_of=as_of,
+        statuses=",".join(statuses),
+        reseller_id=reseller_id,
+        capacity={
+            "access_capacity_gbps": access_capacity_gbps,
+            "unutilized_capacity_mbps": unutilized_capacity_mbps,
+            "points_of_presence": points_of_presence,
+            "data_usage_tb": data_usage_tb,
+        },
+    )
+
+
+@router.get(
+    "/ncc-subscribers",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:read"))],
+)
+def reports_ncc_subscribers(
+    request: Request,
+    as_of: str | None = None,
+    statuses: list[str] = Query(default=[]),
+    reseller_id: str | None = None,
+    access_capacity_gbps: str | None = None,
+    unutilized_capacity_mbps: str | None = None,
+    points_of_presence: str | None = None,
+    data_usage_tb: str | None = None,
+    db: Session = Depends(get_db),
+):
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    params = _ncc_params(
+        as_of,
+        statuses,
+        reseller_id,
+        access_capacity_gbps,
+        unutilized_capacity_mbps,
+        points_of_presence,
+        data_usage_tb,
+    )
+    report = ncc_report_service.build_ncc_subscriber_report(db, params)
+    context = {
+        "request": request,
+        "active_page": "reports-ncc-subscribers",
+        "active_menu": "reports",
+        "current_user": get_current_user(request),
+        "sidebar_stats": get_sidebar_stats(db),
+        "report": report,
+        "status_options": [s.value for s in SubscriptionStatus],
+        "selected_statuses": report["parameters"]["active_statuses"],
+        "form": {
+            "as_of": as_of or "",
+            "reseller_id": reseller_id or "",
+            "access_capacity_gbps": access_capacity_gbps or "",
+            "unutilized_capacity_mbps": unutilized_capacity_mbps or "",
+            "points_of_presence": points_of_presence or "",
+            "data_usage_tb": data_usage_tb or "",
+        },
+    }
+    return templates.TemplateResponse("admin/reports/ncc_subscribers.html", context)
+
+
+@router.get(
+    "/ncc-subscribers/export",
+    dependencies=[Depends(require_permission("customer:read"))],
+)
+def reports_ncc_subscribers_export(
+    as_of: str | None = None,
+    statuses: list[str] = Query(default=[]),
+    reseller_id: str | None = None,
+    access_capacity_gbps: str | None = None,
+    unutilized_capacity_mbps: str | None = None,
+    points_of_presence: str | None = None,
+    data_usage_tb: str | None = None,
+    db: Session = Depends(get_db),
+):
+    params = _ncc_params(
+        as_of,
+        statuses,
+        reseller_id,
+        access_capacity_gbps,
+        unutilized_capacity_mbps,
+        points_of_presence,
+        data_usage_tb,
+    )
+    report = ncc_report_service.build_ncc_subscriber_report(db, params)
+    content = ncc_report_service.build_ncc_subscriber_csv(report)
+    stamp = report["parameters"]["as_of"][:10]
+    return Response(
+        content,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f"attachment; filename=ncc-subscribers-{stamp}.csv"
+        },
+    )
+
+
+# ── NCC quarterly Complaints return (①) ──────────────────────────────────────
+def _ncc_complaints_window(
+    date_from: str | None, date_to: str | None
+) -> tuple[datetime, datetime]:
+    """Bound the complaints window. Defaults to the trailing 90 days — the
+    quarterly cadence the return is filed on — anchored on ``created_at``."""
+    end = _parse_date_end(date_to) or datetime.now(UTC)
+    start = _parse_date_start(date_from) or (end - timedelta(days=90))
+    if end < start:
+        start, end = end, start
+    return start, end
+
+
+@router.get(
+    "/ncc-complaints",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("provisioning:read"))],
+)
+def reports_ncc_complaints(
+    request: Request,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    db: Session = Depends(get_db),
+):
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    start, end = _ncc_complaints_window(date_from, date_to)
+    report = ncc_complaints_service.build_report(db, start=start, end=end)
+    # Surface, per row, whether it is filable — the workbook's own validator
+    # is the authority, so the officer sees exactly what CRM's export would.
+    rows = []
+    for record in ncc_workbook.export_rows(report["records"]):
+        status = ncc_workbook.validation_status(record)
+        rows.append(
+            {"record": record, "validation": status, "ok": status.startswith("[OK]")}
+        )
+    not_filable = sum(1 for row in rows if not row["ok"])
+    context = {
+        "request": request,
+        "active_page": "reports-ncc-complaints",
+        "active_menu": "reports",
+        "current_user": get_current_user(request),
+        "sidebar_stats": get_sidebar_stats(db),
+        "report": report,
+        "columns": report["columns"],
+        "rows": rows,
+        "not_filable": not_filable,
+        "date_from": date_from or "",
+        "date_to": date_to or "",
+        "window": {"start": start.isoformat(), "end": end.isoformat()},
+    }
+    return templates.TemplateResponse("admin/reports/ncc_complaints.html", context)
+
+
+@router.get(
+    "/ncc-complaints/export",
+    dependencies=[Depends(require_permission("provisioning:read"))],
+)
+def reports_ncc_complaints_export(
+    date_from: str | None = None,
+    date_to: str | None = None,
+    db: Session = Depends(get_db),
+):
+    start, end = _ncc_complaints_window(date_from, date_to)
+    report = ncc_complaints_service.build_report(db, start=start, end=end)
+    rows = ncc_workbook.export_rows(report["records"])
+    content = ncc_workbook.build_workbook(rows, report["columns"])
+    filename = ncc_workbook.export_filename(end)
+    return Response(
+        content,
+        media_type=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+# ── NCC Regulatory Pack (① + ② + ③) ──────────────────────────────────────────
+def _ncc_pack_window(
+    date_from: str | None, date_to: str | None
+) -> tuple[datetime, datetime]:
+    return _ncc_complaints_window(date_from, date_to)
+
+
+@router.get(
+    "/ncc-regulatory-pack",
+    dependencies=[Depends(require_permission("provisioning:read"))],
+)
+def reports_ncc_regulatory_pack(
+    date_from: str | None = None,
+    date_to: str | None = None,
+    as_of: str | None = None,
+    year: int | None = None,
+    db: Session = Depends(get_db),
+):
+    """The full pack as JSON. Sections degrade to ``available: false`` when an
+    upstream (sub/erp) is unreachable — the pack never fabricates a section."""
+    start, end = _ncc_pack_window(date_from, date_to)
+    pack = ncc_pack_service.build_regulatory_pack(
+        db, start_dt=start, end_dt=end, as_of=as_of, year=year
+    )
+    return JSONResponse(pack)
+
+
+@router.get(
+    "/ncc-pack",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("provisioning:read"))],
+)
+def reports_ncc_pack_page(
+    request: Request,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    as_of: str | None = None,
+    year: int | None = None,
+    db: Session = Depends(get_db),
+):
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    start, end = _ncc_pack_window(date_from, date_to)
+    pack = ncc_pack_service.build_regulatory_pack(
+        db, start_dt=start, end_dt=end, as_of=as_of, year=year
+    )
+    context = {
+        "request": request,
+        "active_page": "reports-ncc-pack",
+        "active_menu": "reports",
+        "current_user": get_current_user(request),
+        "sidebar_stats": get_sidebar_stats(db),
+        "pack": pack,
+        "date_from": date_from or "",
+        "date_to": date_to or "",
+        "as_of": as_of or "",
+        "year": year or "",
+    }
+    return templates.TemplateResponse("admin/reports/ncc_pack.html", context)
+
+
+@router.get(
+    "/ncc-regulatory-pack.pdf",
+    dependencies=[Depends(require_permission("provisioning:read"))],
+)
+def reports_ncc_regulatory_pack_pdf(
+    date_from: str | None = None,
+    date_to: str | None = None,
+    as_of: str | None = None,
+    year: int | None = None,
+    db: Session = Depends(get_db),
+):
+    start, end = _ncc_pack_window(date_from, date_to)
+    pack = ncc_pack_service.build_regulatory_pack(
+        db, start_dt=start, end_dt=end, as_of=as_of, year=year
+    )
+    html_content = _render_ncc_pack_html(pack, start, end)
+    try:
+        from app.services.billing_invoice_pdf import _ensure_weasyprint_pydyf_compat
+
+        _ensure_weasyprint_pydyf_compat()
+        from weasyprint import HTML
+
+        pdf_bytes = HTML(string=html_content).write_pdf()
+        content_type = "application/pdf"
+        extension = "pdf"
+        content: bytes = pdf_bytes
+    except Exception:
+        # No silent fabrication: if PDF rendering is unavailable, hand back the
+        # same content as HTML rather than an empty or fake document.
+        content = html_content.encode("utf-8")
+        content_type = "text/html; charset=utf-8"
+        extension = "html"
+    filename = ncc_workbook.regulatory_pack_filename(start, end, extension)
+    return Response(
+        content,
+        media_type=content_type,
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+def _render_ncc_pack_html(pack: dict, start: datetime, end: datetime) -> str:
+    meta = pack.get("meta", {})
+    sources = meta.get("sources", {})
+
+    def _section_row(label: str, section: dict) -> str:
+        available = section.get("available", False)
+        status = "available" if available else "unavailable"
+        detail = "" if available else escape(str(section.get("error") or ""))
+        return f"<tr><td>{escape(label)}</td><td>{status}</td><td>{detail}</td></tr>"
+
+    complete = "COMPLETE" if meta.get("complete") else "INCOMPLETE — see sections below"
+    rows = "".join(
+        [
+            _section_row("① Quarterly complaints", pack.get("complaints", {})),
+            _section_row("② Quarterly subscribers", pack.get("subscribers", {})),
+            _section_row("③ Annual financials", pack.get("financials", {})),
+            _section_row("③ Annual staff", pack.get("staff", {})),
+        ]
+    )
+    return (
+        "<html><head><meta charset='utf-8'>"
+        "<style>body{font-family:sans-serif}table{border-collapse:collapse}"
+        "td,th{border:1px solid #999;padding:6px 10px;text-align:left}</style>"
+        "</head><body>"
+        "<h1>NCC Regulatory Pack</h1>"
+        f"<p>Reporting window: {start:%Y-%m-%d} — {end:%Y-%m-%d}</p>"
+        f"<p>Status: <strong>{complete}</strong></p>"
+        f"<p>Sources reachable: {escape(str(sources))}</p>"
+        "<table><tr><th>Section</th><th>Status</th><th>Detail</th></tr>"
+        f"{rows}</table>"
+        "</body></html>"
+    )
+
+
+@router.post(
+    "/ncc-email-settings",
+    dependencies=[Depends(require_permission("notification:write"))],
+)
+def reports_ncc_email_settings(
+    request: Request,
+    enabled: bool = Form(default=False),
+    recipient: str = Form(default=""),
+    subject: str = Form(default=""),
+    lookback_days: int = Form(default=7),
+    db: Session = Depends(get_db),
+):
+    """Save the weekly NCC digest email settings (notification domain)."""
+    from app.schemas.settings import DomainSettingUpdate
+    from app.services.domain_settings import notification_settings
+
+    def _save_text(key: str, value: str) -> None:
+        notification_settings.upsert_by_key(
+            db, key, DomainSettingUpdate(value_text=value)
+        )
+
+    notification_settings.upsert_by_key(
+        db,
+        "ncc_report_email_enabled",
+        DomainSettingUpdate(value_json=bool(enabled)),
+    )
+    _save_text("ncc_report_email_to", recipient.strip())
+    _save_text("ncc_report_email_subject", subject.strip() or "Weekly NCC Report")
+    notification_settings.upsert_by_key(
+        db,
+        "ncc_report_email_lookback_days",
+        DomainSettingUpdate(value_json=max(int(lookback_days), 1)),
+    )
+    return RedirectResponse(
+        url="/admin/reports/ncc-complaints?saved=1", status_code=303
+    )
+
+
+# ── AI: on-demand insight for an owned report projection ─────────────────────
+# User-driven: an operator clicks "Get AI insight" on a report page and the
+# advisor for that report set runs against the OWNER's projection. The engine
+# never queries a domain model — the route fetches the projection and hands it
+# in — so the source-of-truth boundary holds by construction.
+_REPORT_ADVISORS: dict[str, str] = {
+    # advisor_key -> the report page it advises on
+    "ticket_sla_advisor": "ticket-sla",
+}
+
+
+def _fetch_report_for_advisor(
+    db: Session, advisor_key: str, date_from: str | None, date_to: str | None
+) -> tuple[dict, str, str | None]:
+    """Fetch the owned projection an advisor reads. Returns
+    (report, entity_type, entity_id)."""
+    if advisor_key == "ticket_sla_advisor":
+        start_at = _parse_date_start(date_from)
+        end_at = _parse_date_end(date_to)
+        report = ticket_sla_reports_service.summary(db, start_at, end_at)
+        return report, "report:ticket_sla", None
+    raise KeyError(advisor_key)
+
+
+@router.post(
+    "/insight/{advisor_key}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("provisioning:read"))],
+)
+def reports_generate_insight(
+    request: Request,
+    advisor_key: str,
+    date_from: str | None = Form(default=None),
+    date_to: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+):
+    """Generate an AI insight for the given report advisor, on demand.
+
+    Renders the insight partial. When AI generation is disabled or the advisor
+    is off, renders a graceful message — never a 500."""
+    from app.services.ai.engine import AIEngineError, intelligence_engine
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request)
+    # get_current_user returns a dict; be tolerant of an object too, and never
+    # let a non-UUID actor id 500 the route — an insight with no recorded
+    # actor is fine, a crash is not.
+    _raw_actor = (
+        current_user.get("id")
+        if isinstance(current_user, dict)
+        else getattr(current_user, "id", None)
+    )
+    actor_id: str | None = None
+    if _raw_actor:
+        try:
+            actor_id = str(UUID(str(_raw_actor)))
+        except (ValueError, TypeError):
+            actor_id = None
+
+    try:
+        report, entity_type, entity_id = _fetch_report_for_advisor(
+            db, advisor_key, date_from, date_to
+        )
+    except KeyError:
+        return templates.TemplateResponse(
+            request,
+            "admin/reports/_insight.html",
+            {"error": "No advisor for this report."},
+            status_code=404,
+        )
+
+    try:
+        insight = intelligence_engine.advise(
+            db,
+            advisor_key=advisor_key,
+            report=report,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            trigger="manual",
+            triggered_by_system_user_id=actor_id,
+        )
+    except AIEngineError as exc:
+        return templates.TemplateResponse(
+            request,
+            "admin/reports/_insight.html",
+            {"error": str(exc), "disabled": True},
+        )
+    return templates.TemplateResponse(
+        request,
+        "admin/reports/_insight.html",
+        {"insight": insight},
+    )

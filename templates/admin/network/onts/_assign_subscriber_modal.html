@@ -28,6 +28,7 @@
               hx-swap="innerHTML">
             {% include "components/forms/csrf_input.html" %}
             <input type="hidden" name="assignment_modal" value="1">
+            <input type="hidden" name="pon_port_id" value="{{ form.pon_port_id if form and form.pon_port_id else pon_port_id or '' }}">
 
             {% if error %}
             <div class="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-800/50 dark:bg-rose-900/20 dark:text-rose-300">
@@ -44,13 +45,23 @@
                      data-typeahead-label="subscribers">
                     <input type="text"
                            id="modal_account_search"
-                           name="account_search"
                            autocomplete="off"
                            data-typeahead-input
                            value="{{ form.account_label if form else '' }}"
                            placeholder="Search by name, email, or account number..."
                            class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-cyan-500 focus:bg-white focus:text-slate-900 focus:ring-cyan-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white dark:focus:bg-slate-700 dark:focus:text-white">
                     <input type="hidden" name="account_id" data-typeahead-hidden value="{{ form.account_id if form else '' }}">
+                    <div data-typeahead-results></div>
+                </div>
+            </div>
+
+            <div class="mt-4">
+                <label for="modal_subscription_search" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Service Subscription <span class="text-red-500">*</span></label>
+                <div class="relative mt-1" data-typeahead-url="/api/v1/search/subscriptions" data-typeahead-min="2" data-typeahead-limit="10">
+                    <input type="text" id="modal_subscription_search" autocomplete="off"
+                           data-typeahead-input value="{{ form.subscription_label if form else '' }}"
+                           class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-cyan-500 focus:ring-cyan-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <input type="hidden" name="subscription_id" data-typeahead-hidden value="{{ form.subscription_id if form else '' }}" required>
                     <div data-typeahead-results></div>
                 </div>
             </div>

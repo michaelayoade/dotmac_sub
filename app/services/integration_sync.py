@@ -34,8 +34,8 @@ def _crm_client_from_job(job: IntegrationJob) -> CRMClient:
     return CRMClient(
         base_url=_value(connector.base_url if connector else None)
         or settings.crm_base_url,
-        username=_value(auth_config.get("username")) or settings.crm_username,
-        password=_value(auth_config.get("password")) or settings.crm_password,
+        service_token=_value(auth_config.get("service_token"))
+        or settings.crm_service_token,
         timeout=float(
             connector.timeout_sec if connector and connector.timeout_sec else 45
         ),
@@ -184,6 +184,15 @@ def run_scheduled_pull(
         )
         .first()
     )
+    if job is not None:
+        filter_config = job.filter_config or {}
+        limit = int(
+            filter_config.get("page_size") or filter_config.get("limit") or limit
+        )
+        max_pages = int(filter_config.get("max_pages") or max_pages)
+        sync_comments = bool(filter_config.get("sync_comments", True))
+    else:
+        sync_comments = True
     run = None
     record_callback = None
     if job is not None:
@@ -209,6 +218,7 @@ def run_scheduled_pull(
             limit=limit,
             max_pages=max_pages,
             since=since,
+            sync_comments=sync_comments,
             record_callback=record_callback,
         )
     except Exception as exc:
@@ -222,8 +232,12 @@ def run_scheduled_pull(
     metrics = {
         "mode": "incremental" if since else "full",
         "since": since.isoformat() if since else None,
+        "page_size": limit,
+        "max_pages": max_pages,
+        "sync_comments": sync_comments,
         **result.as_dict(),
     }
+    metrics["partial_success"] = bool(result.errors and result.fetched)
     if run is not None:
         run.status = (
             IntegrationRunStatus.failed
@@ -231,6 +245,8 @@ def run_scheduled_pull(
             else IntegrationRunStatus.success
         )
         run.metrics = metrics
+        if result.errors and result.fetched:
+            run.error = f"Completed with {len(result.errors)} per-ticket error(s)."
         run.finished_at = datetime.now(UTC)
         if job is not None:
             job.last_run_at = run.finished_at

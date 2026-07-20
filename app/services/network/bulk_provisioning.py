@@ -56,6 +56,8 @@ def _dedupe_ont_ids(ont_ids: list[str | uuid.UUID]) -> tuple[list[uuid.UUID], in
 
 
 def _status_from_result(result: dict[str, Any]) -> BulkProvisioningItemStatus:
+    if result.get("waiting"):
+        return BulkProvisioningItemStatus.waiting
     if result.get("success"):
         return BulkProvisioningItemStatus.succeeded
     return BulkProvisioningItemStatus.failed
@@ -150,14 +152,13 @@ def bulk_provision_onts(
     step_data: dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> BulkProvisioningDispatchResult:
-    """Create a durable bulk run and execute OLT baseline repair synchronously.
+    """Create a durable bulk run and queue tracked OLT baseline repairs.
 
     Normal authorization applies this baseline automatically. This function is
     retained for manual repair and bulk re-apply operations.
     """
-    del provisioning_mode, chunk_delay_seconds, step_data
-    from app.services.network.ont_provision_steps import apply_authorization_baseline
-    from app.services.network.provisioning_events import provisioning_correlation
+    del provisioning_mode, step_data
+    from app.services.queue_adapter import enqueue_task
 
     workers = max(1, min(int(max_workers or 10), 50))
     unique_ont_ids, input_skipped_count = _dedupe_ont_ids(ont_ids)
@@ -183,37 +184,43 @@ def bulk_provision_onts(
         pending_count = 0
 
     processed_count = int(pending_count)
+    orchestrator_task_id: str | None = None
     if pending_count:
         run.status = BulkProvisioningRunStatus.running
-        db.flush()
-
-        pending_items = list_pending_bulk_items(db, run.id)
-        for item in pending_items:
-            mark_bulk_item_running(db, item.id)
-            try:
-                with provisioning_correlation(item.correlation_key):
-                    result = apply_authorization_baseline(
-                        db,
-                        str(item.ont_unit_id),
-                        dry_run=dry_run,
-                        allow_low_optical_margin=allow_low_optical_margin,
-                    )
-                payload = {
-                    "success": result.success,
-                    "message": result.message,
-                    "ont_id": str(item.ont_unit_id),
-                    "duration_ms": result.duration_ms,
-                    "bulk_run_id": str(run.id),
-                    "bulk_item_id": str(item.id),
-                    "correlation_key": item.correlation_key,
-                }
-                mark_bulk_item_completed(db, item.id, payload)
-            except Exception as exc:
-                mark_bulk_item_failed(db, item.id, str(exc))
-
-    finalize_bulk_provisioning_run(db, run.id)
-
-    db.commit()
+        db.commit()
+        dispatch = enqueue_task(
+            "app.tasks.ont_provisioning.queue_bulk_provisioning",
+            args=[[str(ont_id) for ont_id in unique_ont_ids]],
+            kwargs={
+                "dry_run": dry_run,
+                "initiated_by": initiated_by,
+                "max_parallel": workers,
+                "chunk_delay_seconds": chunk_delay_seconds,
+                "bulk_run_id": str(run.id),
+                "allow_low_optical_margin": allow_low_optical_margin,
+            },
+            correlation_id=run_correlation,
+            source=str((metadata or {}).get("source") or "bulk_provisioning"),
+            actor_id=initiated_by,
+        )
+        if dispatch.queued:
+            orchestrator_task_id = dispatch.task_id
+            run.run_metadata = {
+                **(run.run_metadata or {}),
+                "orchestrator_task_id": dispatch.task_id,
+            }
+        else:
+            error = dispatch.error or "unknown queue error"
+            for item in list_pending_bulk_items(db, run.id):
+                mark_bulk_item_failed(
+                    db, item.id, f"Bulk provisioning queue failed: {error}"
+                )
+            run.error_message = f"Bulk provisioning queue failed: {error}"
+        finalize_bulk_provisioning_run(db, run.id)
+        db.commit()
+    else:
+        finalize_bulk_provisioning_run(db, run.id)
+        db.commit()
     return BulkProvisioningDispatchResult(
         run_id=run.id,
         correlation_key=run.correlation_key,
@@ -221,8 +228,134 @@ def bulk_provision_onts(
         total=run.total_count,
         processed=processed_count,
         skipped=run.skipped_count,
-        orchestrator_task_id=None,
+        orchestrator_task_id=orchestrator_task_id,
     )
+
+
+def dispatch_bulk_provisioning_commands(
+    db: Session,
+    ont_ids: list[str],
+    *,
+    dry_run: bool = False,
+    initiated_by: str | None = None,
+    bulk_run_id: str | None = None,
+    allow_low_optical_margin: bool = False,
+) -> dict[str, Any]:
+    """Stage one tracked command per bulk item, or execute DB-only previews."""
+    bulk_items_by_ont_id: dict[str, BulkProvisioningItem] = {}
+    if bulk_run_id:
+        pending_items = list_pending_bulk_items(db, bulk_run_id)
+        bulk_items_by_ont_id = {
+            str(item.ont_unit_id): item for item in pending_items if item.ont_unit_id
+        }
+
+    unique_ont_ids = list(dict.fromkeys(str(ont_id) for ont_id in ont_ids if ont_id))
+    if bulk_items_by_ont_id:
+        unique_ont_ids = [
+            ont_id for ont_id in unique_ont_ids if ont_id in bulk_items_by_ont_id
+        ]
+    if not unique_ont_ids:
+        return {
+            "processed": 0,
+            "errors": 0,
+            "skipped": 0,
+            "message": "No ONTs supplied.",
+            "tasks": [],
+        }
+
+    tasks: list[dict[str, Any]] = []
+    exceptions = 0
+    failed_results = 0
+    for ont_id in unique_ont_ids:
+        bulk_item = bulk_items_by_ont_id.get(ont_id)
+        item_correlation_key = (
+            bulk_item.correlation_key
+            if bulk_item is not None
+            else f"bulk_provision:{ont_id}"
+        )
+        bulk_item_id = str(bulk_item.id) if bulk_item is not None else None
+        try:
+            if dry_run:
+                from app.services.network.ont_provisioning_execution import (
+                    execute_ont_provisioning,
+                )
+
+                payload = execute_ont_provisioning(
+                    db,
+                    ont_id=ont_id,
+                    dry_run=True,
+                    initiated_by=initiated_by,
+                    correlation_key=item_correlation_key,
+                    bulk_run_id=bulk_run_id,
+                    bulk_item_id=bulk_item_id,
+                    allow_low_optical_margin=allow_low_optical_margin,
+                    operation_id=None,
+                )
+            else:
+                from app.services.network.ont_provisioning_commands import (
+                    request_ont_provisioning,
+                )
+
+                command = request_ont_provisioning(
+                    db,
+                    ont_id,
+                    initiated_by=initiated_by,
+                    correlation_key=item_correlation_key,
+                    bulk_run_id=bulk_run_id,
+                    bulk_item_id=bulk_item_id,
+                    allow_low_optical_margin=allow_low_optical_margin,
+                )
+                payload = {
+                    "success": command.accepted,
+                    "waiting": command.waiting,
+                    "message": command.message,
+                    "operation_id": command.operation_id,
+                    "dispatch_id": command.dispatch_id,
+                    "duplicate": command.duplicate,
+                }
+                if not command.accepted and bulk_item is not None:
+                    mark_bulk_item_failed(db, bulk_item.id, command.message)
+                    db.commit()
+            if not payload.get("success") and not payload.get("waiting"):
+                failed_results += 1
+            tasks.append(
+                {
+                    "ont_id": ont_id,
+                    "bulk_item_id": bulk_item_id or "",
+                    "correlation_key": item_correlation_key,
+                    "operation_id": payload.get("operation_id"),
+                    "dispatch_id": payload.get("dispatch_id"),
+                    "success": bool(payload.get("success")),
+                    "waiting": bool(payload.get("waiting")),
+                    "message": str(payload.get("message") or ""),
+                }
+            )
+        except Exception as exc:
+            db.rollback()
+            exceptions += 1
+            if bulk_item is not None:
+                mark_bulk_item_failed(db, bulk_item.id, str(exc))
+                db.commit()
+            tasks.append(
+                {
+                    "ont_id": ont_id,
+                    "bulk_item_id": bulk_item_id or "",
+                    "correlation_key": item_correlation_key,
+                    "success": False,
+                    "error": str(exc),
+                }
+            )
+
+    stats = {
+        "processed": len(tasks) - exceptions,
+        "errors": exceptions + failed_results,
+        "exceptions": exceptions,
+        "failed": failed_results,
+        "skipped": len(ont_ids) - len(unique_ont_ids),
+        "bulk_run_id": bulk_run_id,
+        "tasks": tasks,
+    }
+    return stats
 
 
 def list_pending_bulk_items(
@@ -276,12 +409,16 @@ def mark_bulk_item_completed(
         return None
     item.status = _status_from_result(result)
     item.message = str(result.get("message") or "")
-    item.error_message = None if result.get("success") else item.message
+    item.error_message = (
+        None if result.get("success") or result.get("waiting") else item.message
+    )
     item.result_data = {
         **(item.result_data or {}),
         "provisioning_result": result,
     }
-    item.completed_at = datetime.now(UTC)
+    item.completed_at = (
+        None if item.status == BulkProvisioningItemStatus.waiting else datetime.now(UTC)
+    )
     db.flush()
     finalize_bulk_provisioning_run(db, item.run_id)
     return item
@@ -333,7 +470,11 @@ def finalize_bulk_provisioning_run(
         1
         for item in items
         if item.status
-        in {BulkProvisioningItemStatus.pending, BulkProvisioningItemStatus.running}
+        in {
+            BulkProvisioningItemStatus.pending,
+            BulkProvisioningItemStatus.running,
+            BulkProvisioningItemStatus.waiting,
+        }
     )
     if active_count:
         run.status = BulkProvisioningRunStatus.running

@@ -183,6 +183,7 @@ class TestNetworkOperationLifecycle:
         assert start_record.operation_type == NetworkOperationType.ont_reboot.value
         assert start_record.correlation_key == "ont_reboot:test"
         assert waiting_record.operation_status == NetworkOperationStatus.waiting.value
+        assert waiting_record.control_plane_phase == "readback_pending"
         assert waiting_record.waiting_reason == "next_inform"
 
     def test_running_to_failed_with_payload(self, db_session):
@@ -587,6 +588,7 @@ class TestParentStatusDerivation:
         updated = network_operations.update_parent_status(db_session, str(parent.id))
         assert updated.status == NetworkOperationStatus.failed
         assert updated.completed_at is not None
+        assert updated.error == "test error"
 
     def test_any_pending(self, db_session):
         """Parent is pending when any child is pending (and none running/failed)."""
@@ -673,6 +675,46 @@ class TestCleanupOldOperations:
         assert result["purged"] == 0
         assert db_session.get(NetworkOperation, parent_id) is not None
         assert db_session.get(NetworkOperation, child_id) is not None
+
+    def test_preserves_old_source_with_retained_redrive_attempt(
+        self, db_session, monkeypatch
+    ):
+        """Retention cannot delete a source while a newer retry links to it."""
+        target_id = _make_target_id()
+        source = network_operations.start(
+            db_session,
+            NetworkOperationType.olt_ont_sync,
+            NetworkOperationTargetType.ont,
+            target_id,
+            input_payload={"action": "status_refresh"},
+        )
+        network_operations.mark_running(db_session, str(source.id))
+        network_operations.mark_failed(db_session, str(source.id), "old failure")
+        source.completed_at = datetime.now(UTC) - timedelta(days=120)
+        attempt = network_operations.start(
+            db_session,
+            NetworkOperationType.olt_ont_sync,
+            NetworkOperationTargetType.ont,
+            target_id,
+            input_payload={"action": "status_refresh"},
+        )
+        attempt.redrive_of_id = source.id
+        attempt.redrive_reason = "Recovered transport"
+        attempt.redrive_reviewed_head = "a" * 64
+        attempt.redrive_idempotency_key = "retained-redrive-key"
+        db_session.commit()
+        source_id = source.id
+        attempt_id = attempt.id
+        monkeypatch.setattr(
+            "app.tasks.network_operations.SessionLocal",
+            lambda: db_session,
+        )
+
+        result = cleanup_old_operations()
+
+        assert result["purged"] == 0
+        assert db_session.get(NetworkOperation, source_id) is not None
+        assert db_session.get(NetworkOperation, attempt_id) is not None
 
 
 # ---------------------------------------------------------------------------

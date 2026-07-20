@@ -35,12 +35,14 @@ docker compose exec -T -e PYTHONPATH=/app app \
 All four must be **0**, or explicitly waived with a written reason + named
 approver:
 
-- `billing_disabled_service_lines` — **money bug.** Finance dispositions the 22
-  (`post_cutover_fallback...`/`billing_violations_*` worklists from #287):
-  void unpaid lines, credit-note paid lines, or mark valid-historical. Sign-off
-  required before automation starts compounding balances.
-- `billing_duplicate_subscription_period_lines` — **money bug.** Finance keeps
-  one line per group, voids the rest (51 groups / 106 lines in the snapshot).
+- `billing_disabled_service_lines` — **money bug.** Finance disposition must now
+  start from the reconstructed customer-balance packet in
+  `docs/runbooks/cutover-billing-reconciliation-2026-07-03.md`. The old
+  `post_cutover_*` and `billing_violations_*` worklists are retired diagnostic
+  artifacts.
+- `billing_duplicate_subscription_period_lines` — **money bug.** Review only in
+  the context of the reconstructed customer statement; do not use the old June
+  line-count snapshot as the finance source of truth.
 - `active_subscription_missing_radius` — see Step 2.
 - `billing_addon_without_billable_parent` — was 0 in the snapshot; keep it 0.
 

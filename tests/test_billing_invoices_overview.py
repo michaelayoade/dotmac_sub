@@ -103,6 +103,30 @@ def test_build_overview_data_cache_is_scoped_by_filters(db_session, monkeypatch)
     assert calls["count"] == 2
 
 
+def test_empty_invoice_totals_use_display_owner_default_currency(
+    db_session, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.services.display_format.default_currency",
+        lambda _db: "USD",
+    )
+
+    result = build_invoices_list_data(
+        db_session,
+        account_id=None,
+        partner_id=None,
+        status=None,
+        customer_ref=None,
+        search=None,
+        date_range=None,
+        page=1,
+        per_page=25,
+    )
+
+    assert result["status_totals"]["all"]["display"] == "USD 0.00"
+    assert result["status_totals"]["draft"]["due_display"] == "USD 0.00"
+
+
 def _create_invoice(
     db_session,
     *,
@@ -169,6 +193,9 @@ def test_invoices_list_returns_status_totals_and_payment_split(db_session, subsc
     assert result["status_totals"]["all"]["count"] == 2
     assert result["status_totals"]["all"]["due_total"] == 25.0
     assert result["status_totals"]["all"]["received_total"] == 155.0
+    presentations = result["invoice_status_presentations"]
+    for invoice in result["invoices"]:
+        assert presentations[str(invoice.id)].value == invoice.status.value
 
 
 def test_invoices_list_status_totals_are_grouped_by_currency(db_session, subscriber):
@@ -253,6 +280,39 @@ def test_invoices_list_search_filters_invoice_numbers(db_session, subscriber):
     assert result["total"] == 1
     assert len(result["invoices"]) == 1
     assert result["invoices"][0].invoice_number == "INV-MATCH-1"
+
+
+def test_invoice_status_summary_preserves_other_status_tabs(db_session, subscriber):
+    now = datetime.now(UTC)
+    _create_invoice(
+        db_session,
+        account_id=subscriber.id,
+        invoice_number="INV-STATUS-DRAFT",
+        total="30.00",
+        balance_due="30.00",
+        status=InvoiceStatus.draft,
+        created_at=now,
+    )
+    _create_invoice(
+        db_session,
+        account_id=subscriber.id,
+        invoice_number="INV-STATUS-ISSUED",
+        total="50.00",
+        balance_due="50.00",
+        status=InvoiceStatus.issued,
+        created_at=now,
+    )
+
+    result = build_invoices_list_data(
+        db_session,
+        status="issued",
+    )
+
+    assert result["total"] == 1
+    assert result["invoices"][0].invoice_number == "INV-STATUS-ISSUED"
+    assert result["status_totals"]["all"]["count"] == 2
+    assert result["status_totals"]["draft"]["count"] == 1
+    assert result["status_totals"]["issued"]["count"] == 1
 
 
 def test_invoices_list_date_range_filters_recent_rows(db_session, subscriber):
@@ -372,3 +432,47 @@ def test_render_invoices_csv_contains_due_and_received_columns(db_session, subsc
     )
     assert "INV-CSV-1" in csv_text
     assert ",150.00,40.00,110.00,NGN," in csv_text
+
+
+def test_stream_invoices_csv_matches_rendered_and_yields_incrementally(
+    db_session, subscriber
+):
+    now = datetime.now(UTC)
+    for idx in range(3):
+        _create_invoice(
+            db_session,
+            account_id=subscriber.id,
+            invoice_number=f"INV-STREAM-{idx}",
+            total="100.00",
+            balance_due="25.00",
+            status=InvoiceStatus.partially_paid,
+            created_at=now - timedelta(minutes=idx),
+        )
+
+    list_query = web_billing_overview_service.build_invoice_list_query(
+        account_id=None,
+        partner_id=None,
+        status=None,
+        proforma_only=False,
+        customer_ref=None,
+        search=None,
+        date_range=None,
+    )
+    scope = web_billing_overview_service.list_invoices_for_scope(
+        db_session, list_query=list_query
+    )
+    expected = render_invoices_csv(scope)
+
+    chunks = list(
+        web_billing_overview_service.stream_invoices_csv(
+            db_session, list_query=list_query
+        )
+    )
+
+    # Streamed output is byte-identical to the eager renderer...
+    assert "".join(chunks) == expected
+    # ...and it is emitted one row at a time (header + one chunk per invoice),
+    # never as a single materialized body.
+    assert len(chunks) == len(scope) + 1
+    assert chunks[0].startswith("invoice_id,")
+    assert all("INV-STREAM-" in chunk for chunk in chunks[1:])

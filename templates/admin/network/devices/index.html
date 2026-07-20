@@ -20,7 +20,7 @@
 
     {% call page_header(
         title="Network Devices",
-        subtitle="Manage OLT, ONT, and CPE devices across the network",
+        subtitle="Manage core, OLT, ONT, and CPE devices across the network",
         icon=icon_server(),
         color="cyan",
         color2="blue",
@@ -33,31 +33,34 @@
     <div x-data="{ activeType: '{{ type or 'all' }}' }" class="animate-fade-in-up" style="animation-delay: 50ms;">
         <div class="flex flex-wrap gap-2 rounded-2xl border border-slate-200/60 bg-white p-2 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
             {% set device_types = [
-                {'value': 'all', 'label': 'All Devices', 'count': stats.total, 'color': 'slate', 'icon': '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/></svg>'},
-                {'value': 'olt', 'label': 'OLT', 'count': stats.olt, 'color': 'violet', 'icon': '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>'},
-                {'value': 'ont', 'label': 'ONT', 'count': stats.ont, 'color': 'blue', 'icon': '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>'},
-                {'value': 'cpe', 'label': 'CPE', 'count': stats.cpe, 'color': 'emerald', 'icon': '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"/></svg>'}
+                {'value': 'all', 'label': 'All Devices', 'kpi': device_kpis.total, 'color': 'slate', 'icon': '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/></svg>'},
+                {'value': 'core', 'label': 'Core', 'kpi': device_kpis.core, 'color': 'slate', 'icon': '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/></svg>'},
+                {'value': 'olt', 'label': 'OLT', 'kpi': device_kpis.olt, 'color': 'violet', 'icon': '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>'},
+                {'value': 'ont', 'label': 'ONT', 'kpi': device_kpis.ont, 'color': 'blue', 'icon': '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>'},
+                {'value': 'cpe', 'label': 'CPE', 'kpi': device_kpis.cpe, 'color': 'emerald', 'icon': '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"/></svg>'}
             ] %}
             {% for dt in device_types %}
             <button x-on:click="activeType = '{{ dt.value }}'"
-                    hx-get="/admin/network/devices?type={{ dt.value }}"
+                    hx-get="{{ dt.kpi.cohort_url }}"
                     hx-target="#devices-content"
+                    hx-select="#devices-content"
                     :class="activeType === '{{ dt.value }}' ? 'bg-gradient-to-r from-{{ dt.color }}-500 to-{{ dt.color }}-600 text-white shadow-lg shadow-{{ dt.color }}-500/25' : 'text-slate-600 hover:bg-{{ dt.color }}-50 dark:text-slate-300 dark:hover:bg-{{ dt.color }}-900/20'"
                     class="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition-all">
                 {{ dt.icon|safe }}
                 {{ dt.label }}
-                <span :class="activeType === '{{ dt.value }}' ? 'bg-white/20 text-white' : 'bg-{{ dt.color }}-100 text-{{ dt.color }}-700 dark:bg-{{ dt.color }}-900/30 dark:text-{{ dt.color }}-400'" class="rounded-lg px-2 py-0.5 text-xs font-semibold transition-colors">{{ dt.count }}</span>
+                <span :class="activeType === '{{ dt.value }}' ? 'bg-white/20 text-white' : 'bg-{{ dt.color }}-100 text-{{ dt.color }}-700 dark:bg-{{ dt.color }}-900/30 dark:text-{{ dt.color }}-400'" class="rounded-lg px-2 py-0.5 text-xs font-semibold transition-colors">{{ dt.kpi.value.value if dt.kpi.value.is_present else dt.kpi.value.placeholder }}</span>
             </button>
             {% endfor %}
         </div>
     </div>
 
     {# Status Summary #}
-    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 animate-fade-in-up" style="animation-delay: 100ms;">
-        {{ stats_card("Online", stats.online, icon='<span class="relative flex h-3 w-3"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75"></span><span class="relative inline-flex h-3 w-3 rounded-full bg-white"></span></span>', color="emerald", color2="green") }}
-        {{ stats_card("Offline", stats.offline, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>', color="red", color2="rose") }}
-        {{ stats_card("Warning", stats.warning, icon=icon_warning(), color="amber", color2="orange") }}
-        {{ stats_card("Unprovisioned", stats.unprovisioned, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>', color="slate", color2="slate") }}
+    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 animate-fade-in-up" style="animation-delay: 100ms;">
+        {{ stats_card("Up", device_kpis.up.value.value if device_kpis.up.value.is_present else device_kpis.up.value.placeholder, icon='<span class="relative flex h-3 w-3"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-current opacity-40"></span><span class="relative inline-flex h-3 w-3 rounded-full bg-current"></span></span>', tone=device_kpis.up.tone, href=device_kpis.up.cohort_url) }}
+        {{ stats_card("Down", device_kpis.down.value.value if device_kpis.down.value.is_present else device_kpis.down.value.placeholder, icon='<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>', tone=device_kpis.down.tone, href=device_kpis.down.cohort_url) }}
+        {{ stats_card("Degraded", device_kpis.degraded.value.value if device_kpis.degraded.value.is_present else device_kpis.degraded.value.placeholder, icon=icon_warning(), tone=device_kpis.degraded.tone, href=device_kpis.degraded.cohort_url) }}
+        {{ stats_card("Maintenance", device_kpis.maintenance.value.value if device_kpis.maintenance.value.is_present else device_kpis.maintenance.value.placeholder, icon='<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8 8-4-4"/></svg>', tone=device_kpis.maintenance.tone, href=device_kpis.maintenance.cohort_url) }}
+        {{ stats_card("Unknown", device_kpis.unknown.value.value if device_kpis.unknown.value.is_present else device_kpis.unknown.value.placeholder, icon='<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8h.01M11 12h1v4h1m8-4a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', tone=device_kpis.unknown.tone, href=device_kpis.unknown.cohort_url) }}
     </div>
 
     <div id="discovery-status"></div>
@@ -65,6 +68,7 @@
     {# Search & Filters #}
     {% call filter_bar() %}
     <form id="devices-filter-form" method="GET" action="/admin/network/devices" class="flex flex-col gap-4 lg:flex-row lg:items-end">
+        <input type="hidden" name="type" value="{{ type or 'all' }}">
         <div class="flex-1">
             <label class="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Search Devices</label>
             {{ search_input("search", search or '', "Search by serial, MAC, name, or IP...", "cyan", {"hx-get": "/admin/network/devices/filter", "hx-trigger": "input changed delay:300ms", "hx-target": "#devices-table-body", "hx-include": "#devices-filter-form"}) }}
@@ -72,10 +76,11 @@
         <div class="w-full lg:w-44">
             {{ filter_select("status", [
                 {"value": "", "label": "All Status"},
-                {"value": "online", "label": "Online"},
-                {"value": "offline", "label": "Offline"},
-                {"value": "warning", "label": "Warning"},
-                {"value": "unprovisioned", "label": "Unprovisioned"}
+                {"value": "up", "label": "Up"},
+                {"value": "down", "label": "Down"},
+                {"value": "degraded", "label": "Degraded"},
+                {"value": "maintenance", "label": "Maintenance"},
+                {"value": "unknown", "label": "Unknown"}
             ], status or '', "Status", "cyan", {"hx-get": "/admin/network/devices/filter", "hx-trigger": "change", "hx-target": "#devices-table-body", "hx-include": "#devices-filter-form"}) }}
         </div>
         <div class="w-full lg:w-44">
@@ -92,6 +97,12 @@
         {% endif %}
     </form>
     {% endcall %}
+
+    {% if devices_refreshed_at %}
+    <p class="mb-3 text-xs text-slate-400 dark:text-slate-500">
+        Operational status as of {{ devices_refreshed_at | app_datetime }} (last inventory refresh) — open a device for live status.
+    </p>
+    {% endif %}
 
     {# Devices Table #}
     <div id="devices-content" class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800" style="animation-delay: 200ms;">

@@ -9,8 +9,8 @@
                 Billing
             </a>
         </div>
-        <h1 class="text-2xl font-bold text-slate-900 dark:text-white" style="font-family: var(--font-display);">Revenue summary</h1>
-        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Billing performance for <span class="font-semibold text-indigo-600 dark:text-indigo-400">{{ reseller.name }}</span></p>
+        <h1 class="text-2xl font-bold text-slate-900 dark:text-white" style="font-family: var(--font-display);">Customer billing summary</h1>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">What your customers have paid Dotmac for <span class="font-semibold text-indigo-600 dark:text-indigo-400">{{ reseller.name }}</span> — this is customer billing, not your commission.</p>
     </div>
 </div>
 {% endblock %}
@@ -19,8 +19,9 @@
 <div class="space-y-8 stagger-children">
     <!-- Stats Cards -->
     <div class="grid gap-4 sm:grid-cols-3">
-        <!-- Total Revenue (Paid) -->
+        <!-- Customer billing (paid to Dotmac) -->
         <div class="group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white/80 p-6 shadow-premium backdrop-blur-sm transition-all duration-300 hover:shadow-lg hover:-translate-y-1 dark:border-slate-700/60 dark:bg-slate-800/80">
+            <a href="{{ kpis.total_paid.cohort_url }}" class="absolute inset-0 z-10" aria-label="View customer billing"></a>
             <div class="absolute inset-0 bg-gradient-to-br from-emerald-500/5 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100"></div>
             <div class="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-gradient-to-br from-emerald-400/10 to-teal-400/10 blur-2xl transition-all duration-500 group-hover:scale-150"></div>
             <div class="relative">
@@ -29,8 +30,9 @@
                         <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                     </div>
                     <div>
-                        <p class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Total Revenue</p>
-                        <p class="mt-1 text-3xl font-bold tabular-nums text-slate-900 dark:text-white" style="font-family: var(--font-display);">{{ "{:,.2f}".format(summary.total_paid) }}</p>
+                        <p class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">{{ kpis.total_paid.label }}</p>
+                        <p class="mt-1 text-3xl font-bold tabular-nums text-slate-900 dark:text-white" style="font-family: var(--font-display);">{{ summary.currency }} {{ "{:,.2f}".format(kpis.total_paid.value.value) }}</p>
+                        <p class="mt-1 text-xs text-slate-400 dark:text-slate-500">Paid by your customers to Dotmac</p>
                     </div>
                 </div>
             </div>
@@ -38,6 +40,7 @@
 
         <!-- Outstanding Balance -->
         <div class="group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white/80 p-6 shadow-premium backdrop-blur-sm transition-all duration-300 hover:shadow-lg hover:-translate-y-1 dark:border-slate-700/60 dark:bg-slate-800/80">
+            <a href="{{ kpis.total_outstanding.cohort_url }}" class="absolute inset-0 z-10" aria-label="View outstanding balances"></a>
             <div class="absolute inset-0 bg-gradient-to-br from-amber-500/5 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100"></div>
             <div class="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-gradient-to-br from-amber-400/10 to-orange-400/10 blur-2xl transition-all duration-500 group-hover:scale-150"></div>
             <div class="relative">
@@ -46,8 +49,8 @@
                         <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                     </div>
                     <div>
-                        <p class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Outstanding Balance</p>
-                        <p class="mt-1 text-3xl font-bold tabular-nums text-slate-900 dark:text-white" style="font-family: var(--font-display);">{{ "{:,.2f}".format(summary.total_outstanding) }}</p>
+                        <p class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">{{ kpis.total_outstanding.label }}</p>
+                        <p class="mt-1 text-3xl font-bold tabular-nums text-slate-900 dark:text-white" style="font-family: var(--font-display);">{{ summary.currency }} {{ "{:,.2f}".format(kpis.total_outstanding.value.value) }}</p>
                     </div>
                 </div>
             </div>
@@ -55,6 +58,7 @@
 
         <!-- Account Count -->
         <div class="group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white/80 p-6 shadow-premium backdrop-blur-sm transition-all duration-300 hover:shadow-lg hover:-translate-y-1 dark:border-slate-700/60 dark:bg-slate-800/80">
+            <a href="{{ kpis.account_count.cohort_url }}" class="absolute inset-0 z-10" aria-label="View accounts"></a>
             <div class="absolute inset-0 bg-gradient-to-br from-indigo-500/5 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100"></div>
             <div class="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-gradient-to-br from-indigo-400/10 to-violet-400/10 blur-2xl transition-all duration-500 group-hover:scale-150"></div>
             <div class="relative">
@@ -63,8 +67,8 @@
                         <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
                     </div>
                     <div>
-                        <p class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Account Count</p>
-                        <p class="mt-1 text-3xl font-bold text-slate-900 dark:text-white" style="font-family: var(--font-display);">{{ summary.account_count }}</p>
+                        <p class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">{{ kpis.account_count.label }}</p>
+                        <p class="mt-1 text-3xl font-bold text-slate-900 dark:text-white" style="font-family: var(--font-display);">{{ kpis.account_count.value.value }}</p>
                     </div>
                 </div>
             </div>
@@ -76,7 +80,7 @@
     <div class="overflow-hidden rounded-2xl border border-slate-200/60 bg-white/80 p-6 shadow-premium backdrop-blur-sm dark:border-slate-700/60 dark:bg-slate-800/80">
         <h2 class="mb-4 flex items-center gap-2 text-lg font-semibold text-slate-900 dark:text-white" style="font-family: var(--font-display);">
             <svg class="h-5 w-5 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
-            Revenue Trend
+            Customer billing trend
         </h2>
         <div style="height: 280px;">
             <canvas id="revenueChart"></canvas>
@@ -91,7 +95,7 @@
             data: {
                 labels: [{% for row in summary.monthly %}"{{ row.year }}/{{ "%02d"|format(row.month) }}"{% if not loop.last %},{% endif %}{% endfor %}],
                 datasets: [{
-                    label: 'Revenue',
+                    label: 'Customer billing (paid)',
                     data: [{% for row in summary.monthly %}{{ row.total }}{% if not loop.last %},{% endif %}{% endfor %}],
                     backgroundColor: 'rgba(16, 185, 129, 0.7)',
                     borderColor: 'rgb(16, 185, 129)',
@@ -104,7 +108,7 @@
                 maintainAspectRatio: false,
                 plugins: { legend: { display: false } },
                 scales: {
-                    y: { beginAtZero: true, ticks: { callback: function(v) { return v.toLocaleString(); } } },
+                    y: { beginAtZero: true, ticks: { callback: function(v) { return '{{ summary.currency }} ' + v.toLocaleString(); } } },
                     x: { grid: { display: false } }
                 }
             }
@@ -113,12 +117,12 @@
     </script>
     {% endif %}
 
-    <!-- Monthly Revenue Table -->
+    <!-- Monthly customer billing Table -->
     <div class="overflow-hidden rounded-2xl border border-slate-200/60 bg-white/80 shadow-premium backdrop-blur-sm dark:border-slate-700/60 dark:bg-slate-800/80">
         <div class="border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
             <h2 class="flex items-center gap-2 text-lg font-semibold text-slate-900 dark:text-white" style="font-family: var(--font-display);">
                 <svg class="h-5 w-5 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
-                Monthly Revenue
+                Monthly customer billing
             </h2>
         </div>
         <div class="overflow-x-auto">
@@ -127,7 +131,7 @@
                     <tr class="bg-slate-50/80 dark:bg-slate-800/50">
                         <th class="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Year / Month</th>
                         <th class="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Invoice Count</th>
-                        <th class="px-6 py-4 text-right text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Total Revenue</th>
+                        <th class="px-6 py-4 text-right text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Customer billing (paid)</th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
@@ -144,7 +148,7 @@
                             </span>
                         </td>
                         <td class="px-6 py-4 text-right">
-                            <span class="font-semibold tabular-nums font-mono text-emerald-600 dark:text-emerald-400">{{ "{:,.2f}".format(row.total) }}</span>
+                            <span class="font-semibold tabular-nums font-mono text-emerald-600 dark:text-emerald-400">{{ summary.currency }} {{ "{:,.2f}".format(row.total) }}</span>
                         </td>
                     </tr>
                     {% else %}
@@ -154,8 +158,8 @@
                                 <div class="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-100 to-teal-100 dark:from-emerald-900/30 dark:to-teal-900/20">
                                     <svg class="h-8 w-8 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
                                 </div>
-                                <h3 class="text-lg font-semibold text-slate-900 dark:text-white" style="font-family: var(--font-display);">No revenue data yet</h3>
-                                <p class="mt-1 max-w-sm text-sm text-slate-500 dark:text-slate-400">Monthly revenue data will appear here once invoices are generated for your accounts.</p>
+                                <h3 class="text-lg font-semibold text-slate-900 dark:text-white" style="font-family: var(--font-display);">No customer billing data yet</h3>
+                                <p class="mt-1 max-w-sm text-sm text-slate-500 dark:text-slate-400">Monthly customer billing will appear here once invoices are generated for your accounts.</p>
                             </div>
                         </td>
                     </tr>

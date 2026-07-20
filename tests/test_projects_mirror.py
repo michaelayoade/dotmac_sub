@@ -166,6 +166,29 @@ def test_webhook_project_completed_sets_status(db_session):
     assert row.completed_at is not None
 
 
+def test_webhook_project_completed_pushes(db_session):
+    sub = _subscriber(db_session)
+    with patch("app.services.push.send_push") as push:
+        out = projects_mirror.apply_webhook(
+            db_session,
+            "project.completed",
+            {"subscriber_id": str(sub.id), "project_id": "p9", "status": "completed"},
+        )
+    assert out["status"] == "ok"
+    push.assert_called_once()
+
+
+def test_webhook_project_updated_does_not_push(db_session):
+    sub = _subscriber(db_session)
+    with patch("app.services.push.send_push") as push:
+        projects_mirror.apply_webhook(
+            db_session,
+            "project.updated",
+            {"subscriber_id": str(sub.id), "project_id": "p9", "status": "active"},
+        )
+    push.assert_not_called()
+
+
 def test_webhook_task_event_forces_refresh(db_session):
     sub = _subscriber(db_session)
     db_session.add(

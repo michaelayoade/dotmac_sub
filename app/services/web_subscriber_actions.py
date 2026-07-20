@@ -158,6 +158,7 @@ def update_subscriber_from_full_form(
             email=form_data.get("email"),
             email_verified=form_data.get("email_verified"),
             phone=form_data.get("phone"),
+            nin=form_data.get("nin"),
             date_of_birth=form_data.get("date_of_birth"),
             gender=form_data.get("gender"),
             preferred_contact_method=form_data.get("preferred_contact_method"),

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 from types import SimpleNamespace
 from typing import cast
 
@@ -11,7 +11,7 @@ from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.models.billing import Invoice
+from app.models.billing import Invoice, InvoiceStatus
 from app.models.catalog import (
     CatalogOffer,
     OfferStatus,
@@ -19,12 +19,10 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
-from app.models.provisioning import InstallAppointment, ServiceOrder
+from app.models.provisioning import AppointmentStatus, InstallAppointment, ServiceOrder
 from app.models.subscriber import (
-    AccountStatus,
     Subscriber,
     SubscriberCategory,
-    SubscriberStatus,
 )
 from app.models.support import Ticket
 from app.services import billing as billing_service
@@ -33,6 +31,25 @@ from app.services import subscriber as subscriber_service
 from app.services.bandwidth import bandwidth_samples
 from app.services.collections import get_available_balance
 from app.services.common import coerce_uuid
+from app.services.customer_context import (
+    RESTRICTED_CUSTOMER_STATUSES,
+    allowed_customer_account_ids,
+    allowed_customer_subscriber_ids,
+    customer_is_restricted,
+    optional_customer_subscriber_id,
+    resolve_customer_account_ids,
+)
+from app.services.customer_financial_position import get_customer_financial_position
+from app.services.customer_support_links import ticket_customer_link_filter
+from app.services.invoice_classification import collectible_ar_invoice_filter
+from app.services.network.radius_sessions import live_framed_ips_by_subscription
+from app.services.prepaid_funding_reconstruction import (
+    PrepaidFundingBaselineMissingError,
+)
+from app.services.status_presentation import (
+    account_status_presentation,
+    subscription_status_presentation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,11 +94,7 @@ def resolve_subscriber_id(session: dict) -> str:
 
 def resolve_allowed_subscriber_ids(session: dict, db: Session) -> list[str]:
     """Resolve all customer-visible subscriber/account IDs for access checks."""
-    allowed = get_allowed_account_ids(session, db)
-    if allowed:
-        return [str(item) for item in allowed if item]
-    fallback = resolve_subscriber_id(session)
-    return [fallback] if fallback else []
+    return allowed_customer_subscriber_ids(db, session)
 
 
 def resolve_customer_subscription(db: Session, session: dict) -> Subscription | None:
@@ -138,23 +151,7 @@ def _live_framed_ips(db: Session, subscription_ids: list) -> dict:
     """
     if not subscription_ids:
         return {}
-    from app.models.usage import RadiusAccountingSession
-
-    rows = (
-        db.query(
-            RadiusAccountingSession.subscription_id,
-            RadiusAccountingSession.framed_ip_address,
-        )
-        .filter(RadiusAccountingSession.subscription_id.in_(subscription_ids))
-        .filter(RadiusAccountingSession.session_end.is_(None))
-        .filter(RadiusAccountingSession.framed_ip_address.isnot(None))
-        .order_by(RadiusAccountingSession.session_start.desc())
-        .all()
-    )
-    ips: dict = {}
-    for sub_id, ip in rows:
-        ips.setdefault(sub_id, ip)
-    return ips
+    return live_framed_ips_by_subscription(db, subscription_ids)
 
 
 def _format_address(address) -> str:
@@ -261,16 +258,22 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
             )
             stats_error = True
 
+    # An unknown balance must never render as 0.00 "good standing": track
+    # whether it actually loaded so the template can show "unavailable" instead
+    # of a reassuring zero (unknown != zero).
     current_balance = 0.0
+    balance_available = False
     if account_id:
         try:
             current_balance = float(get_available_balance(db, str(account_id)))
+            balance_available = True
         except Exception:
             logger.warning(
                 "Failed to resolve available balance for dashboard account %s",
                 account_id,
                 exc_info=True,
             )
+            stats_error = True
     next_bill_amount = float(invoices[0].total or 0) if invoices else 0.0
     next_bill_date = None
 
@@ -299,13 +302,14 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
         next_bill_date = subscriptions[0].next_billing_at
     if not next_bill_date and invoices:
         next_bill_date = invoices[0].due_at or invoices[0].issued_at
-    if not next_bill_date:
-        next_bill_date = datetime.now(UTC) + timedelta(days=30)
+    has_next_bill = bool(next_bill_date or next_bill_amount)
 
     account = SimpleNamespace(
         balance=current_balance,
+        balance_available=balance_available,
         next_bill_amount=next_bill_amount,
         next_bill_date=next_bill_date,
+        has_next_bill=has_next_bill,
     )
 
     services = []
@@ -331,6 +335,9 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
                 address=address,
                 ip_address=live_ips.get(subscription.id) or subscription.ipv4_address,
                 status=subscription.status.value if subscription.status else "pending",
+                status_presentation=subscription_status_presentation(
+                    subscription.status or "pending"
+                ),
                 monthly_cost=monthly_cost,
             )
         )
@@ -341,13 +348,34 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
         else SimpleNamespace(
             status="inactive",
             plan_name="No active plan",
+            status_presentation=subscription_status_presentation("inactive"),
         )
     )
     if services:
         primary_service = SimpleNamespace(
             status=services[0].status,
             plan_name=services[0].name,
+            status_presentation=services[0].status_presentation,
         )
+
+    # Service-access is owned by the access resolver and kept distinct from
+    # subscription lifecycle and financial state: a subscription can read
+    # "active" while access is restricted for non-payment. "known" stays False
+    # when the resolver can't be reached so the template shows "unknown"
+    # rather than implying access is fine.
+    service_access = SimpleNamespace(known=False, restricted=False)
+    if subscriber_id:
+        try:
+            service_access = SimpleNamespace(
+                known=True,
+                restricted=bool(customer_is_restricted(db, subscriber_id)),
+            )
+        except Exception:
+            logger.warning(
+                "Failed to resolve service access for subscriber %s",
+                subscriber_id,
+                exc_info=True,
+            )
 
     open_count = 0
     if account_id:
@@ -356,10 +384,7 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
                 db.scalar(
                     select(func.count(Ticket.id))
                     .where(Ticket.is_active.is_(True))
-                    .where(
-                        (Ticket.subscriber_id == account_id)
-                        | (Ticket.customer_account_id == account_id)
-                    )
+                    .where(ticket_customer_link_filter(Ticket, account_id))
                     .where(
                         Ticket.status.notin_(
                             (
@@ -403,6 +428,7 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
         "user": SimpleNamespace(**user),
         "account": account,
         "service": primary_service,
+        "service_access": service_access,
         "services": services,
         "devices": devices,
         "tickets": SimpleNamespace(open_count=open_count),
@@ -418,18 +444,7 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
     }
 
 
-_RESTRICTED_STATUSES = {
-    SubscriberStatus.blocked,
-    SubscriberStatus.suspended,
-    SubscriberStatus.disabled,
-}
-
-STATUS_DISPLAY = {
-    "blocked": "Blocked — Non-payment",
-    "suspended": "Suspended",
-    "disabled": "Disabled by administrator",
-    "canceled": "Canceled",
-}
+_RESTRICTED_STATUSES = RESTRICTED_CUSTOMER_STATUSES
 
 
 def get_restricted_since(subscriber: Subscriber) -> datetime | None:
@@ -439,23 +454,19 @@ def get_restricted_since(subscriber: Subscriber) -> datetime | None:
 
 
 def get_total_outstanding_balance(db: Session, account_id: object) -> float:
-    """Sum all active positive invoice balances for the account."""
-    total = (
-        db.query(func.coalesce(func.sum(Invoice.balance_due), 0))
-        .filter(Invoice.account_id == coerce_uuid(account_id))
-        .filter(Invoice.is_active.is_(True))
-        .filter(Invoice.balance_due > 0)
-        .scalar()
-    )
-    return float(total or 0)
+    """Active positive account balance owed by the customer.
+
+    This uses the same available-balance calculation as enforcement and
+    statements, so customer portal totals cannot diverge from the canonical
+    customer ledger.
+    """
+    available = float(get_available_balance(db, str(account_id)) or 0)
+    return max(0.0, -available)
 
 
 def is_subscriber_restricted(db: Session, subscriber_id: object) -> bool:
     """Check if a subscriber should see the restricted portal view."""
-    subscriber = db.get(Subscriber, coerce_uuid(subscriber_id))
-    if not subscriber:
-        return False
-    return subscriber.status in _RESTRICTED_STATUSES
+    return customer_is_restricted(db, subscriber_id)
 
 
 def get_restricted_dashboard_context(db: Session, session: dict) -> dict:
@@ -465,7 +476,16 @@ def get_restricted_dashboard_context(db: Session, session: dict) -> dict:
 
     subscriber = db.get(Subscriber, subscriber_id) if subscriber_id else None
     if not subscriber:
-        return {"restricted": True, "account_status": "Unknown"}
+        status_presentation = account_status_presentation(None)
+        return {
+            "restricted": True,
+            "account_status": status_presentation.value,
+            "account_status_display": status_presentation.label,
+            "account_status_presentation": status_presentation,
+            "outstanding_balance": None,
+            "balance_unavailable": True,
+            "recent_invoices": [],
+        }
 
     user_name = session.get("username") or "Customer"
     if subscriber.category == SubscriberCategory.business:
@@ -474,10 +494,20 @@ def get_restricted_dashboard_context(db: Session, session: dict) -> dict:
         user_name = f"{subscriber.first_name} {subscriber.last_name or ''}".strip()
 
     # Outstanding balance from invoices
-    balance = 0.0
+    balance: float | None = 0.0
+    balance_unavailable = False
     recent_invoices = []
     if account_id:
-        balance = get_total_outstanding_balance(db, account_id)
+        try:
+            balance = get_total_outstanding_balance(db, account_id)
+        except PrepaidFundingBaselineMissingError:
+            logger.warning(
+                "Restricted dashboard balance unavailable for account %s",
+                account_id,
+                exc_info=True,
+            )
+            balance = None
+            balance_unavailable = True
         invoices = billing_service.invoices.list(
             db=db,
             account_id=account_id,
@@ -511,17 +541,21 @@ def get_restricted_dashboard_context(db: Session, session: dict) -> dict:
         plan_name = subscriptions[0].offer.name
 
     status_value = subscriber.status.value if subscriber.status else "unknown"
+    status_presentation = account_status_presentation(
+        subscriber.status,
+        is_active=subscriber.is_active,
+    )
 
     return {
         "restricted": True,
         "user_name": user_name,
         "subscriber_number": subscriber.subscriber_number or subscriber.account_number,
         "account_status": status_value,
-        "account_status_display": STATUS_DISPLAY.get(
-            status_value, status_value.title()
-        ),
+        "account_status_display": status_presentation.label,
+        "account_status_presentation": status_presentation,
         "plan_name": plan_name,
         "outstanding_balance": balance,
+        "balance_unavailable": balance_unavailable,
         "recent_invoices": recent_invoices,
         "account_start_date": subscriber.account_start_date,
         "blocked_since": get_restricted_since(subscriber),
@@ -542,33 +576,7 @@ def resolve_customer_account(
     Returns:
         Tuple of (account_id_str, subscription_id_str)
     """
-    account_id = customer.get("account_id")
-    subscription_id = customer.get("subscription_id")
-    account_id_str = str(account_id) if account_id else None
-    subscription_id_str = str(subscription_id) if subscription_id else None
-    if account_id_str or subscription_id_str:
-        return account_id_str, subscription_id_str
-
-    subscriber_id = customer.get("subscriber_id")
-    if not subscriber_id:
-        return None, None
-    accounts = subscriber_service.accounts.list(
-        db=db,
-        subscriber_id=str(subscriber_id),
-        reseller_id=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=10,
-        offset=0,
-    )
-    if not accounts:
-        return None, subscription_id_str
-    active_account = next(
-        (account for account in accounts if account.status == AccountStatus.active),
-        None,
-    )
-    account = active_account or accounts[0]
-    return str(account.id), subscription_id_str
+    return resolve_customer_account_ids(db, customer)
 
 
 def get_allowed_account_ids(customer: dict, db: Session) -> list[str]:
@@ -581,21 +589,7 @@ def get_allowed_account_ids(customer: dict, db: Session) -> list[str]:
     Returns:
         List of account ID strings
     """
-    account_id = customer.get("account_id")
-    account_id_str = str(account_id) if account_id else None
-
-    subscriber = None
-    subscriber_id = customer.get("subscriber_id")
-    if subscriber_id:
-        subscriber = db.get(Subscriber, subscriber_id)
-
-    allowed_account_ids = []
-    if subscriber:
-        allowed_account_ids = [str(subscriber.id)]
-    if account_id_str and account_id_str not in allowed_account_ids:
-        allowed_account_ids.append(account_id_str)
-
-    return allowed_account_ids
+    return allowed_customer_account_ids(db, customer)
 
 
 def get_invoice_billing_contact(db: Session, invoice, customer: dict) -> dict:
@@ -630,8 +624,10 @@ def get_invoice_billing_contact(db: Session, invoice, customer: dict) -> dict:
         )
         billing_email = account.email
 
-    subscriber_id = customer.get("subscriber_id")
-    subscriber = db.get(Subscriber, subscriber_id) if subscriber_id else None
+    subscriber_id = optional_customer_subscriber_id(db, customer)
+    subscriber = (
+        db.get(Subscriber, coerce_uuid(subscriber_id)) if subscriber_id else None
+    )
 
     if not billing_name and subscriber:
         billing_name = (
@@ -669,8 +665,7 @@ def get_customer_appointments(
     Returns:
         Dict with 'appointments', 'total', 'total_pages' keys
     """
-    account_id = customer.get("account_id")
-    subscription_id = customer.get("subscription_id")
+    account_id, subscription_id = resolve_customer_account_ids(db, customer)
     account_id_str = str(account_id) if account_id else None
     subscription_id_str = str(subscription_id) if subscription_id else None
 
@@ -683,7 +678,10 @@ def get_customer_appointments(
     if subscription_id_str:
         filters.append(ServiceOrder.subscription_id == coerce_uuid(subscription_id_str))
     if status:
-        filters.append(InstallAppointment.status == status)
+        normalized_status = str(status).strip().lower()
+        valid_statuses = {item.value for item in AppointmentStatus}
+        if normalized_status in valid_statuses:
+            filters.append(InstallAppointment.status == normalized_status)
 
     count_stmt = (
         select(func.count(InstallAppointment.id))
@@ -707,6 +705,17 @@ def get_customer_appointments(
     return {"appointments": appointments, "total": total, "total_pages": total_pages}
 
 
+def _reseller_default_catalog_open(db: Session) -> bool:
+    """Global default: True = resellers see all unrestricted offers (open)."""
+    from app.models.domain_settings import SettingDomain
+    from app.services import settings_spec
+
+    raw = settings_spec.resolve_value(
+        db, SettingDomain.catalog, "reseller_default_catalog_open"
+    )
+    return str(raw).lower() in {"true", "1", "on", "yes"}
+
+
 def _filter_by_reseller_availability(
     db: Session,
     offers: list[CatalogOffer],
@@ -718,8 +727,14 @@ def _filter_by_reseller_availability(
     subscribers whose reseller is listed; offers with no rows stay
     unrestricted. Callers without subscriber context never see restricted
     offers (fail closed).
+
+    A reseller in "restrict to assigned offers" mode (its own
+    ``restrict_to_assigned_offers`` flag, or the inverse of the global
+    ``reseller_default_catalog_open`` default when the flag is NULL) sees ONLY
+    offers explicitly assigned to it — unrestricted offers are hidden too.
     """
     from app.models.offer_availability import OfferResellerAvailability
+    from app.models.subscriber import Reseller
 
     if not offers:
         return offers
@@ -735,14 +750,37 @@ def _filter_by_reseller_availability(
     restricted: dict[object, set[object]] = {}
     for offer_id, reseller_id in rows:
         restricted.setdefault(offer_id, set()).add(reseller_id)
+
+    # Resolve the caller's reseller + its restrict flag in one query.
+    caller_reseller_id = None
+    caller_restrict_flag: bool | None = None
+    if subscriber_id:
+        row = db.execute(
+            select(Subscriber.reseller_id, Reseller.restrict_to_assigned_offers)
+            .join(Reseller, Reseller.id == Subscriber.reseller_id, isouter=True)
+            .where(Subscriber.id == subscriber_id)
+        ).first()
+        if row:
+            caller_reseller_id, caller_restrict_flag = row
+
+    # Restrict mode only applies to a caller with a resolved reseller.
+    restrict_mode = False
+    if caller_reseller_id is not None:
+        restrict_mode = (
+            bool(caller_restrict_flag)
+            if caller_restrict_flag is not None
+            else not _reseller_default_catalog_open(db)
+        )
+
+    if restrict_mode:
+        return [
+            offer
+            for offer in offers
+            if offer.id in restricted and caller_reseller_id in restricted[offer.id]
+        ]
+
     if not restricted:
         return offers
-
-    caller_reseller_id = None
-    if subscriber_id:
-        caller_reseller_id = db.execute(
-            select(Subscriber.reseller_id).where(Subscriber.id == subscriber_id)
-        ).scalar()
 
     return [
         offer
@@ -839,16 +877,21 @@ def get_outstanding_balance(db: Session, account_id: str) -> dict:
     Returns:
         Dict with 'invoices' and 'outstanding_balance' keys
     """
-    invoices = billing_service.invoices.list(
-        db=db,
-        account_id=account_id,
-        status="overdue",
-        is_active=True,
-        order_by="due_at",
-        order_dir="asc",
-        limit=50,
-        offset=0,
+    invoices = (
+        db.query(Invoice)
+        .filter(Invoice.account_id == coerce_uuid(account_id))
+        .filter(Invoice.status == InvoiceStatus.overdue)
+        .filter(Invoice.is_active.is_(True))
+        .filter(collectible_ar_invoice_filter())
+        .order_by(Invoice.due_at.asc())
+        .limit(50)
+        .all()
     )
-    outstanding_balance = sum(inv.balance_due or 0 for inv in invoices)
+    position = get_customer_financial_position(db, account_id)
+    outstanding_balance = position.collection_blocking_balance
 
-    return {"invoices": invoices, "outstanding_balance": outstanding_balance}
+    return {
+        "invoices": invoices,
+        "outstanding_balance": outstanding_balance,
+        "invoices_truncated": len(invoices) == 50,
+    }

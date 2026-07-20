@@ -20,7 +20,11 @@ from app.models.catalog import (
     SubscriptionAddOn,
     SubscriptionStatus,
 )
-from app.models.notification import Notification, NotificationChannel
+from app.models.notification import (
+    Notification,
+    NotificationChannel,
+    NotificationTemplate,
+)
 from app.services.events.handlers.notification import NotificationHandler
 from app.services.events.types import Event, EventType
 
@@ -79,7 +83,7 @@ def test_notify_expiring_data_bundles_emits_within_24h_window(
 
     monkeypatch.setattr(db_session, "close", lambda: None)
     with (
-        patch("app.tasks.usage.SessionLocal", return_value=db_session),
+        patch("app.services.db_session_adapter.SessionLocal", return_value=db_session),
         patch("app.services.events.emit_event", _capture),
     ):
         from app.tasks.usage import notify_expiring_data_bundles
@@ -106,7 +110,7 @@ def test_notify_expiring_data_bundles_skips_outside_window(
     events = []
     monkeypatch.setattr(db_session, "close", lambda: None)
     with (
-        patch("app.tasks.usage.SessionLocal", return_value=db_session),
+        patch("app.services.db_session_adapter.SessionLocal", return_value=db_session),
         patch(
             "app.services.events.emit_event",
             lambda *a, **k: events.append(a),
@@ -123,6 +127,27 @@ def test_notify_expiring_data_bundles_skips_outside_window(
 def test_addon_expiring_event_creates_push_and_email_notifications(
     db_session, subscriber
 ):
+    db_session.add_all(
+        [
+            NotificationTemplate(
+                name="Addon Expiring Email",
+                code="addon_expiring",
+                channel=NotificationChannel.email,
+                subject="Bundle expiring",
+                body="{addon_name} expires at {expires_at}",
+                is_active=True,
+            ),
+            NotificationTemplate(
+                name="Addon Expiring Push",
+                code="addon_expiring",
+                channel=NotificationChannel.push,
+                subject="Bundle expiring",
+                body="{addon_name} expires at {expires_at}",
+                is_active=True,
+            ),
+        ]
+    )
+    db_session.commit()
     handler = NotificationHandler()
     event = Event(
         event_type=EventType.addon_expiring,

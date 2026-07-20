@@ -7,33 +7,16 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from app.models.billing import BankReconciliationItem, BankReconciliationRun, Payment
+from app.services import display_format
 from app.services import web_billing_payments as web_billing_payments_service
 
 logger = logging.getLogger(__name__)
 
 
-def _currency_code(value: object | None) -> str:
-    code = str(value or "NGN").strip().upper()
-    return code or "NGN"
-
-
-def _format_currency_amount(amount: object, currency: object | None) -> str:
-    return f"{_currency_code(currency)} {Decimal(str(amount or 0)):,.2f}"
-
-
-def _format_currency_groups(amounts: dict[str, Decimal]) -> str:
-    if not amounts:
-        return _format_currency_amount(0, "NGN")
-    return ", ".join(
-        _format_currency_amount(amounts[currency], currency)
-        for currency in sorted(amounts)
-    )
-
-
 def _add_currency_amount(
     amounts: dict[str, Decimal], *, currency: object | None, amount: object
 ) -> None:
-    code = _currency_code(currency)
+    code = display_format.currency_code(currency)
     amounts[code] = amounts.get(code, Decimal("0")) + Decimal(str(amount or 0))
 
 
@@ -106,7 +89,7 @@ def build_reconciliation_data(
         external_id = str(getattr(payment, "external_id", "") or "").strip()
         if not external_id:
             continue
-        currency = _currency_code(
+        currency = display_format.currency_code(
             getattr(payment, "currency", None) or default_currency
         )
         by_external_id.setdefault((external_id, currency), []).append(payment)
@@ -118,7 +101,7 @@ def build_reconciliation_data(
             "total_amount": float(
                 sum(Decimal(str(getattr(item, "amount", 0) or 0)) for item in group)
             ),
-            "total_display": _format_currency_amount(
+            "total_display": display_format.format_currency_amount(
                 sum(Decimal(str(getattr(item, "amount", 0) or 0)) for item in group),
                 currency,
             ),
@@ -203,9 +186,15 @@ def build_reconciliation_data(
             "statement_total": float(statement_total),
             "payment_total": float(payment_total),
             "difference": float(statement_total - payment_total),
-            "statement_display": _format_currency_groups(statement_amounts),
-            "payment_display": _format_currency_groups(payment_amounts),
-            "difference_display": _format_currency_groups(difference_amounts),
+            "statement_display": display_format.format_currency_groups(
+                statement_amounts, empty_currency=default_currency
+            ),
+            "payment_display": display_format.format_currency_groups(
+                payment_amounts, empty_currency=default_currency
+            ),
+            "difference_display": display_format.format_currency_groups(
+                difference_amounts, empty_currency=default_currency
+            ),
         },
         "unmatched_imports": unmatched_imports,
         "partial_imports": partial_imports,

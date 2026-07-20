@@ -126,7 +126,7 @@
                     </td>
                     <td class="py-3 pr-4 text-slate-600 dark:text-slate-300">{{ r.access_method.value | replace('_', ' ') | capitalize }}</td>
                     <td class="py-3 pr-4 text-slate-600 dark:text-slate-300">{{ r.location or '—' }}</td>
-                    <td class="py-3 text-slate-500 dark:text-slate-400 text-xs">{{ r.last_seen_at.strftime('%Y-%m-%d %H:%M') if r.last_seen_at else '—' }}</td>
+                    <td class="py-3 text-slate-500 dark:text-slate-400 text-xs">{{ r.last_seen_at | app_datetime('%Y-%m-%d %H:%M', '—') }}</td>
                 </tr>
                 {% endfor %}
             </tbody>

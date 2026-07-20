@@ -5,12 +5,15 @@ from __future__ import annotations
 import csv
 import io
 import logging
-from datetime import UTC, datetime, timedelta
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
+from urllib.parse import urlencode
 from uuid import UUID
 
-from sqlalchemy import Date, cast, func
+from fastapi import HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import joinedload
 
 from app.models.billing import (
@@ -20,36 +23,20 @@ from app.models.billing import (
     LedgerEntryType,
     LedgerSource,
 )
-from app.models.splynx_transaction import SplynxBillingTransaction
 from app.models.subscriber import Reseller, Subscriber
+from app.schemas.status_presentation import StatusTone
+from app.services import display_format
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services.common import validate_enum
+from app.services.ui_contracts import Kpi, StateValue
 
 logger = logging.getLogger(__name__)
-
-
-def _currency_code(value: object | None) -> str:
-    code = str(value or "NGN").strip().upper()
-    return code or "NGN"
-
-
-def _format_currency_amount(amount: object, currency: object | None) -> str:
-    return f"{_currency_code(currency)} {Decimal(str(amount or 0)):,.2f}"
-
-
-def _format_currency_groups(amounts: dict[str, Decimal]) -> str:
-    if not amounts:
-        return _format_currency_amount(0, "NGN")
-    return ", ".join(
-        _format_currency_amount(amounts[currency], currency)
-        for currency in sorted(amounts)
-    )
 
 
 def _add_grouped_amount(
     amounts: dict[str, Decimal], *, currency: object | None, amount: object
 ) -> None:
-    code = _currency_code(currency)
+    code = display_format.currency_code(currency)
     amounts[code] = amounts.get(code, Decimal("0")) + Decimal(str(amount or 0))
 
 
@@ -71,22 +58,44 @@ _CATEGORY_SOURCES: dict[str, tuple[LedgerSource, ...]] = {
 _LEDGER_CUTOVER = datetime(2026, 3, 15, 23, 59, 59, tzinfo=UTC)
 
 
-def _range_start(date_range: str | None) -> datetime | None:
-    if date_range not in {"today", "week", "month", "quarter", "year"}:
-        return None
-    now = datetime.now(UTC)
-    if date_range == "today":
-        return datetime(now.year, now.month, now.day, tzinfo=UTC)
-    if date_range == "week":
-        return datetime(now.year, now.month, now.day, tzinfo=UTC) - timedelta(
-            days=now.weekday()
+@dataclass(frozen=True)
+class LedgerDateRange:
+    start: datetime | None
+    end: datetime | None
+    start_date: date | None
+    end_date: date | None
+
+
+def _parse_date_range(
+    start_date: str | None,
+    end_date: str | None,
+) -> LedgerDateRange:
+    start_value = (start_date or "").strip()
+    end_value = (end_date or "").strip()
+    try:
+        start_d = date.fromisoformat(start_value) if start_value else None
+        end_d = date.fromisoformat(end_value) if end_value else None
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400, detail="start_date and end_date must be ISO dates"
+        ) from exc
+
+    if start_d and end_d and start_d > end_d:
+        raise HTTPException(
+            status_code=400,
+            detail="start_date must be before or equal to end_date",
         )
-    if date_range == "month":
-        return datetime(now.year, now.month, 1, tzinfo=UTC)
-    if date_range == "quarter":
-        quarter_start_month = ((now.month - 1) // 3) * 3 + 1
-        return datetime(now.year, quarter_start_month, 1, tzinfo=UTC)
-    return datetime(now.year, 1, 1, tzinfo=UTC)
+
+    return LedgerDateRange(
+        start=datetime.combine(start_d, time.min, tzinfo=UTC) if start_d else None,
+        end=(
+            datetime.combine(end_d + timedelta(days=1), time.min, tzinfo=UTC)
+            if end_d
+            else None
+        ),
+        start_date=start_d,
+        end_date=end_d,
+    )
 
 
 def _invoice_as_ledger_row(invoice: Invoice) -> SimpleNamespace:
@@ -106,42 +115,10 @@ def _invoice_as_ledger_row(invoice: Invoice) -> SimpleNamespace:
         entry_type=SimpleNamespace(value="debit"),
         source=SimpleNamespace(value="invoice"),
         amount=invoice.total,
-        currency=invoice.currency or "NGN",
+        currency=display_format.currency_code(invoice.currency),
         memo=label,
         effective_date=invoice.issued_at,
         created_at=invoice.created_at,
-        is_active=True,
-    )
-
-
-def _splynx_credit_as_ledger_row(txn, account) -> SimpleNamespace:  # type: ignore[no-untyped-def]
-    """Adapt an unmigrated legacy credit transaction into a display row.
-
-    Some pre-cutover credits (back-office corrections, credit notes,
-    withholding-tax, service credits) were not imported 1:1 into ledger_entries;
-    their VALUE is already reflected in each prepaid account's balance via the
-    cutover deposit true-up, so they must NOT be inserted as real ledger rows
-    (that would double-count the balance). This surfaces them in the view only —
-    it never affects get_account_credit_balance or any total.
-    """
-    when = datetime(
-        txn.transaction_date.year,
-        txn.transaction_date.month,
-        txn.transaction_date.day,
-        tzinfo=UTC,
-    )
-    label = txn.description or txn.category_name or "Credit"
-    return SimpleNamespace(
-        id=txn.id,
-        account_id=txn.subscriber_id,
-        account=account,
-        entry_type=SimpleNamespace(value="credit"),
-        source=SimpleNamespace(value="credit_note"),
-        amount=txn.amount,
-        currency="NGN",
-        memo=f"{label} (legacy import)",
-        effective_date=when,
-        created_at=when,
         is_active=True,
     )
 
@@ -150,17 +127,46 @@ def _display_date(entry) -> datetime:  # type: ignore[no-untyped-def]
     return getattr(entry, "effective_date", None) or entry.created_at
 
 
+def _ledger_cohort_url(
+    *,
+    entry_type: str | None,
+    customer_ref: str | None,
+    start_date: str | None,
+    end_date: str | None,
+    category: str | None,
+    partner_id: str | None,
+) -> str:
+    """Drill-down to the ledger filtered to exactly the cohort a KPI counts.
+
+    The owner supplies this so a summary tile and the rows it summarises can
+    never diverge (KPI-parity rule): the active filters travel with the link
+    and only ``entry_type`` narrows it to credits or debits.
+    """
+    params = {
+        "entry_type": entry_type,
+        "customer_ref": customer_ref,
+        "start_date": start_date,
+        "end_date": end_date,
+        "category": category,
+        "partner_id": partner_id,
+    }
+    query = urlencode({key: value for key, value in params.items() if value})
+    return "/admin/billing/ledger" + (f"?{query}" if query else "")
+
+
 def build_ledger_entries_data(
     db,
     *,
     customer_ref: str | None,
     entry_type: str | None,
-    date_range: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
     category: str | None = None,
     partner_id: str | None = None,
     limit: int = 200,
 ) -> dict[str, object]:
-    range_start = _range_start(date_range)
+    date_range = _parse_date_range(start_date, end_date)
+    default_currency = display_format.default_currency(db)
 
     account_ids = []
     if customer_ref:
@@ -172,6 +178,10 @@ def build_ledger_entries_data(
         ]
 
     entries = []
+    credit_count = 0
+    debit_count = 0
+    credit_amounts: dict[str, Decimal] = {}
+    debit_amounts: dict[str, Decimal] = {}
     selected_partner_id = (partner_id or "").strip() or None
     # Only offer partners that actually own ledger activity. Listing every active
     # reseller surfaces empty/test partners (e.g. ones with zero subscribers),
@@ -197,49 +207,70 @@ def build_ledger_entries_data(
     selected_category = (category or "").strip().lower()
 
     if account_ids or not customer_ref:
-        query = (
-            db.query(LedgerEntry)
-            .options(joinedload(LedgerEntry.account))
-            .filter(LedgerEntry.is_active.is_(True))
-        )
+        # Build one uncapped base cohort for aggregates. The displayed rows may
+        # be capped for usability, but headline money must never be derived from
+        # that page. ``entry_type`` is deliberately applied only to rows: the
+        # credit/debit cards each summarize and link to their own exact side of
+        # the otherwise-identical filter set.
+        ledger_query = db.query(LedgerEntry).filter(LedgerEntry.is_active.is_(True))
         if account_ids:
-            query = query.filter(LedgerEntry.account_id.in_(account_ids))
-        if want_type is not None:
-            query = query.filter(LedgerEntry.entry_type == want_type)
+            ledger_query = ledger_query.filter(LedgerEntry.account_id.in_(account_ids))
         if selected_partner_id:
-            query = query.filter(
+            ledger_query = ledger_query.filter(
                 LedgerEntry.account.has(
                     Subscriber.reseller_id == UUID(selected_partner_id)
                 )
             )
         if selected_category in _CATEGORY_SOURCES:
-            query = query.filter(
+            ledger_query = ledger_query.filter(
                 LedgerEntry.source.in_(_CATEGORY_SOURCES[selected_category])
             )
-        if range_start is not None:
-            query = query.filter(
-                func.coalesce(LedgerEntry.effective_date, LedgerEntry.created_at)
-                >= range_start
+        ledger_date = func.coalesce(LedgerEntry.effective_date, LedgerEntry.created_at)
+        if date_range.start is not None:
+            ledger_query = ledger_query.filter(ledger_date >= date_range.start)
+        if date_range.end is not None:
+            ledger_query = ledger_query.filter(ledger_date < date_range.end)
+
+        for row in (
+            ledger_query.with_entities(
+                LedgerEntry.entry_type,
+                LedgerEntry.currency,
+                func.count(LedgerEntry.id).label("entry_count"),
+                func.coalesce(func.sum(LedgerEntry.amount), Decimal("0")).label(
+                    "amount_total"
+                ),
             )
-        ledger_rows = (
-            query.order_by(
-                func.coalesce(LedgerEntry.effective_date, LedgerEntry.created_at).desc()
-            )
-            .limit(limit)
+            .group_by(LedgerEntry.entry_type, LedgerEntry.currency)
             .all()
-        )
+        ):
+            target = (
+                credit_amounts
+                if row.entry_type == LedgerEntryType.credit
+                else debit_amounts
+            )
+            _add_grouped_amount(
+                target,
+                currency=row.currency,
+                amount=row.amount_total,
+            )
+            if row.entry_type == LedgerEntryType.credit:
+                credit_count += int(row.entry_count or 0)
+            else:
+                debit_count += int(row.entry_count or 0)
+
+        row_query = ledger_query.options(joinedload(LedgerEntry.account))
+        if want_type is not None:
+            row_query = row_query.filter(LedgerEntry.entry_type == want_type)
+        ledger_rows = row_query.order_by(ledger_date.desc()).limit(limit).all()
 
         # Merge post-cutover invoices as synthetic debit rows so the ledger view
         # reflects ongoing billing (native invoices don't post to ledger_entries).
         # Invoices are debits categorised as "service", so only include them when
         # the active filters don't exclude that combination.
         invoice_rows: list[SimpleNamespace] = []
-        if (want_type in (None, LedgerEntryType.debit)) and (
-            selected_category in ("", "service")
-        ):
+        if selected_category in ("", "service"):
             inv_q = (
                 db.query(Invoice)
-                .options(joinedload(Invoice.account))
                 .filter(Invoice.is_active.is_(True))
                 .filter(Invoice.is_proforma.is_(False))
                 .filter(
@@ -256,145 +287,133 @@ def build_ledger_entries_data(
                         Subscriber.reseller_id == UUID(selected_partner_id)
                     )
                 )
-            if range_start is not None:
-                inv_q = inv_q.filter(Invoice.issued_at >= range_start)
-            invoice_rows = [
-                _invoice_as_ledger_row(invoice)
-                for invoice in inv_q.order_by(Invoice.issued_at.desc())
-                .limit(limit)
+            if date_range.start is not None:
+                inv_q = inv_q.filter(Invoice.issued_at >= date_range.start)
+            if date_range.end is not None:
+                inv_q = inv_q.filter(Invoice.issued_at < date_range.end)
+            for row in (
+                inv_q.with_entities(
+                    Invoice.currency,
+                    func.count(Invoice.id).label("invoice_count"),
+                    func.coalesce(func.sum(Invoice.total), Decimal("0")).label(
+                        "amount_total"
+                    ),
+                )
+                .group_by(Invoice.currency)
                 .all()
-            ]
-
-        # Merge pre-cutover credits that were never migrated 1:1 into the
-        # ledger (corrections / credit notes / withholding-tax / service credits),
-        # so they remain visible for audit. Display-only: deduped
-        # against existing ledger credits (same account+amount+date) so already-
-        # migrated ones aren't shown twice; never written to ledger_entries, so
-        # balances are untouched. They are credits, shown under "credit_note".
-        # These legacy credits are all pre-cutover (<= 2026-03-15), so in an
-        # unscoped, recency-ordered view they can never beat the post-cutover
-        # top-N — running the (correlated) dedup scan there is pure cost for zero
-        # rows. Only evaluate it when the view is scoped to a customer/partner or
-        # a date range, i.e. when a pre-cutover row could actually surface.
-        is_scoped = bool(account_ids or selected_partner_id or range_start)
-        splynx_credit_rows: list[SimpleNamespace] = []
-        if (
-            is_scoped
-            and (want_type in (None, LedgerEntryType.credit))
-            and (selected_category in ("", "credit_note"))
-        ):
-            already_in_ledger = (
-                db.query(LedgerEntry.id)
-                .filter(
-                    LedgerEntry.account_id == SplynxBillingTransaction.subscriber_id
+            ):
+                _add_grouped_amount(
+                    debit_amounts,
+                    currency=row.currency,
+                    amount=row.amount_total,
                 )
-                .filter(LedgerEntry.is_active.is_(True))
-                .filter(LedgerEntry.entry_type == LedgerEntryType.credit)
-                .filter(LedgerEntry.amount == SplynxBillingTransaction.amount)
-                .filter(
-                    cast(
-                        func.coalesce(
-                            LedgerEntry.effective_date, LedgerEntry.created_at
-                        ),
-                        Date,
-                    )
-                    == SplynxBillingTransaction.transaction_date
-                )
-                .exists()
-            )
-            sx_q = (
-                db.query(SplynxBillingTransaction, Subscriber)
-                .join(
-                    Subscriber,
-                    Subscriber.id == SplynxBillingTransaction.subscriber_id,
-                )
-                .filter(SplynxBillingTransaction.deleted.is_(False))
-                .filter(SplynxBillingTransaction.entry_type == "credit")
-                .filter(SplynxBillingTransaction.splynx_payment_id.is_(None))
-                .filter(SplynxBillingTransaction.transaction_date.isnot(None))
-                .filter(
-                    SplynxBillingTransaction.transaction_date <= _LEDGER_CUTOVER.date()
-                )
-                .filter(~already_in_ledger)
-            )
-            if account_ids:
-                sx_q = sx_q.filter(
-                    SplynxBillingTransaction.subscriber_id.in_(account_ids)
-                )
-            if selected_partner_id:
-                sx_q = sx_q.filter(Subscriber.reseller_id == UUID(selected_partner_id))
-            if range_start is not None:
-                sx_q = sx_q.filter(
-                    SplynxBillingTransaction.transaction_date >= range_start.date()
-                )
-            splynx_credit_rows = [
-                _splynx_credit_as_ledger_row(txn, account)
-                for txn, account in sx_q.order_by(
-                    SplynxBillingTransaction.transaction_date.desc()
-                )
-                .limit(limit)
-                .all()
-            ]
+                debit_count += int(row.invoice_count or 0)
+            if want_type in (None, LedgerEntryType.debit):
+                invoice_rows = [
+                    _invoice_as_ledger_row(invoice)
+                    for invoice in inv_q.options(joinedload(Invoice.account))
+                    .order_by(Invoice.issued_at.desc())
+                    .limit(limit)
+                    .all()
+                ]
 
         entries = sorted(
-            [*ledger_rows, *invoice_rows, *splynx_credit_rows],
+            [*ledger_rows, *invoice_rows],
             key=_display_date,
             reverse=True,
         )[:limit]
 
-    credit_entries = [
-        entry
-        for entry in entries
-        if getattr(getattr(entry, "entry_type", None), "value", None) == "credit"
-    ]
-    debit_entries = [
-        entry
-        for entry in entries
-        if getattr(getattr(entry, "entry_type", None), "value", None) == "debit"
-    ]
-    credit_amounts: dict[str, Decimal] = {}
-    debit_amounts: dict[str, Decimal] = {}
-    for entry in credit_entries:
-        _add_grouped_amount(
-            credit_amounts,
-            currency=getattr(entry, "currency", None),
-            amount=getattr(entry, "amount", 0),
-        )
-    for entry in debit_entries:
-        _add_grouped_amount(
-            debit_amounts,
-            currency=getattr(entry, "currency", None),
-            amount=getattr(entry, "amount", 0),
-        )
     net_amounts = dict(credit_amounts)
     for currency, amount in debit_amounts.items():
         net_amounts[currency] = net_amounts.get(currency, Decimal("0")) - amount
     credit_total = sum(float(amount) for amount in credit_amounts.values())
     debit_total = sum(float(amount) for amount in debit_amounts.values())
     ledger_totals = {
-        "credit_count": len(credit_entries),
+        "credit_count": credit_count,
         "credit_total": credit_total,
         "credit_amounts": credit_amounts,
-        "credit_display": _format_currency_groups(credit_amounts),
-        "debit_count": len(debit_entries),
+        "credit_display": display_format.format_currency_groups(
+            credit_amounts, empty_currency=default_currency
+        ),
+        "debit_count": debit_count,
         "debit_total": debit_total,
         "debit_amounts": debit_amounts,
-        "debit_display": _format_currency_groups(debit_amounts),
+        "debit_display": display_format.format_currency_groups(
+            debit_amounts, empty_currency=default_currency
+        ),
         "net_total": credit_total - debit_total,
         "net_amounts": net_amounts,
-        "net_display": _format_currency_groups(net_amounts),
+        "net_display": display_format.format_currency_groups(
+            net_amounts, empty_currency=default_currency
+        ),
+    }
+
+    # Headline tiles as KPI contracts: each drills into the exact filtered
+    # cohort it counts. "Credits"/"Debits" narrow by entry_type; "Net" keeps the
+    # active filter set (it is the balance across both sides, not one type).
+    ledger_kpis = {
+        "credits": Kpi(
+            label="Total Credits",
+            value=StateValue.present(ledger_totals["credit_display"]),
+            cohort_url=_ledger_cohort_url(
+                entry_type=LedgerEntryType.credit.value,
+                customer_ref=customer_ref,
+                start_date=start_date,
+                end_date=end_date,
+                category=category,
+                partner_id=partner_id,
+            ),
+            tone=StatusTone.positive,
+        ),
+        "debits": Kpi(
+            label="Total Debits",
+            value=StateValue.present(ledger_totals["debit_display"]),
+            cohort_url=_ledger_cohort_url(
+                entry_type=LedgerEntryType.debit.value,
+                customer_ref=customer_ref,
+                start_date=start_date,
+                end_date=end_date,
+                category=category,
+                partner_id=partner_id,
+            ),
+            tone=StatusTone.warning,
+        ),
+        "net": Kpi(
+            label="Net Balance",
+            value=StateValue.present(ledger_totals["net_display"]),
+            cohort_url=_ledger_cohort_url(
+                entry_type=None,
+                customer_ref=customer_ref,
+                start_date=start_date,
+                end_date=end_date,
+                category=category,
+                partner_id=partner_id,
+            ),
+            tone=StatusTone.info,
+        ),
     }
 
     return {
         "entries": entries,
         "ledger_totals": ledger_totals,
+        "ledger_kpis": ledger_kpis,
         "entry_type": entry_type,
         "customer_ref": customer_ref,
-        "date_range": date_range,
+        "start_date": date_range.start_date.isoformat()
+        if date_range.start_date
+        else "",
+        "end_date": date_range.end_date.isoformat() if date_range.end_date else "",
         "category": category,
         "selected_partner_id": selected_partner_id,
         "partner_options": partner_options,
     }
+
+
+def _entry_customer_name(entry: LedgerEntry) -> str:
+    account = getattr(entry, "account", None)
+    if account is None:
+        return ""
+    return str(getattr(account, "name", "") or "").strip()
 
 
 def render_ledger_csv(entries: list[LedgerEntry]) -> str:
@@ -403,7 +422,7 @@ def render_ledger_csv(entries: list[LedgerEntry]) -> str:
     writer.writerow(
         [
             "entry_id",
-            "account_id",
+            "customer_name",
             "entry_type",
             "source",
             "debit_amount",
@@ -422,12 +441,12 @@ def render_ledger_csv(entries: list[LedgerEntry]) -> str:
         writer.writerow(
             [
                 str(entry.id),
-                str(entry.account_id) if entry.account_id else "",
+                _entry_customer_name(entry),
                 entry_type,
                 getattr(getattr(entry, "source", None), "value", "") or "",
                 f"{amount:.2f}" if entry_type == "debit" else "",
                 f"{amount:.2f}" if entry_type == "credit" else "",
-                entry.currency or "NGN",
+                display_format.currency_code(entry.currency),
                 entry.memo or "",
                 entry_date.isoformat() if entry_date else "",
             ]

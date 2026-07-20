@@ -15,6 +15,7 @@ from app.schemas.catalog import (
     AddOnPriceUpdate,
     AddOnUpdate,
 )
+from app.services import catalog_billing_governance as billing_governance
 from app.services import settings_spec
 from app.services.common import apply_ordering, apply_pagination, validate_enum
 from app.services.crud import CRUDManager
@@ -91,7 +92,14 @@ class AddOnPrices(CRUDManager[AddOnPrice]):
     soft_delete_value = False
 
     @staticmethod
-    def create(db: Session, payload: AddOnPriceCreate):
+    def create(
+        db: Session,
+        payload: AddOnPriceCreate,
+        *,
+        actor_id: str | None = None,
+        actor_type: str | None = None,
+    ):
+        billing_governance.assert_add_on_price_create_safe(db, payload)
         data = payload.model_dump()
         fields_set = payload.model_fields_set
         if "price_type" not in fields_set:
@@ -110,6 +118,16 @@ class AddOnPrices(CRUDManager[AddOnPrice]):
                 data["currency"] = default_currency
         price = AddOnPrice(**data)
         db.add(price)
+        db.flush()
+        billing_governance.stage_billing_catalog_change(
+            db,
+            action="add_on_price_created",
+            entity_type="add_on_price",
+            entity_id=price.id,
+            changes=data,
+            actor_id=actor_id,
+            actor_type=actor_type,
+        )
         db.commit()
         db.refresh(price)
         return price
@@ -140,9 +158,58 @@ class AddOnPrices(CRUDManager[AddOnPrice]):
         return apply_pagination(query, limit, offset).all()
 
     @classmethod
-    def update(cls, db: Session, price_id: str, payload: AddOnPriceUpdate):
-        return super().update(db, price_id, payload)
+    def update(
+        cls,
+        db: Session,
+        price_id: str,
+        payload: AddOnPriceUpdate,
+        *,
+        actor_id: str | None = None,
+        actor_type: str | None = None,
+    ):
+        price = cls._get_or_404(db, price_id)
+        data = payload.model_dump(exclude_unset=True)
+        changes = billing_governance.billing_field_changes(price, data)
+        billing_governance.assert_add_on_price_update_safe(db, price, changes)
+        for key, value in data.items():
+            setattr(price, key, value)
+        critical_changes = billing_governance.billing_critical_changes(
+            "add_on_price", changes
+        )
+        if critical_changes:
+            billing_governance.stage_billing_catalog_change(
+                db,
+                action="add_on_price_updated",
+                entity_type="add_on_price",
+                entity_id=price.id,
+                changes=critical_changes,
+                actor_id=actor_id,
+                actor_type=actor_type,
+            )
+        db.commit()
+        db.refresh(price)
+        return price
 
     @classmethod
-    def delete(cls, db: Session, price_id: str):
-        return super().delete(db, price_id)
+    def delete(
+        cls,
+        db: Session,
+        price_id: str,
+        *,
+        actor_id: str | None = None,
+        actor_type: str | None = None,
+    ):
+        price = cls._get_or_404(db, price_id)
+        changes = {"is_active": False}
+        billing_governance.assert_add_on_price_update_safe(db, price, changes)
+        price.is_active = False
+        billing_governance.stage_billing_catalog_change(
+            db,
+            action="add_on_price_deactivated",
+            entity_type="add_on_price",
+            entity_id=price.id,
+            changes=changes,
+            actor_id=actor_id,
+            actor_type=actor_type,
+        )
+        db.commit()

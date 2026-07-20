@@ -39,6 +39,17 @@ class InvoiceStatus(enum.Enum):
     written_off = "written_off"
 
 
+class InvoiceClosureType(enum.Enum):
+    void = "void"
+    write_off = "write_off"
+
+
+class InvoiceClosureOrigin(enum.Enum):
+    manual = "manual"
+    system = "system"
+    historical_reconciliation = "historical_reconciliation"
+
+
 class InvoicePdfExportStatus(enum.Enum):
     queued = "queued"
     processing = "processing"
@@ -67,7 +78,51 @@ class PaymentStatus(enum.Enum):
     failed = "failed"
     refunded = "refunded"
     partially_refunded = "partially_refunded"
+    # A previously settled payment whose remaining cash was clawed back. This
+    # is not a failed capture and not a customer refund.
+    reversed = "reversed"
     canceled = "canceled"
+
+
+class TopupIntentPurpose(enum.Enum):
+    """Server-owned reason for collecting money through a top-up intent."""
+
+    account_credit_deposit = "account_credit_deposit"
+
+
+class TopupAllocationPolicy(enum.Enum):
+    """How a confirmed intent first records the provider receipt."""
+
+    credit_only = "credit_only"
+    invoice_first_then_credit = "invoice_first_then_credit"
+
+
+class AccountCreditApplicationPolicy(enum.Enum):
+    """What Sub does with evidenced account credit after settlement."""
+
+    pay_eligible_invoices = "pay_eligible_invoices"
+
+
+class PaymentRefundOrigin(enum.Enum):
+    manual = "manual"
+    provider_event = "provider_event"
+
+
+class PaymentReversalOrigin(enum.Enum):
+    manual = "manual"
+    provider_event = "provider_event"
+
+
+class PaymentSettlementOrigin(enum.Enum):
+    manual = "manual"
+    provider_event = "provider_event"
+    system = "system"
+
+
+class PaymentProviderEventFinancialEffect(enum.Enum):
+    none = "none"
+    refund_confirmed = "refund_confirmed"
+    reversal_confirmed = "reversal_confirmed"
 
 
 class PaymentProviderType(enum.Enum):
@@ -95,7 +150,10 @@ class PaymentWebhookDeadLetterStatus(enum.Enum):
     # Ingest deterministically rejected the payload (HTTP 4xx, e.g. bad data).
     # Replaying as-is will not help; needs human attention.
     rejected = "rejected"
-    # A previously-failed event was successfully reprocessed.
+    # Legacy/manual replay result. Retained rows are treated as unresolved
+    # because old replay code set this without proving money was posted. New
+    # successful replays return this status as an API snapshot, then delete the
+    # dead-letter row; PaymentProviderEvent is the durable success record.
     replayed = "replayed"
 
 
@@ -131,6 +189,12 @@ class LedgerCategory(enum.Enum):
     overage = "overage"
     top_up = "top_up"
     other = "other"
+
+
+class ServiceEntitlementStatus(enum.Enum):
+    active = "active"
+    void = "void"
+    reversed = "reversed"
 
 
 class TaxApplication(enum.Enum):
@@ -198,6 +262,225 @@ class BillingAccount(Base):
 
     reseller = relationship("Reseller", back_populates="billing_account")
     payments = relationship("Payment", back_populates="billing_account")
+    ledger_entries = relationship(
+        "BillingAccountLedgerEntry", back_populates="billing_account"
+    )
+
+
+class BillingAccountLedgerEntry(Base):
+    """Append-only evidence for money held at consolidated-account scope.
+
+    Subscriber invoice allocations continue to use ``LedgerEntry`` because
+    those transactions change a named subscriber receivable. This ledger owns
+    only the reseller billing-account position, so consolidated surplus never
+    needs a fake subscriber account and never exists solely as a mutable
+    ``BillingAccount.balance`` value.
+    """
+
+    __tablename__ = "billing_account_ledger_entries"
+    __table_args__ = (
+        CheckConstraint(
+            "amount > 0", name="ck_billing_account_ledger_entries_amount_positive"
+        ),
+        Index(
+            "uq_billing_account_ledger_entries_payment_credit",
+            "payment_id",
+            unique=True,
+            postgresql_where=text(
+                "payment_id IS NOT NULL AND entry_type = 'credit' AND is_active"
+            ),
+            sqlite_where=text(
+                "payment_id IS NOT NULL AND entry_type = 'credit' AND is_active = 1"
+            ),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    billing_account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("billing_accounts.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    payment_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("payments.id", ondelete="RESTRICT")
+    )
+    entry_type: Mapped[LedgerEntryType] = mapped_column(
+        Enum(LedgerEntryType), nullable=False
+    )
+    source: Mapped[LedgerSource] = mapped_column(Enum(LedgerSource), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    balance_after: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    memo: Mapped[str | None] = mapped_column(Text)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    billing_account = relationship("BillingAccount", back_populates="ledger_entries")
+    payment = relationship("Payment", back_populates="billing_account_ledger_entries")
+
+
+class BillingAccountCreditAllocation(Base):
+    """Confirmed transfer of consolidated credit to subscriber receivables."""
+
+    __tablename__ = "billing_account_credit_allocations"
+    __table_args__ = (
+        CheckConstraint(
+            "amount > 0", name="ck_billing_account_credit_allocations_amount_positive"
+        ),
+        UniqueConstraint(
+            "billing_account_ledger_entry_id",
+            name="uq_billing_account_credit_allocations_debit_entry",
+        ),
+        UniqueConstraint(
+            "idempotency_key",
+            name="uq_billing_account_credit_allocations_idempotency_key",
+        ),
+        Index(
+            "ix_billing_account_credit_allocations_account_created",
+            "billing_account_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    billing_account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("billing_accounts.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    subscriber_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("subscribers.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    billing_account_ledger_entry_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("billing_account_ledger_entries.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    preview_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    billing_account = relationship("BillingAccount")
+    subscriber = relationship("Subscriber")
+    billing_account_ledger_entry = relationship("BillingAccountLedgerEntry")
+    items = relationship(
+        "BillingAccountCreditAllocationItem",
+        back_populates="allocation",
+        passive_deletes=True,
+    )
+    reconciliation_evidence = relationship(
+        "ConsolidatedCreditConsumptionReconciliationEvidence",
+        back_populates="allocation",
+        uselist=False,
+    )
+
+
+class BillingAccountCreditAllocationItem(Base):
+    """Exact source-credit and subscriber-ledger evidence for an allocation."""
+
+    __tablename__ = "billing_account_credit_allocation_items"
+    __table_args__ = (
+        CheckConstraint(
+            "amount > 0",
+            name="ck_billing_account_credit_allocation_items_amount_positive",
+        ),
+        UniqueConstraint(
+            "payment_allocation_id",
+            name="uq_billing_account_credit_allocation_items_payment_allocation",
+        ),
+        UniqueConstraint(
+            "subscriber_ledger_entry_id",
+            name="uq_billing_account_credit_allocation_items_subscriber_ledger",
+        ),
+        Index(
+            "ix_billing_account_credit_allocation_items_allocation",
+            "allocation_id",
+        ),
+        Index(
+            "ix_billing_account_credit_allocation_items_source",
+            "source_billing_account_ledger_entry_id",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    allocation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("billing_account_credit_allocations.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    source_billing_account_ledger_entry_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("billing_account_ledger_entries.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    payment_allocation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("payment_allocations.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    subscriber_ledger_entry_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ledger_entries.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    allocation = relationship("BillingAccountCreditAllocation", back_populates="items")
+    source_billing_account_ledger_entry = relationship("BillingAccountLedgerEntry")
+    payment_allocation = relationship("PaymentAllocation")
+    subscriber_ledger_entry = relationship("LedgerEntry")
+
+
+class ConsolidatedCreditConsumptionReconciliationEvidence(Base):
+    """Reviewed provenance for one historical consolidated-credit transfer."""
+
+    __tablename__ = "consolidated_credit_consumption_reconciliation_evidence"
+    __table_args__ = (
+        CheckConstraint(
+            "debit_action IN ('linked_existing', 'created_missing')",
+            name="ck_consolidated_credit_recon_debit_action",
+        ),
+        UniqueConstraint(
+            "allocation_id", name="uq_consolidated_credit_recon_allocation"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    allocation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("billing_account_credit_allocations.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    debit_action: Mapped[str] = mapped_column(String(24), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    allocation = relationship(
+        "BillingAccountCreditAllocation", back_populates="reconciliation_evidence"
+    )
 
 
 class Invoice(Base):
@@ -209,6 +492,17 @@ class Invoice(Base):
             unique=True,
             postgresql_where=text("is_active AND splynx_invoice_id IS NOT NULL"),
         ),
+        # Idempotency key for CRM-created invoices (installation charges). A
+        # dedicated column, not metadata->>'crm_external_ref', so the partial
+        # unique index is portable to the SQLite test suite. sqlite_where keeps
+        # the predicate (else SQLite would constrain inactive/voided rows too).
+        Index(
+            "uq_invoices_active_crm_external_ref",
+            "crm_external_ref",
+            unique=True,
+            postgresql_where=text("is_active AND crm_external_ref IS NOT NULL"),
+            sqlite_where=text("is_active AND crm_external_ref IS NOT NULL"),
+        ),
         # Backs the per-account billing list (active invoices, newest first)
         # and FK joins on account_id.
         Index(
@@ -216,6 +510,21 @@ class Invoice(Base):
             "account_id",
             "is_active",
             "issued_at",
+        ),
+        # Backs the ERP AR incremental sync watermark (WHERE is_active AND
+        # updated_at >= :cutoff ORDER BY updated_at). Without it the sync did a
+        # global unindexed sort → long-running sessions → app pool starvation.
+        Index(
+            "ix_invoices_is_active_updated_at",
+            "is_active",
+            "updated_at",
+        ),
+        # Backs the un-watermarked UI default (ORDER BY created_at DESC over
+        # active invoices) so that path stops sequentially sorting too.
+        Index(
+            "ix_invoices_is_active_created_at",
+            "is_active",
+            "created_at",
         ),
     )
 
@@ -250,6 +559,9 @@ class Invoice(Base):
         UUID(as_uuid=True), ForeignKey("subscribers.id")
     )
     splynx_invoice_id: Mapped[int | None] = mapped_column(Integer)
+    # Idempotency key for CRM-created invoices (also mirrored into metadata for
+    # back-compat reads); backs uq_invoices_active_crm_external_ref.
+    crm_external_ref: Mapped[str | None] = mapped_column(String(120))
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSONB)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
@@ -271,7 +583,110 @@ class Invoice(Base):
     credit_note_applications = relationship(
         "CreditNoteApplication", back_populates="invoice"
     )
+    closure = relationship("InvoiceClosure", back_populates="invoice", uselist=False)
     pdf_exports = relationship("InvoicePdfExport", back_populates="invoice")
+
+
+class InvoiceClosure(Base):
+    """Append-only evidence for the one terminal financial closure of an invoice."""
+
+    __tablename__ = "invoice_closures"
+    __table_args__ = (
+        Index("uq_invoice_closures_invoice_id", "invoice_id", unique=True),
+        Index("uq_invoice_closures_idempotency_key", "idempotency_key", unique=True),
+        CheckConstraint("amount >= 0", name="ck_invoice_closures_amount_nonnegative"),
+        CheckConstraint(
+            "receivable_before >= 0",
+            name="ck_invoice_closures_receivable_before_nonnegative",
+        ),
+        CheckConstraint(
+            "receivable_after >= 0",
+            name="ck_invoice_closures_receivable_after_nonnegative",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    invoice_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("invoices.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    closure_type: Mapped[InvoiceClosureType] = mapped_column(
+        Enum(InvoiceClosureType), nullable=False
+    )
+    origin: Mapped[InvoiceClosureOrigin] = mapped_column(
+        Enum(InvoiceClosureOrigin), nullable=False
+    )
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    receivable_before: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    receivable_after: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), nullable=False, default=Decimal("0.00")
+    )
+    payments_applied: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), nullable=False, default=Decimal("0.00")
+    )
+    credits_applied: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), nullable=False, default=Decimal("0.00")
+    )
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text)
+    preview_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    idempotency_key: Mapped[str | None] = mapped_column(String(120))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    invoice = relationship("Invoice", back_populates="closure")
+    ledger_evidence = relationship(
+        "InvoiceClosureLedgerEvidence", back_populates="closure"
+    )
+
+
+class InvoiceClosureLedgerEvidence(Base):
+    """Exact ledger result and optional original entry for an invoice closure."""
+
+    __tablename__ = "invoice_closure_ledger_evidence"
+    __table_args__ = (
+        UniqueConstraint(
+            "closure_id",
+            "ledger_entry_id",
+            name="uq_invoice_closure_evidence_closure_ledger",
+        ),
+        Index(
+            "uq_invoice_closure_evidence_ledger_entry_id",
+            "ledger_entry_id",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    closure_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("invoice_closures.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    ledger_entry_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ledger_entries.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    reverses_ledger_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ledger_entries.id", ondelete="RESTRICT"),
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    closure = relationship("InvoiceClosure", back_populates="ledger_evidence")
+    ledger_entry = relationship("LedgerEntry", foreign_keys=[ledger_entry_id])
+    reverses_ledger_entry = relationship(
+        "LedgerEntry", foreign_keys=[reverses_ledger_entry_id]
+    )
 
 
 class InvoicePdfExport(Base):
@@ -320,6 +735,30 @@ class CreditNoteStatus(enum.Enum):
 
 class CreditNote(Base):
     __tablename__ = "credit_notes"
+    __table_args__ = (
+        # Backs the ERP AR incremental sync watermark + the un-watermarked
+        # default list sort (see the Invoice indexes for the incident context).
+        Index(
+            "ix_credit_notes_is_active_updated_at",
+            "is_active",
+            "updated_at",
+        ),
+        Index(
+            "ix_credit_notes_is_active_created_at",
+            "is_active",
+            "created_at",
+        ),
+        Index(
+            "uq_credit_notes_funding_ledger_entry_id",
+            "funding_ledger_entry_id",
+            unique=True,
+        ),
+        Index(
+            "uq_credit_notes_void_ledger_entry_id",
+            "void_ledger_entry_id",
+            unique=True,
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -344,6 +783,22 @@ class CreditNote(Base):
     memo: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     splynx_credit_note_id: Mapped[int | None] = mapped_column(Integer)
+    issued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # New issued credit notes are backed by one exact unallocated ledger credit.
+    # Historical notes remain nullable until reviewed reconciliation supplies
+    # or creates evidence for their remaining available amount.
+    funding_ledger_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ledger_entries.id", ondelete="RESTRICT"),
+    )
+    issue_preview_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    # Voiding is append-only: this links the note to the exact reversal of its
+    # funding entry. A note without reviewed funding evidence cannot be voided.
+    void_ledger_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ledger_entries.id", ondelete="RESTRICT"),
+    )
+    void_preview_fingerprint: Mapped[str | None] = mapped_column(String(64))
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
@@ -358,6 +813,10 @@ class CreditNote(Base):
     invoice = relationship("Invoice")
     lines = relationship("CreditNoteLine", back_populates="credit_note")
     applications = relationship("CreditNoteApplication", back_populates="credit_note")
+    funding_ledger_entry = relationship(
+        "LedgerEntry", foreign_keys=[funding_ledger_entry_id]
+    )
+    void_ledger_entry = relationship("LedgerEntry", foreign_keys=[void_ledger_entry_id])
 
 
 class CreditNoteLine(Base):
@@ -397,6 +856,18 @@ class CreditNoteLine(Base):
 
 class CreditNoteApplication(Base):
     __tablename__ = "credit_note_applications"
+    __table_args__ = (
+        Index(
+            "uq_credit_note_applications_ledger_entry_id",
+            "ledger_entry_id",
+            unique=True,
+        ),
+        Index(
+            "uq_credit_note_applications_consumption_ledger_entry_id",
+            "consumption_ledger_entry_id",
+            unique=True,
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -406,6 +877,24 @@ class CreditNoteApplication(Base):
     )
     invoice_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("invoices.id"), nullable=False
+    )
+    # Exact monetary evidence for this application. Historical rows remain
+    # nullable because inferring a link from amount/memo would risk attaching
+    # the wrong ledger transaction; every new application is linked by the
+    # credit-note owner in the same transaction.
+    ledger_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ledger_entries.id", ondelete="RESTRICT"),
+    )
+    # Fingerprint of the owner-produced preview that the operator confirmed.
+    # This is evidence/stale-state protection, not an authorization token.
+    preview_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    # When an application spends a structurally funded credit note, this is
+    # the exact unallocated debit that consumes the same amount from the
+    # account credit pool. Historical unfunded applications remain nullable.
+    consumption_ledger_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ledger_entries.id", ondelete="RESTRICT"),
     )
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
     memo: Mapped[str | None] = mapped_column(Text)
@@ -421,6 +910,10 @@ class CreditNoteApplication(Base):
 
     credit_note = relationship("CreditNote", back_populates="applications")
     invoice = relationship("Invoice", back_populates="credit_note_applications")
+    ledger_entry = relationship("LedgerEntry", foreign_keys=[ledger_entry_id])
+    consumption_ledger_entry = relationship(
+        "LedgerEntry", foreign_keys=[consumption_ledger_entry_id]
+    )
 
 
 class InvoiceLine(Base):
@@ -577,6 +1070,35 @@ class Payment(Base):
             unique=True,
             postgresql_where=text("is_active AND splynx_payment_id IS NOT NULL"),
         ),
+        # Idempotency backstop for CRM-originated payments. These are recorded
+        # with external_id = "crm:<ref>" and NO provider_id, so they fall outside
+        # uq_payments_active_external_id (which requires provider_id NOT NULL).
+        # A concurrent /crm/payments push could otherwise double-record cash.
+        Index(
+            "uq_payments_active_crm_external_id",
+            "external_id",
+            unique=True,
+            postgresql_where=text(
+                "is_active AND external_id IS NOT NULL AND external_id LIKE 'crm:%'"
+            ),
+            # Keep the predicate partial on SQLite too (tests) so non-CRM
+            # payments sharing an external_id aren't wrongly constrained.
+            sqlite_where=text(
+                "is_active AND external_id IS NOT NULL AND external_id LIKE 'crm:%'"
+            ),
+        ),
+        # Backs the ERP AR incremental sync watermark + the un-watermarked
+        # default list sort (see the Invoice indexes for the incident context).
+        Index(
+            "ix_payments_is_active_updated_at",
+            "is_active",
+            "updated_at",
+        ),
+        Index(
+            "ix_payments_is_active_created_at",
+            "is_active",
+            "created_at",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -601,11 +1123,38 @@ class Payment(Base):
         UUID(as_uuid=True), ForeignKey("billing_accounts.id")
     )
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
+    # Total refunded so far (sum of refund ledger entries), maintained by the
+    # refund flow. `amount` stays the gross captured figure; net cash =
+    # amount - refunded_amount. Exposed so ERP posts the net after a refund.
+    refunded_amount: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), default=Decimal("0.00"), server_default="0"
+    )
+    # Payment-gateway fee withheld from settlement (Paystack `fees`,
+    # Flutterwave `app_fee`). `amount` stays the gross the customer was charged;
+    # the gateway settles `amount - provider_fee` to the bank. Exposed so ERP can
+    # split the receipt (Dr Bank net / Dr charges / Cr AR gross) and bank rec ties.
+    provider_fee: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), default=Decimal("0.00"), server_default="0"
+    )
     currency: Mapped[str] = mapped_column(String(3), default="NGN")
     status: Mapped[PaymentStatus] = mapped_column(
         Enum(PaymentStatus), default=PaymentStatus.pending
     )
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Pending documents carry intent only. This records whether the settlement
+    # owner should allocate across open invoices when cash is later confirmed.
+    auto_allocate_on_settlement: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
+    creation_preview_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    # Set only when a durable apply run proves that it created this payment.
+    # Reused idempotent rows keep the original/null owner and cannot be claimed
+    # by a later import batch reversal.
+    import_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("import_runs.id", ondelete="RESTRICT"),
+        index=True,
+    )
     external_id: Mapped[str | None] = mapped_column(String(120))
     memo: Mapped[str | None] = mapped_column(Text)
     receipt_number: Mapped[str | None] = mapped_column(String(120))
@@ -629,9 +1178,705 @@ class Payment(Base):
     billing_account = relationship("BillingAccount", back_populates="payments")
     provider_events = relationship("PaymentProviderEvent", back_populates="payment")
     ledger_entries = relationship("LedgerEntry", back_populates="payment")
+    billing_account_ledger_entries = relationship(
+        "BillingAccountLedgerEntry", back_populates="payment"
+    )
     dunning_actions = relationship("DunningActionLog", back_populates="payment")
     allocations = relationship("PaymentAllocation", back_populates="payment")
+    refunds = relationship("PaymentRefund", back_populates="payment")
+    reversal = relationship("PaymentReversal", back_populates="payment", uselist=False)
+    settlement = relationship(
+        "PaymentSettlement", back_populates="payment", uselist=False
+    )
     topup_intents = relationship("TopupIntent", back_populates="completed_payment")
+    # One proof-backed reseller payment can raise at most one WHT receivable.
+    # The relationship is read by the bounded ERP sync projection so ERP can
+    # post net bank cash + WHT receivable against the gross AR settlement.
+    withholding_tax_record = relationship(
+        "WithholdingTaxRecord",
+        back_populates="payment",
+        uselist=False,
+    )
+    import_run = relationship(
+        "ImportRun", back_populates="created_payments", foreign_keys=[import_run_id]
+    )
+
+
+class PaymentRefund(Base):
+    """One completed refund projection with exact monetary evidence."""
+
+    __tablename__ = "payment_refunds"
+    __table_args__ = (
+        CheckConstraint("amount > 0", name="ck_payment_refunds_amount_positive"),
+        Index(
+            "uq_payment_refunds_ledger_entry_id",
+            "ledger_entry_id",
+            unique=True,
+        ),
+        Index(
+            "uq_payment_refunds_billing_account_ledger_entry_id",
+            "billing_account_ledger_entry_id",
+            unique=True,
+        ),
+        Index(
+            "uq_payment_refunds_credit_consumption_ledger_entry_id",
+            "credit_consumption_ledger_entry_id",
+            unique=True,
+        ),
+        Index(
+            "uq_payment_refunds_provider_event_id",
+            "provider_event_id",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    payment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("payments.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    provider_event_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("payment_provider_events.id", ondelete="RESTRICT"),
+    )
+    ledger_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ledger_entries.id", ondelete="RESTRICT"),
+    )
+    billing_account_ledger_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("billing_account_ledger_entries.id", ondelete="RESTRICT"),
+    )
+    # The total refund ledger row is accounting/audit evidence. If part of the
+    # refunded payment remained as unallocated account credit, this second link
+    # names the exact internal debit that consumes only that wallet portion.
+    credit_consumption_ledger_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ledger_entries.id", ondelete="RESTRICT"),
+    )
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    origin: Mapped[PaymentRefundOrigin] = mapped_column(
+        Enum(PaymentRefundOrigin), nullable=False
+    )
+    reason: Mapped[str | None] = mapped_column(Text)
+    # Historical evidence reconciled from an explicitly selected ledger row has
+    # no trustworthy preview and therefore remains NULL instead of being guessed.
+    preview_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    payment = relationship("Payment", back_populates="refunds")
+    provider_event = relationship("PaymentProviderEvent", back_populates="refunds")
+    ledger_entry = relationship("LedgerEntry", foreign_keys=[ledger_entry_id])
+    billing_account_ledger_entry = relationship(
+        "BillingAccountLedgerEntry", foreign_keys=[billing_account_ledger_entry_id]
+    )
+    credit_consumption_ledger_entry = relationship(
+        "LedgerEntry", foreign_keys=[credit_consumption_ledger_entry_id]
+    )
+    consolidated_allocation_evidence = relationship(
+        "ConsolidatedPaymentReturnAllocationEvidence",
+        back_populates="refund",
+        foreign_keys="ConsolidatedPaymentReturnAllocationEvidence.refund_id",
+    )
+    consolidated_reconciliation_evidence = relationship(
+        "ConsolidatedPaymentReturnReconciliationEvidence",
+        back_populates="refund",
+        foreign_keys="ConsolidatedPaymentReturnReconciliationEvidence.refund_id",
+        uselist=False,
+    )
+
+
+class PaymentReversal(Base):
+    """One completed chargeback/bank reversal with exact monetary evidence."""
+
+    __tablename__ = "payment_reversals"
+    __table_args__ = (
+        CheckConstraint("amount > 0", name="ck_payment_reversals_amount_positive"),
+        Index("uq_payment_reversals_payment_id", "payment_id", unique=True),
+        Index(
+            "uq_payment_reversals_provider_event_id",
+            "provider_event_id",
+            unique=True,
+        ),
+        Index(
+            "uq_payment_reversals_ledger_entry_id",
+            "ledger_entry_id",
+            unique=True,
+        ),
+        Index(
+            "uq_payment_reversals_billing_account_ledger_entry_id",
+            "billing_account_ledger_entry_id",
+            unique=True,
+        ),
+        Index(
+            "uq_payment_reversals_credit_consumption_ledger_entry_id",
+            "credit_consumption_ledger_entry_id",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    payment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("payments.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    provider_event_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("payment_provider_events.id", ondelete="RESTRICT"),
+    )
+    ledger_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ledger_entries.id", ondelete="RESTRICT"),
+    )
+    billing_account_ledger_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("billing_account_ledger_entries.id", ondelete="RESTRICT"),
+    )
+    credit_consumption_ledger_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ledger_entries.id", ondelete="RESTRICT"),
+    )
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    origin: Mapped[PaymentReversalOrigin] = mapped_column(
+        Enum(PaymentReversalOrigin), nullable=False
+    )
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    preview_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    payment = relationship("Payment", back_populates="reversal")
+    provider_event = relationship("PaymentProviderEvent", back_populates="reversals")
+    ledger_entry = relationship("LedgerEntry", foreign_keys=[ledger_entry_id])
+    billing_account_ledger_entry = relationship(
+        "BillingAccountLedgerEntry", foreign_keys=[billing_account_ledger_entry_id]
+    )
+    credit_consumption_ledger_entry = relationship(
+        "LedgerEntry", foreign_keys=[credit_consumption_ledger_entry_id]
+    )
+    consolidated_allocation_evidence = relationship(
+        "ConsolidatedPaymentReturnAllocationEvidence",
+        back_populates="reversal",
+        foreign_keys="ConsolidatedPaymentReturnAllocationEvidence.reversal_id",
+    )
+    consolidated_reconciliation_evidence = relationship(
+        "ConsolidatedPaymentReturnReconciliationEvidence",
+        back_populates="reversal",
+        foreign_keys="ConsolidatedPaymentReturnReconciliationEvidence.reversal_id",
+        uselist=False,
+    )
+
+
+class ConsolidatedPaymentReturnAllocationEvidence(Base):
+    """Exact subscriber-ledger result for one returned consolidated allocation."""
+
+    __tablename__ = "consolidated_payment_return_allocation_evidence"
+    __table_args__ = (
+        CheckConstraint(
+            "(CASE WHEN refund_id IS NOT NULL THEN 1 ELSE 0 END + "
+            "CASE WHEN reversal_id IS NOT NULL THEN 1 ELSE 0 END) = 1",
+            name="ck_consolidated_return_evidence_exactly_one_owner",
+        ),
+        UniqueConstraint(
+            "refund_id",
+            "payment_allocation_id",
+            name="uq_consolidated_refund_allocation_evidence",
+        ),
+        UniqueConstraint(
+            "reversal_id",
+            "payment_allocation_id",
+            name="uq_consolidated_reversal_allocation_evidence",
+        ),
+        Index(
+            "uq_consolidated_return_allocation_ledger_entry_id",
+            "ledger_entry_id",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    refund_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("payment_refunds.id", ondelete="RESTRICT")
+    )
+    reversal_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("payment_reversals.id", ondelete="RESTRICT")
+    )
+    payment_allocation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("payment_allocations.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    ledger_entry_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ledger_entries.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    refund = relationship(
+        "PaymentRefund",
+        back_populates="consolidated_allocation_evidence",
+        foreign_keys=[refund_id],
+    )
+    reversal = relationship(
+        "PaymentReversal",
+        back_populates="consolidated_allocation_evidence",
+        foreign_keys=[reversal_id],
+    )
+    payment_allocation = relationship("PaymentAllocation")
+    ledger_entry = relationship("LedgerEntry")
+
+
+class ConsolidatedPaymentReturnReconciliationEvidence(Base):
+    """Reviewed structural evidence for one historical consolidated return."""
+
+    __tablename__ = "consolidated_payment_return_reconciliation_evidence"
+    __table_args__ = (
+        CheckConstraint(
+            "(CASE WHEN refund_id IS NOT NULL THEN 1 ELSE 0 END + "
+            "CASE WHEN reversal_id IS NOT NULL THEN 1 ELSE 0 END) = 1",
+            name="ck_consolidated_return_recon_exactly_one_owner",
+        ),
+        UniqueConstraint("refund_id", name="uq_consolidated_return_recon_refund"),
+        UniqueConstraint("reversal_id", name="uq_consolidated_return_recon_reversal"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    refund_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("payment_refunds.id", ondelete="RESTRICT")
+    )
+    reversal_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("payment_reversals.id", ondelete="RESTRICT")
+    )
+    preview_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    refund = relationship(
+        "PaymentRefund",
+        back_populates="consolidated_reconciliation_evidence",
+        foreign_keys=[refund_id],
+    )
+    reversal = relationship(
+        "PaymentReversal",
+        back_populates="consolidated_reconciliation_evidence",
+        foreign_keys=[reversal_id],
+    )
+    document_reconstruction_evidence = relationship(
+        "ConsolidatedPaymentReturnDocumentReconstructionEvidence",
+        back_populates="reconciliation_evidence",
+        uselist=False,
+    )
+
+
+class ConsolidatedPaymentReturnDocumentReconstructionEvidence(Base):
+    """Reviewed source reference for one reconstructed historical return."""
+
+    __tablename__ = "consolidated_payment_return_document_reconstruction_evidence"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    reconciliation_evidence_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "consolidated_payment_return_reconciliation_evidence.id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+        unique=True,
+    )
+    historical_payment_state: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_reference: Mapped[str] = mapped_column(String(255), nullable=False)
+    preview_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    reconciliation_evidence = relationship(
+        "ConsolidatedPaymentReturnReconciliationEvidence",
+        back_populates="document_reconstruction_evidence",
+    )
+
+
+class PaymentSettlement(Base):
+    """Confirmed cash evidence and its exact unallocated ledger result."""
+
+    __tablename__ = "payment_settlements"
+    __table_args__ = (
+        CheckConstraint("amount > 0", name="ck_payment_settlements_amount_positive"),
+        CheckConstraint(
+            "unallocated_amount >= 0",
+            name="ck_payment_settlements_unallocated_nonnegative",
+        ),
+        Index("uq_payment_settlements_payment_id", "payment_id", unique=True),
+        Index(
+            "uq_payment_settlements_idempotency_key",
+            "idempotency_key",
+            unique=True,
+        ),
+        Index(
+            "uq_payment_settlements_unallocated_ledger_entry_id",
+            "unallocated_ledger_entry_id",
+            unique=True,
+        ),
+        Index(
+            "uq_payment_settlements_prepaid_ledger_entry_id",
+            "prepaid_ledger_entry_id",
+            unique=True,
+        ),
+        Index(
+            "uq_payment_settlements_billing_account_ledger_entry_id",
+            "billing_account_ledger_entry_id",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    payment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("payments.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    unallocated_ledger_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ledger_entries.id", ondelete="RESTRICT"),
+    )
+    prepaid_ledger_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ledger_entries.id", ondelete="RESTRICT"),
+    )
+    billing_account_ledger_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("billing_account_ledger_entries.id", ondelete="RESTRICT"),
+    )
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    unallocated_amount: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), nullable=False, default=Decimal("0.00")
+    )
+    prepaid_amount: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), nullable=False, default=Decimal("0.00")
+    )
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    origin: Mapped[PaymentSettlementOrigin] = mapped_column(
+        Enum(PaymentSettlementOrigin), nullable=False
+    )
+    preview_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    idempotency_key: Mapped[str | None] = mapped_column(String(120))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    payment = relationship("Payment", back_populates="settlement")
+    unallocated_ledger_entry = relationship(
+        "LedgerEntry", foreign_keys=[unallocated_ledger_entry_id]
+    )
+    prepaid_ledger_entry = relationship(
+        "LedgerEntry", foreign_keys=[prepaid_ledger_entry_id]
+    )
+    billing_account_ledger_entry = relationship(
+        "BillingAccountLedgerEntry",
+        foreign_keys=[billing_account_ledger_entry_id],
+    )
+    consolidated_reconciliation_evidence = relationship(
+        "ConsolidatedPaymentSettlementReconciliationEvidence",
+        back_populates="settlement",
+        uselist=False,
+    )
+
+
+class PaymentPrepaidApplication(Base):
+    """Exact evidence that settled account credit funded one prepaid period."""
+
+    __tablename__ = "payment_prepaid_applications"
+    __table_args__ = (
+        CheckConstraint(
+            "amount > 0", name="ck_payment_prepaid_applications_amount_positive"
+        ),
+        CheckConstraint(
+            "period_end > period_start",
+            name="ck_payment_prepaid_applications_period_order",
+        ),
+        CheckConstraint(
+            "origin IN ('historical_reconciliation', 'post_settlement')",
+            name="ck_payment_prepaid_applications_origin",
+        ),
+        CheckConstraint(
+            "access_recheck_status IN "
+            "('not_required', 'pending', 'completed', 'deferred')",
+            name="ck_payment_prepaid_applications_access_status",
+        ),
+        Index("uq_payment_prepaid_applications_payment_id", "payment_id", unique=True),
+        Index(
+            "uq_payment_prepaid_applications_settlement_id",
+            "settlement_id",
+            unique=True,
+        ),
+        Index(
+            "uq_payment_prepaid_applications_credit_ledger_entry_id",
+            "credit_ledger_entry_id",
+            unique=True,
+        ),
+        Index(
+            "uq_payment_prepaid_applications_debit_ledger_entry_id",
+            "debit_ledger_entry_id",
+            unique=True,
+        ),
+        Index(
+            "uq_payment_prepaid_applications_entitlement_id",
+            "entitlement_id",
+            unique=True,
+        ),
+        Index(
+            "uq_payment_prepaid_applications_retired_allocation_id",
+            "retired_allocation_id",
+            unique=True,
+        ),
+        Index(
+            "uq_payment_prepaid_applications_invoice_closure_id",
+            "invoice_closure_id",
+            unique=True,
+        ),
+        Index(
+            "uq_payment_prepaid_applications_idempotency_key",
+            "idempotency_key",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    payment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("payments.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    settlement_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("payment_settlements.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("subscribers.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    subscription_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("subscriptions.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    credit_ledger_entry_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ledger_entries.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    debit_ledger_entry_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ledger_entries.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    entitlement_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("service_entitlements.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    retired_allocation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("payment_allocations.id", ondelete="RESTRICT")
+    )
+    historical_invoice_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("invoices.id", ondelete="RESTRICT")
+    )
+    invoice_closure_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("invoice_closures.id", ondelete="RESTRICT")
+    )
+    origin: Mapped[str] = mapped_column(String(32), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    period_start: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    period_end: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    preview_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    access_recheck_status: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="not_required"
+    )
+    access_recheck_error: Mapped[str | None] = mapped_column(String(120))
+    access_rechecked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    payment = relationship("Payment")
+    settlement = relationship("PaymentSettlement")
+    account = relationship("Subscriber")
+    subscription = relationship("Subscription")
+    credit_ledger_entry = relationship(
+        "LedgerEntry", foreign_keys=[credit_ledger_entry_id]
+    )
+    debit_ledger_entry = relationship(
+        "LedgerEntry", foreign_keys=[debit_ledger_entry_id]
+    )
+    entitlement = relationship("ServiceEntitlement")
+    retired_allocation = relationship("PaymentAllocation")
+    historical_invoice = relationship("Invoice")
+    invoice_closure = relationship("InvoiceClosure")
+
+
+class PaymentAllocationReconciliationException(Base):
+    """Durable evidence that settled money could not reach its target invoice."""
+
+    __tablename__ = "payment_allocation_reconciliation_exceptions"
+    __table_args__ = (
+        Index(
+            "uq_payment_allocation_reconciliation_exceptions_key",
+            "idempotency_key",
+            unique=True,
+        ),
+        Index(
+            "ix_payment_allocation_reconciliation_exceptions_status_created",
+            "status",
+            "created_at",
+        ),
+        Index(
+            "ix_payment_allocation_reconciliation_exceptions_payment",
+            "payment_id",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    payment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("payments.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    invoice_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("invoices.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    topup_intent_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("topup_intents.id", ondelete="RESTRICT"),
+    )
+    provider_reference: Mapped[str] = mapped_column(String(120), nullable=False)
+    external_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="open", server_default="open"
+    )
+    error_type: Mapped[str] = mapped_column(String(120), nullable=False)
+    error_message: Mapped[str] = mapped_column(Text, nullable=False)
+    attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    payment = relationship("Payment")
+    invoice = relationship("Invoice")
+    topup_intent = relationship("TopupIntent")
+
+
+class ConsolidatedPaymentSettlementReconciliationEvidence(Base):
+    """Reviewed provenance for one historical consolidated settlement."""
+
+    __tablename__ = "consolidated_payment_settlement_reconciliation_evidence"
+    __table_args__ = (
+        CheckConstraint(
+            "(CASE WHEN provider_event_id IS NOT NULL THEN 1 ELSE 0 END + "
+            "CASE WHEN payment_proof_id IS NOT NULL THEN 1 ELSE 0 END + "
+            "CASE WHEN topup_intent_id IS NOT NULL THEN 1 ELSE 0 END) = 1",
+            name="ck_consolidated_settle_recon_exactly_one_provenance",
+        ),
+        UniqueConstraint(
+            "settlement_id", name="uq_consolidated_settle_recon_settlement"
+        ),
+        UniqueConstraint(
+            "provider_event_id", name="uq_consolidated_settle_recon_provider_event"
+        ),
+        UniqueConstraint(
+            "payment_proof_id", name="uq_consolidated_settle_recon_payment_proof"
+        ),
+        UniqueConstraint(
+            "topup_intent_id", name="uq_consolidated_settle_recon_topup_intent"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    settlement_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("payment_settlements.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    provider_event_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("payment_provider_events.id", ondelete="RESTRICT"),
+    )
+    payment_proof_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("payment_proofs.id", ondelete="RESTRICT"),
+    )
+    topup_intent_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("topup_intents.id", ondelete="RESTRICT"),
+    )
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    settlement = relationship(
+        "PaymentSettlement", back_populates="consolidated_reconciliation_evidence"
+    )
+    provider_event = relationship("PaymentProviderEvent")
+    payment_proof = relationship("PaymentProof")
+    topup_intent = relationship("TopupIntent")
 
 
 class TopupIntent(Base):
@@ -639,6 +1884,28 @@ class TopupIntent(Base):
     __table_args__ = (
         Index("ix_topup_intents_account_id", "account_id"),
         Index("uq_topup_intents_reference", "reference", unique=True),
+        Index(
+            "uq_topup_intents_deposit_idempotency",
+            "account_id",
+            "purpose",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text(
+                "purpose = 'account_credit_deposit' AND idempotency_key IS NOT NULL"
+            ),
+            sqlite_where=text(
+                "purpose = 'account_credit_deposit' AND idempotency_key IS NOT NULL"
+            ),
+        ),
+        CheckConstraint(
+            "purpose IS NULL OR ("
+            "purpose = 'account_credit_deposit' AND "
+            "allocation_policy = 'credit_only' AND "
+            "credit_application_policy = 'pay_eligible_invoices' AND "
+            "policy_version = 1 AND preview_fingerprint IS NOT NULL AND "
+            "idempotency_key IS NOT NULL AND channel IS NOT NULL)",
+            name="ck_topup_intents_account_credit_contract",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -653,6 +1920,17 @@ class TopupIntent(Base):
     completed_payment_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("payments.id")
     )
+    provider_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("payment_providers.id")
+    )
+    purpose: Mapped[str | None] = mapped_column(String(40))
+    allocation_policy: Mapped[str | None] = mapped_column(String(40))
+    credit_application_policy: Mapped[str | None] = mapped_column(String(40))
+    policy_version: Mapped[int | None] = mapped_column(Integer)
+    preview_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    idempotency_key: Mapped[str | None] = mapped_column(String(120))
+    channel: Mapped[str | None] = mapped_column(String(40))
+    created_by: Mapped[str | None] = mapped_column(String(120))
     reference: Mapped[str] = mapped_column(String(120), nullable=False)
     provider_type: Mapped[str] = mapped_column(String(40), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), default="NGN")
@@ -678,6 +1956,7 @@ class TopupIntent(Base):
     account = relationship("Subscriber")
     billing_account = relationship("BillingAccount")
     completed_payment = relationship("Payment", back_populates="topup_intents")
+    provider = relationship("PaymentProvider")
 
 
 class PaymentAllocation(Base):
@@ -689,6 +1968,27 @@ class PaymentAllocation(Base):
         # The unique constraint's index is payment_id-leading; this backs
         # invoice_id-leading lookups (allocations for an invoice).
         Index("ix_payment_allocations_invoice_id", "invoice_id"),
+        Index(
+            "ix_payment_allocations_invoice_active_payment",
+            "invoice_id",
+            "is_active",
+            "payment_id",
+        ),
+        Index(
+            "uq_payment_allocations_ledger_entry_id",
+            "ledger_entry_id",
+            unique=True,
+        ),
+        Index(
+            "uq_payment_allocations_consumption_ledger_entry_id",
+            "consumption_ledger_entry_id",
+            unique=True,
+        ),
+        Index(
+            "uq_payment_allocations_idempotency_key",
+            "idempotency_key",
+            unique=True,
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -700,6 +2000,14 @@ class PaymentAllocation(Base):
     invoice_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("invoices.id"), nullable=False
     )
+    ledger_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ledger_entries.id", ondelete="RESTRICT")
+    )
+    consumption_ledger_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ledger_entries.id", ondelete="RESTRICT")
+    )
+    preview_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    idempotency_key: Mapped[str | None] = mapped_column(String(120))
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
     memo: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(
@@ -712,10 +2020,29 @@ class PaymentAllocation(Base):
 
     payment = relationship("Payment", back_populates="allocations")
     invoice = relationship("Invoice", back_populates="payment_allocations")
+    ledger_entry = relationship("LedgerEntry", foreign_keys=[ledger_entry_id])
+    consumption_ledger_entry = relationship(
+        "LedgerEntry", foreign_keys=[consumption_ledger_entry_id]
+    )
 
 
 class LedgerEntry(Base):
     __tablename__ = "ledger_entries"
+    __table_args__ = (
+        # One reversal per entry, enforced by the database rather than by caller
+        # discipline. NULLs are distinct in a unique index on both Postgres and
+        # SQLite, so ordinary (non-reversal) entries are unconstrained while every
+        # non-null reversal_of_entry_id is unique.
+        #
+        # Deliberately NOT scoped to is_active: a reversal that was later
+        # deactivated must still block a second reversal of the same entry, or
+        # deactivating the reversal would silently re-open the double-post.
+        Index(
+            "uq_ledger_entries_reversal_of",
+            "reversal_of_entry_id",
+            unique=True,
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -741,6 +2068,36 @@ class LedgerEntry(Base):
     currency: Mapped[str] = mapped_column(String(3), default="NGN")
     memo: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # True only when this row is itself a customer-position event. Some ledger
+    # rows are immutable structural evidence for a document-owned movement or
+    # a cutover/correction position carried by the reviewed opening baseline.
+    # The explicit flag prevents those rows from being counted twice and keeps
+    # money semantics independent of free-text memo labels.
+    #
+    # This is orthogonal to ``is_active``: that flag follows the lifecycle of
+    # the source artifact (for example, a later-voided payment or invoice).
+    # Never infer either flag from the other or rewrite this flag merely because
+    # an entry became inactive.
+    affects_customer_position: Mapped[bool] = mapped_column(
+        Boolean, default=True, nullable=False
+    )
+
+    # The entry this one reverses. The ledger is append-only: an entry's effect is
+    # undone by posting its opposite, and this is the structural link between the
+    # two. ``uq_ledger_entries_reversal_of`` makes a second reversal of the same
+    # entry impossible at the database level, so the invariant does not depend on
+    # every future caller remembering to take the row lock first.
+    #
+    # NULL for ordinary entries and for pre-existing reversals, which were only
+    # ever linked by memo text. Those are deliberately NOT backfilled here — the
+    # pairing is inferred, and inferring it wrong would corrupt money. The service
+    # keeps the legacy memo lookup so an un-backfilled reversal still blocks a
+    # re-reversal.
+    reversal_of_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ledger_entries.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
 
     # The real-world date the entry represents (invoice issue / payment / txn
     # date). NULL for native entries and any row the cutover backfill could not
@@ -762,6 +2119,184 @@ class LedgerEntry(Base):
     account = relationship("Subscriber")
     invoice = relationship("Invoice", back_populates="ledger_entries")
     payment = relationship("Payment", back_populates="ledger_entries")
+
+
+class AccountAdjustment(Base):
+    """Evidence for one previewed debit against prepaid account funding.
+
+    The linked ledger entry owns the customer-position effect. This row owns
+    the business decision, stale-confirmation fingerprint, idempotency, and the
+    exact link needed to audit or reverse that decision without guessing from a
+    memo or amount.
+    """
+
+    __tablename__ = "account_adjustments"
+    __table_args__ = (
+        UniqueConstraint(
+            "origin",
+            "idempotency_key",
+            name="uq_account_adjustments_origin_idempotency",
+        ),
+        UniqueConstraint(
+            "origin",
+            "reversal_idempotency_key",
+            name="uq_account_adjustments_origin_reversal_idempotency",
+        ),
+        CheckConstraint("amount > 0", name="ck_account_adjustments_amount_positive"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False, index=True
+    )
+    category: Mapped[LedgerCategory] = mapped_column(
+        Enum(LedgerCategory, name="ledgercategory", create_constraint=False),
+        nullable=False,
+    )
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="NGN")
+    memo: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    origin: Mapped[str] = mapped_column(String(40), nullable=False)
+    origin_ref: Mapped[str | None] = mapped_column(String(160))
+    prepaid_funding_before: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), nullable=False
+    )
+    prepaid_funding_after: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), nullable=False
+    )
+    postpaid_receivables: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), nullable=False, default=Decimal("0.00")
+    )
+    collection_blocking_balance: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), nullable=False, default=Decimal("0.00")
+    )
+    access_consequence: Mapped[str] = mapped_column(
+        String(80), nullable=False, default="none_adjustment_only"
+    )
+    preview_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    ledger_entry_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ledger_entries.id", ondelete="RESTRICT"),
+        nullable=False,
+        unique=True,
+    )
+    reversal_ledger_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ledger_entries.id", ondelete="RESTRICT"),
+        nullable=True,
+        unique=True,
+    )
+    reversal_preview_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    reversal_idempotency_key: Mapped[str | None] = mapped_column(String(120))
+    reversal_reason: Mapped[str | None] = mapped_column(Text)
+    reversal_prepaid_funding_before: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2)
+    )
+    reversal_prepaid_funding_after: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2)
+    )
+    reversed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    account = relationship("Subscriber")
+    ledger_entry = relationship("LedgerEntry", foreign_keys=[ledger_entry_id])
+    reversal_ledger_entry = relationship(
+        "LedgerEntry", foreign_keys=[reversal_ledger_entry_id]
+    )
+    subscription_add_on = relationship(
+        "SubscriptionAddOn", back_populates="account_adjustment", uselist=False
+    )
+
+
+class ServiceEntitlement(Base):
+    """Funded prepaid service period.
+
+    Money remains represented by invoices, payments, allocations, and ledger
+    entries. This row is the prepaid access proof created only after a service
+    period has been funded.
+    """
+
+    __tablename__ = "service_entitlements"
+    __table_args__ = (
+        Index(
+            "ix_service_entitlements_account_subscription_period",
+            "account_id",
+            "subscription_id",
+            "starts_at",
+            "ends_at",
+        ),
+        Index(
+            "uq_service_entitlements_active_invoice_line",
+            "source_invoice_line_id",
+            unique=True,
+            postgresql_where=text(
+                "status = 'active' AND source_invoice_line_id IS NOT NULL"
+            ),
+            sqlite_where=text(
+                "status = 'active' AND source_invoice_line_id IS NOT NULL"
+            ),
+        ),
+        Index(
+            "uq_service_entitlements_active_ledger_entry",
+            "source_ledger_entry_id",
+            unique=True,
+            postgresql_where=text(
+                "status = 'active' AND source_ledger_entry_id IS NOT NULL"
+            ),
+            sqlite_where=text(
+                "status = 'active' AND source_ledger_entry_id IS NOT NULL"
+            ),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
+    )
+    subscription_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscriptions.id"), nullable=False
+    )
+    source_invoice_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("invoices.id")
+    )
+    source_invoice_line_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("invoice_lines.id")
+    )
+    source_ledger_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ledger_entries.id")
+    )
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    amount_funded: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), default=Decimal("0.00")
+    )
+    currency: Mapped[str] = mapped_column(String(3), default="NGN")
+    status: Mapped[ServiceEntitlementStatus] = mapped_column(
+        Enum(ServiceEntitlementStatus), default=ServiceEntitlementStatus.active
+    )
+    metadata_: Mapped[dict | None] = mapped_column("metadata", JSONB)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    account = relationship("Subscriber")
+    subscription = relationship("Subscription")
+    source_invoice = relationship("Invoice")
+    source_invoice_line = relationship("InvoiceLine")
+    source_ledger_entry = relationship("LedgerEntry")
 
 
 class TaxRate(Base):
@@ -960,6 +2495,14 @@ class PaymentProviderEvent(Base):
     event_type: Mapped[str] = mapped_column(String(120), nullable=False)
     external_id: Mapped[str | None] = mapped_column(String(160))
     idempotency_key: Mapped[str | None] = mapped_column(String(160))
+    # Normalized monetary observation supplied by the verified provider adapter.
+    # Refund execution uses this value instead of interpreting raw provider JSON.
+    amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    currency: Mapped[str | None] = mapped_column(String(3))
+    financial_effect: Mapped[PaymentProviderEventFinancialEffect] = mapped_column(
+        Enum(PaymentProviderEventFinancialEffect),
+        default=PaymentProviderEventFinancialEffect.none,
+    )
     status: Mapped[PaymentProviderEventStatus] = mapped_column(
         Enum(PaymentProviderEventStatus), default=PaymentProviderEventStatus.pending
     )
@@ -973,6 +2516,8 @@ class PaymentProviderEvent(Base):
     provider = relationship("PaymentProvider", back_populates="events")
     payment = relationship("Payment", back_populates="provider_events")
     invoice = relationship("Invoice")
+    refunds = relationship("PaymentRefund", back_populates="provider_event")
+    reversals = relationship("PaymentReversal", back_populates="provider_event")
 
 
 class PaymentWebhookDeadLetter(Base):

@@ -2,19 +2,54 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import logging
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from types import SimpleNamespace
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models.subscriber import Subscriber
-from app.services import subscriber as subscriber_service
 from app.services.common import parse_date_filter as _parse_date
+from app.services.status_presentation import invoice_status_presentation
 
 logger = logging.getLogger(__name__)
+
+
+def _default_report_window(days: int | None = 30) -> tuple[datetime, datetime]:
+    end = datetime.now(UTC)
+    start = end - timedelta(days=days or 30)
+    return start, end
+
+
+def _resolve_report_window(
+    *,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    days: int | None = 30,
+) -> tuple[datetime, datetime, str, str]:
+    start, end = _default_report_window(days)
+    parsed_from = _parse_date(date_from)
+    parsed_to = _parse_date(date_to)
+    if parsed_from is not None:
+        start = parsed_from
+    if parsed_to is not None:
+        end = parsed_to + timedelta(days=1)
+    if end <= start:
+        end = start + timedelta(days=1)
+    return (
+        start,
+        end,
+        start.date().isoformat(),
+        (end - timedelta(days=1)).date().isoformat(),
+    )
+
+
+def _gb_from_avg_bps(
+    avg_bps: float | int | Decimal | None, span_seconds: float
+) -> float:
+    return (float(avg_bps or 0) / 8.0 * span_seconds) / (1024**3)
 
 
 # ---------------------------------------------------------------------------
@@ -23,72 +58,21 @@ logger = logging.getLogger(__name__)
 
 
 def get_subscriber_growth_data(db: Session, *, days: int = 30) -> dict:
-    """Daily subscriber counts by status over last N days."""
-    from app.models.subscriber import SubscriberStatus
+    """Daily subscriber counts by status over last N days.
 
-    end = datetime.now(UTC)
-    start = end - timedelta(days=days)
+    Read owner: app.services.subscriber_growth — this function composes the
+    owner's counts/series and owns presentation only.
+    """
+    from app.services import subscriber_growth
 
-    visible_subscribers = [
-        SimpleNamespace(
-            status=row.status,
-            metadata_=row.metadata_,
-            splynx_customer_id=row.splynx_customer_id,
-            account_start_date=row.account_start_date,
-            created_at=row.created_at,
-        )
-        for row in db.execute(
-            select(
-                Subscriber.status,
-                Subscriber.metadata_,
-                Subscriber.splynx_customer_id,
-                Subscriber.account_start_date,
-                Subscriber.created_at,
-            ).where(subscriber_service.visible_subscriber_clause())
-        ).all()
-    ]
-    total = len(visible_subscribers)
-
-    # Count by status
-    status_counts: dict[str, int] = {}
-    for s in SubscriberStatus:
-        count = sum(1 for row in visible_subscribers if row.status == s)
-        status_counts[s.value] = count
-
-    # New this month
-    month_start = end.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    new_this_month = sum(
-        1
-        for row in visible_subscribers
-        if (
-            (created_at := subscriber_service.get_effective_created_at(row)) is not None
-            and created_at >= month_start
-        )
-    )
-
-    # Daily chart data — cumulative subscriber count per day
-    chart_labels = []
-    chart_data = []
-    for i in range(days):
-        day = start + timedelta(days=i)
-        chart_labels.append(day.strftime("%Y-%m-%d"))
-        day_count = sum(
-            1
-            for row in visible_subscribers
-            if (
-                (created_at := subscriber_service.get_effective_created_at(row))
-                is not None
-                and created_at <= day
-            )
-        )
-        chart_data.append(day_count)
+    signups = subscriber_growth.daily_cumulative_signups(db, days=days)
 
     return {
-        "total_subscribers": total,
-        "status_counts": status_counts,
-        "new_this_month": new_this_month,
-        "chart_labels": chart_labels,
-        "chart_data": chart_data,
+        "total_subscribers": signups["total"],
+        "status_counts": subscriber_growth.status_counts(db),
+        "new_this_month": signups["new_this_month"],
+        "chart_labels": signups["labels"],
+        "chart_data": signups["data"],
         "days": days,
     }
 
@@ -99,21 +83,11 @@ def get_subscriber_growth_data(db: Session, *, days: int = 30) -> dict:
 
 
 def get_usage_by_plan_data(db: Session) -> dict:
-    """Subscriber counts per catalog offer."""
-    try:
-        from app.models.catalog import CatalogOffer, Subscription
+    """Subscriber counts per catalog offer (read owner: billing.reporting)."""
+    from app.services.billing import reporting as billing_reporting
 
-        stmt = (
-            select(
-                CatalogOffer.name,
-                func.count(Subscription.id).label("sub_count"),
-            )
-            .join(Subscription, Subscription.offer_id == CatalogOffer.id, isouter=True)
-            .group_by(CatalogOffer.id, CatalogOffer.name)
-            .order_by(func.count(Subscription.id).desc())
-        )
-        rows = db.execute(stmt).all()
-        plans = [{"name": r[0], "count": r[1]} for r in rows]
+    try:
+        plans = billing_reporting.get_subscription_count_by_offer(db)
     except Exception as exc:
         logger.warning("Could not query plan usage: %s", exc)
         plans = []
@@ -170,38 +144,17 @@ def get_upcoming_charges_data(db: Session) -> dict:
 def get_revenue_per_plan_data(
     db: Session, date_from: str | None = None, date_to: str | None = None
 ) -> dict:
-    """Revenue aggregated by plan."""
+    """Revenue aggregated by plan (read owner: billing.reporting)."""
+    from app.services.billing import reporting as billing_reporting
+
     try:
-        from app.models.billing import Invoice, InvoiceLine
-        from app.models.catalog import CatalogOffer, Subscription
-
-        stmt = (
-            select(
-                CatalogOffer.name,
-                func.count(func.distinct(Invoice.id)).label("invoice_count"),
-                func.coalesce(func.sum(InvoiceLine.amount), 0).label("total_revenue"),
-            )
-            .select_from(CatalogOffer)
-            .join(Subscription, Subscription.offer_id == CatalogOffer.id, isouter=True)
-            .join(
-                InvoiceLine,
-                InvoiceLine.subscription_id == Subscription.id,
-                isouter=True,
-            )
-            .join(Invoice, Invoice.id == InvoiceLine.invoice_id, isouter=True)
-            .group_by(CatalogOffer.id, CatalogOffer.name)
-            .order_by(func.coalesce(func.sum(InvoiceLine.amount), 0).desc())
-        )
-
         d_from = _parse_date(date_from)
         d_to = _parse_date(date_to)
-        if d_from:
-            stmt = stmt.where(Invoice.issued_at >= d_from)
-        if d_to:
-            stmt = stmt.where(Invoice.issued_at < d_to + timedelta(days=1))
-
-        rows = db.execute(stmt).all()
-        plans = [{"name": r[0], "invoice_count": r[1], "revenue": r[2]} for r in rows]
+        plans = billing_reporting.get_revenue_by_offer(
+            db,
+            issued_from=d_from,
+            issued_before=(d_to + timedelta(days=1)) if d_to else None,
+        )
     except Exception as exc:
         logger.warning("Could not query revenue per plan: %s", exc)
         plans = []
@@ -213,11 +166,6 @@ def get_revenue_per_plan_data(
         "chart_labels": [p["name"] for p in plans[:20]],
         "chart_values": [float(p["revenue"]) for p in plans[:20]],
     }
-
-
-# ---------------------------------------------------------------------------
-# 4.30 Invoice Report
-# ---------------------------------------------------------------------------
 
 
 def get_invoice_report_data(
@@ -247,6 +195,10 @@ def get_invoice_report_data(
 
     return {
         "invoices": invoices,
+        "invoice_status_presentations": {
+            str(invoice.id): invoice_status_presentation(invoice.status)
+            for invoice in invoices
+        },
         "total_count": len(invoices),
         "date_from": date_from or "",
         "date_to": date_to or "",
@@ -260,29 +212,11 @@ def get_invoice_report_data(
 
 
 def get_statements_data(db: Session) -> dict:
-    """Customer financial summaries."""
-    try:
-        from app.models.billing import Invoice
-        from app.models.subscriber import Subscriber
+    """Customer financial summaries (read owner: billing.reporting)."""
+    from app.services.billing import reporting as billing_reporting
 
-        stmt = (
-            select(
-                (Subscriber.first_name + " " + Subscriber.last_name).label("full_name"),
-                func.count(Invoice.id).label("doc_count"),
-                func.coalesce(func.sum(Invoice.total), 0).label("total"),
-            )
-            .join(Invoice, Invoice.account_id == Subscriber.id, isouter=True)
-            .group_by(
-                Subscriber.id,
-                (Subscriber.first_name + " " + Subscriber.last_name).label("full_name"),
-            )
-            .order_by(
-                (Subscriber.first_name + " " + Subscriber.last_name).label("full_name")
-            )
-            .limit(200)
-        )
-        rows = db.execute(stmt).all()
-        statements = [{"name": r[0], "doc_count": r[1], "total": r[2]} for r in rows]
+    try:
+        statements = billing_reporting.get_customer_statement_totals(db)
     except Exception as exc:
         logger.warning("Could not query statements: %s", exc)
         statements = []
@@ -295,24 +229,20 @@ def get_statements_data(db: Session) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def get_tax_report_data(db: Session) -> dict:
-    """Per-invoice tax details and totals."""
-    try:
-        from app.models.billing import Invoice
+def get_tax_report_data(
+    db: Session,
+    *,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> dict[str, object]:
+    """Delegate tax-report meaning to the tax-accounting owner."""
+    from app.services import tax_accounting
 
-        stmt = (
-            select(Invoice)
-            .where(Invoice.tax_total > 0)
-            .order_by(Invoice.issued_at.desc())
-            .limit(200)
-        )
-        invoices = list(db.scalars(stmt).all())
-    except Exception as exc:
-        logger.warning("Could not query tax data: %s", exc)
-        invoices = []
-
-    total_tax = sum(getattr(i, "tax_total", 0) or 0 for i in invoices)
-    return {"invoices": invoices, "total_tax": total_tax}
+    return tax_accounting.build_tax_report(
+        db,
+        date_from=date_from,
+        date_to=date_to,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -320,105 +250,56 @@ def get_tax_report_data(db: Session) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def get_mrr_data(db: Session, year: int | None = None) -> dict:
-    """Monthly recurring revenue movement with real subscription data."""
-    from app.models.catalog import Subscription, SubscriptionStatus
+def get_mrr_data(
+    db: Session,
+    year: int | None = None,
+    *,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> dict:
+    """Monthly recurring revenue movement with real subscription data.
 
+    The per-month movement counts are owned by billing.reporting
+    (get_subscription_movement); this function windows the months to the
+    requested date range and presents them.
+    """
+    from app.services.billing import reporting as billing_reporting
+
+    parsed_from = _parse_date(date_from)
+    parsed_to = _parse_date(date_to)
+    if parsed_from is not None:
+        year = parsed_from.year
     if not year:
         year = datetime.now(UTC).year
+    range_start = parsed_from
+    range_end = parsed_to + timedelta(days=1) if parsed_to is not None else None
+
+    movement = billing_reporting.get_subscription_movement(db, year=year)
 
     months = []
-    now = datetime.now(UTC)
-
-    for m in range(1, 13):
+    for m, entry in enumerate(movement, start=1):
         month_start = datetime(year, m, 1, tzinfo=UTC)
         if m < 12:
             month_end = datetime(year, m + 1, 1, tzinfo=UTC)
         else:
             month_end = datetime(year + 1, 1, 1, tzinfo=UTC)
 
-        # Skip future months
-        if month_start > now:
-            months.append(
-                {
-                    "month": f"{year}-{m:02d}",
-                    "start_count": 0,
-                    "new": 0,
-                    "cancellations": 0,
-                    "end_count": 0,
-                    "net_change": 0,
-                }
-            )
+        if range_start is not None and month_end <= range_start:
+            continue
+        if range_end is not None and month_start >= range_end:
             continue
 
-        # Active at start of month (created before month_start and not canceled before)
-        start_count = (
-            db.scalar(
-                select(func.count(Subscription.id)).where(
-                    Subscription.created_at < month_start,
-                    Subscription.status.in_(
-                        [
-                            SubscriptionStatus.active,
-                            SubscriptionStatus.suspended,
-                            SubscriptionStatus.pending,
-                        ]
-                    ),
-                )
-            )
-            or 0
-        )
+        months.append(entry)
 
-        # New subscriptions created this month
-        new_count = (
-            db.scalar(
-                select(func.count(Subscription.id)).where(
-                    Subscription.created_at >= month_start,
-                    Subscription.created_at < month_end,
-                )
-            )
-            or 0
-        )
+    total = billing_reporting.get_active_subscription_count(db)
 
-        # Cancellations this month
-        cancel_count = (
-            db.scalar(
-                select(func.count(Subscription.id)).where(
-                    Subscription.status == SubscriptionStatus.canceled,
-                    Subscription.updated_at >= month_start,
-                    Subscription.updated_at < month_end,
-                )
-            )
-            or 0
-        )
-
-        end_count = start_count + new_count - cancel_count
-
-        months.append(
-            {
-                "month": f"{year}-{m:02d}",
-                "start_count": start_count,
-                "new": new_count,
-                "cancellations": cancel_count,
-                "end_count": max(0, end_count),
-                "net_change": new_count - cancel_count,
-            }
-        )
-
-    total = (
-        db.scalar(
-            select(func.count(Subscription.id)).where(
-                Subscription.status.in_(
-                    [
-                        SubscriptionStatus.active,
-                        SubscriptionStatus.suspended,
-                    ]
-                ),
-            )
-        )
-        or 0
-    )
-
-    return {"months": months, "year": year, "total_subscribers": total}
+    return {
+        "months": months,
+        "year": year,
+        "total_subscribers": total,
+        "date_from": date_from or "",
+        "date_to": date_to or "",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -481,126 +362,83 @@ def get_new_services_data(
 # ---------------------------------------------------------------------------
 
 
-def get_bandwidth_report_data(db: Session, *, days: int = 30) -> dict:
-    """Network usage analytics — total usage, per-plan, top consumers."""
-    from app.models.bandwidth import BandwidthSample
+def get_bandwidth_report_data(
+    db: Session,
+    *,
+    days: int | None = 30,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    show_chart: bool = False,
+) -> dict:
+    """Network usage analytics — total usage, per-plan, top consumers.
+
+    The window aggregations are owned by app.services.usage_summary; this
+    function composes them and owns presentation (unit conversion, rounding,
+    chart shaping) only.
+    """
     from app.models.catalog import CatalogOffer, Subscription
     from app.models.subscriber import Subscriber
+    from app.services import usage_summary
 
-    end = datetime.now(UTC)
-    start = end - timedelta(days=days)
-
-    # Total bandwidth usage
-    row = db.execute(
-        select(
-            func.avg(BandwidthSample.rx_bps).label("avg_rx"),
-            func.avg(BandwidthSample.tx_bps).label("avg_tx"),
-            func.max(BandwidthSample.rx_bps).label("peak_rx"),
-            func.max(BandwidthSample.tx_bps).label("peak_tx"),
-            func.count(func.distinct(BandwidthSample.subscription_id)).label(
-                "active_subs"
-            ),
-        ).where(
-            BandwidthSample.sample_at >= start,
-            BandwidthSample.sample_at <= end,
-        )
-    ).first()
-
-    avg_rx = float(row.avg_rx or 0) if row else 0
-    avg_tx = float(row.avg_tx or 0) if row else 0
-    peak_rx = float(row.peak_rx or 0) if row else 0
-    peak_tx = float(row.peak_tx or 0) if row else 0
-    active_subs = int(row.active_subs or 0) if row else 0
+    start, end, date_from_value, date_to_value = _resolve_report_window(
+        date_from=date_from,
+        date_to=date_to,
+        days=days,
+    )
     span_seconds = max(0.0, (end - start).total_seconds())
-    total_gb = ((avg_rx + avg_tx) / 8.0 * span_seconds) / (1024**3)
+    usage = usage_summary.subscription_bandwidth_usage_subquery(
+        start, end, span_seconds
+    )
 
-    # Daily usage trend
-    bucket = func.date_trunc("day", BandwidthSample.sample_at)
-    daily_rows = db.execute(
-        select(
-            bucket.label("day"),
-            func.avg(BandwidthSample.rx_bps).label("rx"),
-            func.avg(BandwidthSample.tx_bps).label("tx"),
-        )
-        .where(
-            BandwidthSample.sample_at >= start,
-            BandwidthSample.sample_at <= end,
-        )
-        .group_by(bucket)
-        .order_by(bucket)
-    ).all()
-    chart_labels = [r.day.strftime("%Y-%m-%d") if r.day else "" for r in daily_rows]
-    chart_rx = [round(float(r.rx or 0) / 1_000_000, 2) for r in daily_rows]
-    chart_tx = [round(float(r.tx or 0) / 1_000_000, 2) for r in daily_rows]
+    totals = usage_summary.bandwidth_report_totals(db, usage)
+    usage_bytes = totals["usage_bytes"]
+    avg_rx = totals["avg_rx"]
+    avg_tx = totals["avg_tx"]
+    peak_rx = totals["peak_rx"]
+    peak_tx = totals["peak_tx"]
+    active_subs = totals["active_subs"]
+    total_gb = usage_bytes / (1024**3)
 
-    # Top consumers (by average bps)
     top_rows = db.execute(
         select(
-            BandwidthSample.subscription_id,
-            func.avg(BandwidthSample.rx_bps + BandwidthSample.tx_bps).label(
-                "avg_total"
-            ),
+            usage.c.subscription_id,
+            usage.c.avg_total,
+            usage.c.usage_bytes,
+            Subscriber.first_name,
+            Subscriber.last_name,
+            Subscriber.company_name,
+            Subscriber.display_name,
+            CatalogOffer.name.label("plan_name"),
         )
-        .where(
-            BandwidthSample.sample_at >= start,
-        )
-        .group_by(BandwidthSample.subscription_id)
-        .order_by(func.avg(BandwidthSample.rx_bps + BandwidthSample.tx_bps).desc())
+        .select_from(usage)
+        .join(Subscription, Subscription.id == usage.c.subscription_id, isouter=True)
+        .join(Subscriber, Subscriber.id == Subscription.subscriber_id, isouter=True)
+        .join(CatalogOffer, CatalogOffer.id == Subscription.offer_id, isouter=True)
+        .order_by(usage.c.usage_bytes.desc())
         .limit(20)
     ).all()
 
-    top_consumers = []
-    for tr in top_rows:
-        sub = db.get(Subscription, tr.subscription_id) if tr.subscription_id else None
-        subscriber_name = "Unknown"
-        plan_name = "Unknown"
-        if sub:
-            subscriber = (
-                db.get(Subscriber, sub.subscriber_id) if sub.subscriber_id else None
-            )
-            if subscriber:
-                subscriber_name = (
-                    f"{subscriber.first_name or ''} {subscriber.last_name or ''}".strip()
-                    or str(subscriber.id)[:8]
-                )
-            offer = db.get(CatalogOffer, sub.offer_id) if sub.offer_id else None
-            if offer:
-                plan_name = offer.name
-        avg_mbps = float(tr.avg_total or 0) / 1_000_000
-        usage_gb = (float(tr.avg_total or 0) / 8.0 * span_seconds) / (1024**3)
-        top_consumers.append(
-            {
-                "subscriber": subscriber_name,
-                "plan": plan_name,
-                "avg_mbps": round(avg_mbps, 2),
-                "usage_gb": round(usage_gb, 2),
-            }
-        )
-
-    # Usage by plan
-    plan_rows = db.execute(
-        select(
-            CatalogOffer.name,
-            func.avg(BandwidthSample.rx_bps + BandwidthSample.tx_bps).label("avg_bps"),
-            func.count(func.distinct(BandwidthSample.subscription_id)).label(
-                "sub_count"
+    top_consumers = [
+        {
+            "subscriber": (
+                r.company_name
+                or r.display_name
+                or f"{r.first_name or ''} {r.last_name or ''}".strip()
+                or "Unknown"
             ),
-        )
-        .select_from(BandwidthSample)
-        .join(
-            Subscription,
-            Subscription.id == BandwidthSample.subscription_id,
-            isouter=True,
-        )
-        .join(CatalogOffer, CatalogOffer.id == Subscription.offer_id, isouter=True)
-        .where(BandwidthSample.sample_at >= start)
-        .group_by(CatalogOffer.name)
-        .order_by(func.avg(BandwidthSample.rx_bps + BandwidthSample.tx_bps).desc())
-    ).all()
+            "plan": r.plan_name or "Unknown",
+            "avg_mbps": round(float(r.avg_total or 0) / 1_000_000, 2),
+            "usage_gb": round(float(r.usage_bytes or 0) / (1024**3), 2),
+        }
+        for r in top_rows
+    ]
+
+    plan_rows = usage_summary.bandwidth_usage_by_plan(db, usage)
     usage_by_plan = [
         {
             "name": r.name or "Unlinked",
             "avg_mbps": round(float(r.avg_bps or 0) / 1_000_000, 2),
+            "usage_gb": round(float(r.usage_bytes or 0) / (1024**3), 2),
             "subscribers": r.sub_count,
         }
         for r in plan_rows
@@ -608,18 +446,60 @@ def get_bandwidth_report_data(db: Session, *, days: int = 30) -> dict:
 
     return {
         "days": days,
+        "date_from": date_from_value,
+        "date_to": date_to_value,
+        "show_chart": show_chart,
         "total_gb": round(total_gb, 2),
         "avg_rx_mbps": round(avg_rx / 1_000_000, 2),
         "avg_tx_mbps": round(avg_tx / 1_000_000, 2),
         "peak_rx_mbps": round(peak_rx / 1_000_000, 2),
         "peak_tx_mbps": round(peak_tx / 1_000_000, 2),
         "active_subscribers": active_subs,
-        "chart_labels": chart_labels,
-        "chart_rx": chart_rx,
-        "chart_tx": chart_tx,
+        "chart_labels": [],
+        "chart_rx": [],
+        "chart_tx": [],
+        "plan_chart_labels": [row["name"] for row in usage_by_plan[:20]],
+        "plan_chart_values": [row["usage_gb"] for row in usage_by_plan[:20]],
         "top_consumers": top_consumers,
         "usage_by_plan": usage_by_plan,
     }
+
+
+def build_bandwidth_report_export_csv(data: dict) -> str:
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Bandwidth & Usage Report"])
+    writer.writerow(["date_from", data.get("date_from", "")])
+    writer.writerow(["date_to", data.get("date_to", "")])
+    writer.writerow(["total_usage_gb", data.get("total_gb", 0)])
+    writer.writerow(["active_subscribers", data.get("active_subscribers", 0)])
+    writer.writerow([])
+    writer.writerow(["Usage by Plan"])
+    writer.writerow(["plan", "usage_gb", "avg_mbps", "subscribers"])
+    for row in data.get("usage_by_plan", []):
+        writer.writerow(
+            [
+                row.get("name", ""),
+                row.get("usage_gb", 0),
+                row.get("avg_mbps", 0),
+                row.get("subscribers", 0),
+            ]
+        )
+    writer.writerow([])
+    writer.writerow(["Top Consumers"])
+    writer.writerow(["subscriber", "plan", "usage_gb", "avg_mbps"])
+    for row in data.get("top_consumers", []):
+        writer.writerow(
+            [
+                row.get("subscriber", ""),
+                row.get("plan", ""),
+                row.get("usage_gb", 0),
+                row.get("avg_mbps", 0),
+            ]
+        )
+    content = output.getvalue()
+    output.close()
+    return content
 
 
 # ---------------------------------------------------------------------------
@@ -628,40 +508,20 @@ def get_bandwidth_report_data(db: Session, *, days: int = 30) -> dict:
 
 
 def get_revenue_categories_data(db: Session) -> dict:
-    """Revenue segmented by offer service type and plan category."""
-    try:
-        from app.models.billing import Invoice, InvoiceLine
-        from app.models.catalog import CatalogOffer, Subscription
+    """Revenue segmented by offer service type (read owner: billing.reporting)."""
+    from app.services.billing import reporting as billing_reporting
 
-        # Revenue by service_type
-        stmt_service = (
-            select(
-                CatalogOffer.service_type,
-                func.count(func.distinct(Invoice.id)).label("invoice_count"),
-                func.coalesce(func.sum(InvoiceLine.amount), 0).label("total"),
-            )
-            .select_from(InvoiceLine)
-            .join(Invoice, Invoice.id == InvoiceLine.invoice_id)
-            .join(
-                Subscription,
-                Subscription.id == InvoiceLine.subscription_id,
-                isouter=True,
-            )
-            .join(CatalogOffer, CatalogOffer.id == Subscription.offer_id, isouter=True)
-            .where(Invoice.is_active.is_(True))
-            .group_by(CatalogOffer.service_type)
-            .order_by(func.coalesce(func.sum(InvoiceLine.amount), 0).desc())
-        )
-        rows = db.execute(stmt_service).all()
+    try:
+        rows = billing_reporting.get_revenue_by_service_type(db)
         categories = [
             {
                 "name": (
-                    r[0].value
-                    if hasattr(r[0], "value")
-                    else str(r[0] or "Uncategorized")
+                    r["service_type"].value
+                    if hasattr(r["service_type"], "value")
+                    else str(r["service_type"] or "Uncategorized")
                 ),
-                "invoice_count": r[1],
-                "revenue": float(r[2] or 0),
+                "invoice_count": r["invoice_count"],
+                "revenue": float(r["total"] or 0),
             }
             for r in rows
         ]
@@ -677,11 +537,6 @@ def get_revenue_categories_data(db: Session) -> dict:
         "chart_labels": [c["name"] for c in categories],
         "chart_values": [c["revenue"] for c in categories],
     }
-
-
-# ---------------------------------------------------------------------------
-# Custom Pricing & Discounts (subscription add-ons and unit price overrides)
-# ---------------------------------------------------------------------------
 
 
 def get_custom_pricing_data(db: Session) -> dict:

@@ -416,40 +416,58 @@ def provision_ont_direct(
     Normal authorization applies this baseline automatically. This endpoint is
     kept for manual repair of already-authorized ONTs.
     """
-    del async_execution
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
         return denied
 
-    result = steps.apply_authorization_baseline(db, ont_id, dry_run=dry_run)
+    # Device writes always run through the tracked worker lifecycle. A dry run
+    # is DB-only and remains synchronous for immediate preview feedback.
+    if not dry_run:
+        from app.services.network.ont_provisioning_commands import (
+            request_ont_provisioning,
+        )
 
-    log_network_action_result(
-        request=request,
-        resource_type="ont",
-        resource_id=ont_id,
-        action="Provision ONT",
-        success=result.success,
-        message=result.message,
-        metadata={
-            "duration_ms": result.duration_ms,
-            "step_name": result.step_name,
-        },
+        initiated_by = actor_label(request)
+        command = request_ont_provisioning(
+            db,
+            ont_id,
+            initiated_by=initiated_by,
+        )
+        if not command.accepted:
+            return _step_response(
+                StepResult(
+                    "authorization_baseline",
+                    False,
+                    f"Could not start ONT provisioning: {command.message}",
+                ),
+                request=request,
+                ont_id=ont_id,
+            )
+        return _step_response(
+            StepResult(
+                "authorization_baseline",
+                True,
+                "ONT provisioning queued; waiting for device confirmation.",
+                waiting=True,
+                data={
+                    "operation_id": command.operation_id,
+                    "dispatch_id": command.dispatch_id,
+                    "correlation_key": f"provision:{ont_id}",
+                    "waiting_reason": "device_confirmation",
+                    "duplicate": command.duplicate,
+                },
+            ),
+            request=request,
+            ont_id=ont_id,
+        )
+
+    from app.services.network.ont_provisioning_execution import (
+        preview_ont_provisioning,
     )
 
-    toast_type = "success" if result.success else "error"
-    status_code = 200 if result.success else 400
+    result = preview_ont_provisioning(db, ont_id)
 
-    return JSONResponse(
-        content={
-            "success": result.success,
-            "message": result.message,
-            "ont_id": ont_id,
-            "duration_ms": result.duration_ms,
-            "step_name": result.step_name,
-        },
-        status_code=status_code,
-        headers=_toast_headers(result.message, toast_type),
-    )
+    return _step_response(result, request=request, ont_id=ont_id)
 
 
 @router.post(

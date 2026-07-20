@@ -152,3 +152,61 @@ def test_open_shell_does_not_send_screen_length_before_return(monkeypatch) -> No
     )
 
     assert channel.sent == ["\n"]
+
+
+def test_prepare_read_shell_tracks_privileged_prompt_and_paces_commands(
+    monkeypatch,
+) -> None:
+    from app.services.network import olt_ssh
+
+    channel = _FakeChannel()
+    prompts: list[str] = []
+    responses = iter(["\r\nboi-olt#", "screen-length 0 temporary\r\nboi-olt#"])
+
+    def read(_channel, prompt_regex: str, timeout_sec: float = 8.0):
+        prompts.append(prompt_regex)
+        return next(responses)
+
+    monkeypatch.setattr(olt_ssh, "_read_until_prompt", read)
+    monkeypatch.setattr(olt_ssh.time, "sleep", lambda _: None)
+
+    prompt = olt_ssh._prepare_huawei_read_shell(channel, r"(?:^|\r?\n)boi\-olt>\s*$")
+
+    assert prompt == r"(?:^|\r?\n)boi\-olt\#\s*$"
+    assert "".join(channel.sent) == "enable\nscreen-length 0 temporary\n"
+    assert prompts[0] == r"(?:^|\r?\n)[^\r\n]*#\s*$"
+    assert prompts[1].startswith(prompt)
+
+
+def test_firmware_probe_uses_privileged_prompt_for_readback(monkeypatch) -> None:
+    from app.services.network import olt_ssh
+
+    channel = _FakeChannel()
+    transport = SimpleNamespace(close=lambda: None)
+    policy = SimpleNamespace(prompt_regex=r"(?:^|\r?\n)boi\-olt>\s*$")
+    calls: list[tuple[str, str]] = []
+    privileged_prompt = r"(?:^|\r?\n)boi\-olt\#\s*$"
+    monkeypatch.setattr(
+        olt_ssh,
+        "_open_shell",
+        lambda _olt: (transport, channel, policy),
+    )
+    monkeypatch.setattr(
+        olt_ssh,
+        "_prepare_huawei_read_shell",
+        lambda _channel, _prompt: privileged_prompt,
+    )
+
+    def run_paged(_channel, command: str, prompt: str, *, timeout_sec: int):
+        calls.append((command, prompt))
+        assert timeout_sec == 30
+        return "VERSION : MA5600V800R013C00\nboi-olt#"
+
+    monkeypatch.setattr(olt_ssh, "_run_huawei_paged_cmd", run_paged)
+
+    success, message, info = olt_ssh.get_firmware_info(SimpleNamespace(name="BOI"))
+
+    assert success is True
+    assert message == "Running: MA5600V800R013C00"
+    assert info.current_version == "MA5600V800R013C00"
+    assert calls == [("display version", privileged_prompt)]

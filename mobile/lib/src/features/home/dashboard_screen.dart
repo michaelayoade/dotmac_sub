@@ -5,12 +5,16 @@ import 'package:go_router/go_router.dart';
 import '../../core/formatters.dart';
 import '../../core/semantic_colors.dart';
 import '../auth/biometric_enrollment_prompt.dart';
+import '../../models/project.dart';
+import '../../models/connection_status.dart';
 import '../../models/service_status.dart';
 import '../../models/subscription.dart';
 import '../../models/usage.dart';
+import '../../models/work_order.dart';
 import '../../providers/auth_controller.dart';
 import '../../providers/data_providers.dart';
 import '../../providers/read_notifications.dart';
+import '../../widgets/account_avatar_button.dart';
 import '../../widgets/async_value_view.dart';
 import '../../widgets/offline_banner.dart';
 import '../../widgets/skeleton.dart';
@@ -18,6 +22,18 @@ import '../../widgets/status_chip.dart';
 
 /// Home dashboard: an at-a-glance summary (account status, balance, data,
 /// services) plus quick-action shortcuts into the rest of the app.
+/// Short, human ETA for the Home visit banner. Prefers the live estimate, then
+/// falls back to a plain "on the way" (the tracking screen has the detail).
+String _visitEta(WorkOrderItem w) {
+  final eta = w.estimatedArrivalAt;
+  if (eta != null) {
+    final mins = eta.difference(DateTime.now()).inMinutes;
+    if (mins > 1) return 'arriving in ~$mins min';
+    if (mins >= -15) return 'arriving now';
+  }
+  return 'on the way';
+}
+
 class DashboardScreen extends ConsumerWidget {
   const DashboardScreen({super.key});
 
@@ -29,20 +45,13 @@ class DashboardScreen extends ConsumerWidget {
     final invoices = ref.watch(invoicesProvider);
     final sessions = ref.watch(accountingSessionsProvider);
     final notifications = ref.watch(notificationsProvider);
-    final readIds = ref.watch(readNotificationsProvider);
+    ref.watch(notificationReadMigrationProvider);
 
-    final unread = notifications.asData?.value.items
-            .where((n) => !readIds.contains(n.id))
-            .length ??
-        0;
+    final unread =
+        notifications.asData?.value.items.where((n) => !n.isRead).length ?? 0;
 
     // --- Summary values (null while loading) ---
     final subList = subs.asData?.value.items;
-    // Services the customer can fix by paying (blocked/suspended). The
-    // provider already drops terminated plans, so this can't false-alarm
-    // on history.
-    final needsPayment = subList?.where((s) => s.needsPayment).toList() ??
-        const <Subscription>[];
 
     // The service the dashboard is "about": the user's switcher pick, else
     // the shared current-service rule. Drives the days-left stat and the
@@ -55,6 +64,13 @@ class DashboardScreen extends ConsumerWidget {
         orElse: () => pickCurrentService(subList),
       );
     }
+    final currentServiceStatus = currentService == null
+        ? null
+        : serviceStatus?.forSubscription(currentService.id);
+    final unavailableServices =
+        serviceStatus?.unavailableServices ?? const <ServiceStatusItem>[];
+    final statusAction =
+        unavailableServices.isNotEmpty ? serviceStatus?.primaryAction : null;
 
     final invItems = invoices.asData?.value.items;
     final outstanding = invItems
@@ -73,28 +89,12 @@ class DashboardScreen extends ConsumerWidget {
     // unlimited plans, unlike "data left" which reads as 0 on unlimited.
     final cycleSummary = ref.watch(usageSummaryProvider('cycle')).asData?.value;
     final dataToday = todaySummary?.totalBytes;
-    // Total data used this subscription period = RADIUS session octets over the
-    // cycle window (server-authoritative). Until that's deployed, fall back to
-    // summing the loaded sessions started in the window, then the (retention-
-    // limited) throughput series, then today — so it's never a false 0 and never
-    // the under-counted series when session data is available.
-    int? dataPeriod;
-    if (cycleSummary != null) {
-      final cycleStart = cycleSummary.start;
-      final sessionSum = (sessItems ?? const <AccountingSession>[])
-          .where((s) =>
-              s.sessionStart != null && !s.sessionStart!.isBefore(cycleStart))
-          .fold<int>(0, (a, s) => a + s.totalOctets);
-      final seriesSum = cycleSummary.series.fold<int>(0, (a, p) => a + p.bytes);
-      dataPeriod = cycleSummary.totalBytes > 0
-          ? cycleSummary.totalBytes
-          : (sessionSum > 0
-              ? sessionSum
-              : (seriesSum > 0 ? seriesSum : (dataToday ?? 0)));
-    }
-    // Wallet (account credit) balance for its own at-a-glance card. Uses the
-    // always-available credit balance (/me/balance), not the feature-gated VAS
-    // wallet (/me/wallet 404s when vas.enabled is off → card never reads).
+    // The cycle headline is a server-owned RADIUS-session total. An
+    // authoritative zero means no recorded usage in the window; it is not a
+    // missing-data sentinel and must never be replaced with the loaded-session
+    // page, retention-limited chart series, or today's different window.
+    final dataPeriod = cycleSummary?.authoritativeTotalBytes;
+    // Server-owned account credit balance for the at-a-glance card.
     final balance = ref.watch(balanceProvider).asData?.value;
     // Peak throughput for the "Peak" tile — shown per direction (↓ download,
     // ↑ upload), subscriber perspective. Prefer the exact billing-cycle peak
@@ -153,15 +153,17 @@ class DashboardScreen extends ConsumerWidget {
     final (expiryStatLabel, expiryStatValue) =
         _expiryOrBillingStat(subList, currentService);
     String? renewMessage;
-    if (currentService != null && needsPayment.isEmpty) {
+    ServiceStatusAction? renewAction;
+    if (currentService != null && currentService.isActive) {
       final name = currentService.displayName;
       if (currentService.isExpired) {
         renewMessage = '$name has expired — renew now';
-      } else if (serviceStatus?.needsRenewal ?? false) {
+      } else if (currentServiceStatus?.action?.isFinancial ?? false) {
         // The real, balance/dunning-driven nudge: a running service heading for
         // a cut the customer can prevent by paying. The cut date (if known)
         // comes from the prepaid grace timer — never from a billing date.
-        renewMessage = _renewFromServiceStatus(serviceStatus!);
+        renewAction = currentServiceStatus!.action;
+        renewMessage = renewAction!.message;
       } else if (daysLeft != null && daysLeft >= 0 && daysLeft <= 3) {
         // Contract end approaching (the only genuine date-based expiry).
         renewMessage = switch (daysLeft) {
@@ -214,6 +216,7 @@ class DashboardScreen extends ConsumerWidget {
               child: const Icon(Icons.notifications_outlined),
             ),
           ),
+          const AccountAvatarButton(),
         ],
       ),
       body: RefreshIndicator(
@@ -236,24 +239,26 @@ class DashboardScreen extends ConsumerWidget {
           children: [
             const BiometricEnrollmentPrompt(),
             const OfflineBanner(),
-            _ConnectionBanner(
+            ConnectionBanner(
               session: activeSession,
               known: sessions.hasValue,
               serviceActive: currentService?.isActive ?? false,
               ipAddress: currentService?.ipv4Address,
+              // Outage-classifier verdict (P4): lets the banner suppress
+              // "check your router" during a known area outage and drill into
+              // the connection troubleshooter.
+              classifier: ref.watch(connectionStatusProvider).asData?.value,
             ),
             const SizedBox(height: 12),
             _StatusBanner(
-              suspendedMessage: _suspendedMessage(
-                needsPayment,
-                outstanding: outstanding,
-                currency: currency,
-              ),
-              known: subList != null,
-              // A blocked/suspended service is resolved by paying — deep-link
-              // to billing.
-              onTap:
-                  needsPayment.isNotEmpty ? () => context.go('/billing') : null,
+              attentionMessage: unavailableServices.isNotEmpty
+                  ? statusAction?.message ??
+                      'A service is unavailable — contact support for help.'
+                  : null,
+              known: serviceStatus != null,
+              onTap: statusAction == null
+                  ? null
+                  : () => _openServiceAction(context, statusAction),
             ),
             if (fup != null && (fup.needsAttention || fup.isApproaching)) ...[
               const SizedBox(height: 12),
@@ -264,24 +269,90 @@ class DashboardScreen extends ConsumerWidget {
               _RenewBanner(
                 message: renewMessage,
                 expired: currentService?.isExpired ?? false,
-                // Prepaid renewal = top-up; postpaid overdue = pay the bill.
-                onTap: () => context.push(
-                  (serviceStatus?.isPrepaid ?? true) ? '/topup' : '/billing',
-                ),
+                onTap: renewAction == null
+                    ? () => context.go('/billing')
+                    : () => _openServiceAction(context, renewAction!),
               ),
             ],
+            // Live technician visit — a slim banner shown only while a work
+            // order is in progress. The full map lives on its own screen
+            // (/track/:id) so it doesn't crowd the dashboard.
             Consumer(builder: (context, ref, _) {
-              final wallet = ref.watch(walletProvider).asData?.value;
-              if (wallet == null) return const SizedBox.shrink();
+              final orders =
+                  ref.watch(workOrdersProvider).asData?.value.workOrders ??
+                      const <WorkOrderItem>[];
+              WorkOrderItem? active;
+              for (final w in orders) {
+                if (w.status == 'in_progress') {
+                  active = w;
+                  break;
+                }
+              }
+              if (active == null) return const SizedBox.shrink();
+              final v = active;
+              final scheme = Theme.of(context).colorScheme;
+              final who = v.technicianName ?? 'Your technician';
               return Padding(
                 padding: const EdgeInsets.only(top: 12),
                 child: Card(
+                  shape: RoundedRectangleBorder(
+                    side: BorderSide(
+                      color: scheme.primary.withValues(alpha: 0.45),
+                    ),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
                   child: ListTile(
-                    leading: const Icon(Icons.wallet_outlined),
-                    title: Text(Fmt.money(wallet.balance, wallet.currency)),
-                    subtitle: const Text('Wallet — fund once, pay bills'),
+                    leading: CircleAvatar(
+                      backgroundColor: scheme.primaryContainer,
+                      foregroundColor: scheme.onPrimaryContainer,
+                      child: const Icon(Icons.engineering_outlined),
+                    ),
+                    title: const Text(
+                      'Technician on the way',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    subtitle: Text('$who · ${_visitEta(v)}'),
                     trailing: const Icon(Icons.chevron_right),
-                    onTap: () => context.push('/wallet'),
+                    onTap: () => context.push('/track/${v.id}'),
+                  ),
+                ),
+              );
+            }),
+            // Installation progress — a modest, secondary banner shown only
+            // while an install is under way. Onboarding is a one-time activity,
+            // so it's deliberately low-key (muted, no accent) vs. the visit
+            // banner; it links to the tracker and disappears once complete.
+            Consumer(builder: (context, ref, _) {
+              final projects =
+                  ref.watch(projectsProvider).asData?.value.projects ??
+                      const <ProjectItem>[];
+              ProjectItem? install;
+              for (final p in projects) {
+                if (p.progressPct < 100) {
+                  install = p;
+                  break;
+                }
+              }
+              if (install == null) return const SizedBox.shrink();
+              final p = install;
+              final scheme = Theme.of(context).colorScheme;
+              final stage = (p.currentStage?.isNotEmpty ?? false)
+                  ? p.currentStage!
+                  : 'Setting up your service';
+              return Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Card(
+                  color: scheme.surfaceContainerHighest,
+                  elevation: 0,
+                  child: ListTile(
+                    leading: Icon(
+                      Icons.timeline_outlined,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                    title: const Text('Installation in progress'),
+                    subtitle: Text('$stage · ${p.progressPct}%'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => context.push('/profile/installation-progress'),
                   ),
                 ),
               );
@@ -293,12 +364,12 @@ class DashboardScreen extends ConsumerWidget {
               tiles: [
                 _StatCard(
                   icon: Icons.account_balance_wallet_outlined,
-                  label: 'Wallet',
+                  label: 'Account credit',
                   value: balance == null
                       ? null
                       : Fmt.moneyCompact(
                           balance.creditBalance, balance.currency),
-                  onTap: () => context.push('/wallet'),
+                  onTap: () => context.go('/billing'),
                 ),
                 _StatCard(
                   icon: Icons.receipt_long_outlined,
@@ -320,7 +391,11 @@ class DashboardScreen extends ConsumerWidget {
                   icon: Icons.data_usage_outlined,
                   // Total data used this billing/subscription period.
                   label: 'This period',
-                  value: dataPeriod == null ? null : Fmt.bytes(dataPeriod),
+                  value: cycleSummary == null
+                      ? null
+                      : dataPeriod == null
+                          ? '—'
+                          : Fmt.bytes(dataPeriod),
                   highlight: (fup?.isApproaching ?? false) ||
                       (fup?.needsAttention ?? false),
                   onTap: () => context.go('/usage'),
@@ -406,6 +481,8 @@ class DashboardScreen extends ConsumerWidget {
                       _CurrentServiceCard(
                         service: selected,
                         quota: currentQuota,
+                        action:
+                            serviceStatus?.forSubscription(selected.id)?.action,
                       ),
                     ],
                   );
@@ -448,47 +525,42 @@ class DashboardScreen extends ConsumerWidget {
   return ('Days left', '—');
 }
 
-/// Renewal nudge for a *running* service heading for a cut the customer can
-/// prevent by paying — driven by real balance/dunning state, not a billing
-/// date. Prepaid surfaces the grace cut-off date when known.
-String _renewFromServiceStatus(ServiceStatus s) {
-  if (s.isPrepaid) {
-    final when = s.graceUntil;
-    return when != null
-        ? 'Balance low — top up by ${Fmt.date(when)} to keep your service'
-        : 'Balance low — top up to keep your service';
+void _openServiceAction(BuildContext context, ServiceStatusAction action) {
+  final route = switch (action.kind) {
+    'top_up' => '/topup',
+    'pay_invoices' => '/billing',
+    'view_usage' => '/usage',
+    _ => '/support',
+  };
+  if (action.kind == 'top_up') {
+    context.push(route);
+  } else {
+    context.go(route);
   }
-  return 'Payment overdue — pay now to avoid suspension';
-}
-
-/// Status-banner copy when service(s) are blocked/suspended: names the plan
-/// and, when we know the amount due, makes the ask concrete. Null = all good.
-String? _suspendedMessage(
-  List<Subscription> needsPayment, {
-  required double? outstanding,
-  required String currency,
-}) {
-  if (needsPayment.isEmpty) return null;
-  final action = (outstanding != null && outstanding > 0)
-      ? 'pay ${Fmt.moneyCompact(outstanding, currency)} to restore'
-      : 'tap to pay';
-  if (needsPayment.length > 1) {
-    return '${needsPayment.length} services suspended — $action';
-  }
-  final service = needsPayment.first;
-  final word = service.status == 'blocked' ? 'blocked' : 'suspended';
-  return '${service.displayName} $word — $action';
 }
 
 /// Network connection status — the headline reason customers open the app.
-/// Derived from whether an open RADIUS accounting session exists.
-class _ConnectionBanner extends StatelessWidget {
-  const _ConnectionBanner({
+/// When the outage-classifier verdict ([classifier]) is loaded it is the
+/// SOURCE OF TRUTH, so this banner agrees with the /connection screen and the
+/// web portal (no more "Connected" here while the screen says "trouble"). It
+/// falls back to the live RADIUS-session signal when the verdict isn't ready.
+@visibleForTesting
+class ConnectionBanner extends StatelessWidget {
+  const ConnectionBanner({
+    super.key,
     required this.session,
     required this.known,
     this.serviceActive = false,
     this.ipAddress,
+    this.classifier,
   });
+
+  /// The outage-classifier verdict for this customer, when loaded. This is the
+  /// SOURCE OF TRUTH for the displayed state and customer-safe wording. Its
+  /// status presentation supplies the semantic tone and icon.
+  /// Null while it loads or errors, in which case the banner falls back to the
+  /// session-derived rendering below so it never shows a blank/spinner.
+  final ConnectionStatus? classifier;
 
   /// Whether the displayed subscription is active. An active account that is
   /// merely not connected right now (router off, brief drop) is routine — it
@@ -505,6 +577,21 @@ class _ConnectionBanner extends StatelessWidget {
   /// (statically-assigned plans).
   final String? ipAddress;
 
+  /// The friendly "Connected · up 3h · 10.0.0.5" line, built from the live
+  /// session when we have one (framed IP is the live dynamic address; the
+  /// subscription's assigned IP is the static fallback). Degrades to a bare
+  /// "Connected" when the classifier says healthy but no session is loaded.
+  String _connectedLine() {
+    final s = session;
+    final start = s?.sessionStart;
+    final ip = s?.framedIpAddress ?? ipAddress;
+    return [
+      'Connected',
+      if (start != null) 'up ${Fmt.uptime(start)}',
+      if (ip != null && ip.isNotEmpty) ip,
+    ].join(' · ');
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -512,52 +599,104 @@ class _ConnectionBanner extends StatelessWidget {
     final Color fg;
     final IconData icon;
     final String text;
+    // Optional second line — the ONE action (classifier `advice`) or the
+    // plain-language `message`, shown under the headline for a problem state.
+    String? subtitle;
+    // Whether tapping drills into the full /connection troubleshooter; there's
+    // only something to troubleshoot when we're not cleanly connected.
+    final bool tappable;
 
-    if (!known) {
+    final c = classifier;
+    if (c != null) {
+      // The classifier owns the state and the backend presentation contract
+      // owns its semantic tone/icon. Raw state is used only for drill-in
+      // behavior and connected-session enrichment.
+      final visual = statusPresentationVisual(context, c.statusPresentation);
+      bg = visual.color.withValues(alpha: 0.12);
+      fg = visual.color;
+      icon = visual.icon;
+      if (c.isConnected) {
+        text = _connectedLine();
+        tappable = false;
+      } else {
+        text = c.headline;
+        // `advice` is the ONE action; the server nulls it under an area outage
+        // (this guard is belt-and-suspenders) so the banner never self-blames.
+        subtitle = (c.advice != null && !c.areaOutage) ? c.advice! : c.message;
+        tappable = true;
+      }
+    } else if (!known) {
+      // FALLBACK (classifier absent / loading / unknown): the original
+      // session-derived rendering, so the banner always shows something sane.
       bg = scheme.surfaceContainerHighest;
       fg = scheme.onSurfaceVariant;
       icon = Icons.wifi_find_outlined;
       text = 'Checking connection…';
+      tappable = false;
     } else if (session != null) {
-      final start = session!.sessionStart;
-      // The session's framed IP is the live address (covers dynamic plans);
-      // the subscription's assigned IP is the fallback.
-      final ip = session!.framedIpAddress ?? ipAddress;
       bg = scheme.secondaryContainer;
       fg = scheme.onSecondaryContainer;
       icon = Icons.wifi;
-      text = [
-        'Connected',
-        if (start != null) 'up ${Fmt.uptime(start)}',
-        if (ip != null && ip.isNotEmpty) ip,
-      ].join(' · ');
+      text = _connectedLine();
+      tappable = false;
     } else if (serviceActive) {
       bg = scheme.surfaceContainerHighest;
       fg = scheme.onSurfaceVariant;
       icon = Icons.wifi_off_outlined;
-      text = 'Not connected — service is active, check your router';
+      text = 'Not connected — tap to troubleshoot';
+      tappable = true;
     } else {
       bg = scheme.errorContainer;
       fg = scheme.onErrorContainer;
       icon = Icons.wifi_off_outlined;
       text = 'Offline';
+      tappable = true;
     }
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, color: fg),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(text,
-                style: TextStyle(color: fg, fontWeight: FontWeight.w600)),
-          ),
-        ],
+    final Widget label = subtitle == null
+        ? Text(text, style: TextStyle(color: fg, fontWeight: FontWeight.w600))
+        : Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(text,
+                  style: TextStyle(color: fg, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 2),
+              Text(
+                subtitle,
+                style: TextStyle(
+                  color: fg.withValues(alpha: 0.9),
+                  fontSize: 12.5,
+                ),
+              ),
+            ],
+          );
+    final row = Row(
+      children: [
+        Icon(icon, color: fg),
+        const SizedBox(width: 10),
+        Expanded(child: label),
+        if (tappable) Icon(Icons.chevron_right, color: fg),
+      ],
+    );
+    const shape = BorderRadius.all(Radius.circular(14));
+    if (!tappable) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(color: bg, borderRadius: shape),
+        child: row,
+      );
+    }
+    return Material(
+      color: bg,
+      borderRadius: shape,
+      child: InkWell(
+        borderRadius: shape,
+        onTap: () => context.push('/connection'),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          child: row,
+        ),
       ),
     );
   }
@@ -565,14 +704,13 @@ class _ConnectionBanner extends StatelessWidget {
 
 class _StatusBanner extends StatelessWidget {
   const _StatusBanner({
-    required this.suspendedMessage,
+    required this.attentionMessage,
     required this.known,
     this.onTap,
   });
 
-  /// Concrete attention message ("Unlimited Lite blocked — pay ₦5k to
-  /// restore"); null when every service is in good standing.
-  final String? suspendedMessage;
+  /// Server-owned action message; null when every service is in good standing.
+  final String? attentionMessage;
   final bool known;
   final VoidCallback? onTap;
 
@@ -586,12 +724,12 @@ class _StatusBanner extends StatelessWidget {
             Icons.hourglass_empty,
             'Loading your account…'
           )
-        : suspendedMessage != null
+        : attentionMessage != null
             ? (
                 scheme.errorContainer,
                 scheme.onErrorContainer,
                 Icons.warning_amber_rounded,
-                suspendedMessage!
+                attentionMessage!
               )
             : (
                 scheme.primaryContainer,
@@ -913,8 +1051,9 @@ class _AddFundsCard extends StatelessWidget {
 }
 
 class _CurrentServiceCard extends StatelessWidget {
-  const _CurrentServiceCard({required this.service, this.quota});
+  const _CurrentServiceCard({required this.service, this.quota, this.action});
   final Subscription service;
+  final ServiceStatusAction? action;
 
   /// Current period's quota bucket, when the plan is capped — renders a thin
   /// usage bar so an approaching cap is visible without opening Usage.
@@ -970,7 +1109,7 @@ class _CurrentServiceCard extends StatelessWidget {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis),
                   ),
-                  StatusChip.forSubscription(s.status),
+                  StatusChip.fromPresentation(s.statusPresentation),
                 ],
               ),
               if (s.planType != null) ...[
@@ -1038,22 +1177,35 @@ class _CurrentServiceCard extends StatelessWidget {
               ],
               const SizedBox(height: 8),
               Builder(builder: (context) {
-                // Surface a pay CTA when the service needs attention: suspended,
-                // or expiring within 3 days / already expired.
-                final needsAttention =
-                    !s.isActive || (days != null && days <= 3);
+                // Suspended/stopped actions come only from service-status. A
+                // status string alone is never treated as proof that payment
+                // will reactivate service.
+                final serverAction = action;
+                final showContractRenewal = serverAction == null &&
+                    s.isActive &&
+                    days != null &&
+                    days >= 0 &&
+                    days <= 3;
+                final showAction = serverAction != null || showContractRenewal;
                 return Row(
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
-                    if (needsAttention)
+                    if (showAction)
                       Expanded(
                         child: FilledButton.icon(
-                          icon: const Icon(Icons.payment, size: 18),
-                          onPressed: () => context.go('/billing'),
-                          label: Text(s.isActive ? 'Renew' : 'Reactivate'),
+                          icon: Icon(
+                            serverAction?.kind == 'contact_support'
+                                ? Icons.support_agent_outlined
+                                : Icons.payment,
+                            size: 18,
+                          ),
+                          onPressed: serverAction == null
+                              ? () => context.go('/billing')
+                              : () => _openServiceAction(context, serverAction),
+                          label: Text(serverAction?.label ?? 'Renew'),
                         ),
                       ),
-                    if (needsAttention) const SizedBox(width: 8),
+                    if (showAction) const SizedBox(width: 8),
                     TextButton(
                       onPressed: () =>
                           context.push('/service/${s.id}', extra: s),

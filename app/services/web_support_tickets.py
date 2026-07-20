@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import logging
 from collections.abc import Mapping
@@ -11,18 +13,38 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.models.subscriber import Subscriber
-from app.models.support import Ticket, TicketChannel, TicketCommentAuthorType
+from app.models.support import (
+    Ticket,
+    TicketChannel,
+    TicketCommentAuthorType,
+    TicketStatus,
+)
 from app.schemas.support import (
     AttachmentMeta,
     TicketCommentCreate,
+    TicketCommentUpdate,
     TicketCreate,
     TicketLinkCreate,
     TicketMergeRequest,
     TicketUpdate,
 )
+from app.services import (
+    sla_assignment,
+    support_ticket_filters,
+    ticket_mentions,
+    ticket_validation,
+)
 from app.services import support as support_service
 from app.services import support_ticket_settings as support_ticket_settings_service
 from app.services.file_storage import file_uploads
+from app.services.list_query import (
+    ListDefinition,
+    ListFieldDefinition,
+    ListQuery,
+    PageMeta,
+    SortDirection,
+)
+from app.services.status_presentation import ticket_status_presentation
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +83,111 @@ TICKET_COLUMNS = [
     {"key": "created_at", "label": "Opening Date"},
 ]
 
+SUPPORT_TICKET_LIST_DEFINITION = ListDefinition(
+    key="support_tickets",
+    fields=(
+        ListFieldDefinition("number", "Ticket", searchable=True, sortable=True),
+        ListFieldDefinition("title", "Title", searchable=True),
+        ListFieldDefinition("description", "Description", searchable=True),
+        ListFieldDefinition("status", "Status", filterable=True, sortable=True),
+        ListFieldDefinition("ticket_type", "Ticket type", filterable=True),
+        ListFieldDefinition("assigned_to_me", "Assigned to me", filterable=True),
+        ListFieldDefinition(
+            "project_manager_person_id", "Project manager", filterable=True
+        ),
+        ListFieldDefinition(
+            "site_coordinator_person_id", "Site coordinator", filterable=True
+        ),
+        ListFieldDefinition("subscriber_id", "Subscriber", filterable=True),
+        ListFieldDefinition("filters", "Advanced filters", filterable=True),
+        ListFieldDefinition("priority", "Priority", sortable=True),
+        ListFieldDefinition("due_at", "Due", sortable=True),
+        ListFieldDefinition("updated_at", "Updated", sortable=True),
+        ListFieldDefinition("created_at", "Opened", sortable=True),
+    ),
+    default_sort="created_at",
+    default_sort_dir="desc",
+)
+
+_TICKET_STATUSES = frozenset(status.value for status in TicketStatus)
+
+
+def _normalize_ticket_uuid_filter(value: str | None, name: str) -> str | None:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return None
+    try:
+        return str(UUID(normalized))
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a valid UUID") from exc
+
+
+def _normalize_ticket_per_page(per_page: int | str | None) -> int:
+    try:
+        normalized = int(str(per_page or "").strip())
+    except ValueError:
+        return SUPPORT_TICKET_LIST_DEFINITION.default_per_page
+    if normalized in SUPPORT_TICKET_LIST_DEFINITION.per_page_options:
+        return normalized
+    return SUPPORT_TICKET_LIST_DEFINITION.default_per_page
+
+
+def _normalize_ticket_filters(filters: str | None) -> str | None:
+    normalized = str(filters or "").strip()
+    if not normalized:
+        return None
+    try:
+        payload = json.loads(normalized)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Invalid JSON in filters payload") from exc
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    support_ticket_filters.build_ticket_filter_clause(canonical)
+    return canonical
+
+
+def build_ticket_list_query(
+    *,
+    search: str | None,
+    status: str | None,
+    ticket_type: str | None,
+    assigned_to_me: bool,
+    project_manager_person_id: str | None,
+    site_coordinator_person_id: str | None,
+    subscriber_id: str | None,
+    filters: str | None,
+    sort_by: str | None = None,
+    sort_dir: SortDirection | str | None = None,
+    page: int = 1,
+    per_page: int | str | None = 25,
+) -> ListQuery:
+    """Normalize the admin support queue through its declared capabilities."""
+
+    normalized_status = str(status or "").strip().lower() or None
+    if normalized_status and normalized_status not in _TICKET_STATUSES:
+        raise ValueError(f"Unsupported ticket status: {normalized_status}")
+    return SUPPORT_TICKET_LIST_DEFINITION.build_query(
+        search=search,
+        filters={
+            "status": normalized_status,
+            "ticket_type": str(ticket_type or "").strip() or None,
+            "assigned_to_me": "true" if assigned_to_me else None,
+            "project_manager_person_id": _normalize_ticket_uuid_filter(
+                project_manager_person_id, "project_manager_person_id"
+            ),
+            "site_coordinator_person_id": _normalize_ticket_uuid_filter(
+                site_coordinator_person_id, "site_coordinator_person_id"
+            ),
+            "subscriber_id": _normalize_ticket_uuid_filter(
+                subscriber_id, "subscriber_id"
+            ),
+            "filters": _normalize_ticket_filters(filters),
+        },
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        page=page,
+        per_page=_normalize_ticket_per_page(per_page),
+    )
+
 
 def parse_uuid_or_none(value: str | None) -> UUID | None:
     text = (value or "").strip()
@@ -82,12 +209,8 @@ def parse_dt_or_none(value: str | None) -> datetime | None:
         return None
 
 
-def service_team_options() -> list[dict[str, str]]:
-    return [
-        {"id": "8e4f0b90-2de0-4d8c-8af1-c3f3a5f6ca01", "label": "Field Operations"},
-        {"id": "3ac5eb8c-bdcf-4d03-9c8c-623ee7f8898e", "label": "Core Network"},
-        {"id": "df39d87d-d31e-4dc8-9968-6fd95d7bb67f", "label": "Customer Support"},
-    ]
+def service_team_options(db: Session) -> list[dict[str, str]]:
+    return support_ticket_settings_service.list_service_teams(db)
 
 
 def visible_ticket_columns(raw_cookie: str | None) -> list[str]:
@@ -115,8 +238,8 @@ def _label_lookup(options: list[dict[str, str]]) -> dict[str, str]:
     return {item["id"]: item["label"] for item in options if item.get("id")}
 
 
-def _service_team_lookup() -> dict[str, str]:
-    return {item["id"]: item["label"] for item in service_team_options()}
+def _service_team_lookup(db: Session) -> dict[str, str]:
+    return {item["id"]: item["label"] for item in service_team_options(db)}
 
 
 def _append_missing_option(options: list[str], value: str | None) -> list[str]:
@@ -126,38 +249,69 @@ def _append_missing_option(options: list[str], value: str | None) -> list[str]:
     return [*options, text]
 
 
-def _status_summary_cards(db: Session) -> list[dict[str, str | int]]:
-    totals = support_service.status_totals(db)
-    closed_count = int(totals.get("closed", 0))
-    canceled_count = int(totals.get("canceled", 0))
-    open_count = sum(
-        int(count)
-        for status, count in totals.items()
-        if str(status).strip() not in {"closed", "canceled"}
+def _ticket_sla_state(
+    ticket: Ticket, *, clock=None, now: datetime | None = None
+) -> dict[str, object]:
+    state = sla_assignment.ticket_sla_status(ticket, clock=clock, now=now)
+    settings_terminal = support_ticket_settings_service.status_is_terminal(
+        ticket.status
+    )
+    state["terminal"] = state["terminal"] or settings_terminal
+    if settings_terminal:
+        state["breached"] = False
+    return state
+
+
+def _ticket_scope_count(
+    db: Session,
+    *,
+    list_query: ListQuery,
+    actor_id: str | None,
+    status: str | None,
+) -> int:
+    return support_service.tickets.count(
+        db,
+        search=list_query.search,
+        status=status,
+        ticket_type=list_query.filter_value("ticket_type"),
+        assigned_to_person_id=(
+            actor_id if list_query.filter_value("assigned_to_me") == "true" else None
+        ),
+        project_manager_person_id=list_query.filter_value("project_manager_person_id"),
+        site_coordinator_person_id=list_query.filter_value(
+            "site_coordinator_person_id"
+        ),
+        subscriber_id=list_query.filter_value("subscriber_id"),
+        filters=list_query.filter_value("filters"),
     )
 
+
+def _status_summary_cards(
+    db: Session, *, list_query: ListQuery, actor_id: str | None
+) -> list[dict[str, str | int | bool]]:
+    selected_status = list_query.filter_value("status")
+    definitions = (
+        ("", "All"),
+        ("open", "Open"),
+        ("closed", "Closed"),
+        ("canceled", "Cancelled"),
+    )
     return [
         {
-            "value": "open",
-            "label": "Open",
-            "count": open_count,
-            "href": "/admin/support/tickets?status=open",
-            "color": "emerald",
-        },
-        {
-            "value": "closed",
-            "label": "Closed",
-            "count": closed_count,
-            "href": "/admin/support/tickets?status=closed",
-            "color": "slate",
-        },
-        {
-            "value": "canceled",
-            "label": "Cancelled",
-            "count": canceled_count,
-            "href": "/admin/support/tickets?status=canceled",
-            "color": "red",
-        },
+            "value": value,
+            "label": label,
+            "count": _ticket_scope_count(
+                db,
+                list_query=list_query,
+                actor_id=actor_id,
+                status=value or None,
+            ),
+            "href": list_query.url(
+                "/admin/support/tickets", filters={"status": value or None}
+            ),
+            "active": (selected_status or "") == value,
+        }
+        for value, label in definitions
     ]
 
 
@@ -188,7 +342,8 @@ def upload_ticket_attachments(
             if not payload:
                 continue
             if len(payload) > MAX_ATTACHMENT_BYTES:
-                raise ValueError(f"{filename}: max file size is 5 MB")
+                max_mb = max(1, MAX_ATTACHMENT_BYTES // 1048576)
+                raise ValueError(f"{filename}: max file size is {max_mb} MB")
             content_type = (
                 getattr(attachment, "content_type", None) or "application/octet-stream"
             ).lower()
@@ -253,6 +408,9 @@ def build_ticket_form_context(
         ]
     )
     staff = support_service.list_assignment_people(db, include_ids=assignment_ids)
+    crm_write_locked = (
+        support_service.crm_ticket_user_writes_locked(ticket) if ticket else False
+    )
     prefill = {
         "title": ticket.title if ticket else str(params.get("title", "") or ""),
         "description": ticket.description
@@ -335,7 +493,7 @@ def build_ticket_form_context(
         "all_channels": [item.value for item in TicketChannel],
         "region_options": support_service.regions(db),
         "ticket_type_options": ticket_type_options,
-        "service_team_options": service_team_options(),
+        "service_team_options": service_team_options(db),
         "staff_options": staff,
         "subscriber_options": support_service.list_people(
             db,
@@ -345,6 +503,17 @@ def build_ticket_form_context(
         ),
         "selected_person": selected_person,
         "prefill": prefill,
+        "crm_origin": (
+            support_service.is_crm_origin_ticket(ticket) if ticket else False
+        ),
+        "crm_write_locked": crm_write_locked,
+        "crm_write_lock_message": (
+            "This ticket is currently owned by CRM. It is visible in sub for "
+            "cutover validation, but edits stay disabled until ticket writes move "
+            "to sub."
+            if crm_write_locked
+            else ""
+        ),
     }
 
 
@@ -446,16 +615,68 @@ def build_ticket_comment_payload(
     )
 
 
+class DuplicateTicketWarningError(Exception):
+    """A create submission matches existing open tickets and the operator has
+    not ticked the ``duplicate_override`` checkbox yet."""
+
+    def __init__(self, result: ticket_validation.TicketDuplicateResult):
+        super().__init__("A similar ticket already exists.")
+        self.result = result
+
+
+def _duplicate_input_from_payload(
+    payload: TicketCreate,
+) -> ticket_validation.TicketDuplicateInput:
+    metadata = payload.metadata_ if isinstance(payload.metadata_, dict) else {}
+    return ticket_validation.TicketDuplicateInput(
+        title=payload.title,
+        description=payload.description,
+        subscriber_id=payload.subscriber_id,
+        customer_account_id=payload.customer_account_id,
+        customer_person_id=payload.customer_person_id,
+        lead_id=payload.lead_id,
+        ticket_type=payload.ticket_type,
+        base_station_details=str(metadata.get("base_station_details") or "") or None,
+        tags=payload.tags,
+        region=payload.region,
+    )
+
+
 def create_ticket_from_form(
     db: Session,
     *,
     request,
     actor_id: str | None,
     attachments: list,
+    duplicate_override: bool = False,
     **form,
 ):
-    """Create a support ticket from web form values and attach uploaded files."""
+    """Create a support ticket from web form values and attach uploaded files.
+
+    Mirrors CRM's admin create flow: candidate duplicates are re-checked
+    server-side on submit; without the operator's ``duplicate_override``
+    confirmation a warning is raised so the route can re-render the form.
+    """
     payload = build_ticket_create_payload(actor_id=actor_id, **form)
+    duplicate_result = ticket_validation.find_duplicate_ticket_candidates(
+        db, _duplicate_input_from_payload(payload)
+    )
+    if duplicate_result.has_warning:
+        if not duplicate_override:
+            raise DuplicateTicketWarningError(duplicate_result)
+        metadata = dict(payload.metadata_ or {})
+        metadata["duplicate_override"] = True
+        metadata["possible_duplicate_tickets"] = [
+            {
+                "ticket_id": match.ticket_id,
+                "reference": match.reference,
+                "score": match.score,
+                "confidence": match.confidence,
+                "reasons": match.reasons,
+            }
+            for match in duplicate_result.matches
+        ]
+        payload.metadata_ = metadata
     ticket = support_service.tickets.create(
         db, payload, actor_id=actor_id, request=request
     )
@@ -549,6 +770,7 @@ def add_ticket_comment_from_form(
     body: str,
     is_internal: bool,
     attachments: list,
+    mentions: str | None = None,
 ):
     uploaded = upload_ticket_attachments(
         db,
@@ -563,13 +785,76 @@ def add_ticket_comment_from_form(
         actor_id=actor_id,
         uploaded=uploaded,
     )
-    return support_service.tickets.create_comment(
+    comment = support_service.tickets.create_comment(
         db,
         ticket_id,
         payload,
         actor_id=actor_id,
         request=request,
     )
+    mentioned_agent_ids = _parse_mentions_payload(mentions)
+    if mentioned_agent_ids:
+        try:
+            ticket = support_service.tickets.get(db, ticket_id)
+            ticket_mentions.notify_ticket_comment_mentions(
+                db,
+                ticket_id=str(ticket.id),
+                ticket_number=ticket.number,
+                ticket_title=ticket.title,
+                comment_preview=body[:300],
+                mentioned_agent_ids=mentioned_agent_ids,
+                actor_person_id=actor_id,
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.debug("ticket_comment_staff_mention_failed", exc_info=True)
+    return comment
+
+
+def update_ticket_comment_from_form(
+    db: Session,
+    *,
+    request,
+    ticket_id: str,
+    comment_id: str,
+    actor_id: str | None,
+    body: str,
+):
+    from fastapi import HTTPException
+
+    comment = support_service.ticket_comments.get(db, comment_id)
+    if str(comment.ticket_id) != str(ticket_id):
+        raise HTTPException(status_code=404, detail="Ticket comment not found")
+    return support_service.ticket_comments.update(
+        db,
+        comment=comment,
+        payload=TicketCommentUpdate(body=body),
+        actor_id=actor_id,
+        request=request,
+    )
+
+
+def _parse_mentions_payload(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    mentions: list[str] = []
+    for item in parsed:
+        if isinstance(item, str):
+            token = item.strip()
+        elif isinstance(item, Mapping):
+            token = str(item.get("id") or "").strip()
+        else:
+            token = ""
+        if token and token not in mentions:
+            mentions.append(token)
+    return mentions
 
 
 def auto_assign_ticket(
@@ -596,7 +881,10 @@ def link_ticket_from_form(
     link_type: str,
     actor_id: str | None,
 ):
-    payload = TicketLinkCreate(to_ticket_id=UUID(to_ticket_id), link_type=link_type)
+    to_ticket_uuid = parse_uuid_or_none(to_ticket_id)
+    if not to_ticket_uuid:
+        raise ValueError("Target ticket must be a valid ticket UUID.")
+    payload = TicketLinkCreate(to_ticket_id=to_ticket_uuid, link_type=link_type)
     return support_service.tickets.link_ticket(
         db,
         from_ticket_id=ticket_id,
@@ -616,10 +904,13 @@ def merge_ticket_from_form(
     reason: str | None,
     actor_id: str | None,
 ):
+    target_uuid = parse_uuid_or_none(target_ticket_id)
+    if not target_uuid:
+        raise ValueError("Target ticket must be a valid ticket UUID.")
     return support_service.tickets.merge(
         db,
         ticket_id,
-        TicketMergeRequest(target_ticket_id=UUID(target_ticket_id), reason=reason),
+        TicketMergeRequest(target_ticket_id=target_uuid, reason=reason),
         actor_id=actor_id,
         request=request,
     )
@@ -695,40 +986,79 @@ def _identity_resolution_summary(ticket) -> dict[str, str] | None:
 def build_tickets_list_context(
     db: Session,
     *,
-    search: str | None,
-    status: str | None,
-    ticket_type: str | None,
-    assigned_to_me: bool,
-    actor_id: str | None,
-    project_manager_person_id: str | None,
-    site_coordinator_person_id: str | None,
-    subscriber_id: str | None,
-    order_by: str,
-    order_dir: str,
-    page: int,
-    per_page: int,
-    visible_columns_cookie: str | None,
+    list_query: ListQuery | None = None,
+    search: str | None = None,
+    status: str | None = None,
+    ticket_type: str | None = None,
+    assigned_to_me: bool = False,
+    actor_id: str | None = None,
+    project_manager_person_id: str | None = None,
+    site_coordinator_person_id: str | None = None,
+    subscriber_id: str | None = None,
+    order_by: str = "created_at",
+    order_dir: SortDirection | str = "desc",
+    page: int = 1,
+    per_page: int | str | None = 25,
+    visible_columns_cookie: str | None = None,
+    filters: str | None = None,
 ) -> dict:
+    if list_query is None:
+        list_query = build_ticket_list_query(
+            search=search,
+            status=status,
+            ticket_type=ticket_type,
+            assigned_to_me=assigned_to_me,
+            project_manager_person_id=project_manager_person_id,
+            site_coordinator_person_id=site_coordinator_person_id,
+            subscriber_id=subscriber_id,
+            filters=filters,
+            sort_by=order_by,
+            sort_dir=order_dir,
+            page=page,
+            per_page=per_page,
+        )
+    if list_query.definition.key != SUPPORT_TICKET_LIST_DEFINITION.key:
+        raise ValueError("Ticket list requires the support ticket definition")
+
+    selected_status = list_query.filter_value("status")
     status_options = support_ticket_settings_service.list_status_options(db)
     priority_options = support_ticket_settings_service.list_priority_options(db)
-    status_options = _append_missing_option(status_options, status)
-    offset = (page - 1) * per_page
+    status_options = _append_missing_option(status_options, selected_status)
+    total = _ticket_scope_count(
+        db,
+        list_query=list_query,
+        actor_id=actor_id,
+        status=selected_status,
+    )
+    page_meta = PageMeta.from_query(list_query, total)
+    effective_query = list_query.with_page(page_meta.page)
     rows = support_service.tickets.list(
         db,
-        search=search,
-        status=status,
-        ticket_type=ticket_type,
-        assigned_to_person_id=actor_id if assigned_to_me else None,
-        project_manager_person_id=project_manager_person_id,
-        site_coordinator_person_id=site_coordinator_person_id,
-        subscriber_id=subscriber_id,
-        order_by=order_by,
-        order_dir=order_dir,
-        limit=per_page,
-        offset=offset,
+        search=effective_query.search,
+        status=effective_query.filter_value("status"),
+        ticket_type=effective_query.filter_value("ticket_type"),
+        assigned_to_person_id=(
+            actor_id
+            if effective_query.filter_value("assigned_to_me") == "true"
+            else None
+        ),
+        project_manager_person_id=effective_query.filter_value(
+            "project_manager_person_id"
+        ),
+        site_coordinator_person_id=effective_query.filter_value(
+            "site_coordinator_person_id"
+        ),
+        subscriber_id=effective_query.filter_value("subscriber_id"),
+        filters=effective_query.filter_value("filters"),
+        order_by=effective_query.sort_by,
+        order_dir=effective_query.sort_dir,
+        limit=effective_query.per_page,
+        offset=effective_query.offset,
     )
     assignment_ids: list[object | None] = []
-    subscriber_ids: list[object | None] = [subscriber_id]
+    subscriber_ids: list[object | None] = [
+        effective_query.filter_value("subscriber_id")
+    ]
     for ticket in rows:
         assignment_ids.extend(
             [
@@ -749,28 +1079,55 @@ def build_tickets_list_context(
         db,
         include_ids=_non_empty_ids(
             assignment_ids
-            + [project_manager_person_id, site_coordinator_person_id, actor_id]
+            + [
+                effective_query.filter_value("project_manager_person_id"),
+                effective_query.filter_value("site_coordinator_person_id"),
+                actor_id,
+            ]
         ),
     )
     subscribers = support_service.list_people(
         db,
         include_ids=_non_empty_ids(subscriber_ids),
     )
+    sla_clocks = sla_assignment.latest_ticket_sla_clocks(
+        db, [ticket.id for ticket in rows]
+    )
     return {
         "tickets": rows,
-        "search": search or "",
-        "status": status or "",
-        "ticket_type": ticket_type or "",
-        "assigned_to_me": assigned_to_me,
-        "project_manager_person_id": project_manager_person_id or "",
-        "site_coordinator_person_id": site_coordinator_person_id or "",
-        "subscriber_id": subscriber_id or "",
-        "order_by": order_by,
-        "order_dir": order_dir,
-        "page": page,
-        "per_page": per_page,
-        "has_next_page": len(rows) >= per_page,
-        "status_summary_cards": _status_summary_cards(db),
+        "list_query": effective_query,
+        "page_meta": page_meta,
+        "search": effective_query.search or "",
+        "status": effective_query.filter_value("status") or "",
+        "ticket_type": effective_query.filter_value("ticket_type") or "",
+        "assigned_to_me": effective_query.filter_value("assigned_to_me") == "true",
+        "project_manager_person_id": effective_query.filter_value(
+            "project_manager_person_id"
+        )
+        or "",
+        "site_coordinator_person_id": effective_query.filter_value(
+            "site_coordinator_person_id"
+        )
+        or "",
+        "subscriber_id": effective_query.filter_value("subscriber_id") or "",
+        "filters": effective_query.filter_value("filters") or "",
+        "ticket_filter_schema": support_ticket_filters.serialize_ticket_filter_schema(
+            status_options=status_options,
+            priority_options=priority_options,
+            ticket_type_options=support_service.ticket_types(db),
+            staff_options=staff,
+            service_team_options=service_team_options(db),
+        ),
+        "order_by": effective_query.sort_by,
+        "order_dir": effective_query.sort_dir,
+        "page": page_meta.page,
+        "per_page": page_meta.per_page,
+        "total": page_meta.total_items,
+        "total_pages": page_meta.total_pages,
+        "has_next_page": page_meta.has_next,
+        "status_summary_cards": _status_summary_cards(
+            db, list_query=effective_query, actor_id=actor_id
+        ),
         "visible_columns": visible_ticket_columns(visible_columns_cookie),
         "ticket_columns": TICKET_COLUMNS,
         "all_statuses": status_options,
@@ -780,7 +1137,171 @@ def build_tickets_list_context(
         "staff_lookup": _label_lookup(staff),
         "subscriber_options": subscribers,
         "subscriber_lookup": _label_lookup(subscribers),
+        "sla_states": {
+            str(ticket.id): _ticket_sla_state(
+                ticket, clock=sla_clocks.get(str(ticket.id))
+            )
+            for ticket in rows
+        },
+        "status_presentations": {
+            value: ticket_status_presentation(value)
+            for value in {
+                *status_options,
+                *(ticket.status for ticket in rows),
+            }
+        },
     }
+
+
+def list_tickets_for_scope(
+    db: Session, *, list_query: ListQuery, actor_id: str | None
+) -> list[Ticket]:
+    """Return the complete canonical support queue scope for export/reconciliation."""
+
+    if list_query.definition.key != SUPPORT_TICKET_LIST_DEFINITION.key:
+        raise ValueError("Ticket scope requires the support ticket definition")
+    return support_service.tickets.list(
+        db,
+        search=list_query.search,
+        status=list_query.filter_value("status"),
+        ticket_type=list_query.filter_value("ticket_type"),
+        assigned_to_person_id=(
+            actor_id if list_query.filter_value("assigned_to_me") == "true" else None
+        ),
+        project_manager_person_id=list_query.filter_value("project_manager_person_id"),
+        site_coordinator_person_id=list_query.filter_value(
+            "site_coordinator_person_id"
+        ),
+        subscriber_id=list_query.filter_value("subscriber_id"),
+        filters=list_query.filter_value("filters"),
+        order_by=list_query.sort_by,
+        order_dir=list_query.sort_dir,
+        limit=None,
+        offset=0,
+    )
+
+
+def _ticket_csv_value(
+    ticket: Ticket,
+    key: str,
+    *,
+    staff_lookup: dict[str, str],
+    subscriber_lookup: dict[str, str],
+) -> str:
+    def _person(lookup: dict[str, str], value: object | None) -> str:
+        text = str(value) if value else ""
+        return lookup.get(text, text)
+
+    if key == "number":
+        return ticket.number or str(ticket.id)
+    if key == "ticket_type":
+        return ticket.ticket_type or ""
+    if key == "priority":
+        return ticket.priority or ""
+    if key == "status":
+        return ticket.status or ""
+    if key == "customer":
+        return _person(subscriber_lookup, ticket.customer_person_id)
+    if key == "customer_id":
+        return _person(subscriber_lookup, ticket.customer_account_id)
+    if key == "subscriber":
+        return _person(subscriber_lookup, ticket.subscriber_id)
+    if key == "region":
+        return ticket.region or ""
+    if key == "technician":
+        return _person(staff_lookup, ticket.technician_person_id)
+    if key == "project_manager":
+        return _person(staff_lookup, ticket.ticket_manager_person_id)
+    if key == "site_coordinator":
+        return _person(staff_lookup, ticket.site_coordinator_person_id)
+    if key == "channel":
+        return ticket.channel.value if ticket.channel else ""
+    if key == "due_at":
+        return ticket.due_at.strftime("%Y-%m-%d %H:%M UTC") if ticket.due_at else ""
+    if key == "created_at":
+        return (
+            ticket.created_at.strftime("%Y-%m-%d %H:%M UTC")
+            if ticket.created_at
+            else ""
+        )
+    return ""
+
+
+def render_tickets_csv(
+    db: Session,
+    *,
+    list_query: ListQuery | None = None,
+    search: str | None = None,
+    status: str | None = None,
+    ticket_type: str | None = None,
+    assigned_to_me: bool = False,
+    actor_id: str | None = None,
+    project_manager_person_id: str | None = None,
+    site_coordinator_person_id: str | None = None,
+    subscriber_id: str | None = None,
+    filters: str | None = None,
+    order_by: str = "created_at",
+    order_dir: SortDirection | str = "desc",
+    visible_columns_cookie: str | None = None,
+) -> str:
+    """Render the ticket list as CSV honoring list filters and visible columns."""
+    if list_query is None:
+        list_query = build_ticket_list_query(
+            search=search,
+            status=status,
+            ticket_type=ticket_type,
+            assigned_to_me=assigned_to_me,
+            project_manager_person_id=project_manager_person_id,
+            site_coordinator_person_id=site_coordinator_person_id,
+            subscriber_id=subscriber_id,
+            filters=filters,
+            sort_by=order_by,
+            sort_dir=order_dir,
+        )
+    columns = visible_ticket_columns(visible_columns_cookie)
+    rows = list_tickets_for_scope(db, list_query=list_query, actor_id=actor_id)
+    assignment_ids: list[object | None] = []
+    subscriber_ids: list[object | None] = []
+    for ticket in rows:
+        assignment_ids.extend(
+            [
+                ticket.technician_person_id,
+                ticket.ticket_manager_person_id,
+                ticket.site_coordinator_person_id,
+            ]
+        )
+        subscriber_ids.extend(
+            [
+                ticket.customer_person_id,
+                ticket.customer_account_id,
+                ticket.subscriber_id,
+            ]
+        )
+    staff_lookup = _label_lookup(
+        support_service.list_assignment_people(
+            db, include_ids=_non_empty_ids(assignment_ids)
+        )
+    )
+    subscriber_lookup = _label_lookup(
+        support_service.list_people(db, include_ids=_non_empty_ids(subscriber_ids))
+    )
+    labels = {item["key"]: item["label"] for item in TICKET_COLUMNS}
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow([labels[key] for key in columns])
+    for ticket in rows:
+        writer.writerow(
+            [
+                _ticket_csv_value(
+                    ticket,
+                    key,
+                    staff_lookup=staff_lookup,
+                    subscriber_lookup=subscriber_lookup,
+                )
+                for key in columns
+            ]
+        )
+    return buffer.getvalue()
 
 
 def build_ticket_detail_context(db: Session, *, ticket_lookup: str) -> dict:
@@ -789,6 +1310,7 @@ def build_ticket_detail_context(db: Session, *, ticket_lookup: str) -> dict:
     status_options = support_ticket_settings_service.list_status_options(db)
     priority_options = support_ticket_settings_service.list_priority_options(db)
     ticket = support_service.tickets.get_by_lookup(db, ticket_lookup)
+    crm_write_locked = support_service.crm_ticket_user_writes_locked(ticket)
     comments = support_service.ticket_comments.list(
         db, str(ticket.id), limit=500, offset=0
     )
@@ -842,14 +1364,33 @@ def build_ticket_detail_context(db: Session, *, ticket_lookup: str) -> dict:
         "all_priorities": priority_options,
         "all_channels": [item.value for item in TicketChannel],
         "people_options": subscribers,
+        "mention_agents": ticket_mentions.list_ticket_mention_users(db),
         "staff_options": staff,
         "staff_lookup": _label_lookup(staff),
         "subscriber_lookup": _label_lookup(subscribers),
-        "service_team_options": service_team_options(),
-        "service_team_lookup": _service_team_lookup(),
+        "service_team_options": service_team_options(db),
+        "service_team_lookup": _service_team_lookup(db),
+        "sla_state": _ticket_sla_state(
+            ticket,
+            clock=sla_assignment.latest_ticket_sla_clocks(db, [ticket.id]).get(
+                str(ticket.id)
+            ),
+        ),
+        "status_presentations": {
+            value: ticket_status_presentation(value) for value in status_options
+        },
         "is_merged_source": bool(
             ticket.merged_into_ticket_id
             or support_ticket_settings_service.status_is_merged(ticket.status)
         ),
         "identity_resolution": _identity_resolution_summary(ticket),
+        "crm_origin": support_service.is_crm_origin_ticket(ticket),
+        "crm_write_locked": crm_write_locked,
+        "crm_write_lock_message": (
+            "This ticket is currently owned by CRM. It is visible in sub for "
+            "cutover validation, but edits stay disabled until ticket writes move "
+            "to sub."
+            if crm_write_locked
+            else ""
+        ),
     }

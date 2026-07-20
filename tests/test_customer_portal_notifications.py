@@ -106,6 +106,209 @@ class TestPortalNotificationsPage:
         assert preview["has_recent_notifications"] is True
         assert len(preview["recent_notifications"]) == 1
 
+    def test_notifications_page_resolves_account_id_only_session(
+        self, db_session, subscriber
+    ) -> None:
+        from app.models.notification import (
+            Notification,
+            NotificationChannel,
+            NotificationStatus,
+        )
+        from app.services.customer_portal_notifications import get_notifications_page
+
+        db_session.add(
+            Notification(
+                subscriber_id=subscriber.id,
+                channel=NotificationChannel.email,
+                recipient=subscriber.email,
+                event_type="invoice_sent",
+                category="billing",
+                body="Account-scoped session notice",
+                status=NotificationStatus.delivered,
+            )
+        )
+        db_session.commit()
+
+        page = get_notifications_page(
+            db_session,
+            {"account_id": str(subscriber.id)},
+            page=1,
+            per_page=10,
+        )
+
+        assert page["total"] == 1
+        assert page["notifications"][0].message == "Account-scoped session notice"
+
+    def test_mark_notifications_read_updates_page_and_preview_counts(
+        self, db_session, subscriber
+    ) -> None:
+        from app.models.notification import (
+            Notification,
+            NotificationChannel,
+            NotificationStatus,
+        )
+        from app.services.customer_portal_notifications import (
+            get_notifications_page,
+            get_notifications_preview,
+            mark_notifications_read,
+        )
+
+        notice = Notification(
+            subscriber_id=subscriber.id,
+            channel=NotificationChannel.email,
+            recipient=subscriber.email,
+            event_type="invoice_paid",
+            category="billing",
+            body="Payment received",
+            status=NotificationStatus.delivered,
+        )
+        db_session.add(notice)
+        db_session.commit()
+
+        page = get_notifications_page(
+            db_session,
+            {"subscriber_id": str(subscriber.id)},
+            page=1,
+            per_page=10,
+        )
+        read_key = page["notifications"][0].read_key
+
+        marked = mark_notifications_read(
+            db_session,
+            {"subscriber_id": str(subscriber.id)},
+            read_key=read_key,
+        )
+        page = get_notifications_page(
+            db_session,
+            {"subscriber_id": str(subscriber.id)},
+            page=1,
+            per_page=10,
+        )
+        preview = get_notifications_preview(
+            db_session,
+            {"subscriber_id": str(subscriber.id)},
+            limit=5,
+        )
+
+        assert marked == 1
+        assert page["notifications"][0].is_read is True
+        assert page["unread_notifications_count"] == 0
+        assert preview["unread_notifications_count"] == 0
+
+    def test_mobile_read_mutation_updates_web_and_api_read_state(
+        self, db_session, subscriber
+    ) -> None:
+        from app.models.notification import (
+            Notification,
+            NotificationChannel,
+            NotificationStatus,
+        )
+        from app.schemas.notification import CustomerInboxNotificationRead
+        from app.services.customer_portal_notifications import (
+            apply_notification_read_state,
+            get_notifications_page,
+            mark_api_notifications_read,
+        )
+        from app.services.notification import notifications
+
+        notice = Notification(
+            subscriber_id=subscriber.id,
+            channel=NotificationChannel.push,
+            recipient=subscriber.email,
+            event_type="service_restored",
+            category="service",
+            body="Your service is back online",
+            status=NotificationStatus.delivered,
+        )
+        db_session.add(notice)
+        db_session.commit()
+
+        api_response = notifications.list_response_for_subscriber(
+            db_session, subscriber.id, 50, 0
+        )
+        apply_notification_read_state(
+            db_session,
+            subscriber_id=str(subscriber.id),
+            notifications=api_response["items"],
+        )
+        assert api_response["items"][0].is_read is False
+
+        marked = mark_api_notifications_read(
+            db_session,
+            subscriber_id=str(subscriber.id),
+            notification_ids=[notice.id],
+        )
+        portal_page = get_notifications_page(
+            db_session,
+            {"subscriber_id": str(subscriber.id)},
+            page=1,
+            per_page=10,
+        )
+        refreshed_api = notifications.list_response_for_subscriber(
+            db_session, subscriber.id, 50, 0
+        )
+        apply_notification_read_state(
+            db_session,
+            subscriber_id=str(subscriber.id),
+            notifications=refreshed_api["items"],
+        )
+
+        assert marked == 1
+        assert portal_page["notifications"][0].is_read is True
+        assert portal_page["unread_notifications_count"] == 0
+        assert refreshed_api["items"][0].is_read is True
+        assert (
+            CustomerInboxNotificationRead.model_validate(
+                refreshed_api["items"][0]
+            ).is_read
+            is True
+        )
+
+    def test_mobile_read_mutation_ignores_another_subscribers_ids(
+        self, db_session, subscriber
+    ) -> None:
+        from app.models.notification import (
+            Notification,
+            NotificationChannel,
+            NotificationStatus,
+        )
+        from app.models.subscriber import Subscriber
+        from app.services.customer_portal_notifications import (
+            apply_notification_read_state,
+            mark_api_notifications_read,
+        )
+
+        other = Subscriber(
+            first_name="Other",
+            last_name="Customer",
+            email="other-read-state@example.com",
+        )
+        db_session.add(other)
+        db_session.flush()
+        other_notice = Notification(
+            subscriber_id=other.id,
+            channel=NotificationChannel.email,
+            recipient=other.email,
+            body="Other customer only",
+            status=NotificationStatus.delivered,
+        )
+        db_session.add(other_notice)
+        db_session.commit()
+
+        marked = mark_api_notifications_read(
+            db_session,
+            subscriber_id=str(subscriber.id),
+            notification_ids=[other_notice.id],
+        )
+        apply_notification_read_state(
+            db_session,
+            subscriber_id=str(other.id),
+            notifications=[other_notice],
+        )
+
+        assert marked == 0
+        assert other_notice.is_read is False
+
     def test_notifications_page_prefers_subscriber_id_and_hides_non_visible_statuses(
         self, db_session, subscriber
     ) -> None:
@@ -219,6 +422,7 @@ class TestPortalNotificationsPage:
         subscriber.metadata_ = {
             "billing_notifications": False,
             "sms_updates": False,
+            "push_notifications": False,
         }
         subscriber.phone = "+2348000000011"
         db_session.add_all(
@@ -272,6 +476,12 @@ class TestCustomerProfileNotifications:
                 phone="+2348000000012",
                 billing_notifications=False,
                 sms_updates=True,
+                push_notifications=False,
+                service_notifications=False,
+                account_notifications=True,
+                usage_notifications=False,
+                general_notifications=True,
+                locale="en-NG",
             )
 
         assert updated is not None
@@ -279,6 +489,10 @@ class TestCustomerProfileNotifications:
         assert updated.phone == "+2348000000012"
         assert (updated.metadata_ or {}).get("billing_notifications") is False
         assert (updated.metadata_ or {}).get("sms_updates") is True
+        assert (updated.metadata_ or {}).get("push_notifications") is False
+        assert (updated.metadata_ or {}).get("service_notifications") is False
+        assert (updated.metadata_ or {}).get("usage_notifications") is False
+        assert updated.locale == "en-NG"
         assert emit_event_mock.call_args.args[1] == EventType.subscriber_updated
 
     def test_customer_update_profile_route_passes_notification_preferences(
@@ -306,6 +520,12 @@ class TestCustomerProfileNotifications:
                 phone="+2348000000012",
                 billing_notifications=False,
                 sms_updates=True,
+                push_notifications=False,
+                service_notifications=False,
+                account_notifications=True,
+                usage_notifications=False,
+                general_notifications=True,
+                locale="en-NG",
                 db=MagicMock(),
             )
 
@@ -313,3 +533,7 @@ class TestCustomerProfileNotifications:
         kwargs = update_mock.call_args.kwargs
         assert kwargs["billing_notifications"] is False
         assert kwargs["sms_updates"] is True
+        assert kwargs["push_notifications"] is False
+        assert kwargs["service_notifications"] is False
+        assert kwargs["usage_notifications"] is False
+        assert kwargs["locale"] == "en-NG"

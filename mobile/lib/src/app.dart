@@ -92,7 +92,7 @@ class _DotMacAppState extends ConsumerState<DotMacApp>
 
 /// The app's [ThemeData] for a given [brightness]. Top-level (not a closure)
 /// so widget tests can mount the real theme — including the [SemanticColors]
-/// extension that backs `context.semantic.success/warning` in both modes.
+/// extension that backs the branding-owned semantic status palette in both modes.
 ThemeData dotmacThemeFor(Brightness brightness) => ThemeData(
       colorScheme: ColorScheme.fromSeed(
         seedColor: Brand.primaryColor,

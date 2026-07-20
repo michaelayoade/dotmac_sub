@@ -133,7 +133,7 @@ def test_void_candidate_voids_and_reverses_ledger(db_session):
     assert inv.balance_due == Decimal("0.00")
     assert inv.metadata_["void_reason"] == "prepaid_phantom_invoice_cleanup"
     assert inv.metadata_["original_status"] == "issued"
-    # reversing credit posted; original debit deactivated
+    # Append-only reversing credit posted; the original debit remains active.
     credits = (
         db_session.query(LedgerEntry)
         .filter(
@@ -143,6 +143,16 @@ def test_void_candidate_voids_and_reverses_ledger(db_session):
         .all()
     )
     assert len(credits) == 1 and credits[0].amount == Decimal("100.00")
+    debit = (
+        db_session.query(LedgerEntry)
+        .filter(
+            LedgerEntry.invoice_id == inv.id,
+            LedgerEntry.entry_type == LedgerEntryType.debit,
+        )
+        .one()
+    )
+    assert debit.is_active is True
+    assert credits[0].reversal_of_entry_id == debit.id
 
 
 def test_legacy_debit_overlap_voids_invoice_preserves_debit(db_session):

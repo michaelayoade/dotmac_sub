@@ -11,6 +11,7 @@ from app.models.billing import (
     InvoiceStatus,
 )
 from app.services.web_billing_invoice_bulk import (
+    BulkInvoiceActionResult,
     bulk_mark_paid,
     bulk_queue_pdf_exports,
     bulk_send,
@@ -50,11 +51,9 @@ def test_bulk_send_calls_invoice_notification_helper(
     assert called["count"] == 1
 
 
-def test_invoice_notification_email_includes_payment_summary_and_steps(
+def test_invoice_notification_delegates_once_to_canonical_event_owner(
     db_session, subscriber, monkeypatch
 ):
-    subscriber.account_number = "ACC-1001"
-    subscriber.display_name = "Jane Customer"
     invoice = Invoice(
         account_id=subscriber.id,
         invoice_number="INV-1001",
@@ -70,42 +69,26 @@ def test_invoice_notification_email_includes_payment_summary_and_steps(
     db_session.commit()
     db_session.refresh(invoice)
 
-    captured: dict[str, str] = {}
+    captured: list[dict[str, object]] = []
 
-    def _fake_send_email(
-        db, to_email, subject, body_html, body_text, activity, **kwargs
-    ):
-        captured["to_email"] = to_email
-        captured["subject"] = subject
-        captured["body_html"] = body_html
-        captured["body_text"] = body_text
-        captured["activity"] = activity
-        return True
+    def _fake_announce(db, invoice_id, *, reason, commit):
+        captured.append({"invoice_id": invoice_id, "reason": reason, "commit": commit})
+        return invoice
 
     monkeypatch.setattr(
-        "app.services.web_billing_invoices.email_service.send_email",
-        _fake_send_email,
-        raising=False,
+        "app.services.web_billing_invoices.billing_service.invoices.announce_issued",
+        _fake_announce,
     )
-    monkeypatch.setattr(
-        "app.services.email.send_email",
-        _fake_send_email,
-    )
-    monkeypatch.setenv("APP_URL", "https://selfcare.dotmac.ng")
 
     maybe_send_invoice_notification(db_session, invoice=invoice, send_notification="1")
 
-    assert captured["subject"] == "Invoice INV-1001 — payment due 2026-06-24"
-    assert captured["activity"] == "billing_invoice"
-    assert "Invoice Summary" in captured["body_html"]
-    assert "ACC-1001" in captured["body_html"]
-    assert "INV-1001" in captured["body_html"]
-    assert "NGN 15,000.00" in captured["body_html"]
-    assert "2026-06-24" in captured["body_html"]
-    assert "How to pay through the portal" in captured["body_html"]
-    assert "/portal/billing/pay?invoice=" in captured["body_html"]
-    assert "Pay Invoice in Portal" in captured["body_html"]
-    assert "1. Open the customer portal" in captured["body_text"]
+    assert captured == [
+        {
+            "invoice_id": str(invoice.id),
+            "reason": "admin_invoice_send",
+            "commit": True,
+        }
+    ]
 
 
 def test_list_invoices_by_ids_preserves_order_and_deduplicates(db_session, subscriber):
@@ -192,20 +175,34 @@ def test_bulk_mark_paid_updates_only_eligible_statuses(db_session, subscriber):
 
 
 def test_bulk_mark_paid_route_reports_skipped_count(db_session, monkeypatch):
-    def _fake_execute_audited_bulk_action(db, request, *, action, invoice_ids_csv):
+    def _fake_execute_audited_bulk_action_result(
+        db, request, *, action, invoice_ids_csv
+    ):
         assert action == "mark_paid"
         assert invoice_ids_csv == "inv-1,inv-2,missing"
-        return ["inv-1"]
+        return BulkInvoiceActionResult(
+            selected_ids=["inv-1", "inv-2", "missing"],
+            processed_ids=["inv-1"],
+            skipped_ids=["inv-2", "missing"],
+        )
 
     monkeypatch.setattr(
         bulk_routes.web_billing_invoice_bulk_service,
-        "execute_audited_bulk_action",
-        _fake_execute_audited_bulk_action,
+        "execute_audited_bulk_action_result",
+        _fake_execute_audited_bulk_action_result,
+    )
+    monkeypatch.setattr(
+        bulk_routes,
+        "_require_confirmed_invoice_scope",
+        lambda *args, **kwargs: None,
     )
 
     response = bulk_routes.invoice_bulk_mark_paid(
         request=None,
         invoice_ids="inv-1,inv-2,missing",
+        confirmed=True,
+        expected_count=3,
+        expected_scope_token="preview-token",
         db=db_session,
     )
     payload = json.loads(response.body)
@@ -213,7 +210,7 @@ def test_bulk_mark_paid_route_reports_skipped_count(db_session, monkeypatch):
     assert response.status_code == 200
     assert payload["count"] == 1
     assert payload["skipped"] == 2
-    assert "skipped 2" in payload["message"]
+    assert "2 skipped" in payload["message"]
 
 
 def test_bulk_queue_pdf_exports_reports_ready_and_queued(

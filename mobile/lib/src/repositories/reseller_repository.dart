@@ -1,12 +1,10 @@
 import 'package:dio/dio.dart';
 
-import '../core/api_exception.dart';
 import '../core/http.dart';
 import '../models/payment_method.dart';
 import '../models/quote.dart';
 import '../models/reseller.dart';
 import '../models/reseller_crm.dart';
-import '../models/vas.dart';
 import '../models/page.dart';
 
 /// Wraps the reseller endpoints (app/api/reseller.py, mounted at /api/v1).
@@ -287,70 +285,5 @@ class ResellerRepository {
       }),
     );
     return Quote.fromJson(data as Map<String, dynamic>);
-  }
-}
-
-/// Reseller VAS float wallet + sell-for-customer (/reseller/vas/*).
-/// Server-flagged: 404 while vas.enabled is off — [vasWalletOrNull] maps
-/// that to null so reseller surfaces hide themselves.
-extension ResellerVas on ResellerRepository {
-  Future<Map<String, dynamic>?> vasWalletOrNull() async {
-    try {
-      final data = await guard(() => dio.get('/reseller/vas/wallet'));
-      return data as Map<String, dynamic>;
-    } on ApiException catch (e) {
-      if (e.statusCode == 404) return null;
-      rethrow;
-    }
-  }
-
-  Future<List<VasCategory>> vasCatalog() async {
-    final data = await guard(() => dio.get('/reseller/vas/catalog'));
-    return [
-      for (final item in (data as List))
-        VasCategory.fromJson(item as Map<String, dynamic>),
-    ];
-  }
-
-  Future<String?> vasVerify(
-      {required String serviceId, required String identifier}) async {
-    final data = await guard(() => dio.post('/reseller/vas/verify', data: {
-          'service_id': serviceId,
-          'identifier': identifier,
-        }));
-    return (data as Map<String, dynamic>)['customer_name'] as String?;
-  }
-
-  Future<Map<String, dynamic>> vasSell({
-    required String serviceId,
-    required String identifier,
-    String? variationCode,
-    double? amount,
-  }) async {
-    final data = await guard(() => dio.post('/reseller/vas/purchases', data: {
-          'service_id': serviceId,
-          'identifier': identifier,
-          if (variationCode != null) 'variation_code': variationCode,
-          if (amount != null) 'amount': amount,
-        }));
-    return data as Map<String, dynamic>;
-  }
-
-  Future<List<Map<String, dynamic>>> vasSales({int limit = 30}) async {
-    final data = await guard(() =>
-        dio.get('/reseller/vas/purchases', queryParameters: {'limit': limit}));
-    return [for (final item in (data as List)) item as Map<String, dynamic>];
-  }
-
-  Future<Map<String, dynamic>> vasTopupInitiate(double amount) async {
-    final data = await guard(() => dio
-        .post('/reseller/vas/wallet/topup/initiate', data: {'amount': amount}));
-    return data as Map<String, dynamic>;
-  }
-
-  Future<Map<String, dynamic>> vasTopupVerify(String reference) async {
-    final data = await guard(() => dio.post('/reseller/vas/wallet/topup/verify',
-        data: {'reference': reference}));
-    return data as Map<String, dynamic>;
   }
 }

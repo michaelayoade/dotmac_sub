@@ -1,4 +1,5 @@
 {% extends "layouts/customer.html" %}
+{% from "components/ui/macros.html" import status_presentation_badge %}
 
 {% block title %}Service Orders - Customer Portal{% endblock %}
 
@@ -53,24 +54,11 @@
                             {{ so_type | replace('_', ' ') | capitalize if so_type else '—' }}
                         </td>
                         <td class="px-5 py-4">
-                            <span class="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold
-                                {% if so_status == 'active' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400
-                                {% elif so_status == 'provisioning' %}bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400
-                                {% elif so_status == 'scheduled' %}bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400
-                                {% elif so_status == 'submitted' %}bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400
-                                {% elif so_status == 'failed' %}bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400
-                                {% elif so_status == 'canceled' %}bg-stone-100 text-stone-600 dark:bg-stone-700 dark:text-stone-400
-                                {% else %}bg-stone-100 text-stone-600 dark:bg-stone-700 dark:text-stone-400{% endif %}">
-                                {% if so_status == 'active' %}
-                                <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
-                                {% elif so_status == 'provisioning' %}
-                                <span class="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse"></span>
-                                {% endif %}
-                                {{ so_status | capitalize if so_status else 'Unknown' }}
-                            </span>
+                            {# Status semantics from the service-order presentation owner. #}
+                            {{ status_presentation_badge(service_order_status_presentation(order.status), pulse=(so_status == 'provisioning'), size="sm") }}
                         </td>
                         <td class="px-5 py-4 text-sm text-stone-500 dark:text-stone-400">
-                            {{ order.created_at.strftime('%b %d, %Y') if order.created_at else '—' }}
+                            {{ order.created_at | portal_datetime('%b %d, %Y', '-') }}
                         </td>
                         <td class="px-5 py-4 text-right">
                             <a href="/portal/service-orders/{{ order.id }}" class="text-sm font-medium text-[var(--color-brand-600)] hover:underline dark:text-[var(--color-brand-400)]">

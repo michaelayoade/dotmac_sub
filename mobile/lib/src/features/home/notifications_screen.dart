@@ -53,32 +53,40 @@ class NotificationsScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final notifications = ref.watch(notificationsProvider);
-    final readIds = ref.watch(readNotificationsProvider);
+    ref.watch(notificationReadMigrationProvider);
+
+    Future<void> runReadMutation(Future<void> Function() mutation) async {
+      try {
+        await mutation();
+      } catch (_) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Could not sync notification state. Try again.'),
+          ),
+        );
+      }
+    }
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Notifications'),
         actions: [
           if (notifications.asData != null &&
-              notifications.asData!.value.items
-                  .any((n) => !readIds.contains(n.id)))
+              notifications.asData!.value.items.any((n) => !n.isRead))
             TextButton(
-              onPressed: () =>
-                  ref.read(readNotificationsProvider.notifier).markAllRead(
-                        notifications.asData!.value.items.map((n) => n.id),
-                      ),
+              onPressed: () => runReadMutation(
+                ref.read(notificationReadActionsProvider).markAllRead,
+              ),
               child: const Text('Mark all read'),
             ),
         ],
       ),
       body: RefreshIndicator(
         onRefresh: () async {
+          ref.invalidate(notificationReadMigrationProvider);
           ref.invalidate(notificationsProvider);
-          final page = await ref.read(notificationsProvider.future);
-          // Keep the persisted read-set bounded to the current inbox.
-          await ref
-              .read(readNotificationsProvider.notifier)
-              .prune(page.items.map((n) => n.id));
+          await ref.read(notificationsProvider.future);
         },
         child: AsyncValueView(
           value: notifications,
@@ -105,10 +113,12 @@ class NotificationsScreen extends ConsumerWidget {
                 final route = notificationRoute(n);
                 return _NotificationCard(
                   n: n,
-                  unread: !readIds.contains(n.id),
-                  onMarkRead: () {
-                    ref.read(readNotificationsProvider.notifier).markRead(n.id);
-                  },
+                  unread: !n.isRead,
+                  onMarkRead: () => runReadMutation(
+                    () => ref
+                        .read(notificationReadActionsProvider)
+                        .markRead(n.id),
+                  ),
                   onOpen: route == null ? null : () => context.go(route),
                   openLabel: route == null ? null : _sectionLabel(route),
                 );
@@ -131,7 +141,7 @@ class _NotificationCard extends StatefulWidget {
   });
   final AppNotification n;
   final bool unread;
-  final VoidCallback onMarkRead;
+  final Future<void> Function() onMarkRead;
   final VoidCallback? onOpen;
   final String? openLabel;
 
@@ -150,9 +160,9 @@ class _NotificationCardState extends State<_NotificationCard> {
         _ => Icons.notifications_none_outlined,
       };
 
-  void _toggle() {
-    widget.onMarkRead();
+  Future<void> _toggle() async {
     setState(() => _expanded = !_expanded);
+    if (widget.unread) await widget.onMarkRead();
   }
 
   @override

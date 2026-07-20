@@ -19,7 +19,6 @@ from app.services.customer_portal_flows import (
     _compute_total_pages,
     _get_offer_recurring_price,
     _resolve_next_billing_date,
-    _resolve_payment_provider,
     apply_instant_plan_change,
     cancel_customer_arrangement,
     complete_invoice_payment_intent,
@@ -71,7 +70,10 @@ from app.services.customer_portal_session import (
     get_remember_max_age,
     get_session_max_age,
     invalidate_customer_session,
+    list_customer_sessions_for_subscriber,
     refresh_customer_session,
+    revoke_customer_sessions_for_subscriber,
+    revoke_other_customer_sessions_for_subscriber,
 )
 
 logger = logging.getLogger(__name__)
@@ -88,6 +90,9 @@ __all__ = [
     "refresh_customer_session",
     "invalidate_customer_session",
     "get_current_customer",
+    "list_customer_sessions_for_subscriber",
+    "revoke_customer_sessions_for_subscriber",
+    "revoke_other_customer_sessions_for_subscriber",
     "_session_ttl_seconds",
     "get_session_max_age",
     "get_remember_max_age",
@@ -123,7 +128,6 @@ __all__ = [
     "get_payment_arrangement_detail",
     "get_invoice_detail",
     "get_notifications_page",
-    "_resolve_payment_provider",
     "complete_invoice_payment_intent",
     "create_invoice_payment_intent",
     "create_topup_intent",

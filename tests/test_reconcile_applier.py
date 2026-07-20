@@ -15,9 +15,13 @@ from app.services.network.reconcile import (
     AcsAddObject,
     AcsDeleteObject,
     AcsSetDhcpServer,
+    AcsSetIpv6,
     AcsSetManagementServer,
     AcsSetNatEnabled,
     AcsSetPppoe,
+    AcsSetRemoteAccess,
+    AcsSetWanIp,
+    AcsSetWifiConfig,
     AcsSetWifiPassword,
     AcsSetWifiSsid,
     ApplyContext,
@@ -38,8 +42,27 @@ from app.services.network.reconcile import (
     OltTr069ServerConfig,
     Plan,
     ReconcileFailureReason,
+    Tr069RemoteAccessParameterPaths,
+    Tr069WifiParameterPaths,
+    Tr181WanParameterPaths,
     apply_plan,
 )
+
+
+def _tr181_wan_paths() -> Tr181WanParameterPaths:
+    return Tr181WanParameterPaths(
+        ip_enable="Device.IP.Interface.3.Enable",
+        dhcp_enable="Device.DHCPv4.Client.3.Enable",
+        ip_address="Device.IP.Interface.3.IPv4Address.1.IPAddress",
+        subnet_mask="Device.IP.Interface.3.IPv4Address.1.SubnetMask",
+        gateway="Device.Routing.Router.1.IPv4Forwarding.3.GatewayIPAddress",
+        dns_primary="Device.DNS.Client.Server.3.DNSServer",
+        dns_secondary="Device.DNS.Client.Server.4.DNSServer",
+        nat_enable="Device.NAT.InterfaceSetting.3.Enable",
+        vlan_enable="Device.Ethernet.VLANTermination.3.Enable",
+        vlan_id="Device.Ethernet.VLANTermination.3.VLANID",
+    )
+
 
 # ── Stubs ───────────────────────────────────────────────────────────────────
 
@@ -47,16 +70,27 @@ from app.services.network.reconcile import (
 class _StubOltAdapter:
     """Records every call. Returns success unless ``fail_on`` matches."""
 
-    def __init__(self, *, fail_on: str | None = None, fail_message: str = "rejected"):
+    def __init__(
+        self,
+        *,
+        fail_on: str | None = None,
+        fail_message: str = "rejected",
+        error_code: str | None = None,
+        data: dict | None = None,
+    ):
         self.calls: list[tuple[str, tuple, dict]] = []
         self._fail_on = fail_on
         self._fail_message = fail_message
+        self._error_code = error_code
+        self._data = data or {}
 
     def _result(self, method: str):
         success = method != self._fail_on
         return SimpleNamespace(
             success=success,
             message="ok" if success else self._fail_message,
+            error_code=self._error_code,
+            data=self._data,
         )
 
     def authorize_ont(self, *args, **kwargs):
@@ -178,6 +212,119 @@ def test_empty_plan_returns_success_with_no_actions():
     assert result.success is True
     assert result.actions_applied == ()
     assert result.halted_by is None
+
+
+def test_tr181_ipv6_action_enables_dhcpv6_prefix_delegation():
+    acs = _StubAcsClient()
+    result = apply_plan(
+        _plan(
+            AcsSetIpv6(
+                device_id="dev",
+                interface_index=2,
+                enabled=True,
+                request_prefixes=True,
+            )
+        ),
+        _ctx(acs_client=acs),
+    )
+
+    assert result.success is True
+    params = acs.calls[0][1][1]
+    assert params == {
+        "Device.IP.Interface.2.IPv6Enable": True,
+        "Device.DHCPv6.Client.2.Enable": True,
+        "Device.DHCPv6.Client.2.RequestPrefixes": True,
+        "Device.RouterAdvertisement.InterfaceSettings.2.Enable": True,
+    }
+
+
+def test_tr098_static_wan_action_writes_routed_nat_addressing():
+    acs = _StubAcsClient()
+    result = apply_plan(
+        _plan(
+            AcsSetWanIp(
+                device_id="dev",
+                data_model_root="InternetGatewayDevice",
+                wcd_index=2,
+                instance_index=1,
+                mode="static",
+                vlan=203,
+                nat_enabled=True,
+                ip_address="198.51.100.10",
+                subnet_mask="255.255.255.248",
+                gateway="198.51.100.9",
+                dns_servers="1.1.1.1",
+            )
+        ),
+        _ctx(acs_client=acs),
+    )
+
+    assert result.success is True
+    params = acs.calls[0][1][1]
+    base = "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANIPConnection.1"
+    assert params[f"{base}.AddressingType"] == "Static"
+    assert params[f"{base}.ExternalIPAddress"] == "198.51.100.10"
+    assert params[f"{base}.NATEnabled"] is True
+
+
+def test_tr181_private_static_wan_writes_nat_and_full_addressing():
+    acs = _StubAcsClient()
+    paths = _tr181_wan_paths()
+    result = apply_plan(
+        _plan(
+            AcsSetWanIp(
+                device_id="dev",
+                data_model_root="Device",
+                wcd_index=1,
+                instance_index=3,
+                mode="static",
+                vlan=203,
+                nat_enabled=True,
+                ip_address="10.20.30.2",
+                subnet_mask="255.255.255.0",
+                gateway="10.20.30.1",
+                dns_servers="1.1.1.1, 8.8.8.8",
+                tr181_paths=paths,
+            )
+        ),
+        _ctx(acs_client=acs),
+    )
+
+    assert result.success is True
+    params = acs.calls[0][1][1]
+    assert params[paths.dhcp_enable] is False
+    assert params[paths.nat_enable] is True
+    assert params[paths.vlan_id] == 203
+    assert params[paths.ip_address] == "10.20.30.2"
+    assert params[paths.gateway] == "10.20.30.1"
+    assert params[paths.dns_primary] == "1.1.1.1"
+    assert params[paths.dns_secondary] == "8.8.8.8"
+
+
+def test_tr181_public_static_wan_explicitly_disables_nat():
+    acs = _StubAcsClient()
+    paths = _tr181_wan_paths()
+    result = apply_plan(
+        _plan(
+            AcsSetWanIp(
+                device_id="dev",
+                data_model_root="Device",
+                wcd_index=1,
+                instance_index=3,
+                mode="static",
+                vlan=203,
+                nat_enabled=False,
+                ip_address="160.119.127.194",
+                subnet_mask="255.255.255.248",
+                gateway="160.119.127.193",
+                tr181_paths=paths,
+            )
+        ),
+        _ctx(acs_client=acs),
+    )
+
+    assert result.success is True
+    assert acs.calls[0][1][1][paths.nat_enable] is False
 
 
 def test_acs_delete_object_dispatches_to_client():
@@ -393,6 +540,34 @@ def test_olt_failure_halts_with_olt_write_rejected():
     assert all(call[0] != "reboot_ont" for call in olt.calls)
 
 
+def test_olt_failure_retains_structured_adapter_evidence():
+    classifier = {"response_code": "unknown_command", "unsupported": True}
+    olt = _StubOltAdapter(
+        fail_on="authorize_ont",
+        fail_message="unsupported command",
+        error_code="unknown_command",
+        data={"huawei_cli_response": classifier},
+    )
+    result = apply_plan(
+        _plan(
+            OltAuthorize(
+                fsp="0/1/3",
+                ont_id=11,
+                line_profile_id=40,
+                service_profile_id=42,
+                serial_number="HWTC8535819A",
+                description="desc",
+            )
+        ),
+        _ctx(olt_adapter=olt),
+    )
+
+    assert result.halted_by.evidence == {
+        "error_code": "unknown_command",
+        "huawei_cli_response": classifier,
+    }
+
+
 def test_olt_modify_description_dispatches_to_set_ont_description():
     olt = _StubOltAdapter()
     ctx = _ctx(olt_adapter=olt)
@@ -492,6 +667,76 @@ def test_acs_set_wifi_password_pushes_resolved_psk_and_records_redacted():
     assert result.actions_applied[0].new_value == "[redacted]"
 
 
+def test_acs_set_wifi_config_batches_fields_and_resolves_password():
+    acs = _StubAcsClient()
+    paths = Tr069WifiParameterPaths(
+        enabled="Device.WiFi.SSID.1.Enable",
+        ssid="Device.WiFi.SSID.1.SSID",
+        psk_path="Device.WiFi.AccessPoint.1.Security.KeyPassphrase",
+        channel="Device.WiFi.Radio.1.Channel",
+        security_mode="Device.WiFi.AccessPoint.1.Security.ModeEnabled",
+    )
+    result = apply_plan(
+        _plan(
+            AcsSetWifiConfig(
+                device_id="dev",
+                paths=paths,
+                enabled=False,
+                ssid="DOTMAC",
+                password_ref="bao://wifi",
+                channel=6,
+                security_mode="WPA2-Personal",
+            )
+        ),
+        _ctx(
+            acs_client=acs,
+            resolve_secret=lambda ref: "ACTUAL_PSK" if ref == "bao://wifi" else ref,
+        ),
+    )
+
+    assert result.success is True
+    assert len(acs.calls) == 1
+    params = acs.calls[0][1][1]
+    assert params == {
+        paths.enabled: False,
+        paths.ssid: "DOTMAC",
+        paths.channel: 6,
+        paths.security_mode: "WPA2-Personal",
+        paths.psk_path: "ACTUAL_PSK",
+    }
+    assert "ACTUAL_PSK" not in str(result.actions_applied)
+
+
+def test_acs_set_remote_access_batches_ssh_and_telnet_guard():
+    acs = _StubAcsClient()
+    paths = Tr069RemoteAccessParameterPaths(
+        ssh_enabled="Device.X_HW_UserInterface.SSHEnable",
+        ssh_port="Device.X_HW_UserInterface.SSHPort",
+        telnet_enabled="Device.X_HW_UserInterface.TelnetEnable",
+        telnet_port="Device.X_HW_UserInterface.TelnetPort",
+    )
+    result = apply_plan(
+        _plan(
+            AcsSetRemoteAccess(
+                device_id="dev",
+                paths=paths,
+                ssh_enabled=True,
+                ssh_port=22,
+                telnet_enabled=False,
+            )
+        ),
+        _ctx(acs_client=acs),
+    )
+
+    assert result.success is True
+    assert len(acs.calls) == 1
+    assert acs.calls[0][1][1] == {
+        paths.ssh_enabled: True,
+        paths.ssh_port: 22,
+        paths.telnet_enabled: False,
+    }
+
+
 def test_acs_set_nat_enabled_pushes_single_param():
     acs = _StubAcsClient()
     ctx = _ctx(acs_client=acs)
@@ -552,6 +797,43 @@ def test_acs_set_management_server_pushes_cr_creds_and_inform_interval():
     assert params[ms_root + "ConnectionRequestUsername"] == "admin"
     assert params[ms_root + "ConnectionRequestPassword"] == "PW"
     assert params[ms_root + "PeriodicInformInterval"] == 300
+
+
+def test_acs_management_server_moves_endpoint_after_connection_credentials():
+    acs = _StubAcsClient()
+    secrets = {
+        "encrypted-cr": "CR-PW",
+        "encrypted-cwmp": "CWMP-PW",
+    }
+    ctx = _ctx(acs_client=acs, resolve_secret=secrets.__getitem__)
+    plan = _plan(
+        AcsSetManagementServer(
+            device_id="dev",
+            cr_username="admin",
+            cr_password_ref="encrypted-cr",
+            inform_interval_sec=300,
+            data_model_root="Device",
+            acs_url="https://new-acs.example.net/cwmp",
+            acs_username="cwmp-user",
+            acs_password_ref="encrypted-cwmp",
+        )
+    )
+
+    result = apply_plan(plan, ctx)
+
+    assert result.success is True
+    assert len(acs.calls) == 2
+    connection_params = acs.calls[0][1][1]
+    endpoint_params = acs.calls[1][1][1]
+    assert (
+        connection_params["Device.ManagementServer.ConnectionRequestPassword"]
+        == "CR-PW"
+    )
+    assert endpoint_params == {
+        "Device.ManagementServer.URL": "https://new-acs.example.net/cwmp",
+        "Device.ManagementServer.Username": "cwmp-user",
+        "Device.ManagementServer.Password": "CWMP-PW",
+    }
 
 
 # ── Secret resolver fail-paths ──────────────────────────────────────────────
@@ -758,6 +1040,23 @@ def test_applied_actions_record_duration():
     plan = _plan(OltReset(fsp="0/1/3", ont_id=11))
     result = apply_plan(plan, ctx)
     assert result.actions_applied[0].duration_ms >= 0
+
+
+def test_successful_olt_action_retains_structured_adapter_evidence():
+    classifier = {"response_code": "already_exists", "idempotent_success": True}
+    olt = _StubOltAdapter(
+        error_code="already_exists",
+        data={"huawei_cli_response": classifier},
+    )
+    result = apply_plan(
+        _plan(OltReset(fsp="0/1/3", ont_id=11)),
+        _ctx(olt_adapter=olt),
+    )
+
+    assert result.actions_applied[0].evidence == {
+        "error_code": "already_exists",
+        "huawei_cli_response": classifier,
+    }
 
 
 # ── Passthrough secret resolver (default) ───────────────────────────────────

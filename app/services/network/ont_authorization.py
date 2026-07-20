@@ -20,7 +20,6 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.models.network import (
-    OntAssignment,
     OntAuthorizationStatus,
     OntProvisioningStatus,
     OntUnit,
@@ -28,13 +27,18 @@ from app.models.network import (
 )
 from app.services.network._common import normalize_mac_address
 from app.services.network.equipment_identity import normalize_ont_equipment_id
+from app.services.network.huawei_cli_response import (
+    is_huawei_serial_already_registered,
+    project_huawei_result_evidence,
+)
 from app.services.network.olt_inventory import get_olt_or_none
 from app.services.network.olt_web_audit import log_olt_audit_event
 from app.services.network.serial_utils import (
-    normalize as normalize_serial,
+    build_huawei_external_id,
+    normalized_serial_sql,
 )
 from app.services.network.serial_utils import (
-    normalized_serial_sql,
+    normalize as normalize_serial,
 )
 from app.services.network.serial_utils import (
     search_candidates as serial_search_candidates,
@@ -55,6 +59,7 @@ class AuthorizationStepResult:
     success: bool
     message: str
     duration_ms: int = 0
+    details: dict[str, object] | None = None
 
 
 @dataclass
@@ -71,6 +76,7 @@ class AuthorizationWorkflowResult:
     partial_success: bool = False
     baseline_applied: bool | None = None
     duration_ms: int = 0
+    phase_timings: list[dict[str, object]] = field(default_factory=list)
 
     @property
     def ont_id(self) -> str | None:
@@ -88,6 +94,7 @@ class AuthorizationWorkflowResult:
             "partial_success": self.partial_success,
             "baseline_applied": self.baseline_applied,
             "duration_ms": self.duration_ms,
+            "phase_timings": self.phase_timings,
             "steps": [
                 {
                     "step": step.step,
@@ -95,6 +102,7 @@ class AuthorizationWorkflowResult:
                     "success": step.success,
                     "message": step.message,
                     "duration_ms": step.duration_ms,
+                    **({"details": step.details} if step.details is not None else {}),
                 }
                 for step in self.steps
             ],
@@ -102,8 +110,7 @@ class AuthorizationWorkflowResult:
 
 
 def _is_serial_already_registered_message(message: str | None) -> bool:
-    lowered = str(message or "").lower()
-    return "sn already exists" in lowered or "serial already exists" in lowered
+    return is_huawei_serial_already_registered(message)
 
 
 def _build_initial_ont_description(serial_number: str) -> str:
@@ -148,13 +155,6 @@ def _serial_predicates(serial_number: str) -> list[str]:
         )
         if candidate
     ]
-
-
-def _get_or_create_active_assignment(db: Session, ont: OntUnit) -> OntAssignment:
-    """Get the active assignment for an ONT, creating one if none exists."""
-    from app.services import web_network_ont_assignments as assignments_service
-
-    return assignments_service.get_or_create_active_assignment(db, ont)
 
 
 def _commit_without_expiring(db: Session) -> None:
@@ -303,6 +303,7 @@ def create_or_find_ont_for_authorized_serial(
         if str(olt_run_state or "").strip().lower() == "online"
         else None
     )
+    scoped_external_id = build_huawei_external_id(fsp, ont_id_on_olt)
 
     existing = db.scalars(
         select(OntUnit).where(
@@ -311,17 +312,12 @@ def create_or_find_ont_for_authorized_serial(
     ).first()
     if existing:
         try:
-            existing.olt_device_id = uuid.UUID(str(olt_id))
             existing.is_active = True
             set_authorization_status(
                 existing, OntAuthorizationStatus.authorized, strict=False
             )
             if ont_id_on_olt is not None:
-                existing.external_id = str(ont_id_on_olt)
-            parts = fsp.split("/")
-            if len(parts) == 3:
-                existing.board = f"{parts[0]}/{parts[1]}"
-                existing.port = parts[2]
+                existing.external_id = scoped_external_id or str(ont_id_on_olt)
             if observed_olt_status is not None:
                 existing.olt_status = observed_olt_status
                 existing.offline_reason = None
@@ -361,20 +357,14 @@ def create_or_find_ont_for_authorized_serial(
 
     display_serial = normalize_serial(serial_number)
     vendor = "Huawei" if display_serial.upper().startswith(("HWTC", "HWTT")) else None
-    parts = fsp.split("/")
-    board = f"{parts[0]}/{parts[1]}" if len(parts) == 3 else None
-    port = parts[2] if len(parts) == 3 else None
 
     new_ont = OntUnit(
         id=uuid.uuid4(),
         serial_number=display_serial,
-        external_id=str(ont_id_on_olt) if ont_id_on_olt is not None else None,
+        external_id=scoped_external_id if ont_id_on_olt is not None else None,
         vendor=vendor,
         model=getattr(matched_candidate, "model", None),
         mac_address=normalize_mac_address(getattr(matched_candidate, "mac", None)),
-        olt_device_id=uuid.UUID(str(olt_id)),
-        board=board,
-        port=port,
         is_active=True,
         authorization_status=OntAuthorizationStatus.authorized,
         provisioning_status=OntProvisioningStatus.unprovisioned,
@@ -400,16 +390,16 @@ def create_or_find_ont_for_authorized_serial(
     return str(new_ont.id), f"Created ONT record for {display_serial}."
 
 
-def ensure_assignment_and_pon_port_for_authorized_ont(
+def record_topology_observation_for_authorized_ont(
     db: Session,
     *,
     ont_unit_id: str,
     olt_id: str,
     fsp: str,
 ) -> tuple[bool, str]:
-    """Ensure the authorized ONT is linked to an active assignment and PON port."""
+    """Record non-conflicting PON topology without inferring an assignment."""
     from app.services.network.ont_assignment_alignment import (
-        align_ont_assignment_to_authoritative_fsp,
+        project_ont_topology_from_fsp_observation,
     )
 
     ont = db.get(OntUnit, ont_unit_id)
@@ -417,16 +407,32 @@ def ensure_assignment_and_pon_port_for_authorized_ont(
         return False, "ONT record not found."
 
     try:
-        result = align_ont_assignment_to_authoritative_fsp(
+        result = project_ont_topology_from_fsp_observation(
             db,
             ont=ont,
             olt_id=olt_id,
             fsp=fsp,
         )
         if result is None:
-            return False, f"Invalid OLT F/S/P for assignment: {fsp}."
+            return False, f"Invalid OLT F/S/P: {fsp}."
+        if result.review_required:
+            if result.review_reason == (
+                "observed PON has no exact active modeled port"
+            ):
+                return True, (
+                    f"Recorded OLT observation {fsp} without a customer assignment; "
+                    "the PON is not yet modeled and remains an explicit topology gap."
+                )
+            return False, (
+                f"ONT topology needs reviewed identity repair: {result.review_reason}."
+            )
         db.flush()
-        return True, f"Linked ONT to PON port {result.pon_port.name}."
+        if result.pon_port is None:
+            return False, "ONT topology did not resolve to a modeled PON port."
+        return True, (
+            f"Recorded ONT PON port {result.pon_port.name}; customer assignment "
+            "requires explicit provisioning."
+        )
     except SQLAlchemyError as exc:
         db.rollback()
         logger.warning(
@@ -470,7 +476,15 @@ def authorize_autofind_ont(
     steps: list[AuthorizationStepResult] = []
     started_at = monotonic()
 
-    def add_step(name: str, success: bool, message: str, step_started: float) -> None:
+    def add_step(
+        name: str,
+        success: bool,
+        message: str,
+        step_started: float,
+        *,
+        adapter_result: object | None = None,
+    ) -> None:
+        details = project_huawei_result_evidence(adapter_result)
         steps.append(
             AuthorizationStepResult(
                 step=len(steps) + 1,
@@ -478,6 +492,7 @@ def authorize_autofind_ont(
                 success=success,
                 message=message,
                 duration_ms=max(0, int((monotonic() - step_started) * 1000)),
+                details=details,
             )
         )
 
@@ -525,12 +540,24 @@ def authorize_autofind_ont(
         find_result = adapter.find_ont_by_serial(normalized_serial)
         existing = find_result.data.get("registration") if find_result.success else None
         if not find_result.success:
-            add_step("Activate ONT", False, find_result.message, force_started)
+            add_step(
+                "Activate ONT",
+                False,
+                find_result.message,
+                force_started,
+                adapter_result=find_result,
+            )
             return finish(success=False, message=find_result.message, status="error")
         if existing:
             delete_result = adapter.deauthorize_ont(existing.fsp, existing.onu_id)
             if not delete_result.success:
-                add_step("Activate ONT", False, delete_result.message, force_started)
+                add_step(
+                    "Activate ONT",
+                    False,
+                    delete_result.message,
+                    force_started,
+                    adapter_result=delete_result,
+                )
                 return finish(
                     success=False, message=delete_result.message, status="error"
                 )
@@ -598,6 +625,7 @@ def authorize_autofind_ont(
                     True,
                     "ONT serial was already registered on the OLT; reusing registration.",
                     activation_started,
+                    adapter_result=auth_result,
                 )
             else:
                 # On different port - remove and re-add
@@ -609,7 +637,11 @@ def authorize_autofind_ont(
                 delete_result = adapter.deauthorize_ont(existing.fsp, existing.onu_id)
                 if not delete_result.success:
                     add_step(
-                        "Activate ONT", False, delete_result.message, activation_started
+                        "Activate ONT",
+                        False,
+                        delete_result.message,
+                        activation_started,
+                        adapter_result=delete_result,
                     )
                     return finish(
                         success=False, message=delete_result.message, status="error"
@@ -637,7 +669,13 @@ def authorize_autofind_ont(
                 ont_id = auth_result.ont_id
                 if not auth_result.success or ont_id is None:
                     msg = f"Removed old registration, but authorization failed: {auth_result.message}"
-                    add_step("Activate ONT", False, msg, activation_started)
+                    add_step(
+                        "Activate ONT",
+                        False,
+                        msg,
+                        activation_started,
+                        adapter_result=auth_result,
+                    )
                     return finish(success=False, message=msg, status="error")
                 auth_result.message = (
                     f"Removed existing ONT registration on {existing.fsp}; "
@@ -645,7 +683,13 @@ def authorize_autofind_ont(
                 )
         else:
             message = auth_result.message or "Authorization failed"
-            add_step("Activate ONT", False, message, activation_started)
+            add_step(
+                "Activate ONT",
+                False,
+                message,
+                activation_started,
+                adapter_result=auth_result,
+            )
             return finish(success=False, message=message, status="error")
 
     # Create/find ONT record
@@ -670,7 +714,7 @@ def authorize_autofind_ont(
             partial_success=True,
         )
 
-    assignment_ok, assignment_msg = ensure_assignment_and_pon_port_for_authorized_ont(
+    assignment_ok, assignment_msg = record_topology_observation_for_authorized_ont(
         db,
         ont_unit_id=ont_unit_id,
         olt_id=olt_id,
@@ -700,7 +744,13 @@ def authorize_autofind_ont(
         f"{getattr(authorization_profiles, 'message', '')} "
         f"{auth_result.message} {create_msg} {assignment_msg}".strip()
     )
-    add_step("Activate ONT", True, activation_message, activation_started)
+    add_step(
+        "Activate ONT",
+        True,
+        activation_message,
+        activation_started,
+        adapter_result=auth_result,
+    )
 
     return finish(
         success=True,
@@ -746,8 +796,19 @@ def authorize_ont(
     from app.services.network.ont_provision_steps import apply_authorization_baseline
 
     started_at = monotonic()
+    phase_timings: list[dict[str, object]] = []
+
+    def record_phase(name: str, phase_started: float, **details: object) -> None:
+        phase_timings.append(
+            {
+                "phase": name,
+                "duration_ms": max(0, int((monotonic() - phase_started) * 1000)),
+                **details,
+            }
+        )
 
     # Step 1: Core OLT authorization (register serial, create record, link PON)
+    phase_started = monotonic()
     result = authorize_autofind_ont(
         db,
         olt_id,
@@ -756,18 +817,38 @@ def authorize_ont(
         force_reauthorize=force_reauthorize,
         preset_id=preset_id,
     )
+    record_phase("core_authorization", phase_started, success=result.success)
+    result.phase_timings = phase_timings
 
     if not result.success:
+        phase_started = monotonic()
         _audit_authorization(
             db, request, olt_id, fsp, serial_number, force_reauthorize, result
         )
+        record_phase("audit", phase_started)
+        result.duration_ms = max(0, int((monotonic() - started_at) * 1000))
         return result
 
+    phase_started = monotonic()
     db.commit()
+    record_phase("post_authorization_commit", phase_started)
 
     # Step 2: Apply OLT baseline (internet service port + ACS reachability)
     if provision and result.ont_unit_id:
+        phase_started = monotonic()
         provision_result = apply_authorization_baseline(db, result.ont_unit_id)
+        provision_data = provision_result.data or {}
+        record_phase(
+            "authorization_baseline",
+            phase_started,
+            success=provision_result.success,
+            subphases=provision_data.get("phase_timings", []),
+        )
+        step_details: dict[str, object] = {
+            key: provision_data[key]
+            for key in ("phase_timings", "command_timings", "domain_outcomes")
+            if key in provision_data
+        }
         if provision_result.success:
             result.baseline_applied = True
             result.steps.append(
@@ -777,9 +858,12 @@ def authorize_ont(
                     success=True,
                     message=provision_result.message,
                     duration_ms=provision_result.duration_ms,
+                    details=step_details,
                 )
             )
+            phase_started = monotonic()
             db.commit()
+            record_phase("post_baseline_commit", phase_started)
         else:
             # Provisioning failed but authorization succeeded - partial success
             result.baseline_applied = False
@@ -790,6 +874,7 @@ def authorize_ont(
                     success=False,
                     message=provision_result.message,
                     duration_ms=provision_result.duration_ms,
+                    details=step_details,
                 )
             )
             result.status = "warning"
@@ -799,9 +884,12 @@ def authorize_ont(
                 f"{provision_result.message}"
             )
 
+    phase_started = monotonic()
     _audit_authorization(
         db, request, olt_id, fsp, serial_number, force_reauthorize, result
     )
+    record_phase("audit", phase_started)
+    result.phase_timings = phase_timings
     result.duration_ms = max(0, int((monotonic() - started_at) * 1000))
     return result
 

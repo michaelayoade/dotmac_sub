@@ -1,9 +1,25 @@
 """Tests for the authoritative single-writer radreply builder."""
 
+import ipaddress
 import types
 
 from app.models.catalog import SubscriptionStatus
-from app.services.radius_population import _radreply_attrs
+from app.models.subscriber import SubscriberCategory, SubscriberStatus, UserType
+from app.services.radius_population import (
+    _captive_redirect_allowed,
+    _radreply_attrs,
+)
+from app.services.subscriber_access_policy import RADIUS_BLOCKING_SUBSCRIBER_STATUSES
+
+
+def test_account_level_radius_blocking_statuses():
+    assert SubscriberStatus.blocked in RADIUS_BLOCKING_SUBSCRIBER_STATUSES
+    assert SubscriberStatus.suspended in RADIUS_BLOCKING_SUBSCRIBER_STATUSES
+    assert SubscriberStatus.disabled in RADIUS_BLOCKING_SUBSCRIBER_STATUSES
+    assert SubscriberStatus.canceled in RADIUS_BLOCKING_SUBSCRIBER_STATUSES
+    assert SubscriberStatus.new in RADIUS_BLOCKING_SUBSCRIBER_STATUSES
+    assert SubscriberStatus.active not in RADIUS_BLOCKING_SUBSCRIBER_STATUSES
+    assert SubscriberStatus.delinquent not in RADIUS_BLOCKING_SUBSCRIBER_STATUSES
 
 
 def _sub(ipv4="10.0.0.5", status=SubscriptionStatus.active):
@@ -76,6 +92,46 @@ class TestRadreplyAdditionalRoutes:
         attrs = _radreply_attrs(_sub(), None, None, additional_routes=None)
         assert _routes(attrs) == []
 
+    def test_e2e_private_primary_is_natted_public_addon_is_not(self):
+        """Simulate the Garki BNG split between subscriber NAT and routed IPs."""
+        private_primary = "172.16.99.10"
+        public_addon = "160.119.125.104/29"
+        attrs = _radreply_attrs(
+            _sub(ipv4=private_primary),
+            None,
+            None,
+            additional_routes=[(public_addon, 1)],
+        )
+
+        assert ("Framed-IP-Address", ":=", private_primary) in attrs
+        assert (
+            "Framed-Route",
+            "+=",
+            f"{public_addon} 0.0.0.0 1",
+        ) in attrs
+
+        # Current Garki Access SRCNAT partitions cover only the private pool.
+        # A public routed add-on therefore bypasses NAT by source matching.
+        nat_ranges = (
+            ("172.16.99.1", "172.16.99.63"),
+            ("172.16.99.64", "172.16.99.128"),
+            ("172.16.99.129", "172.16.99.191"),
+            ("172.16.99.192", "172.16.99.254"),
+        )
+        primary = ipaddress.ip_address(private_primary)
+        routed = ipaddress.ip_network(public_addon)
+        assert any(
+            ipaddress.ip_address(start) <= primary <= ipaddress.ip_address(end)
+            for start, end in nat_ranges
+        )
+        assert not any(
+            routed.overlaps(source_network)
+            for start, end in nat_ranges
+            for source_network in ipaddress.summarize_address_range(
+                ipaddress.ip_address(start), ipaddress.ip_address(end)
+            )
+        )
+
 
 class TestRadreplyIPv6:
     """The authoritative sweep must emit Framed-IPv6-Prefix or its DELETE+INSERT
@@ -110,3 +166,54 @@ class TestRadreplyIPv6:
         )
         attrs = _radreply_attrs(sub, None, None, captive_redirect_enabled=True)
         assert ("Framed-IPv6-Prefix", ":=", "2001:db8::/64") in attrs
+
+
+class TestCaptiveRedirectEligibility:
+    def _subscriber(
+        self,
+        *,
+        user_type=UserType.customer,
+        category=SubscriberCategory.residential.value,
+        house_reseller=True,
+    ):
+        metadata = {} if category is None else {"subscriber_category": category}
+        reseller = (
+            None
+            if house_reseller is None
+            else types.SimpleNamespace(is_house=house_reseller, is_active=True)
+        )
+        return types.SimpleNamespace(
+            user_type=user_type,
+            metadata_=metadata,
+            reseller=reseller,
+            is_active=True,
+            status=SubscriberStatus.active,
+        )
+
+    def test_direct_house_residential_customer_allowed(self):
+        assert _captive_redirect_allowed(self._subscriber()) is True
+
+    def test_uncategorized_customer_not_allowed(self):
+        assert _captive_redirect_allowed(self._subscriber(category=None)) is False
+
+    def test_business_customer_not_allowed(self):
+        assert (
+            _captive_redirect_allowed(
+                self._subscriber(category=SubscriberCategory.business.value)
+            )
+            is False
+        )
+
+    def test_reseller_user_not_allowed(self):
+        assert (
+            _captive_redirect_allowed(self._subscriber(user_type=UserType.reseller))
+            is False
+        )
+
+    def test_non_house_reseller_customer_not_allowed(self):
+        assert (
+            _captive_redirect_allowed(self._subscriber(house_reseller=False)) is False
+        )
+
+    def test_missing_reseller_not_allowed(self):
+        assert _captive_redirect_allowed(self._subscriber(house_reseller=None)) is False

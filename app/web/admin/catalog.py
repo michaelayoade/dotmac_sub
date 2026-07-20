@@ -1,10 +1,11 @@
 """Admin catalog management web routes."""
 
 import logging
+from datetime import datetime
 from typing import Any, cast
 from urllib.parse import quote_plus
 
-from fastapi import APIRouter, Depends, Form, Query, Request
+from fastapi import APIRouter, Depends, Form, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -12,6 +13,7 @@ from starlette.datastructures import FormData
 
 from app.db import get_db
 from app.services import catalog as catalog_service
+from app.services import radio_registration as radio_registration_service
 from app.services import web_admin as web_admin_service
 from app.services import web_bulk_tariff_change as web_bulk_tariff_change_service
 from app.services import web_catalog_calculator as web_catalog_calculator_service
@@ -21,7 +23,15 @@ from app.services import (
 )
 from app.services import web_catalog_subscriptions as web_catalog_subscriptions_service
 from app.services import web_fup as web_fup_service
-from app.services.auth_dependencies import require_permission
+from app.services.auth_dependencies import (
+    has_permission,
+    require_any_permission,
+    require_permission,
+)
+from app.services.subscription_lifecycle import (
+    SubscriptionCommandKind,
+    SubscriptionEffectiveTiming,
+)
 from app.services.topology.customer_path import resolve_customer_path
 from app.web.request_parsing import parse_form_data, parse_form_data_sync
 
@@ -46,6 +56,24 @@ def _base_context(
 
 def _get_actor_id(request: Request) -> str | None:
     return web_admin_service.get_actor_id(request)
+
+
+def _assert_lifecycle_command_permission(
+    request: Request,
+    db: Session,
+    kind: SubscriptionCommandKind,
+) -> None:
+    auth = getattr(request.state, "auth", None) or {}
+    if auth and has_permission(auth, db, "catalog:write"):
+        return
+    action_permission = {
+        SubscriptionCommandKind.activate: "subscription:activate",
+        SubscriptionCommandKind.restore: "subscription:activate",
+        SubscriptionCommandKind.suspend: "subscription:suspend",
+    }.get(kind)
+    if action_permission and auth and has_permission(auth, db, action_permission):
+        return
+    raise HTTPException(status_code=403, detail="Forbidden")
 
 
 @router.get(
@@ -116,7 +144,7 @@ def catalog_offers(
 def catalog_offers_create(
     request: Request, db: Session = Depends(get_db)
 ) -> HTMLResponse:
-    offer = web_catalog_offers_service.default_offer_form()
+    offer = web_catalog_offers_service.default_offer_form(db)
     context = _base_context(request, db, active_page="catalog")
     context.update(web_catalog_offers_service.offer_form_context(db, offer))
     return templates.TemplateResponse("admin/catalog/offer_form.html", context)
@@ -125,7 +153,10 @@ def catalog_offers_create(
 @router.post(
     "/offers",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("catalog:write"))],
+    dependencies=[
+        Depends(require_permission("catalog:write")),
+        Depends(require_permission("catalog:billing_write")),
+    ],
 )
 def catalog_offers_create_post(
     request: Request,
@@ -187,7 +218,10 @@ def catalog_offer_edit(
 @router.post(
     "/offers/{offer_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("catalog:write"))],
+    dependencies=[
+        Depends(require_permission("catalog:write")),
+        Depends(require_permission("catalog:billing_write")),
+    ],
 )
 def catalog_offer_edit_post(
     request: Request,
@@ -219,26 +253,42 @@ def catalog_offer_edit_post(
 
 @router.post(
     "/offers/{offer_id}/archive",
-    dependencies=[Depends(require_permission("catalog:write"))],
+    dependencies=[
+        Depends(require_permission("catalog:write")),
+        Depends(require_permission("catalog:billing_write")),
+    ],
 )
 def catalog_offer_archive(
-    offer_id: str, db: Session = Depends(get_db)
+    request: Request, offer_id: str, db: Session = Depends(get_db)
 ) -> RedirectResponse:
     """Archive an offer (soft-delete: status=archived, is_active=False)."""
-    catalog_service.offers.delete(db, offer_id)
+    catalog_service.offers.delete(
+        db,
+        offer_id,
+        actor_id=_get_actor_id(request),
+        actor_type="user",
+    )
     db.commit()
     return RedirectResponse("/admin/catalog/offers", status_code=303)
 
 
 @router.post(
     "/offers/{offer_id}/restore",
-    dependencies=[Depends(require_permission("catalog:write"))],
+    dependencies=[
+        Depends(require_permission("catalog:write")),
+        Depends(require_permission("catalog:billing_write")),
+    ],
 )
 def catalog_offer_restore(
-    offer_id: str, db: Session = Depends(get_db)
+    request: Request, offer_id: str, db: Session = Depends(get_db)
 ) -> RedirectResponse:
     """Restore an archived offer (status=active, is_active=True)."""
-    catalog_service.offers.restore(db, offer_id)
+    catalog_service.offers.restore(
+        db,
+        offer_id,
+        actor_id=_get_actor_id(request),
+        actor_type="user",
+    )
     db.commit()
     return RedirectResponse("/admin/catalog/offers?status=archived", status_code=303)
 
@@ -357,6 +407,35 @@ def offer_fup_simulate(offer_id: str, request: Request, db: Session = Depends(ge
     """Simulate FUP rules for a given usage scenario. Returns JSON for HTMX."""
     form = parse_form_data_sync(request)
     result = web_fup_service.simulate_offer_fup(db, offer_id, form)
+    return JSONResponse(result, status_code=400 if result.get("error") else 200)
+
+
+@router.get(
+    "/offers/{offer_id}/fup/rule-impact-preview",
+    dependencies=[Depends(require_permission("catalog:read"))],
+)
+def offer_fup_rule_impact_preview(
+    offer_id: str,
+    threshold_amount: str,
+    threshold_unit: str = "gb",
+    direction: str = "up_down",
+    consumption_period: str = "monthly",
+    action: str = "reduce_speed",
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Blast-radius preview: how many active subs a draft FUP rule would hit now.
+
+    Read-only, no side effects — mirrors the change-plan-quote preview pattern.
+    """
+    result = web_fup_service.preview_rule_impact(
+        db,
+        offer_id,
+        threshold_amount=threshold_amount,
+        threshold_unit=threshold_unit,
+        direction=direction,
+        consumption_period=consumption_period,
+        action=action,
+    )
     return JSONResponse(result, status_code=400 if result.get("error") else 200)
 
 
@@ -587,7 +666,63 @@ def catalog_subscription_detail(
         from app.services.topology.outage import open_incident_for_path
 
         context["known_outage"] = open_incident_for_path(db, network_path)
+    context["registered_radios"] = (
+        radio_registration_service.list_radios_for_subscriber(
+            db, subscription_obj.subscriber_id
+        )
+        if subscription_obj is not None
+        else []
+    )
     return templates.TemplateResponse("admin/catalog/subscription_detail.html", context)
+
+
+@router.post(
+    "/subscriptions/{subscription_id}/register-radio-mac",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
+def catalog_subscription_register_radio_mac(
+    request: Request,
+    subscription_id: str,
+    form: FormData = Depends(parse_form_data),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    """Record the customer radio MAC at install time (capture at source)."""
+    base_url = f"/admin/catalog/subscriptions/{subscription_id}"
+    mac = str(form.get("mac_address") or "")
+    try:
+        result = radio_registration_service.register_radio_mac(
+            db,
+            subscription_id=subscription_id,
+            mac=mac,
+            actor_id=_get_actor_id(request),
+            source=radio_registration_service.SOURCE_ADMIN,
+            request=request,
+        )
+    except LookupError:
+        return RedirectResponse(
+            f"{base_url}?error={quote_plus('Subscription not found.')}",
+            status_code=303,
+        )
+    except radio_registration_service.InvalidMacError as exc:
+        return RedirectResponse(
+            f"{base_url}?error={quote_plus(str(exc))}", status_code=303
+        )
+    except radio_registration_service.MacConflictError as exc:
+        return RedirectResponse(
+            f"{base_url}?error={quote_plus(str(exc))}", status_code=303
+        )
+    mac_display = result.device.mac_address
+    if result.created:
+        message = f"Radio MAC {mac_display} registered."
+    else:
+        message = f"Radio MAC {mac_display} was already registered."
+    if result.warnings:
+        message = f"{message} {' '.join(result.warnings)}"
+        return RedirectResponse(
+            f"{base_url}?warning={quote_plus(message)}", status_code=303
+        )
+    return RedirectResponse(f"{base_url}?notice={quote_plus(message)}", status_code=303)
 
 
 @router.post(
@@ -675,6 +810,129 @@ def catalog_subscription_update(
 
 
 @router.post(
+    "/subscriptions/{subscription_id}/lifecycle/preview",
+    dependencies=[Depends(require_permission("catalog:read"))],
+)
+def catalog_subscription_preview_lifecycle_command(
+    request: Request,
+    subscription_id: str,
+    kind: SubscriptionCommandKind = Form(...),
+    effective_timing: SubscriptionEffectiveTiming = Form(
+        SubscriptionEffectiveTiming.immediate
+    ),
+    effective_at: datetime | None = Form(None),
+    target_offer_id: str | None = Form(None),
+    reason: str | None = Form(None),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Preview one lifecycle command without mutating subscription state."""
+    payload, status_code = (
+        web_catalog_subscription_workflows_service.preview_lifecycle_command_response(
+            db,
+            subscription_id=subscription_id,
+            kind=kind,
+            actor_id=_get_actor_id(request),
+            reason=reason,
+            target_offer_id=target_offer_id,
+            effective_timing=effective_timing,
+            effective_at=effective_at,
+        )
+    )
+    return JSONResponse(payload, status_code=status_code)
+
+
+@router.post(
+    "/subscriptions/{subscription_id}/lifecycle/execute",
+    dependencies=[
+        Depends(
+            require_any_permission(
+                "catalog:write",
+                "subscription:activate",
+                "subscription:suspend",
+            )
+        )
+    ],
+)
+def catalog_subscription_execute_lifecycle_command(
+    request: Request,
+    subscription_id: str,
+    kind: SubscriptionCommandKind = Form(...),
+    effective_timing: SubscriptionEffectiveTiming = Form(
+        SubscriptionEffectiveTiming.immediate
+    ),
+    effective_at: datetime | None = Form(None),
+    target_offer_id: str | None = Form(None),
+    reason: str | None = Form(None),
+    expected_head: str = Form(...),
+    preview_fingerprint: str | None = Form(None),
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Execute one canonical, reviewed subscription lifecycle command."""
+    _assert_lifecycle_command_permission(request, db, kind)
+    payload, status_code = (
+        web_catalog_subscription_workflows_service.execute_lifecycle_command_response(
+            db,
+            subscription_id=subscription_id,
+            kind=kind,
+            actor_id=_get_actor_id(request),
+            expected_head=expected_head,
+            preview_fingerprint=preview_fingerprint,
+            idempotency_key=idempotency_key,
+            reason=reason,
+            target_offer_id=target_offer_id,
+            effective_timing=effective_timing,
+            effective_at=effective_at,
+        )
+    )
+    return JSONResponse(payload, status_code=status_code)
+
+
+@router.post(
+    "/subscriptions/{subscription_id}/lifecycle/schedules/{schedule_id}/cancel",
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
+def catalog_subscription_cancel_lifecycle_schedule(
+    request: Request,
+    subscription_id: str,
+    schedule_id: str,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Cancel one pending deferred lifecycle status command."""
+    payload, status_code = (
+        web_catalog_subscription_workflows_service.cancel_lifecycle_schedule_response(
+            db,
+            subscription_id=subscription_id,
+            schedule_id=schedule_id,
+            actor_id=_get_actor_id(request),
+        )
+    )
+    return JSONResponse(payload, status_code=status_code)
+
+
+@router.post(
+    "/subscriptions/{subscription_id}/lifecycle/schedules/{schedule_id}/cancel-view",
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
+def catalog_subscription_cancel_lifecycle_schedule_view(
+    request: Request,
+    subscription_id: str,
+    schedule_id: str,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    """Cancel a deferred lifecycle command from the subscription detail page."""
+    return RedirectResponse(
+        web_catalog_subscription_workflows_service.cancel_lifecycle_schedule_redirect(
+            db,
+            subscription_id=subscription_id,
+            schedule_id=schedule_id,
+            actor_id=_get_actor_id(request),
+        ),
+        status_code=303,
+    )
+
+
+@router.post(
     "/subscriptions/{subscription_id}/send-credentials",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("catalog:write"))],
@@ -714,12 +972,53 @@ def catalog_subscription_resume_vacation_hold(
 
 
 @router.post(
+    "/subscriptions/bulk/lifecycle/preview",
+    dependencies=[Depends(require_permission("catalog:read"))],
+)
+def subscription_bulk_lifecycle_preview(
+    request: Request,
+    subscription_ids: str = Form(...),
+    kind: SubscriptionCommandKind = Form(...),
+    effective_timing: SubscriptionEffectiveTiming = Form(
+        SubscriptionEffectiveTiming.immediate
+    ),
+    effective_at: datetime | None = Form(None),
+    target_offer_id: str | None = Form(None),
+    reason: str | None = Form(None),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Preview a subscription lifecycle batch without mutating any item."""
+    payload, status_code = (
+        web_catalog_subscription_workflows_service.preview_bulk_lifecycle_response(
+            db,
+            subscription_ids=subscription_ids,
+            kind=kind,
+            actor_id=_get_actor_id(request),
+            effective_timing=effective_timing,
+            effective_at=effective_at,
+            target_offer_id=target_offer_id,
+            reason=reason,
+        )
+    )
+    return JSONResponse(payload, status_code=status_code)
+
+
+@router.post(
     "/subscriptions/bulk/activate",
-    dependencies=[Depends(require_permission("catalog:write"))],
+    dependencies=[
+        Depends(require_any_permission("catalog:write", "subscription:activate"))
+    ],
 )
 def subscription_bulk_activate(
     request: Request,
     subscription_ids: str = Form(...),
+    effective_timing: SubscriptionEffectiveTiming = Form(
+        SubscriptionEffectiveTiming.immediate
+    ),
+    effective_at: datetime | None = Form(None),
+    reason: str | None = Form(None),
+    reviewed_heads: str | None = Form(None),
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Bulk activate subscriptions."""
@@ -729,17 +1028,64 @@ def subscription_bulk_activate(
             subscription_ids=subscription_ids,
             request=request,
             actor_id=_get_actor_id(request),
+            effective_timing=effective_timing,
+            effective_at=effective_at,
+            reason=reason,
+            reviewed_heads=reviewed_heads,
+            idempotency_key=idempotency_key,
+        )
+    )
+
+
+@router.post(
+    "/subscriptions/bulk/restore",
+    dependencies=[
+        Depends(require_any_permission("catalog:write", "subscription:activate"))
+    ],
+)
+def subscription_bulk_restore(
+    request: Request,
+    subscription_ids: str = Form(...),
+    effective_timing: SubscriptionEffectiveTiming = Form(
+        SubscriptionEffectiveTiming.immediate
+    ),
+    effective_at: datetime | None = Form(None),
+    reason: str | None = Form(None),
+    reviewed_heads: str | None = Form(None),
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Bulk restore subscriptions through canonical lifecycle commands."""
+    return JSONResponse(
+        web_catalog_subscription_workflows_service.bulk_restore_response(
+            db,
+            subscription_ids=subscription_ids,
+            actor_id=_get_actor_id(request),
+            effective_timing=effective_timing,
+            effective_at=effective_at,
+            reason=reason,
+            reviewed_heads=reviewed_heads,
+            idempotency_key=idempotency_key,
         )
     )
 
 
 @router.post(
     "/subscriptions/bulk/suspend",
-    dependencies=[Depends(require_permission("catalog:write"))],
+    dependencies=[
+        Depends(require_any_permission("catalog:write", "subscription:suspend"))
+    ],
 )
 def subscription_bulk_suspend(
     request: Request,
     subscription_ids: str = Form(...),
+    effective_timing: SubscriptionEffectiveTiming = Form(
+        SubscriptionEffectiveTiming.immediate
+    ),
+    effective_at: datetime | None = Form(None),
+    reason: str | None = Form(None),
+    reviewed_heads: str | None = Form(None),
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Bulk suspend subscriptions."""
@@ -749,6 +1095,11 @@ def subscription_bulk_suspend(
             subscription_ids=subscription_ids,
             request=request,
             actor_id=_get_actor_id(request),
+            effective_timing=effective_timing,
+            effective_at=effective_at,
+            reason=reason,
+            reviewed_heads=reviewed_heads,
+            idempotency_key=idempotency_key,
         )
     )
 
@@ -760,6 +1111,13 @@ def subscription_bulk_suspend(
 def subscription_bulk_cancel(
     request: Request,
     subscription_ids: str = Form(...),
+    effective_timing: SubscriptionEffectiveTiming = Form(
+        SubscriptionEffectiveTiming.immediate
+    ),
+    effective_at: datetime | None = Form(None),
+    reason: str | None = Form(None),
+    reviewed_heads: str | None = Form(None),
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Bulk cancel subscriptions."""
@@ -769,6 +1127,30 @@ def subscription_bulk_cancel(
             subscription_ids=subscription_ids,
             request=request,
             actor_id=_get_actor_id(request),
+            effective_timing=effective_timing,
+            effective_at=effective_at,
+            reason=reason,
+            reviewed_heads=reviewed_heads,
+            idempotency_key=idempotency_key,
+        )
+    )
+
+
+@router.get(
+    "/subscriptions/{subscription_id}/change-plan-quote",
+    dependencies=[Depends(require_permission("catalog:read"))],
+)
+def subscription_change_plan_quote(
+    subscription_id: str,
+    target_offer_id: str,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Proration preview for the change-plan modal (no side effects)."""
+    return JSONResponse(
+        web_catalog_subscription_workflows_service.change_plan_quote_response(
+            db,
+            subscription_id=subscription_id,
+            target_offer_id=target_offer_id,
         )
     )
 
@@ -781,9 +1163,19 @@ def subscription_bulk_change_plan(
     request: Request,
     subscription_ids: str = Form(...),
     target_offer_id: str = Form(...),
+    effective_timing: SubscriptionEffectiveTiming = Form(
+        SubscriptionEffectiveTiming.immediate
+    ),
+    effective_at: datetime | None = Form(None),
+    reason: str | None = Form(None),
+    reviewed_heads: str | None = Form(None),
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
-    """Bulk change plan/offer for subscriptions."""
+    """Bulk change plan/offer for subscriptions.
+
+    ``effective_timing`` follows the canonical lifecycle timing contract.
+    """
     return JSONResponse(
         web_catalog_subscription_workflows_service.bulk_change_plan_response(
             db,
@@ -791,7 +1183,34 @@ def subscription_bulk_change_plan(
             target_offer_id=target_offer_id,
             request=request,
             actor_id=_get_actor_id(request),
+            effective_timing=effective_timing,
+            effective_at=effective_at,
+            reason=reason,
+            reviewed_heads=reviewed_heads,
+            idempotency_key=idempotency_key,
         )
+    )
+
+
+@router.post(
+    "/subscriptions/{subscription_id}/scheduled-change/{request_id}/cancel",
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
+def subscription_cancel_scheduled_change(
+    request: Request,
+    subscription_id: str,
+    request_id: str,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    """Cancel a scheduled next-cycle plan change before it takes effect."""
+    return RedirectResponse(
+        web_catalog_subscription_workflows_service.cancel_scheduled_plan_change_redirect(
+            db,
+            subscription_id=subscription_id,
+            request_id=request_id,
+            actor_id=_get_actor_id(request),
+        ),
+        status_code=303,
     )
 
 

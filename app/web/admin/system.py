@@ -23,6 +23,7 @@ from fastapi import (
 )
 from fastapi.responses import (
     HTMLResponse,
+    JSONResponse,
     RedirectResponse,
     Response,
     StreamingResponse,
@@ -41,6 +42,7 @@ from app.services import (
     billing as billing_service,
 )
 from app.services import branding_storage as branding_storage_service
+from app.services import control_registry as control_registry_service
 from app.services import email as email_service
 from app.services import file_upload as file_upload_service
 from app.services import import_runs as import_runs_service
@@ -52,8 +54,11 @@ from app.services import (
 from app.services import (
     scheduler as scheduler_service,
 )
+from app.services import session_manager as session_manager_service
 from app.services import settings_spec
+from app.services import support as support_service
 from app.services import support_ticket_settings as support_ticket_settings_service
+from app.services import web_control_plane as web_control_plane_service
 from app.services import web_system_about as web_system_about_service
 from app.services import web_system_api_key_forms as web_system_api_key_forms_service
 from app.services import (
@@ -95,8 +100,20 @@ from app.services.audit_helpers import (
     log_audit_event,
 )
 from app.services.auth_dependencies import require_permission
+from app.services.brand_theme import (
+    DEFAULT_HEX,
+    DEFAULT_SECONDARY_HEX,
+    is_accessible_semantic_color,
+)
+from app.services.common import coerce_uuid
+from app.services.financial_import_batch_reversals import (
+    PaymentImportBatchReversals,
+)
 from app.tasks.exports import run_export_job
 from app.tasks.gis import run_batch_geocode_job
+from app.tasks.imports import (
+    process_import_run as process_import_run_task,
+)
 from app.tasks.imports import run_import_job
 from app.web.request_parsing import (
     parse_form_data,
@@ -271,15 +288,6 @@ def _radius_config_audit_items(db: Session, limit: int = 5) -> list[dict]:
         return []
 
 
-def _cpe_config_audit_items(db: Session, limit: int = 5) -> list[dict]:
-    try:
-        return build_audit_activities(db, "cpe_config", "cpe", limit=limit)
-    except Exception:
-        logger.exception("Unable to load CPE config audit items")
-        db.rollback()
-        return []
-
-
 @router.get("/health", response_class=HTMLResponse)
 def system_health_page(request: Request, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -348,23 +356,69 @@ def modules_manager_page(request: Request, db: Session = Depends(get_db)):
 )
 def modules_manager_save(request: Request, db: Session = Depends(get_db)):
     """Persist module manager toggles."""
+    from app.services.control_registry import Layer
+
     form = parse_form_data_sync(request)
     module_payload: dict[str, bool] = {}
-    feature_payload: dict[str, bool] = {}
+    feature_payload: dict[str, bool | None] = {}
 
     for module_name in module_manager_service.MODULE_KEY_MAP:
-        module_payload[module_name] = (
-            str(form.get(f"module__{module_name}") or "").lower() == "true"
-        )
-
-    for feature_map in module_manager_service.MODULE_FEATURE_MAP.values():
-        for feature_name in feature_map:
-            feature_payload[feature_name] = (
-                str(form.get(f"feature__{feature_name}") or "").lower() == "true"
+        field_name = f"module__{module_name}"
+        if field_name in form:
+            module_payload[module_name] = (
+                str(form.get(field_name) or "").lower() == "true"
             )
 
+    stored_values: dict[str, bool | None] = {
+        "inherit": None,
+        "on": True,
+        "off": False,
+    }
+    for control in control_registry_service.all_controls():
+        if control.layer is not Layer.feature:
+            continue
+        field_name = f"control__{control.key}"
+        if field_name not in form:
+            continue
+        raw_value = str(form.get(field_name) or "").lower()
+        if raw_value not in stored_values:
+            raise HTTPException(status_code=400, detail="Invalid feature control value")
+        feature_payload[control.key] = stored_values[raw_value]
+
+    provider_payload: dict[str, bool] = {}
+    for provider in module_manager_service.list_payment_providers(db):
+        provider_id = provider["id"]
+        field_name = f"provider__{provider_id}"
+        if field_name in form:
+            provider_payload[provider_id] = (
+                str(form.get(field_name) or "").lower() == "true"
+            )
+
+    from app.services.control_relationships import (
+        ControlRelationshipError,
+        validate_feature_control_changes,
+    )
+
+    try:
+        validate_feature_control_changes(db, feature_payload)
+    except ControlRelationshipError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     module_manager_service.update_module_flags(db, payload=module_payload)
-    module_manager_service.update_feature_flags(db, payload=feature_payload)
+    feature_changes = control_registry_service.update_canonical_feature_controls(
+        db, payload=feature_payload
+    )
+    module_manager_service.update_provider_flags(db, payload=provider_payload)
+    if feature_changes:
+        log_audit_event(
+            db=db,
+            request=request,
+            action="feature_controls.update",
+            entity_type="feature_control",
+            entity_id="canonical-features",
+            actor_id=_system_actor_id(request),
+            metadata={"changes": feature_changes},
+        )
     return RedirectResponse("/admin/system/modules?saved=1", status_code=303)
 
 
@@ -505,6 +559,42 @@ def system_import_wizard_submit(
         )
         total_rows = len(parsed_preview.rows)
         threshold = web_system_import_wizard_service.background_threshold_rows(db)
+        from app.services.financial_imports import FINANCIAL_IMPORT_MODULES
+
+        if module in FINANCIAL_IMPORT_MODULES:
+            # Financial input always enters the durable run ledger first. Files
+            # are normalized to JSON so the exact validated rows are retained
+            # and the apply action cannot read changed upload bytes.
+            staged_text = json.dumps(parsed_preview.rows, default=str)
+            run = import_runs_service.create_import_run(
+                db,
+                module=module,
+                raw_text=staged_text,
+                data_format="json",
+                source_name=source_name,
+                column_mapping=column_mapping,
+                csv_delimiter=csv_delimiter,
+                dry_run=True,
+                created_by=(current_user.get("email") or "").strip() or None,
+            )
+            if total_rows >= threshold:
+                from app.services.queue_adapter import enqueue_task
+
+                enqueue_task(
+                    process_import_run_task,
+                    args=[str(run.id)],
+                    correlation_id=f"financial_import:{run.id}",
+                    source="admin_system_import",
+                    request_id=getattr(request.state, "request_id", None),
+                    actor_id=str(current_user.get("subscriber_id") or "").strip()
+                    or None,
+                )
+            else:
+                import_runs_service.process_import_run(db, run.id)
+            return RedirectResponse(
+                f"/admin/system/import-runs/{run.id}", status_code=303
+            )
+
         if total_rows >= threshold:
             job_id = str(uuid4())
             web_system_import_wizard_service.upsert_job(
@@ -672,6 +762,7 @@ def system_import_run_detail(
     run = import_runs_service.get_import_run(db, run_id)
     if run is None:
         return RedirectResponse("/admin/system/import-runs", status_code=303)
+    batch_reversal_capability = PaymentImportBatchReversals.capability(db, run.id)
     return templates.TemplateResponse(
         "admin/system/import_run_detail.html",
         {
@@ -682,6 +773,10 @@ def system_import_run_detail(
             "sidebar_stats": get_sidebar_stats(db),
             "run": run,
             "rows": run.rows,
+            "batch_reversal": run.payment_batch_reversal,
+            "batch_reversal_capability": batch_reversal_capability,
+            "reversal_error": request.query_params.get("reversal_error"),
+            "reversal_notice": request.query_params.get("reversal_notice"),
         },
     )
 
@@ -698,11 +793,85 @@ def system_import_run_apply(
     user = get_current_user(request)
     try:
         applied = import_runs_service.apply_from_dry_run(
-            db, run_id, created_by=getattr(user, "email", None)
+            db, run_id, created_by=(user.get("email") or "").strip() or None
         )
     except ValueError:
         return RedirectResponse(f"/admin/system/import-runs/{run_id}", status_code=303)
     return RedirectResponse(f"/admin/system/import-runs/{applied.id}", status_code=303)
+
+
+@router.post(
+    "/import-runs/{run_id}/payment-reversal-preview",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def system_import_payment_reversal_preview(
+    request: Request, run_id: str, db: Session = Depends(get_db)
+):
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    form = parse_form_data_sync(request)
+    reason = str(form.get("reason") or "").strip()
+    try:
+        preview = PaymentImportBatchReversals.preview(db, run_id, reason=reason)
+    except (HTTPException, ValueError) as exc:
+        detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
+        return RedirectResponse(
+            f"/admin/system/import-runs/{run_id}?reversal_error={quote_plus(str(detail))}",
+            status_code=303,
+        )
+    return templates.TemplateResponse(
+        "admin/system/import_payment_batch_reversal_confirm.html",
+        {
+            "request": request,
+            "active_page": "system-import",
+            "active_menu": "system",
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+            "preview": preview,
+            "preview_snapshot": preview.as_snapshot(),
+            "preview_fingerprint": preview.fingerprint,
+            "idempotency_key": f"payment-import-batch-reversal:{preview.import_run_id}",
+        },
+    )
+
+
+@router.post(
+    "/import-runs/{run_id}/payment-reversal-confirm",
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def system_import_payment_reversal_confirm(
+    request: Request, run_id: str, db: Session = Depends(get_db)
+):
+    from app.web.admin import get_current_user
+
+    form = parse_form_data_sync(request)
+    user = get_current_user(request)
+    try:
+        result = PaymentImportBatchReversals.confirm(
+            db,
+            run_id,
+            reason=str(form.get("reason") or ""),
+            preview_fingerprint=str(form.get("preview_fingerprint") or ""),
+            idempotency_key=str(form.get("idempotency_key") or ""),
+            actor_id=(user.get("email") or "").strip() or None,
+        )
+    except (HTTPException, ValueError) as exc:
+        db.rollback()
+        detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
+        return RedirectResponse(
+            f"/admin/system/import-runs/{run_id}?reversal_error={quote_plus(str(detail))}",
+            status_code=303,
+        )
+    replay = " Existing evidence was returned." if result.idempotent_replay else ""
+    notice = quote_plus(
+        f"Reversed {result.batch_reversal.reversed_payment_count} imported payments "
+        f"through exact append-only evidence.{replay}"
+    )
+    return RedirectResponse(
+        f"/admin/system/import-runs/{run_id}?reversal_notice={notice}",
+        status_code=303,
+    )
 
 
 @router.get(
@@ -1325,11 +1494,16 @@ def user_profile(request: Request, db: Session = Depends(get_db)):
     success = None
     if request.query_params.get("mfa") == "enabled":
         success = "Two-factor authentication enabled successfully."
+    elif request.query_params.get("sessions") == "signed-out":
+        success = "Other active sessions signed out."
+    elif request.query_params.get("device_login") == "updated":
+        success = "Router device login updated."
     state = web_system_profiles_service.build_profile_page_state(
         db,
         current_user=current_user,
         success=success,
         system_user_id=system_user_id,
+        current_session_id=auth.get("session_id"),
     )
 
     context = {
@@ -1341,6 +1515,45 @@ def user_profile(request: Request, db: Session = Depends(get_db)):
         **state,
     }
     return templates.TemplateResponse("admin/system/profile.html", context)
+
+
+def _user_profile_template_response(
+    request: Request,
+    db: Session,
+    *,
+    error: str | None = None,
+    success: str | None = None,
+    status_code: int = 200,
+):
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    current_user = get_current_user(request)
+    auth = getattr(request.state, "auth", None) or {}
+    system_user_id = (
+        auth.get("principal_id")
+        if auth.get("principal_type") == "system_user"
+        else None
+    )
+    state = web_system_profiles_service.build_profile_page_state(
+        db,
+        current_user=current_user,
+        error=error,
+        success=success,
+        system_user_id=system_user_id,
+        current_session_id=auth.get("session_id"),
+    )
+    return templates.TemplateResponse(
+        "admin/system/profile.html",
+        {
+            "request": request,
+            "active_page": "users",
+            "active_menu": "system",
+            "current_user": current_user,
+            "sidebar_stats": get_sidebar_stats(db),
+            **state,
+        },
+        status_code=status_code,
+    )
 
 
 @router.post("/users/profile", response_class=HTMLResponse)
@@ -1390,6 +1603,7 @@ def user_profile_update(
         success=success,
         person_id=updated_person_id,
         system_user_id=system_user_id if updated_person_id is None else None,
+        current_session_id=auth.get("session_id"),
     )
 
     context = {
@@ -1401,6 +1615,122 @@ def user_profile_update(
         **state,
     }
     return templates.TemplateResponse("admin/system/profile.html", context)
+
+
+@router.post("/users/profile/device-login", response_class=HTMLResponse)
+def user_profile_device_login(
+    request: Request,
+    form_data=Depends(parse_form_data),
+    db: Session = Depends(get_db),
+):
+    """Allow router admins to set or rotate their own router RADIUS secret."""
+    from app.tasks.radius_population import sync_device_login
+
+    auth = _require_system_user_principal(request)
+    principal_id = str(auth.get("principal_id") or "")
+    if not principal_id:
+        raise HTTPException(status_code=401, detail="Unable to resolve current user")
+
+    person = web_system_profiles_service.get_subscriber(db, principal_id)
+    if not person:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    device_login_state = web_system_profiles_service.get_device_login_state(db, person)
+    if not device_login_state["device_login_eligible"]:
+        raise HTTPException(
+            status_code=403,
+            detail="Router device login is only available to router admins",
+        )
+
+    action = str(form_data.get("device_login_action") or "set")
+    current_password = str(form_data.get("current_password") or "")
+    if not web_system_profiles_service.verify_current_password(
+        db, system_user_id=person.id, password=current_password
+    ):
+        return _user_profile_template_response(
+            request,
+            db,
+            error="Current password is incorrect.",
+            status_code=400,
+        )
+
+    try:
+        if action == "revoke":
+            web_system_user_mutations_service.revoke_device_login(
+                db, user_id=str(person.id)
+            )
+            note = "Router device login revoked."
+        elif action == "set":
+            secret = str(form_data.get("device_login_secret") or "")
+            confirm = str(form_data.get("device_login_secret_confirm") or "")
+            if len(secret) < 12:
+                raise ValueError("Router password must be at least 12 characters.")
+            if not any(ch.isalpha() for ch in secret):
+                raise ValueError("Router password must include at least one letter.")
+            if not any(ch.isdigit() for ch in secret):
+                raise ValueError("Router password must include at least one number.")
+            if not any(not ch.isalnum() for ch in secret):
+                raise ValueError("Router password must include at least one symbol.")
+            if secret != confirm:
+                raise ValueError("Router password confirmation does not match.")
+            web_system_user_mutations_service.set_device_login(
+                db, user_id=str(person.id), enabled=True, secret=secret
+            )
+            note = "Router device login updated."
+        else:
+            raise ValueError("Unsupported device-login action.")
+
+        _log_system_user_event(
+            db,
+            request,
+            action=f"device_login_self_{action}",
+            user_id=str(person.id),
+            metadata={"action": action, "source": "profile"},
+        )
+        sync_device_login.delay()
+    except ValueError as exc:
+        db.rollback()
+        return _user_profile_template_response(
+            request,
+            db,
+            error=str(exc),
+            status_code=400,
+        )
+    except Exception:
+        db.rollback()
+        return _user_profile_template_response(
+            request,
+            db,
+            error="Router device-login update failed.",
+            status_code=500,
+        )
+
+    return RedirectResponse(
+        url="/admin/system/users/profile?device_login=updated",
+        status_code=303,
+        headers={"HX-Trigger": json.dumps({"showToast": {"message": note}})},
+    )
+
+
+@router.post("/users/profile/sessions/sign-out-others")
+def user_profile_sign_out_other_sessions(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    auth = _require_system_user_principal(request)
+    principal_id = str(auth.get("principal_id") or "")
+    if not principal_id:
+        return RedirectResponse(url="/admin/system/users/profile", status_code=303)
+
+    session_manager_service.revoke_all_other_sessions(
+        db,
+        coerce_uuid(principal_id),
+        str(auth.get("session_id") or ""),
+        principal_type="system_user",
+    )
+    return RedirectResponse(
+        url="/admin/system/users/profile?sessions=signed-out", status_code=303
+    )
 
 
 @router.get("/users/profile/mfa/setup", response_class=HTMLResponse)
@@ -1454,7 +1784,7 @@ def user_profile_mfa_confirm(
         return RedirectResponse(url="/admin/system/users/profile", status_code=303)
 
     try:
-        auth_flow_service.auth_flow.admin_mfa_confirm(
+        method = auth_flow_service.auth_flow.admin_mfa_confirm(
             db, method_id, code.strip(), principal_id
         )
     except Exception:
@@ -1473,6 +1803,29 @@ def user_profile_mfa_confirm(
                 "error": "Invalid verification code. Please try again.",
             },
             status_code=401,
+        )
+
+    recovery_codes = (
+        auth_flow_service.generate_mfa_recovery_codes(db, method)
+        if getattr(method, "id", None)
+        else []
+    )
+    if recovery_codes:
+        return templates.TemplateResponse(
+            "admin/system/profile_mfa_setup.html",
+            {
+                "request": request,
+                "active_page": "users",
+                "active_menu": "system",
+                "current_user": get_current_user(request),
+                "sidebar_stats": get_sidebar_stats(db),
+                "method_id": method_id,
+                "secret_key": "",
+                "otpauth_uri": "",
+                "qr_code_url": "",
+                "recovery_codes": recovery_codes,
+                "continue_url": "/admin/system/users/profile?mfa=enabled",
+            },
         )
 
     return RedirectResponse(
@@ -1890,19 +2243,30 @@ def user_device_login_set(
     db: Session = Depends(get_db),
 ):
     """Enable/disable device login and set/rotate the router secret."""
+    from app.services.device_login import derive_router_tier
+    from app.services.radius_population import effective_perms, effective_roles
     from app.tasks.radius_population import sync_device_login
 
     action = form_data.get("device_login_action", "set")
     note: str
     try:
         if action == "revoke":
-            web_system_user_mutations_service.revoke_device_login(db, user_id=user_id)
+            web_system_user_mutations_service.revoke_device_login(
+                db, user_id=user_id, commit=False
+            )
             note = "Device login revoked."
         else:
             enabled = bool(form_data.get("device_login_enabled"))
             secret = form_data.get("device_login_secret") or None
+            if enabled:
+                roles = effective_roles(db, UUID(user_id))
+                perms = effective_perms(db, UUID(user_id))
+                if derive_router_tier(roles, perms) is None:
+                    raise ValueError(
+                        "Router device login is only available to router admins."
+                    )
             web_system_user_mutations_service.set_device_login(
-                db, user_id=user_id, enabled=enabled, secret=secret
+                db, user_id=user_id, enabled=enabled, secret=secret, commit=False
             )
             note = "Device login updated."
         _log_system_user_event(
@@ -1912,7 +2276,9 @@ def user_device_login_set(
             user_id=user_id,
             metadata={"action": action},
         )
-        sync_device_login.delay()
+        # Commit the credential change and its audit row atomically, so a
+        # failure in either rolls BOTH back (no "changed but reported failed").
+        db.commit()
     except ValueError as exc:
         db.rollback()
         note = str(exc)
@@ -1948,6 +2314,17 @@ def user_device_login_set(
             )
         return RedirectResponse(
             url=f"/admin/system/users/{user_id}/edit", status_code=303
+        )
+
+    # Best-effort sync: the credential change + audit are already committed. A
+    # broker/enqueue failure must NOT report failure to the operator — the
+    # periodic device_login_sync sweep reconciles RADIUS regardless.
+    try:
+        sync_device_login.delay()
+    except Exception:
+        logger.warning(
+            "device-login sync enqueue failed; periodic sweep will reconcile",
+            exc_info=True,
         )
 
     trigger = {
@@ -2471,7 +2848,7 @@ def permission_delete(
 
 
 @router.get("/api-keys", response_class=HTMLResponse)
-def api_keys_list(request: Request, db: Session = Depends(get_db)):
+def api_keys_list(request: Request, revoked: str = "", db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
 
     current_user = get_current_user(request)
@@ -2479,7 +2856,8 @@ def api_keys_list(request: Request, db: Session = Depends(get_db)):
     api_keys = web_system_api_keys_service.list_api_keys_for_subscriber(db, person_id)
 
     # ``new_key`` is intentionally never read from the query string — the raw
-    # secret is shown once on the create POST response, not via a URL param.
+    # secret is shown once on the create/rotate POST response, not via a URL
+    # param. A revoke has no secret, so it uses a redirect query flag banner.
     context = {
         "request": request,
         "active_page": "api-keys",
@@ -2488,6 +2866,7 @@ def api_keys_list(request: Request, db: Session = Depends(get_db)):
         "sidebar_stats": get_sidebar_stats(db),
         "api_keys": api_keys,
         "new_key": None,
+        "revoked": bool(revoked),
         "now": datetime.now(UTC),
     }
     return templates.TemplateResponse("admin/system/api_keys.html", context)
@@ -2519,19 +2898,27 @@ def api_key_create(
     label: str = Form(...),
     expires_in: str = Form(None),
     scopes: str = Form(None),
+    system_owned: str = Form(None),
     db: Session = Depends(get_db),
 ):
     from app.web.admin import get_current_user, get_sidebar_stats
 
     current_user = get_current_user(request)
+    if not current_user:
+        return RedirectResponse(url="/admin/system/api-keys", status_code=303)
 
-    if not current_user or not current_user.get("person_id"):
+    person_id = current_user.get("person_id")
+    # A "system-owned" key has no subscriber owner (service/integration key).
+    # Otherwise the key is owned by the calling admin's subscriber principal, so
+    # that still requires a person_id.
+    owner_id = None if system_owned else person_id
+    if not system_owned and not person_id:
         return RedirectResponse(url="/admin/system/api-keys", status_code=303)
 
     try:
         raw_key = web_system_api_key_forms_service.create_api_key(
             db,
-            subscriber_id=current_user["person_id"],
+            subscriber_id=owner_id,
             label=label,
             expires_in=expires_in,
             scopes=web_system_api_key_forms_service.parse_scopes(scopes),
@@ -2541,7 +2928,7 @@ def api_key_create(
         # redirect URL (which leaks into access logs / history / Referer and
         # re-shows on reload).
         api_keys = web_system_api_keys_service.list_api_keys_for_subscriber(
-            db, current_user["person_id"]
+            db, person_id
         )
         return templates.TemplateResponse(
             "admin/system/api_keys.html",
@@ -2584,7 +2971,44 @@ def api_key_revoke(request: Request, key_id: str, db: Session = Depends(get_db))
     web_system_api_key_mutations_service.revoke_api_key(
         db, key_id=key_id, subscriber_id=person_id
     )
-    return RedirectResponse(url="/admin/system/api-keys", status_code=303)
+    # No secret to surface on a revoke, so use PRG + a query flag the list page
+    # renders as a "revoked" banner (create/rotate keep the secret out of URLs).
+    return RedirectResponse(url="/admin/system/api-keys?revoked=1", status_code=303)
+
+
+@router.post(
+    "/api-keys/{key_id}/rotate",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def api_key_rotate(request: Request, key_id: str, db: Session = Depends(get_db)):
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    current_user = get_current_user(request)
+    person_id = current_user.get("person_id") if current_user else None
+    raw_key = web_system_api_key_mutations_service.rotate_api_key(
+        db, key_id=key_id, subscriber_id=person_id
+    )
+    api_keys = web_system_api_keys_service.list_api_keys_for_subscriber(db, person_id)
+    if not raw_key:
+        # Missing / out-of-scope / already-revoked key: no secret to show.
+        return RedirectResponse(url="/admin/system/api-keys", status_code=303)
+    # Show the rotated secret exactly once in the POST response body — same
+    # one-time-reveal pattern as create, never via a redirect URL.
+    return templates.TemplateResponse(
+        "admin/system/api_keys.html",
+        {
+            "request": request,
+            "active_page": "api-keys",
+            "active_menu": "system",
+            "current_user": current_user,
+            "sidebar_stats": get_sidebar_stats(db),
+            "api_keys": api_keys,
+            "new_key": raw_key,
+            "rotated": True,
+            "now": datetime.now(UTC),
+        },
+    )
 
 
 @router.get(
@@ -2639,6 +3063,7 @@ def webhook_create(
     url: str = Form(...),
     secret: str = Form(None),
     is_active: str = Form(None),
+    events: list[str] = Form([]),
     db: Session = Depends(get_db),
 ):
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -2650,6 +3075,7 @@ def webhook_create(
             url=url,
             secret=secret,
             is_active=is_active == "true",
+            events=events,
         )
         return RedirectResponse(url="/admin/system/webhooks", status_code=303)
     except Exception as e:
@@ -2661,7 +3087,10 @@ def webhook_create(
             "current_user": get_current_user(request),
             "sidebar_stats": get_sidebar_stats(db),
             "endpoint": None,
-            "subscribed_events": [],
+            "subscribed_events": events,
+            "event_types": web_system_webhook_forms_service.get_webhook_new_form_context()[
+                "event_types"
+            ],
             "action_url": "/admin/system/webhooks",
             "error": str(e),
         }
@@ -2688,6 +3117,7 @@ def webhook_edit(request: Request, endpoint_id: str, db: Session = Depends(get_d
         "sidebar_stats": get_sidebar_stats(db),
         "endpoint": form_data["endpoint"],
         "subscribed_events": form_data["subscribed_events"],
+        "event_types": form_data["event_types"],
         "action_url": f"/admin/system/webhooks/{endpoint_id}",
         "error": None,
     }
@@ -2706,6 +3136,7 @@ def webhook_update(
     url: str = Form(...),
     secret: str = Form(None),
     is_active: str = Form(None),
+    events: list[str] = Form([]),
     db: Session = Depends(get_db),
 ):
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -2718,6 +3149,7 @@ def webhook_update(
             url=url,
             secret=secret,
             is_active=is_active == "true",
+            events=events,
         )
         if endpoint is None:
             return RedirectResponse(url="/admin/system/webhooks", status_code=303)
@@ -2734,7 +3166,16 @@ def webhook_update(
             "current_user": get_current_user(request),
             "sidebar_stats": get_sidebar_stats(db),
             "endpoint": form_data["endpoint"] if form_data else None,
-            "subscribed_events": form_data["subscribed_events"] if form_data else [],
+            "subscribed_events": events
+            if events
+            else form_data["subscribed_events"]
+            if form_data
+            else [],
+            "event_types": form_data["event_types"]
+            if form_data
+            else web_system_webhook_forms_service.get_webhook_new_form_context()[
+                "event_types"
+            ],
             "action_url": f"/admin/system/webhooks/{endpoint_id}",
             "error": str(e),
         }
@@ -2751,19 +3192,29 @@ def audit_log(
     actor_id: str | None = None,
     action: str | None = None,
     entity_type: str | None = None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=10, le=100),
     db: Session = Depends(get_db),
 ):
     """View audit log."""
-    page_data = web_system_audit_service.get_audit_page_data(
-        db,
-        actor_id=actor_id,
-        action=action,
-        entity_type=entity_type,
-        page=page,
-        per_page=per_page,
-    )
+    try:
+        list_query = web_system_audit_service.build_audit_list_query(
+            actor_id=actor_id,
+            action=action,
+            entity_type=entity_type,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            page=page,
+            per_page=per_page,
+        )
+    except ValueError:
+        # Out-of-contract sort/page params (e.g. hand-edited URL) fall back to
+        # the contract defaults rather than erroring the page.
+        list_query = web_system_audit_service.build_audit_list_query(page=page)
+
+    page_data = web_system_audit_service.get_audit_page_data(db, list_query)
 
     if request.headers.get("HX-Request"):
         return templates.TemplateResponse(
@@ -3056,6 +3507,11 @@ def settings_branding_update(
     favicon_file: UploadFile | None = File(None),
     brand_primary_color: str | None = Form(None),
     brand_secondary_color: str | None = Form(None),
+    brand_semantic_positive_color: str | None = Form(None),
+    brand_semantic_info_color: str | None = Form(None),
+    brand_semantic_warning_color: str | None = Form(None),
+    brand_semantic_negative_color: str | None = Form(None),
+    brand_semantic_neutral_color: str | None = Form(None),
     login_hero_customer_url: str | None = Form(None),
     login_hero_reseller_url: str | None = Form(None),
     login_hero_admin_url: str | None = Form(None),
@@ -3237,7 +3693,7 @@ def settings_branding_update(
         if color_candidate:
             if not re.fullmatch(r"#?[0-9a-fA-F]{6}", color_candidate):
                 raise ValueError(
-                    "Brand colour must be a 6-digit hex value, e.g. #206a07."
+                    f"Brand colour must be a 6-digit hex value, e.g. {DEFAULT_HEX}."
                 )
             normalised = color_candidate.lstrip("#").lower()
             _persist_setting("brand_primary_color", f"#{normalised}")
@@ -3246,10 +3702,53 @@ def settings_branding_update(
         if secondary_candidate:
             if not re.fullmatch(r"#?[0-9a-fA-F]{6}", secondary_candidate):
                 raise ValueError(
-                    "Brand colour must be a 6-digit hex value, e.g. #06b6d4."
+                    "Brand colour must be a 6-digit hex value, "
+                    f"e.g. {DEFAULT_SECONDARY_HEX}."
                 )
             normalised_secondary = secondary_candidate.lstrip("#").lower()
             _persist_setting("brand_secondary_color", f"#{normalised_secondary}")
+
+        semantic_candidates = {
+            "positive": brand_semantic_positive_color,
+            "info": brand_semantic_info_color,
+            "warning": brand_semantic_warning_color,
+            "negative": brand_semantic_negative_color,
+            "neutral": brand_semantic_neutral_color,
+        }
+        for tone, raw_color in semantic_candidates.items():
+            candidate = (raw_color or "").strip()
+            if not candidate:
+                continue
+            if not re.fullmatch(r"#?[0-9a-fA-F]{6}", candidate):
+                raise ValueError(
+                    f"{tone.title()} semantic colour must be a 6-digit hex value."
+                )
+            normalised_semantic = f"#{candidate.lstrip('#').lower()}"
+            if not is_accessible_semantic_color(normalised_semantic):
+                raise ValueError(
+                    f"{tone.title()} semantic colour must meet WCAG AA contrast "
+                    "in light and dark themes."
+                )
+            _persist_setting(
+                f"brand_semantic_{tone}_color",
+                normalised_semantic,
+            )
+
+        from app.services.brand_profiles import (
+            sync_platform_brand_from_legacy_settings_committed,
+        )
+
+        sync_platform_brand_from_legacy_settings_committed(
+            db,
+            overwrite_fields={
+                "logo_url",
+                "dark_logo_url",
+                "favicon_url",
+                "primary_color",
+                "secondary_color",
+                "semantic_colors",
+            },
+        )
 
         return RedirectResponse(url="/admin/system/branding", status_code=303)
     except Exception as exc:
@@ -4000,31 +4499,65 @@ def settings_hub(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get(
+    "/control-plane",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
+def control_plane(request: Request, db: Session = Depends(get_db)):
+    return templates.TemplateResponse(
+        "admin/system/control_plane.html",
+        _config_context(
+            request,
+            db,
+            {
+                "active_page": "control-plane",
+                **web_control_plane_service.build_control_plane_context(db),
+            },
+        ),
+    )
+
+
+@router.get(
     "/ticket-settings",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("system:settings:read"))],
 )
 def ticket_settings_page(request: Request, db: Session = Depends(get_db)):
+    staff_options = support_service.list_assignment_people(db)
+    ticket_settings = {
+        "active_page": "ticket-settings",
+        "status_options": support_ticket_settings_service.list_status_options(db),
+        "priority_options": support_ticket_settings_service.list_priority_options(db),
+        "ticket_type_options": support_ticket_settings_service.list_ticket_type_options(
+            db
+        ),
+        "region_options": support_ticket_settings_service.list_region_options(db),
+        "service_team_options": support_ticket_settings_service.list_service_teams(db),
+        "auto_assign_enabled": support_ticket_settings_service.auto_assign_enabled(db),
+        "auto_assign_max_open_tickets": support_ticket_settings_service.auto_assign_max_open_tickets(
+            db
+        ),
+        "routing_rules": support_ticket_settings_service.region_assignment_rules(db),
+        "service_team_members": support_ticket_settings_service.service_team_members(
+            db
+        ),
+        "sla_policy": support_ticket_settings_service.sla_policy(db),
+        "staff_options": staff_options,
+        "assignment_rules": support_ticket_settings_service.list_assignment_rules(db),
+        "assignment_strategies": ["round_robin", "least_loaded"],
+        "assignment_targets": [
+            "technician",
+            "technical_supervisor",
+            "site_coordinator",
+        ],
+        "saved": request.query_params.get("saved") == "1",
+        "rule_saved": request.query_params.get("rule_saved") == "1",
+        "rule_deleted": request.query_params.get("rule_deleted") == "1",
+        "errors": [],
+    }
     return templates.TemplateResponse(
         "admin/system/ticket_settings.html",
-        _config_context(
-            request,
-            db,
-            {
-                "active_page": "ticket-settings",
-                "status_options": support_ticket_settings_service.list_status_options(
-                    db
-                ),
-                "priority_options": support_ticket_settings_service.list_priority_options(
-                    db
-                ),
-                "ticket_type_options": support_ticket_settings_service.list_ticket_type_options(
-                    db
-                ),
-                "saved": request.query_params.get("saved") == "1",
-                "errors": [],
-            },
-        ),
+        _config_context(request, db, ticket_settings),
     )
 
 
@@ -4041,6 +4574,25 @@ def ticket_settings_update(
     statuses = form.getlist("status_values")
     priorities = form.getlist("priority_values")
     ticket_types = form.getlist("ticket_type_values")
+    regions = form.getlist("region_values")
+    service_team_ids = form.getlist("service_team_ids")
+    service_team_labels = form.getlist("service_team_labels")
+    routing_regions = form.getlist("routing_regions")
+    routing_ticket_manager_person_ids = form.getlist(
+        "routing_ticket_manager_person_ids"
+    )
+    routing_site_coordinator_person_ids = form.getlist(
+        "routing_site_coordinator_person_ids"
+    )
+    routing_technician_person_ids = form.getlist("routing_technician_person_ids")
+    routing_service_team_ids = form.getlist("routing_service_team_ids")
+    routing_assignee_person_ids = form.getlist("routing_assignee_person_ids")
+    team_member_team_ids = form.getlist("team_member_team_ids")
+    team_member_person_ids = form.getlist("team_member_person_ids")
+    sla_priorities = form.getlist("sla_priorities")
+    sla_response_hours = form.getlist("sla_response_hours")
+    sla_resolution_hours = form.getlist("sla_resolution_hours")
+    sla_aging_hours = form.getlist("sla_aging_hours")
     errors: list[str] = []
     try:
         support_ticket_settings_service.update_options(
@@ -4048,6 +4600,23 @@ def ticket_settings_update(
             statuses=statuses,
             priorities=priorities,
             ticket_types=ticket_types,
+            regions=regions,
+            service_team_ids=service_team_ids,
+            service_team_labels=service_team_labels,
+            auto_assign=form.get("auto_assign_enabled") == "1",
+            auto_assign_max_open_tickets=form.get("auto_assign_max_open_tickets"),
+            routing_regions=routing_regions,
+            routing_ticket_manager_person_ids=routing_ticket_manager_person_ids,
+            routing_site_coordinator_person_ids=routing_site_coordinator_person_ids,
+            routing_technician_person_ids=routing_technician_person_ids,
+            routing_service_team_ids=routing_service_team_ids,
+            routing_assignee_person_ids=routing_assignee_person_ids,
+            team_member_team_ids=team_member_team_ids,
+            team_member_person_ids=team_member_person_ids,
+            sla_priorities=sla_priorities,
+            sla_response_hours=sla_response_hours,
+            sla_resolution_hours=sla_resolution_hours,
+            sla_aging_hours=sla_aging_hours,
         )
         return RedirectResponse(
             url="/admin/system/ticket-settings?saved=1", status_code=303
@@ -4071,11 +4640,102 @@ def ticket_settings_update(
                 "ticket_type_options": support_ticket_settings_service.list_ticket_type_options(
                     db
                 ),
+                "region_options": support_ticket_settings_service.list_region_options(
+                    db
+                ),
+                "service_team_options": support_ticket_settings_service.list_service_teams(
+                    db
+                ),
+                "auto_assign_enabled": support_ticket_settings_service.auto_assign_enabled(
+                    db
+                ),
+                "auto_assign_max_open_tickets": support_ticket_settings_service.auto_assign_max_open_tickets(
+                    db
+                ),
+                "routing_rules": support_ticket_settings_service.region_assignment_rules(
+                    db
+                ),
+                "service_team_members": support_ticket_settings_service.service_team_members(
+                    db
+                ),
+                "sla_policy": support_ticket_settings_service.sla_policy(db),
+                "staff_options": support_service.list_assignment_people(db),
+                "assignment_rules": support_ticket_settings_service.list_assignment_rules(
+                    db
+                ),
+                "assignment_strategies": ["round_robin", "least_loaded"],
+                "assignment_targets": [
+                    "technician",
+                    "technical_supervisor",
+                    "site_coordinator",
+                ],
                 "saved": False,
+                "rule_saved": False,
+                "rule_deleted": False,
                 "errors": errors,
             },
         ),
         status_code=400,
+    )
+
+
+def _split_form_values(values: list[str]) -> list[str]:
+    parsed: list[str] = []
+    for value in values:
+        for item in str(value or "").split(","):
+            text = item.strip()
+            if text and text not in parsed:
+                parsed.append(text)
+    return parsed
+
+
+@router.post(
+    "/ticket-settings/assignment-rules",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def ticket_assignment_rule_create(
+    name: str = Form(...),
+    priority: str = Form("0"),
+    strategy: str = Form("round_robin"),
+    team_id: str | None = Form(default=None),
+    ticket_types: list[str] = Form(default=[]),
+    regions: list[str] = Form(default=[]),
+    assignee_person_id: str | None = Form(default=None),
+    assignment_target: str = Form("technician"),
+    is_active: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+):
+    try:
+        support_ticket_settings_service.create_assignment_rule(
+            db,
+            name=name,
+            priority=priority,
+            strategy=strategy,
+            team_id=team_id,
+            ticket_types=_split_form_values(ticket_types),
+            regions=_split_form_values(regions),
+            assignee_person_id=assignee_person_id,
+            assignment_target=assignment_target,
+            is_active=is_active == "1",
+        )
+    except Exception:
+        db.rollback()
+        raise
+    return RedirectResponse(
+        url="/admin/system/ticket-settings?rule_saved=1", status_code=303
+    )
+
+
+@router.post(
+    "/ticket-settings/assignment-rules/{rule_id}/delete",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def ticket_assignment_rule_delete(rule_id: str, db: Session = Depends(get_db)):
+    support_ticket_settings_service.delete_assignment_rule(db, rule_id)
+    return RedirectResponse(
+        url="/admin/system/ticket-settings?rule_deleted=1", status_code=303
     )
 
 
@@ -4092,6 +4752,33 @@ def branding_page(request: Request, db: Session = Depends(get_db)):
         "admin/system/branding.html",
         _config_context(request, db, {"active_page": "system-branding", **data}),
     )
+
+
+@router.get(
+    "/control-relationships",
+    response_class=JSONResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
+def control_relationship_diagnostics(db: Session = Depends(get_db)):
+    from app.services.control_relationships import (
+        audit_event_relationships,
+        audit_setting_relationships,
+        event_policies,
+        event_topology,
+        relationship_manifest,
+    )
+
+    return {
+        "relationships": relationship_manifest(),
+        "event_topology": event_topology(),
+        "event_policies": event_policies(),
+        "settings_findings": [
+            finding.to_dict() for finding in audit_setting_relationships(db)
+        ],
+        "event_findings": [
+            finding.to_dict() for finding in audit_event_relationships()
+        ],
+    }
 
 
 @router.get(
@@ -4190,31 +4877,20 @@ def config_email_save(request: Request, db: Session = Depends(get_db)):
     return RedirectResponse(url="/admin/system/email", status_code=303)
 
 
-# --- 8.7 Subscriber Settings ---
-@router.get("/config/subscribers", response_class=HTMLResponse)
-def config_subscribers_page(request: Request, db: Session = Depends(get_db)):
-    data = web_system_config_service.get_subscriber_config_context(db)
-    return templates.TemplateResponse(
-        "admin/system/config/subscribers.html",
-        _config_context(request, db, {"active_page": "config-subscribers", **data}),
-    )
-
-
-@router.post(
-    "/config/subscribers",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:settings:write"))],
-)
-def config_subscribers_save(request: Request, db: Session = Depends(get_db)):
-    form = parse_form_data_sync(request)
-    web_system_config_service.save_subscriber_config(db, form)
-    return RedirectResponse(url="/admin/system/config/subscribers", status_code=303)
+# --- 8.7 Subscriber Settings: REMOVED (inert/dead config; subscriber defaults
+# are governed by feature-specific workflows) ---
 
 
 # --- 8.8 Customer Portal ---
 @router.get("/config/portal", response_class=HTMLResponse)
 def config_portal_page(request: Request, db: Session = Depends(get_db)):
     data = web_system_config_service.get_portal_config_context(db)
+    data.update(
+        {
+            "saved": request.query_params.get("saved") == "1",
+            "error": request.query_params.get("error"),
+        }
+    )
     return templates.TemplateResponse(
         "admin/system/config/portal.html",
         _config_context(request, db, {"active_page": "config-portal", **data}),
@@ -4228,29 +4904,19 @@ def config_portal_page(request: Request, db: Session = Depends(get_db)):
 )
 def config_portal_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
-    web_system_config_service.save_portal_config(db, form)
-    return RedirectResponse(url="/admin/system/config/portal", status_code=303)
+    try:
+        web_system_config_service.save_portal_config(db, form)
+    except ValueError as exc:
+        db.rollback()
+        return RedirectResponse(
+            url=f"/admin/system/config/portal?error={quote_plus(str(exc))}",
+            status_code=303,
+        )
+    return RedirectResponse(url="/admin/system/config/portal?saved=1", status_code=303)
 
 
-# --- 8.10 Data Retention ---
-@router.get("/config/data-retention", response_class=HTMLResponse)
-def config_data_retention_page(request: Request, db: Session = Depends(get_db)):
-    data = web_system_config_service.get_retention_context(db)
-    return templates.TemplateResponse(
-        "admin/system/config/data_retention.html",
-        _config_context(request, db, {"active_page": "config-data-retention", **data}),
-    )
-
-
-@router.post(
-    "/config/data-retention",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:settings:write"))],
-)
-def config_data_retention_save(request: Request, db: Session = Depends(get_db)):
-    form = parse_form_data_sync(request)
-    web_system_config_service.save_retention(db, form)
-    return RedirectResponse(url="/admin/system/config/data-retention", status_code=303)
+# --- 8.10 Data Retention: REMOVED (inert/dead config; enforced retention lives on
+# feature-specific settings such as monitoring, bandwidth, restore, and backups) ---
 
 
 # --- 8.11 Finance Automation: REMOVED (inert/dead config; billing automation is
@@ -4551,6 +5217,8 @@ def config_radius_page(request: Request, db: Session = Depends(get_db)):
     data = web_system_config_service.get_radius_config_context(db)
     push_status = str(request.query_params.get("push_status") or "").strip()
     push_message = str(request.query_params.get("push_message") or "").strip()
+    saved = request.query_params.get("saved") == "1"
+    error = str(request.query_params.get("error") or "").strip()
     return templates.TemplateResponse(
         "admin/system/config/radius.html",
         _config_context(
@@ -4560,6 +5228,8 @@ def config_radius_page(request: Request, db: Session = Depends(get_db)):
                 "active_page": "config-radius",
                 "push_status": push_status,
                 "push_message": push_message,
+                "saved": saved,
+                "error": error,
                 "audit_items": _radius_config_audit_items(db),
                 **data,
             },
@@ -4575,7 +5245,14 @@ def config_radius_page(request: Request, db: Session = Depends(get_db)):
 def config_radius_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     before = dict(web_system_config_service.get_radius_config_context(db)["radius"])
-    web_system_config_service.save_radius_config(db, form)
+    try:
+        web_system_config_service.save_radius_config(db, form)
+    except ValueError as exc:
+        db.rollback()
+        return RedirectResponse(
+            url=f"/admin/system/config/radius?error={quote_plus(str(exc))}",
+            status_code=303,
+        )
     after = dict(web_system_config_service.get_radius_config_context(db)["radius"])
     changes = _diff_audit_snapshots(before, after)
     if changes:
@@ -4595,7 +5272,7 @@ def config_radius_save(request: Request, db: Session = Depends(get_db)):
         logger.warning(
             "Failed to push RADIUS reject rules after config save", exc_info=True
         )
-    return RedirectResponse(url="/admin/system/config/radius", status_code=303)
+    return RedirectResponse(url="/admin/system/config/radius?saved=1", status_code=303)
 
 
 @router.post(
@@ -4631,52 +5308,19 @@ def config_radius_push_reject_rules(request: Request, db: Session = Depends(get_
     )
 
 
-# --- 8.22 CPE Configuration ---
-@router.get("/config/cpe", response_class=HTMLResponse)
-def config_cpe_page(request: Request, db: Session = Depends(get_db)):
-    data = web_system_config_service.get_cpe_config_context(db)
-    return templates.TemplateResponse(
-        "admin/system/config/cpe.html",
-        _config_context(
-            request,
-            db,
-            {
-                "active_page": "config-cpe",
-                "audit_items": _cpe_config_audit_items(db),
-                **data,
-            },
-        ),
-    )
-
-
-@router.post(
-    "/config/cpe",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:settings:write"))],
-)
-def config_cpe_save(request: Request, db: Session = Depends(get_db)):
-    form = parse_form_data_sync(request)
-    before = dict(web_system_config_service.get_cpe_config_context(db)["cpe"])
-    web_system_config_service.save_cpe_config(db, form)
-    after = dict(web_system_config_service.get_cpe_config_context(db)["cpe"])
-    changes = _diff_audit_snapshots(before, after)
-    if changes:
-        log_audit_event(
-            db=db,
-            request=request,
-            action="update",
-            entity_type="cpe_config",
-            entity_id="cpe",
-            actor_id=_system_actor_id(request),
-            metadata={"changes": changes},
-        )
-    return RedirectResponse(url="/admin/system/config/cpe", status_code=303)
+# --- 8.22 CPE Configuration: REMOVED (inert/dead config; no active consumer) ---
 
 
 # --- 8.23 Monitoring ---
 @router.get("/config/monitoring", response_class=HTMLResponse)
 def config_monitoring_page(request: Request, db: Session = Depends(get_db)):
     data = web_system_config_service.get_monitoring_config_context(db)
+    data.update(
+        {
+            "saved": request.query_params.get("saved") == "1",
+            "error": request.query_params.get("error"),
+        }
+    )
     return templates.TemplateResponse(
         "admin/system/config/monitoring.html",
         _config_context(request, db, {"active_page": "config-monitoring", **data}),
@@ -4690,29 +5334,20 @@ def config_monitoring_page(request: Request, db: Session = Depends(get_db)):
 )
 def config_monitoring_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
-    web_system_config_service.save_monitoring_config(db, form)
-    return RedirectResponse(url="/admin/system/config/monitoring", status_code=303)
-
-
-# --- 8.25 FUP ---
-@router.get("/config/fup", response_class=HTMLResponse)
-def config_fup_page(request: Request, db: Session = Depends(get_db)):
-    data = web_system_config_service.get_fup_config_context(db)
-    return templates.TemplateResponse(
-        "admin/system/config/fup.html",
-        _config_context(request, db, {"active_page": "config-fup", **data}),
+    try:
+        web_system_config_service.save_monitoring_config(db, form)
+    except ValueError as exc:
+        db.rollback()
+        return RedirectResponse(
+            url=f"/admin/system/config/monitoring?error={quote_plus(str(exc))}",
+            status_code=303,
+        )
+    return RedirectResponse(
+        url="/admin/system/config/monitoring?saved=1", status_code=303
     )
 
 
-@router.post(
-    "/config/fup",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:settings:write"))],
-)
-def config_fup_save(request: Request, db: Session = Depends(get_db)):
-    form = parse_form_data_sync(request)
-    web_system_config_service.save_fup_config(db, form)
-    return RedirectResponse(url="/admin/system/config/fup", status_code=303)
+# --- 8.25 FUP: REMOVED (inert/dead config; no active enforcement consumer) ---
 
 
 # --- 8.26 NAS Types ---
@@ -4725,25 +5360,7 @@ def config_nas_types_page(request: Request, db: Session = Depends(get_db)):
     )
 
 
-# --- 8.27 IPv6 ---
-@router.get("/config/ipv6", response_class=HTMLResponse)
-def config_ipv6_page(request: Request, db: Session = Depends(get_db)):
-    data = web_system_config_service.get_ipv6_config_context(db)
-    return templates.TemplateResponse(
-        "admin/system/config/ipv6.html",
-        _config_context(request, db, {"active_page": "config-ipv6", **data}),
-    )
-
-
-@router.post(
-    "/config/ipv6",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:settings:write"))],
-)
-def config_ipv6_save(request: Request, db: Session = Depends(get_db)):
-    form = parse_form_data_sync(request)
-    web_system_config_service.save_ipv6_config(db, form)
-    return RedirectResponse(url="/admin/system/config/ipv6", status_code=303)
+# --- 8.27 IPv6: REMOVED (inert/dead config; no provisioning/IPAM consumer) ---
 
 
 # ── Secrets Management (OpenBao) ─────────────────────────────────────

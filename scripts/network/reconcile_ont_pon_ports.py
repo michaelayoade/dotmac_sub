@@ -1,10 +1,7 @@
-"""Reconcile ONT PonPort pointers from imported OLT registrations.
+"""Report ONT/PON discrepancies from imported OLT registrations.
 
-Dry-run is the default:
-    poetry run python -m scripts.reconcile_ont_pon_ports
-
-Apply changes:
-    poetry run python -m scripts.reconcile_ont_pon_ports --apply
+This command is observation-only. Repairs use the independently reviewed
+``scripts.network.review_ont_assignment_identity`` workflow with exact IDs.
 """
 
 from __future__ import annotations
@@ -23,7 +20,6 @@ logger = logging.getLogger(__name__)
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--apply", action="store_true", help="Apply the repair")
     parser.add_argument("--olt-id", help="Limit repair to one OLT ID")
     parser.add_argument(
         "--limit",
@@ -37,14 +33,10 @@ def main() -> None:
         result = reconcile_ont_pon_ports_from_registrations(
             db,
             olt_id=args.olt_id,
-            apply=args.apply,
         )
-        if args.apply:
-            db.commit()
-        else:
-            db.rollback()
+        db.rollback()
 
-    logger.info("Mode: %s", "apply" if result.apply else "dry-run")
+    logger.info("Mode: observation-only")
     logger.info("Candidates: %d", len(result.candidates))
     logger.info("Updated: %d", result.updated)
     logger.info("Created PonPorts: %d", result.created_pon_ports)
@@ -64,10 +56,10 @@ def main() -> None:
             candidate.skipped_reason,
         )
 
-    if not args.apply:
-        logger.info(
-            "Dry-run only. Re-run with --apply to update ONT and active assignment PonPort pointers."
-        )
+    logger.info(
+        "Submit exact discrepancies through the reviewed "
+        "network.ont_assignment_identity workflow."
+    )
 
 
 if __name__ == "__main__":

@@ -9,8 +9,8 @@ import 'api_exception.dart';
 /// `insufficient_balance`, `card_declined`) under `detail.code` where it can;
 /// we fall back on the status code and finally a generic message. Screens use
 /// [message] for the text and [action] to decide whether to offer
-/// "Fund wallet" / "Try another method" / "Retry".
-enum PaymentErrorAction { none, fundWallet, tryAnotherMethod, retry }
+/// "Top up account" / "Try another method" / "Retry".
+enum PaymentErrorAction { none, topUpAccount, tryAnotherMethod, retry }
 
 class PaymentError {
   const PaymentError(this.message, {this.action = PaymentErrorAction.none});
@@ -26,8 +26,8 @@ class PaymentError {
         case 'insufficient_balance':
         case 'insufficient_funds':
           return const PaymentError(
-            'Not enough wallet balance for this payment.',
-            action: PaymentErrorAction.fundWallet,
+            'Not enough account credit for this payment.',
+            action: PaymentErrorAction.topUpAccount,
           );
         case 'invalid_amount':
           return const PaymentError('Enter a valid amount and try again.');
@@ -66,7 +66,7 @@ class PaymentError {
 }
 
 /// Show a payment failure as a SnackBar with the right contextual action:
-///   * insufficient balance → "Fund wallet" (routes to /wallet),
+///   * insufficient balance → "Top up account" (routes to /topup),
 ///   * declined / 402 → "Try another method" (just dismisses; the user can
 ///     pick a different rail),
 ///   * network/timeout → "Retry" (re-runs [onRetry] when provided).
@@ -79,10 +79,10 @@ void showPaymentError(
   final messenger = ScaffoldMessenger.of(context);
   SnackBarAction? action;
   switch (pe.action) {
-    case PaymentErrorAction.fundWallet:
+    case PaymentErrorAction.topUpAccount:
       action = SnackBarAction(
-        label: 'Fund wallet',
-        onPressed: () => context.push('/wallet'),
+        label: 'Top up account',
+        onPressed: () => context.push('/topup'),
       );
     case PaymentErrorAction.retry:
       if (onRetry != null) {

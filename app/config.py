@@ -14,26 +14,66 @@ class Settings:
         "postgresql+psycopg://postgres:postgres@localhost:5434/dotmac_sub",
     )
     # Pool is per-process; the engine is recreated in every uvicorn worker and
-    # every Celery prefork process. With ~8 such processes (4 uvicorn + Celery
-    # workers + beat), 30+30 per process could demand ~480 connections and
-    # exhaust Postgres' max_connections (default 100) before pool_timeout ever
-    # engages. 20+10 keeps the fleet's ceiling well under a 300-conn server and
-    # makes the app queue on pool_timeout (graceful) rather than getting hard
-    # "too many clients" rejections. Override per-process via env if needed.
-    db_pool_size: int = int(os.getenv("DB_POOL_SIZE", "20"))
-    db_max_overflow: int = int(os.getenv("DB_MAX_OVERFLOW", "10"))
+    # every Celery prefork child. Production runs multiple app/worker processes
+    # against a Postgres server that may have only ~100 connection slots, so the
+    # default must stay conservative. The production compose shape is currently
+    # 4 API workers plus 10 Celery prefork children; 5+1 per process keeps the
+    # theoretical ceiling close to a 100-connection Postgres while avoiding
+    # application-side QueuePool starvation. Raise via env only with PgBouncer
+    # or a deliberately larger database connection budget.
+    db_pool_size: int = int(os.getenv("DB_POOL_SIZE", "5"))
+    db_max_overflow: int = int(os.getenv("DB_MAX_OVERFLOW", "1"))
     # Cap the AnyIO threadpool that runs sync request handlers so a uvicorn
-    # worker never schedules more concurrent DB-touching threads than its pool
-    # can serve (default AnyIO limit is 40 > pool of 30). Applied in the API
+    # worker never schedules far more DB-touching threads than its pool can
+    # serve (default AnyIO limit is 40). Applied in the API
     # lifespan only; Celery sets its own concurrency.
-    web_threadpool_limit: int = int(os.getenv("WEB_THREADPOOL_LIMIT", "30"))
-    db_pool_timeout: int = int(os.getenv("DB_POOL_TIMEOUT", "30"))
+    web_threadpool_limit: int = int(os.getenv("WEB_THREADPOOL_LIMIT", "6"))
+    db_pool_timeout: int = int(os.getenv("DB_POOL_TIMEOUT", "20"))
     db_pool_recycle: int = int(os.getenv("DB_POOL_RECYCLE", "1800"))
     db_statement_timeout_ms: int = int(os.getenv("DB_STATEMENT_TIMEOUT_MS", "120000"))
     db_lock_timeout_ms: int = int(os.getenv("DB_LOCK_TIMEOUT_MS", "10000"))
-    db_idle_in_transaction_session_timeout_ms: int = int(
-        os.getenv("DB_IDLE_IN_TRANSACTION_SESSION_TIMEOUT_MS", "120000")
+    # Prompt timeout for OLT SSH session-setup reads (enable/screen-length);
+    # floor 5s — see app/services/network/olt_ssh.py:_setup_prompt_timeout.
+    olt_ssh_prompt_timeout_seconds: float = max(
+        5.0, float(os.getenv("OLT_SSH_PROMPT_TIMEOUT_SECONDS", "15"))
     )
+    # Postgres lock_timeout for the ALEMBIC MIGRATION connection (env.py), so a
+    # schema-locking migration fails fast instead of piling up behind the live
+    # app. Sanitized in app.db.resolve_migration_lock_timeout; "0" disables.
+    alembic_lock_timeout: str = os.getenv("ALEMBIC_LOCK_TIMEOUT", "5s")
+    db_idle_in_transaction_session_timeout_ms: int = int(
+        os.getenv("DB_IDLE_IN_TRANSACTION_SESSION_TIMEOUT_MS", "60000")
+    )
+
+    # Dedicated team-inbox SMTP process. Compose explicitly enables this only
+    # for its profile-gated listener; web and worker processes leave it off.
+    team_inbox_smtp_inbound_enabled: bool = os.getenv(
+        "TEAM_INBOX_SMTP_INBOUND_ENABLED", "false"
+    ).lower() in ("true", "1", "yes", "on")
+    team_inbox_smtp_inbound_host: str = os.getenv(
+        "TEAM_INBOX_SMTP_INBOUND_HOST", "127.0.0.1"
+    )
+    team_inbox_smtp_inbound_port: int = int(
+        os.getenv("TEAM_INBOX_SMTP_INBOUND_PORT", "2525")
+    )
+    team_inbox_smtp_inbound_recipients: str = os.getenv(
+        "TEAM_INBOX_SMTP_INBOUND_RECIPIENTS", ""
+    )
+    team_inbox_smtp_fallback_service_team_id: str = os.getenv(
+        "TEAM_INBOX_SMTP_FALLBACK_SERVICE_TEAM_ID", ""
+    ).strip()
+    team_inbox_smtp_probe_recipient: str = os.getenv(
+        "TEAM_INBOX_SMTP_PROBE_RECIPIENT", ""
+    ).strip()
+    team_inbox_smtp_probe_interval_seconds: int = max(
+        300,
+        int(os.getenv("TEAM_INBOX_SMTP_PROBE_INTERVAL_SECONDS", "900")),
+    )
+    team_inbox_smtp_probe_timeout_seconds: int = min(
+        300,
+        max(10, int(os.getenv("TEAM_INBOX_SMTP_PROBE_TIMEOUT_SECONDS", "120"))),
+    )
+    team_inbox_smtp_log_level: str = os.getenv("TEAM_INBOX_SMTP_LOG_LEVEL", "INFO")
 
     # Avatar settings
     avatar_upload_dir: str = os.getenv("AVATAR_UPLOAD_DIR", "static/avatars")
@@ -72,14 +112,32 @@ class Settings:
 
     # CRM integration (DotMac Omni CRM)
     crm_base_url: str = os.getenv("CRM_BASE_URL", "")
-    crm_username: str = os.getenv("CRM_USERNAME", "")
-    crm_password: str = os.getenv("CRM_PASSWORD", "")
+    # Static service ApiKey for machine-to-machine CRM auth (auth-unification
+    # phase 2b). When set, the CRM client authenticates with X-API-Key and does
+    # NOT perform the staff username/password login below. The staff credentials
+    # remain only as a transitional fallback while this token is unset.
+    crm_service_token: str = os.getenv("CRM_SERVICE_TOKEN", "")
+    # CRM_USERNAME/CRM_PASSWORD retired (auth unification S1): services
+    # authenticate to CRM with CRM_SERVICE_TOKEN only; staff credentials are
+    # for humans. The env vars are intentionally no longer read.
     # Shared secret for inbound CRM webhook deliveries (HMAC-SHA256).
     crm_webhook_secret: str = os.getenv("CRM_WEBHOOK_SECRET", "")
     # Dedicated bearer token for CRM server-to-server pull/write-back API.
     # This is intentionally separate from CRM_WEBHOOK_SECRET, which protects
     # inbound HMAC-signed webhook deliveries.
     selfcare_api_token: str = os.getenv("SELFCARE_API_TOKEN", "")
+    # Migration flag for the crm->sub auth cutover: while true, the legacy
+    # shared bearer (selfcare_api_token) is still accepted alongside scoped
+    # ApiKeys; flip false after CRM sends X-Api-Key to retire the bearer.
+    crm_legacy_bearer_enabled: bool = (
+        os.getenv("CRM_LEGACY_BEARER_ENABLED", "true").lower() != "false"
+    )
+    # During CRM absorption, sub can read/import CRM tickets natively before it
+    # owns writes. Keep user/admin mutations blocked for CRM-origin tickets until
+    # the ticket vertical cutover flips writes to sub.
+    crm_ticket_native_writes_enabled: bool = os.getenv(
+        "CRM_TICKET_NATIVE_WRITES_ENABLED", "false"
+    ).lower() in ("1", "true", "yes", "on")
 
     # Live chat (bridges to the CRM chat_widget channel). Default OFF: the
     # broker endpoints return 503 until a deploy flips this on deliberately.
@@ -92,9 +150,9 @@ class Settings:
     # ChatWidgetConfig id in the CRM that customer + reseller sessions attach to
     # (general support pool; same config for both surfaces).
     crm_chat_config_id: str = os.getenv("CRM_CHAT_CONFIG_ID", "")
-    # Distinct from crm_webhook_secret: protects the inbound chat message_new
-    # webhook that drives mobile push.
-    crm_chat_webhook_secret: str = os.getenv("CRM_CHAT_WEBHOOK_SECRET", "")
+    # The inbound chat push webhook shares crm_webhook_secret with the other CRM
+    # webhooks (the CRM signs it with the same selfcare secret), so no separate
+    # chat secret is needed.
     # Visitor WebSocket URL handed to clients. Derived from crm_base_url
     # (https→wss) + /ws/widget when left blank.
     crm_chat_ws_url: str = os.getenv("CRM_CHAT_WS_URL", "")
@@ -122,6 +180,36 @@ class Settings:
     router_tunnel_cleanup_interval_min: int = int(
         os.getenv("ROUTER_TUNNEL_CLEANUP_MIN", "5")
     )
+    # Config snapshots are captured over SSH `/export`: RouterOS 7.x REST cannot
+    # return config text (inline /export is empty; exported files aren't readable
+    # back over REST). Uses the dedicated dotmac-ops SSH key, not the API/REST
+    # identity. Set ROUTER_CONFIG_EXPORT_VIA_SSH=false to fall back to REST.
+    router_config_export_via_ssh: bool = os.getenv(
+        "ROUTER_CONFIG_EXPORT_VIA_SSH", "true"
+    ).lower() in ("true", "1", "yes")
+    router_config_ssh_username: str = os.getenv(
+        "ROUTER_CONFIG_SSH_USERNAME", "dotmac-ops"
+    )
+    router_config_ssh_port: int = int(os.getenv("ROUTER_CONFIG_SSH_PORT", "120"))
+    router_config_ssh_key_path: str = os.getenv(
+        "ROUTER_CONFIG_SSH_KEY_PATH", "/etc/dotmac/dotmac-ops.key"
+    )
+    # Optional password auth for a least-privilege (ssh,read) snapshot user, as
+    # an alternative/fallback to the key. Simplifies per-router onboarding (one
+    # `/user add password=...` line — no public-key file import). Key is
+    # preferred: the password is only used when no key is configured, or when a
+    # router rejects the key (e.g. a not-yet-keyed new router). May be a plain
+    # value or an OpenBao/secret ref (bao://…) resolved at use.
+    router_config_ssh_password: str = os.getenv("ROUTER_CONFIG_SSH_PASSWORD", "")
+    # Host-key pinning (TOFU): known_hosts persists first-seen router keys so a
+    # CHANGED key is rejected (MITM guard). Strict mode also rejects unknown
+    # hosts (requires a pre-populated known_hosts file).
+    router_config_ssh_known_hosts_path: str = os.getenv(
+        "ROUTER_CONFIG_SSH_KNOWN_HOSTS_PATH", "/etc/dotmac/router_known_hosts"
+    )
+    router_config_ssh_strict_host_key: bool = os.getenv(
+        "ROUTER_CONFIG_SSH_STRICT_HOST_KEY", "false"
+    ).lower() in ("true", "1", "yes")
 
     # TR-069 settings
     tr069_periodic_inform_interval: int = int(
@@ -152,7 +240,7 @@ class Settings:
     # availability transitions as uptime Alert intervals (down->open,
     # recovered->resolve). This is what populates the SLA/uptime report —
     # without it, no uptime alerts exist in prod and every uptime % reads 100%
-    # (see INFRASTRUCTURE_SLA_PERFORMANCE.md Phase 0 / R1). Default OFF: the
+    # (see INFRASTRUCTURE_SLA_PERFORMANCE.md availability-log contract). Default OFF: the
     # warmer is a hot deployed task, so the bridge is inert until a deploy flips
     # this on deliberately. Additive-only — never changes live_status behaviour.
     sla_availability_log_enabled: bool = os.getenv(
@@ -166,6 +254,26 @@ class Settings:
     # later refinement.
     infra_sla_target_percent: float = float(
         os.getenv("INFRA_SLA_TARGET_PERCENT", "99.5")
+    )
+
+    # Outage-classifier customer notifications (design docs/designs/OUTAGE_CLASSIFIER.md
+    # §P4). Default OFF: the notifier only ever *plans* messages (recipients,
+    # bodies) for review — it never dispatches, and the live send-path is gated
+    # on comms policy, not on this flag. Flip on only once the send-path exists
+    # and the operator has approved customer outage messaging.
+    outage_notify_enabled: bool = os.getenv(
+        "OUTAGE_NOTIFY_ENABLED", "false"
+    ).lower() in ("true", "1", "yes")
+    # Safety knobs for the (still operator-triggered) outage dispatch. Channel
+    # selection is NOT here — it lives in the notification system's per-type
+    # registry. These bound blast radius, dedup, and the confidence gate.
+    outage_notify_max_per_run: int = int(os.getenv("OUTAGE_NOTIFY_MAX_PER_RUN", "500"))
+    outage_notify_batch_size: int = int(os.getenv("OUTAGE_NOTIFY_BATCH_SIZE", "50"))
+    outage_notify_debounce_hours: int = int(
+        os.getenv("OUTAGE_NOTIFY_DEBOUNCE_HOURS", "6")
+    )
+    outage_notify_area_min_affected: int = int(
+        os.getenv("OUTAGE_NOTIFY_AREA_MIN_AFFECTED", "5")
     )
 
 

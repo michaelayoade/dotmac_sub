@@ -13,21 +13,37 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+from uuid import UUID as _UUID
 
 import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.billing import Payment, PaymentStatus, TopupIntent
+from app.models.billing import (
+    Payment,
+    PaymentSettlementOrigin,
+    PaymentStatus,
+    TopupIntent,
+)
 from app.models.domain_settings import SettingDomain
-from app.schemas.billing import PaymentCreate
+from app.schemas.billing import (
+    BillingAccountPaymentPreviewRequest,
+    PaymentAllocationApply,
+    PaymentCreate,
+)
 from app.services import billing as billing_service
 from app.services import settings_spec
 from app.services.billing._common import lock_account
+from app.services.billing.consolidated_payments import consolidated_settlement_key
 from app.services.collections import restore_account_services
 from app.services.common import round_money, to_decimal
 from app.services.customer_portal_flow_payments import _provider_uuid
+from app.services.db_session_adapter import db_session_adapter
 from app.services.payment_gateway_adapter import payment_gateway_adapter
+from app.services.provider_payment_settlements import (
+    settle_verified_invoice_payment,
+)
 from app.services.topup_intents import set_topup_intent_status
 
 logger = logging.getLogger(__name__)
@@ -49,6 +65,7 @@ _GATEWAY_PROVIDERS = ("paystack", "flutterwave")
 _NOT_FOUND_STATUSES = (400, 404)
 DEFAULT_STALE_MINUTES = 15
 DEFAULT_MAX_AGE_DAYS = 7
+SessionLocal = db_session_adapter.create_session
 
 
 def _resolve_positive_int_setting(
@@ -80,40 +97,165 @@ def _park_if_expired(db: Session, intent: TopupIntent, now: datetime) -> bool:
     return False
 
 
+def _intent_allocations(
+    intent: TopupIntent, amount
+) -> list[PaymentAllocationApply] | None:
+    """Allocate a reconciled payment the way the customer asked us to.
+
+    The intent is the authoritative record of what the payment was *for*: an
+    invoice checkout stamps ``metadata_["invoice_id"]`` alongside
+    ``payment_flow="invoice_payment"``. The happy path
+    (``verify_and_record_payment``) allocates explicitly to that invoice.
+
+    Reconciliation is a *repair* path: it must converge on the same outcome, not
+    a different one. Returning ``None`` here would auto-allocate oldest-invoice-
+    first, so a customer who paid invoice #7 could have the recovered payment
+    applied to invoice #3 -- leaving the invoice they actually paid still open,
+    inviting a second payment, and recording in the ledger that they settled a
+    bill they never chose. The money is not lost, but it lands in the wrong place.
+
+    Genuine top-ups have no target invoice and keep auto-allocation.
+    """
+    metadata = intent.metadata_ or {}
+    if str(metadata.get("payment_flow")) != "invoice_payment":
+        return None
+    invoice_id = metadata.get("invoice_id")
+    if not invoice_id:
+        # An invoice checkout with no recorded invoice is a bug upstream; do not
+        # silently guess which bill to settle.
+        logger.warning(
+            "Invoice-payment intent %s has no invoice_id in metadata; falling "
+            "back to auto-allocation",
+            intent.id,
+        )
+        return None
+    try:
+        target = _UUID(str(invoice_id))
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invoice-payment intent %s has an unparseable invoice_id %r; falling "
+            "back to auto-allocation",
+            intent.id,
+            invoice_id,
+        )
+        return None
+    return [PaymentAllocationApply(invoice_id=target, amount=amount)]
+
+
 def _settle_intent(
     db: Session,
     intent: TopupIntent,
     *,
     external_id: str,
     amount,
+    provider_fee,
     currency: str,
     memo: str,
     now: datetime,
 ) -> bool:
     """Record (or link) the payment for a confirmed intent. True if recovered."""
+    metadata = intent.metadata_ or {}
+    if str(metadata.get("payment_flow")) == "invoice_payment":
+        invoice_id = metadata.get("invoice_id")
+        try:
+            target_invoice_id = _UUID(str(invoice_id))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "Invoice-payment intent has no valid target invoice"
+            ) from exc
+        provider_id = _provider_uuid(db, intent.provider_type)
+        if provider_id is None:
+            raise ValueError("Payment provider configuration is unavailable")
+        result = settle_verified_invoice_payment(
+            db,
+            account_id=_UUID(str(intent.account_id)),
+            invoice_id=target_invoice_id,
+            topup_intent_id=intent.id,
+            provider_id=provider_id,
+            provider_reference=intent.reference,
+            external_id=external_id,
+            gross_amount=round_money(to_decimal(amount)),
+            provider_fee=round_money(to_decimal(provider_fee)),
+            net_amount=round_money(to_decimal(intent.requested_amount)),
+            currency=currency,
+            memo=memo,
+            paid_at=now,
+        )
+        payment = result.payment
+        intent.completed_payment_id = payment.id
+        set_topup_intent_status(intent, "completed", source="reconcile_settle")
+        intent.completed_at = now
+        intent.actual_amount = round_money(to_decimal(amount))
+        intent.external_id = external_id
+        db.commit()
+        return result.payment_created
+
     existing = db.scalars(
         select(Payment).where(Payment.external_id == external_id)
     ).first()
     created = False
     if existing is not None:
-        payment = existing
+        if (
+            intent.billing_account_id is not None
+            and existing.billing_account_id is not None
+            and existing.status == PaymentStatus.pending
+        ):
+            payment = billing_service.consolidated_payment_settlements.settle_verified(
+                db,
+                str(intent.billing_account_id),
+                BillingAccountPaymentPreviewRequest(
+                    amount=amount,
+                    currency=currency,
+                    provider_id=_provider_uuid(db, intent.provider_type),
+                    external_id=external_id,
+                    memo=memo,
+                    auto_allocate=False,
+                ),
+                idempotency_key=consolidated_settlement_key(
+                    "topup-intent", str(intent.id)
+                ),
+                origin=PaymentSettlementOrigin.provider_event,
+                commit=False,
+                existing_payment_id=str(existing.id),
+            ).payment
+            created = True
+        else:
+            payment = existing
     else:
-        payment = billing_service.payments.create(
-            db,
-            PaymentCreate(
-                account_id=intent.account_id,
-                billing_account_id=intent.billing_account_id
-                if intent.account_id is None
-                else None,
-                amount=amount,
-                currency=currency,
-                status=PaymentStatus.succeeded,
-                provider_id=_provider_uuid(db, intent.provider_type),
-                external_id=external_id,
-                memo=memo,
-                allocations=None,  # auto-allocate: invoices first, rest credit
-            ),
-        )
+        if intent.account_id is None and intent.billing_account_id is not None:
+            payment = billing_service.consolidated_payment_settlements.settle_verified(
+                db,
+                str(intent.billing_account_id),
+                BillingAccountPaymentPreviewRequest(
+                    amount=amount,
+                    currency=currency,
+                    provider_id=_provider_uuid(db, intent.provider_type),
+                    external_id=external_id,
+                    memo=memo,
+                    auto_allocate=False,
+                ),
+                idempotency_key=consolidated_settlement_key(
+                    "topup-intent", str(intent.id)
+                ),
+                origin=PaymentSettlementOrigin.provider_event,
+                commit=False,
+            ).payment
+        else:
+            payment = billing_service.payments.create(
+                db,
+                PaymentCreate(
+                    account_id=intent.account_id,
+                    amount=amount,
+                    currency=currency,
+                    status=PaymentStatus.succeeded,
+                    provider_id=_provider_uuid(db, intent.provider_type),
+                    external_id=external_id,
+                    memo=memo,
+                    # Honour the customer's instruction recorded on the intent;
+                    # only genuine subscriber top-ups auto-allocate.
+                    allocations=_intent_allocations(intent, amount),
+                ),
+            )
         created = True
     intent.completed_payment_id = payment.id
     set_topup_intent_status(intent, "completed", source="reconcile_settle")
@@ -221,6 +363,9 @@ def reconcile_pending_topups(
                 intent,
                 external_id=tx.external_id,
                 amount=round_money(to_decimal(tx.amount)),
+                provider_fee=round_money(
+                    to_decimal(getattr(tx, "provider_fee", Decimal("0.00")))
+                ),
                 currency=tx.currency,
                 memo=f"{tx.memo_prefix} top-up reconciliation ref: {intent.reference}",
                 now=now,
@@ -238,8 +383,24 @@ def reconcile_pending_topups(
                 linked += 1
             if intent.account_id is not None:
                 try:
+                    from app.services.billing.reconcile_unposted import (
+                        settle_prepaid_draft_invoices_from_credit,
+                    )
+
+                    settled = settle_prepaid_draft_invoices_from_credit(
+                        db, str(intent.account_id), run_at=now
+                    )
+                    if settled.changed:
+                        logger.info(
+                            "Top-up reconciliation settled %d prepaid draft "
+                            "invoice(s) for account %s",
+                            len(settled.invoices_settled),
+                            intent.account_id,
+                        )
+                        db.commit()
                     restore_account_services(db, str(intent.account_id))
                 except Exception:
+                    db.rollback()
                     logger.warning(
                         "Top-up reconciliation: restore failed for account %s",
                         intent.account_id,
@@ -259,3 +420,27 @@ def reconcile_pending_topups(
         "expired": expired,
         "errors": errors,
     }
+
+
+def reconcile_topups_scheduled() -> dict[str, int]:
+    """Scheduled top-up reconciliation entry point."""
+    logger.info("Starting top-up payment reconciliation sweep")
+    session = SessionLocal()
+    try:
+        result = reconcile_pending_topups(session)
+        logger.info(
+            "Top-up reconciliation completed: checked=%d recovered=%d "
+            "linked=%d expired=%d errors=%d",
+            result.get("checked", 0),
+            result.get("recovered", 0),
+            result.get("linked", 0),
+            result.get("expired", 0),
+            result.get("errors", 0),
+        )
+        session.commit()
+        return result
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()

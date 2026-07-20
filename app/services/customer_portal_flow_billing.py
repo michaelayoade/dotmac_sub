@@ -4,7 +4,7 @@ import logging
 from datetime import datetime
 from decimal import Decimal
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
@@ -24,14 +24,32 @@ from app.services import billing as billing_service
 from app.services.collections import get_available_balance
 from app.services.common import coerce_uuid
 from app.services.common import validate_enum as _validate_enum
+from app.services.customer_context import (
+    customer_can_access_account,
+    optional_customer_account_id,
+    optional_customer_subscriber_id,
+)
+from app.services.customer_financial_position import get_customer_billing_summary
 from app.services.customer_portal_context import (
-    get_allowed_account_ids,
     get_invoice_billing_contact,
     get_outstanding_balance,
 )
 from app.services.customer_portal_flow_common import _compute_total_pages
+from app.services.status_presentation import invoice_status_presentation
 
 logger = logging.getLogger(__name__)
+
+INTERNAL_LEDGER_MEMO_EXACT = {
+    "Prepaid opening balance @ cutover",
+}
+INTERNAL_LEDGER_MEMO_PREFIXES = (
+    "Correction:",
+    "Partial cutover opening balance construction adjustment",
+    "Reversal of phantom",
+    "Reversal of prepaid opening",
+    "Data repair 2026-06-29:",
+    "Validated account credit consumed",
+)
 
 
 def _enum_value(value: Any) -> str:
@@ -43,6 +61,13 @@ def _money_activity_timestamp(*values: Any) -> Any:
         if value is not None:
             return value
     return None
+
+
+def _customer_visible_ledger_memo(memo: str | None) -> bool:
+    text = str(memo or "")
+    return text not in INTERNAL_LEDGER_MEMO_EXACT and not text.startswith(
+        INTERNAL_LEDGER_MEMO_PREFIXES
+    )
 
 
 def _build_billing_activity(db: Session, account_id: str, limit: int = 25) -> list[Any]:
@@ -59,6 +84,9 @@ def _build_billing_activity(db: Session, account_id: str, limit: int = 25) -> li
         db.query(Payment)
         .filter(Payment.account_id == account_uuid)
         .filter(Payment.is_active.is_(True))
+        # Failed/canceled payments never moved money; rendering them as
+        # credit-direction "Payment update" lines reads as a double charge.
+        .filter(Payment.status.notin_([PaymentStatus.failed, PaymentStatus.canceled]))
         .order_by(func.coalesce(Payment.paid_at, Payment.created_at).desc())
         .limit(limit)
         .all()
@@ -73,6 +101,7 @@ def _build_billing_activity(db: Session, account_id: str, limit: int = 25) -> li
         activity.append(
             SimpleNamespace(
                 kind="payment",
+                payment_id=str(payment.id),
                 direction="credit",
                 title=title,
                 description=payment.memo or status.replace("_", " ").title(),
@@ -98,6 +127,7 @@ def _build_billing_activity(db: Session, account_id: str, limit: int = 25) -> li
         activity.append(
             SimpleNamespace(
                 kind="credit_note",
+                payment_id=None,
                 direction="credit",
                 title="Credit added",
                 description=note.memo or status,
@@ -115,11 +145,14 @@ def _build_billing_activity(db: Session, account_id: str, limit: int = 25) -> li
         source = _enum_value(entry.source)
         if source in {LedgerSource.payment.value, LedgerSource.credit_note.value}:
             continue
+        if not _customer_visible_ledger_memo(entry.memo):
+            continue
         entry_type = _enum_value(entry.entry_type)
         category = _enum_value(entry.category).replace("_", " ").title()
         activity.append(
             SimpleNamespace(
                 kind=source or "ledger",
+                payment_id=None,
                 direction=entry_type,
                 title=entry.memo or category or source.replace("_", " ").title(),
                 description=category or source.replace("_", " ").title(),
@@ -147,8 +180,7 @@ def get_billing_page(
     per_page: int = 10,
 ) -> dict:
     """Get billing page data for the customer portal."""
-    account_id = customer.get("account_id")
-    account_id_str = str(account_id) if account_id else None
+    account_id_str = optional_customer_account_id(db, customer)
 
     if status == "pending":
         status = "issued"
@@ -163,6 +195,8 @@ def get_billing_page(
         "prepaid_balance": None,
         "ledger_entries": [],
         "billing_activity": [],
+        "invoice_status_presentations": {},
+        "billing_stats": {"available": False},
     }
     if not account_id_str:
         return empty_result
@@ -198,6 +232,29 @@ def get_billing_page(
             exc_info=True,
         )
 
+    # Account-level headline KPIs come from the canonical billing-summary owner
+    # over the COMPLETE, currency-typed invoice set — never summed in the
+    # template over the paginated page.
+    # When the owner can't be reached, the stats are marked unavailable so the
+    # template renders "unavailable", never a misleading zero.
+    billing_stats: dict[str, Any] = {"available": False}
+    try:
+        summary = get_customer_billing_summary(db, account_id_str)
+        billing_stats = {
+            "available": True,
+            "currency": summary.currency,
+            "total_billed": summary.total_billed,
+            "outstanding": summary.outstanding,
+            "overdue": summary.overdue,
+            "overdue_count": summary.overdue_count,
+        }
+    except Exception:
+        logger.warning(
+            "Failed to resolve billing KPIs for account %s",
+            account_id_str,
+            exc_info=True,
+        )
+
     # Backwards-compatible raw ledger rows for older templates.
     ledger_entries = billing_service.ledger_entries.list(
         db, account_id_str, None, None, True, "effective_date", "desc", 25, 0
@@ -214,6 +271,11 @@ def get_billing_page(
         "prepaid_balance": prepaid_balance,
         "ledger_entries": ledger_entries,
         "billing_activity": billing_activity,
+        "billing_stats": billing_stats,
+        "invoice_status_presentations": {
+            str(invoice.id): invoice_status_presentation(invoice.status)
+            for invoice in invoices
+        },
     }
 
 
@@ -227,8 +289,7 @@ def get_payment_arrangements_page(
     """Get payment arrangements page data for the customer portal."""
     from app.services import payment_arrangements as arrangement_service
 
-    account_id = customer.get("account_id")
-    account_id_str = str(account_id) if account_id else None
+    account_id_str = optional_customer_account_id(db, customer)
 
     empty_result: dict[str, Any] = {
         "arrangements": [],
@@ -281,8 +342,7 @@ def get_new_arrangement_page(
     invoice_id: str | None = None,
 ) -> dict:
     """Get data for the new payment arrangement form."""
-    account_id = customer.get("account_id")
-    account_id_str = str(account_id) if account_id else None
+    account_id_str = optional_customer_account_id(db, customer)
 
     invoices: list[Any] = []
     outstanding_balance: int | float = 0
@@ -292,7 +352,6 @@ def get_new_arrangement_page(
         outstanding_balance = balance_data["outstanding_balance"]
 
     selected_invoice = None
-    allowed_account_ids = get_allowed_account_ids(customer, db)
     if invoice_id:
         try:
             candidate_invoice = billing_service.invoices.get(
@@ -300,9 +359,8 @@ def get_new_arrangement_page(
             )
         except Exception:
             candidate_invoice = None
-        if candidate_invoice and (
-            not allowed_account_ids
-            or str(getattr(candidate_invoice, "account_id", "")) in allowed_account_ids
+        if candidate_invoice and customer_can_access_account(
+            db, customer, getattr(candidate_invoice, "account_id", None)
         ):
             selected_invoice = candidate_invoice
 
@@ -341,14 +399,19 @@ def submit_payment_arrangement(
     start_date: str,
     invoice_id: str | None = None,
     notes: str | None = None,
+    terms_accepted: bool = False,
 ) -> dict:
     """Submit a payment arrangement request."""
+    if not terms_accepted:
+        raise ValueError("You must agree to the payment arrangement terms")
+
     from app.services import payment_arrangements as arrangement_service
 
-    account_id = customer.get("account_id")
-    account_id_str = str(account_id) if account_id else None
-    subscriber_id = customer.get("subscriber_id")
-    subscriber = db.get(Subscriber, subscriber_id) if subscriber_id else None
+    account_id_str = optional_customer_account_id(db, customer)
+    subscriber_id = optional_customer_subscriber_id(db, customer)
+    subscriber = (
+        db.get(Subscriber, coerce_uuid(subscriber_id)) if subscriber_id else None
+    )
 
     start = datetime.strptime(start_date, "%Y-%m-%d").date()
     amount = Decimal(total_amount.replace(",", ""))
@@ -375,21 +438,17 @@ def get_arrangement_error_context(
     account_id_str: str | None,
 ) -> dict:
     """Get context data for re-rendering the arrangement form after an error."""
-    invoices = billing_service.invoices.list(
-        db=db,
-        account_id=account_id_str,
-        status="overdue",
-        is_active=True,
-        order_by="due_at",
-        order_dir="asc",
-        limit=50,
-        offset=0,
+    balance_data: dict[str, Any] = (
+        get_outstanding_balance(db, account_id_str)
+        if account_id_str
+        else {"invoices": [], "outstanding_balance": 0}
     )
-    outstanding_balance = sum(inv.balance_due or 0 for inv in invoices)
+    invoices = cast(list[Invoice], balance_data["invoices"])
+    outstanding_balance = balance_data["outstanding_balance"]
     # The form template needs the same eligibility fields as the GET page,
     # otherwise the error re-render falls into the "Not Eligible" branch.
     eligible = bool(account_id_str) and outstanding_balance and len(invoices) > 0
-    due_dates = [inv.due_at for inv in invoices if getattr(inv, "due_at", None)]
+    due_dates = [due_at for inv in invoices if (due_at := inv.due_at) is not None]
     return {
         "invoices": invoices,
         "overdue_invoices": invoices,
@@ -420,7 +479,7 @@ def cancel_customer_arrangement(
     """
     from app.services import payment_arrangements as arrangement_service
 
-    account_id = customer.get("account_id")
+    account_id = optional_customer_account_id(db, customer)
     arrangement = arrangement_service.payment_arrangements.get(db, arrangement_id)
     if not account_id or str(arrangement.subscriber_id) != str(account_id):
         raise HTTPException(status_code=404, detail="Payment arrangement not found")
@@ -448,7 +507,7 @@ def get_payment_arrangement_detail(
     """Get payment arrangement detail data for the customer portal."""
     from app.services import payment_arrangements as arrangement_service
 
-    account_id = customer.get("account_id")
+    account_id = optional_customer_account_id(db, customer)
 
     try:
         arrangement = arrangement_service.payment_arrangements.get(
@@ -485,12 +544,9 @@ def get_invoice_detail(
     invoice_id: str,
 ) -> dict | None:
     """Get invoice detail data for the customer portal."""
-    allowed_account_ids = get_allowed_account_ids(customer, db)
-
     invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
-    if not invoice or (
-        allowed_account_ids
-        and str(getattr(invoice, "account_id", "")) not in allowed_account_ids
+    if not invoice or not customer_can_access_account(
+        db, customer, getattr(invoice, "account_id", None)
     ):
         return None
 
@@ -498,6 +554,7 @@ def get_invoice_detail(
 
     return {
         "invoice": invoice,
+        "invoice_status_presentation": invoice_status_presentation(invoice.status),
         "billing_name": billing_contact["billing_name"],
         "billing_email": billing_contact["billing_email"],
     }

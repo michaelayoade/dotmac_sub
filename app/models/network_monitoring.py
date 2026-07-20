@@ -222,6 +222,14 @@ class NetworkDevice(Base):
             unique=True,
             postgresql_where=text("zabbix_hostid IS NOT NULL"),
         ),
+        # Stable UISP device id (wireless APs / infra) stamped by the UISP
+        # topology sync; partial-unique so non-UISP rows stay NULL.
+        Index(
+            "uq_network_devices_uisp_device_id",
+            "uisp_device_id",
+            unique=True,
+            postgresql_where=text("uisp_device_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -270,6 +278,9 @@ class NetworkDevice(Base):
     # --- Topology reconcile (Zabbix linkage) ---
     # Stable Zabbix host id; the reconcile key. NULL until merged to a Zabbix host.
     zabbix_hostid: Mapped[str | None] = mapped_column(String(20))
+    # Stable UISP device id, stamped by the UISP topology sync when this node
+    # is matched to a UISP AP/infra device. NULL until matched.
+    uisp_device_id: Mapped[str | None] = mapped_column(String(64))
     # Provenance of this row: 'zabbix_reconcile', 'splynx', manual, etc.
     source: Mapped[str | None] = mapped_column(String(40))
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -281,12 +292,14 @@ class NetworkDevice(Base):
     # resolve_customer_path and the topology-gaps report.
     matched_device_type: Mapped[str | None] = mapped_column(String(20))
     matched_device_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
-    # Topology live status (Phase 3), warmed from Zabbix into this cache and read
+    # Topology live status, warmed from Zabbix into this cache and read
     # by the Network Path panel — never fetched on the request path. Distinct
     # from the ping/snmp `status` column (different writer). One of
     # up/down/problem/unknown.
     live_status: Mapped[str | None] = mapped_column(String(20))
     live_status_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    topology_x: Mapped[float | None] = mapped_column(Float)
+    topology_y: Mapped[float | None] = mapped_column(Float)
 
     # Capacity tracking
     max_concurrent_subscribers: Mapped[int | None] = mapped_column(Integer)
@@ -727,11 +740,47 @@ class TopologyLinkAdminStatus(enum.Enum):
     maintenance = "maintenance"
 
 
-class NetworkTopologyLink(Base):
-    """Explicit link between two device interfaces.
+class NetworkWeathermapView(Base):
+    """Saved operational weather-map layout and display settings."""
 
-    This is the graph-topology truth for the network — not the
-    parent_device_id inventory hierarchy.
+    __tablename__ = "network_weathermap_views"
+    __table_args__ = (
+        UniqueConstraint("slug", name="uq_network_weathermap_views_slug"),
+        Index("ix_network_weathermap_views_pop_site", "pop_site_id"),
+        Index("ix_network_weathermap_views_default", "is_default"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    slug: Mapped[str] = mapped_column(String(80), nullable=False)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    topology_group: Mapped[str | None] = mapped_column(String(80))
+    pop_site_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pop_sites.id")
+    )
+    layout: Mapped[dict | None] = mapped_column(JSON)
+    settings: Mapped[dict | None] = mapped_column(JSON)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    pop_site = relationship("PopSite")
+
+
+class NetworkTopologyLink(Base):
+    """Observed or manually recorded adjacency between device interfaces.
+
+    LLDP-sourced rows are observations. They can verify a reviewed forwarding
+    declaration, but do not establish official upstream path, role, site,
+    outage blast radius, or customer-path consequences on their own.
     """
 
     __tablename__ = "network_topology_links"
@@ -826,11 +875,23 @@ class NetworkTopologyLink(Base):
 
 
 class OutageIncident(Base):
-    """An operator-declared outage against a node or basestation (Phase 4b).
+    """An outage against a node, basestation, or FDH cabinet (Phase 4b/5b/§7.6).
 
-    Manual only — no auto-detection. ``affected_count`` is snapshotted from
-    affected_customers at declare time. Kept lean (the Alert model is
-    rule/metric-bound and not reused).
+    Two provenances share this table, distinguished by ``detection_source``:
+
+    - ``operator`` — declared from the console (or the Phase-5b auto-detect
+      scan, which reuses the operator declare path). Lifecycle ``open`` ->
+      ``resolved``; treated as already-confirmed, no debounce.
+    - ``classifier`` — driven by the outage classifier's reconcile loop
+      (§7.6). Debounced lifecycle ``suspected`` -> ``confirmed`` ->
+      ``clearing`` -> ``resolved`` (plus ``discarded`` for false positives).
+
+    ``status`` stays a free-form String (NOT a DB enum — the enum route caused
+    a prod migration collision in #876) and is validated in code. The
+    ``*_at`` lifecycle stamps make MTTR derivable as
+    ``resolved_at - confirmed_at``. ``affected_count`` is snapshotted from
+    affected_customers at declare time. ``crm_ticket_id`` is a placeholder for
+    the future CRM ticket integration — nothing fires on it yet.
     """
 
     __tablename__ = "outage_incidents"
@@ -838,6 +899,7 @@ class OutageIncident(Base):
         Index("ix_outage_incidents_status", "status"),
         Index("ix_outage_incidents_root_node", "root_node_id"),
         Index("ix_outage_incidents_basestation", "basestation_id"),
+        Index("ix_outage_incidents_fdh_cabinet", "fdh_cabinet_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -849,14 +911,33 @@ class OutageIncident(Base):
     basestation_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("pop_sites.id")
     )
+    fdh_cabinet_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("fdh_cabinets.id")
+    )
     declared_by: Mapped[str | None] = mapped_column(String(120))
-    status: Mapped[str] = mapped_column(String(20), default="open")  # open / resolved
+    # operator: open/resolved ; classifier: suspected/confirmed/clearing/
+    # resolved/discarded. Kept String and validated in code (see #876).
+    status: Mapped[str] = mapped_column(String(20), default="open")
+    # 'operator' (console/auto-detect declare) | 'classifier' (§7.6 reconcile).
+    detection_source: Mapped[str] = mapped_column(
+        String(20), default="operator", server_default="operator", nullable=False
+    )
     severity: Mapped[str | None] = mapped_column(String(20))
     affected_count: Mapped[int] = mapped_column(Integer, default=0)
+    # Classifier ladder verdict (node_outage / service_fault / ...) + coarse
+    # confidence, snapshotted on each reconcile pass. NULL for operator rows.
+    classification: Mapped[str | None] = mapped_column(String(40))
+    confidence: Mapped[float | None] = mapped_column(Float)
+    # Placeholder for the future CRM ticket link (§7.6 firing stays gated).
+    crm_ticket_id: Mapped[str | None] = mapped_column(String(120))
     note: Mapped[str | None] = mapped_column(Text)
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
+    # §7.6 debounce lifecycle stamps (classifier incidents only).
+    suspected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cleared_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     created_at: Mapped[datetime] = mapped_column(
@@ -866,6 +947,63 @@ class OutageIncident(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
+    )
+
+
+class OutageNotificationDispatch(Base):
+    """Persisted audit + debounce record for a customer outage notification
+    (outage classifier P4, design docs/designs/OUTAGE_CLASSIFIER.md §P4).
+
+    One row per dispatch *attempt* (or a boundary-level skip). It is the durable,
+    cross-worker source for BOTH:
+      - **debounce** — a boundary is muted while it has a recent ``sent`` row
+        (replaces the old in-memory dict, which didn't survive restarts or span
+        Celery workers), and
+      - **audit** — who was notified, when, by which operator, and the outcome.
+
+    ``status='sent'`` means the notification was **emitted to the notification
+    system** (which owns channel selection + final delivery); this table does not
+    track downstream delivery. ``channel`` stores the outage notification *type*
+    (area / last_mile) — the concrete channels are the notification system's
+    config-driven concern, not the outage notifier's. No FKs: the audit must
+    outlive a deleted node/subscriber (same rationale as AvailabilitySnapshot).
+    """
+
+    __tablename__ = "outage_notification_dispatches"
+    __table_args__ = (
+        Index(
+            "ix_outage_notif_dispatch_boundary",
+            "boundary_node_id",
+            "status",
+            "created_at",
+        ),
+        Index("ix_outage_notif_dispatch_dedup", "dedup_key", "created_at"),
+        Index("ix_outage_notif_dispatch_subscriber", "subscriber_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    # 'area' | 'per_customer'
+    scope: Mapped[str] = mapped_column(String(16))
+    # The assess() boundary key: an access-node id (inferred) OR an operator
+    # OutageIncident id (declared). Used as the debounce/group key.
+    boundary_node_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    subscriber_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    subscription_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    # Outage notification *type* (channels are resolved by the notification
+    # system, so we record the type/category, not a hardcoded channel).
+    channel: Mapped[str | None] = mapped_column(String(40))
+    category: Mapped[str] = mapped_column(String(20))
+    recipient: Mapped[str | None] = mapped_column(String(255))
+    subject: Mapped[str | None] = mapped_column(String(255))
+    dedup_key: Mapped[str] = mapped_column(String(200))
+    # sent | failed | suppressed_optout | skipped_debounce |
+    # skipped_low_confidence | skipped_cap | skipped_no_recipient
+    status: Mapped[str] = mapped_column(String(32))
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
 
 
@@ -916,4 +1054,69 @@ class AvailabilitySnapshot(Base):
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+
+class DeviceProjection(Base):
+    """Materialized, unified projection of every network device type.
+
+    A derived-state projection: one row per device across the OLT, core
+    ``NetworkDevice``, ONT and CPE tables, with the operational status
+    pre-derived, so the admin device list can search, filter, sort and
+    paginate in SQL instead of loading every device and deriving status in
+    memory on each request.
+
+    ``network.device_projection`` (the reconciler) is the sole canonical
+    writer. It rebuilds this table idempotently from the authoritative device
+    tables, so a row here is a rebuildable cache — never the only copy of
+    truth. ``refreshed_at`` carries the freshness of each row; stale rows are
+    repaired and orphans pruned on the next reconcile.
+    """
+
+    __tablename__ = "device_projections"
+    __table_args__ = (
+        UniqueConstraint(
+            "device_type", "source_id", name="uq_device_projection_source"
+        ),
+        Index("ix_device_projection_type_status", "device_type", "operational_status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    # Source identity — (device_type, source_id) is the natural key the
+    # reconciler upserts on. device_type is one of olt/core/ont/cpe.
+    device_type: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    source_id: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    # Display / search columns, denormalised from the source row.
+    name: Mapped[str | None] = mapped_column(String(255), index=True)
+    serial_number: Mapped[str | None] = mapped_column(String(120), index=True)
+    ip_address: Mapped[str | None] = mapped_column(String(64), index=True)
+    vendor: Mapped[str | None] = mapped_column(String(120), index=True)
+    model: Mapped[str | None] = mapped_column(String(120))
+
+    # Pre-derived operational status (the whole point of materialising).
+    operational_status: Mapped[str] = mapped_column(
+        String(40), nullable=False, default="unknown", index=True
+    )
+    operational_reason: Mapped[str | None] = mapped_column(String(160))
+    last_seen: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # Linked subscriber, when the device is customer-premises equipment.
+    subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), index=True
+    )
+
+    # Freshness of this projected row (set on every reconcile pass).
+    refreshed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )

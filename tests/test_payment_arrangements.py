@@ -322,9 +322,7 @@ class TestPaymentArrangements:
         assert exc_info.value.status_code == 400
         assert "invoice" in exc_info.value.detail.lower()
 
-    def test_create_respects_configured_max_installments(
-        self, db_session, subscriber
-    ):
+    def test_create_respects_configured_max_installments(self, db_session, subscriber):
         db_session.add(
             DomainSetting(
                 domain=SettingDomain.billing,
@@ -421,6 +419,45 @@ class TestPaymentArrangements:
         assert get_account_outstanding_balance(
             db_session, str(subscriber.id)
         ) == Decimal("200.00")
+
+    def test_get_account_outstanding_balance_excludes_reconciliation_hold(
+        self, db_session, subscriber
+    ):
+        _overdue_invoice(db_session, subscriber, amount="150.00")
+        held = _overdue_invoice(db_session, subscriber, amount="50.00")
+        held.metadata_ = {"reconciliation_hold": True}
+        db_session.commit()
+
+        assert get_account_outstanding_balance(
+            db_session, str(subscriber.id)
+        ) == Decimal("150.00")
+
+    def test_get_account_outstanding_balance_excludes_truthy_reconciliation_hold(
+        self, db_session, subscriber
+    ):
+        _overdue_invoice(db_session, subscriber, amount="150.00")
+        for hold_value in ("true", "1", "yes", "on"):
+            held = _overdue_invoice(db_session, subscriber, amount="50.00")
+            held.metadata_ = {"reconciliation_hold": hold_value}
+        db_session.commit()
+
+        assert get_account_outstanding_balance(
+            db_session, str(subscriber.id)
+        ) == Decimal("150.00")
+
+    def test_get_account_outstanding_balance_counts_false_or_missing_hold(
+        self, db_session, subscriber
+    ):
+        _overdue_invoice(db_session, subscriber, amount="150.00")
+        false_hold = _overdue_invoice(db_session, subscriber, amount="50.00")
+        false_hold.metadata_ = {"reconciliation_hold": False}
+        false_string_hold = _overdue_invoice(db_session, subscriber, amount="25.00")
+        false_string_hold.metadata_ = {"reconciliation_hold": "false"}
+        db_session.commit()
+
+        assert get_account_outstanding_balance(
+            db_session, str(subscriber.id)
+        ) == Decimal("225.00")
 
     def test_get_arrangement(self, db_session, subscriber):
         arrangement = _create_arrangement_directly(db_session, subscriber)

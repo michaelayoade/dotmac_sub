@@ -5,7 +5,7 @@
 
 {% block head %}
 {% if closure.latitude and closure.longitude %}
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+<link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css"
       integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
 <style>
     #location-map { height: 180px; border-radius: 0.5rem; }
@@ -174,7 +174,7 @@
                     </div>
                     <div>
                         <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Created</p>
-                        <p class="text-sm text-slate-900 dark:text-white">{{ closure.created_at.strftime('%B %d, %Y') if closure.created_at else '-' }}</p>
+                        <p class="text-sm text-slate-900 dark:text-white">{{ closure.created_at | app_datetime('%B %d, %Y', '-', include_tz=False) }}</p>
                     </div>
                 </div>
             </div>
@@ -192,7 +192,7 @@
                         <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</div>
                         {% endif %}
                         {% if activity.occurred_at %}
-                        <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at.strftime('%b %d, %Y at %H:%M') }}</div>
+                        <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at | app_datetime('%b %d, %Y at %H:%M') }}</div>
                         {% endif %}
                     </div>
                     {% endfor %}
@@ -221,7 +221,7 @@
 
 {% block scripts %}
 {% if closure.latitude and closure.longitude %}
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+<script src="/static/vendor/leaflet/leaflet.js"
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 <script>
 (function() {

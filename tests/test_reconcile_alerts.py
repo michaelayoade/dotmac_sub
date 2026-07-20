@@ -1,126 +1,26 @@
 """Tests for the reconciler alert-escalation module.
 
 Covers:
-* ZabbixTrapper protocol framing (header + JSON body) via an in-process
-  TCP server stub.
 * escalate_sweep_unreachable threshold-crossing semantics: only the cycle
   that crosses ``before < threshold <= after`` fires the ERROR log;
   subsequent unreachable cycles log at DEBUG.
 * resolve_sweep_unreachable behavior (only fires when ``before > 0``).
-* ZabbixTrapper.from_env returns None when ZABBIX_TRAPPER_HOST is unset.
+
+(The Zabbix trapper push path was retired with the native monitoring
+cutover; the structured log line is the only output path.)
 """
 
 from __future__ import annotations
 
-import json
 import logging
-import socket
-import struct
 
 from app.services.network.reconcile.alerts import (
     DEFAULT_SWEEP_THRESHOLD,
     SWEEP_ALERT_KIND,
-    ZabbixTrapper,
     default_threshold_from_env,
     escalate_sweep_unreachable,
     resolve_sweep_unreachable,
 )
-
-# ── ZabbixTrapper protocol ─────────────────────────────────────────────────
-
-
-class _FakeZabbixSocket:
-    """Socket-like trapper peer that records the request frame in memory."""
-
-    def __init__(self, *, info: str = "processed: 1; failed: 0"):
-        response_body = json.dumps({"response": "success", "info": info}).encode(
-            "utf-8"
-        )
-        self._response = bytearray(
-            b"ZBXD\x01" + struct.pack("<q", len(response_body)) + response_body
-        )
-        self.received: list[dict] = []
-
-    def __enter__(self) -> _FakeZabbixSocket:
-        return self
-
-    def __exit__(self, exc_type, exc, tb) -> None:
-        return None
-
-    def sendall(self, frame: bytes) -> None:
-        header = frame[:13]
-        assert header.startswith(b"ZBXD\x01")
-        length = struct.unpack("<q", header[5:13])[0]
-        self.received.append(json.loads(frame[13 : 13 + length].decode("utf-8")))
-
-    def recv(self, length: int) -> bytes:
-        chunk = bytes(self._response[:length])
-        del self._response[:length]
-        return chunk
-
-
-def test_zabbix_trapper_sends_well_formed_payload(monkeypatch):
-    peer = _FakeZabbixSocket()
-    monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: peer)
-
-    trapper = ZabbixTrapper(host="127.0.0.1", port=10051)
-    ok = trapper.send(zabbix_host="172.16.210.20", key="ont.foo", value=3)
-
-    assert ok is True
-    assert len(peer.received) == 1
-    payload = peer.received[0]
-    assert payload["request"] == "sender data"
-    assert payload["data"][0] == {
-        "host": "172.16.210.20",
-        "key": "ont.foo",
-        "value": "3",
-    }
-
-
-def test_zabbix_trapper_returns_false_when_server_rejects_value(monkeypatch):
-    """Zabbix replies with ``processed: 0`` when the host or trapper key
-    isn't configured — treat as failure so a misconfigured item isn't
-    silently considered delivered."""
-    peer = _FakeZabbixSocket(info="processed: 0; failed: 1")
-    monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: peer)
-
-    trapper = ZabbixTrapper(host="127.0.0.1", port=10051)
-    ok = trapper.send(zabbix_host="x", key="ont.foo", value=3)
-
-    assert ok is False
-
-
-def test_zabbix_trapper_returns_false_on_connection_error(monkeypatch):
-    """Network failure (e.g. Zabbix down) is logged and swallowed."""
-    monkeypatch.setattr(
-        socket,
-        "create_connection",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("down")),
-    )
-    trapper = ZabbixTrapper(host="127.0.0.1", port=1, timeout_sec=0.1)
-    ok = trapper.send(zabbix_host="x", key="ont.foo", value=3)
-    assert ok is False
-
-
-def test_zabbix_trapper_from_env_unset_returns_none(monkeypatch):
-    monkeypatch.delenv("ZABBIX_TRAPPER_HOST", raising=False)
-    assert ZabbixTrapper.from_env() is None
-
-
-def test_zabbix_trapper_from_env_with_host_returns_configured(monkeypatch):
-    monkeypatch.setenv("ZABBIX_TRAPPER_HOST", "zabbix.example")
-    monkeypatch.setenv("ZABBIX_TRAPPER_PORT", "10052")
-    trapper = ZabbixTrapper.from_env()
-    assert trapper is not None
-    assert trapper.host == "zabbix.example"
-    assert trapper.port == 10052
-
-
-def test_zabbix_trapper_from_env_invalid_port_returns_none(monkeypatch):
-    monkeypatch.setenv("ZABBIX_TRAPPER_HOST", "zabbix.example")
-    monkeypatch.setenv("ZABBIX_TRAPPER_PORT", "not-a-number")
-    assert ZabbixTrapper.from_env() is None
-
 
 # ── default_threshold_from_env ─────────────────────────────────────────────
 
@@ -202,58 +102,6 @@ def test_escalate_does_not_alert_before_threshold(caplog):
     assert error_records == []
 
 
-def test_escalate_pushes_to_zabbix_when_trapper_configured():
-    """Trapper.send is called with the post-increment counter regardless
-    of whether the threshold was crossed — keeps Zabbix history fresh so
-    the trigger expression can evaluate correctly."""
-    calls: list[dict] = []
-
-    class _FakeTrapper:
-        def send(self, *, zabbix_host, key, value):
-            calls.append({"zabbix_host": zabbix_host, "key": key, "value": value})
-            return True
-
-    escalate_sweep_unreachable(
-        ont_id="ont-1",
-        serial_number="x",
-        mgmt_ip="172.16.210.20",
-        before=0,
-        after=1,
-        threshold=3,
-        trapper=_FakeTrapper(),
-        zabbix_host="172.16.210.20",
-    )
-    assert len(calls) == 1
-    assert calls[0] == {
-        "zabbix_host": "172.16.210.20",
-        "key": "ont.consecutive_sweep_unreachable",
-        "value": 1,
-    }
-
-
-def test_escalate_skips_zabbix_when_no_zabbix_host():
-    """zabbix_host=None disables the trapper push even when a trapper
-    object is provided — there's no Zabbix host to send to."""
-    calls: list[dict] = []
-
-    class _FakeTrapper:
-        def send(self, **k):
-            calls.append(k)
-            return True
-
-    escalate_sweep_unreachable(
-        ont_id="ont-1",
-        serial_number="x",
-        mgmt_ip=None,
-        before=2,
-        after=3,
-        threshold=3,
-        trapper=_FakeTrapper(),
-        zabbix_host=None,
-    )
-    assert calls == []
-
-
 # ── resolve_sweep_unreachable ──────────────────────────────────────────────
 
 
@@ -281,23 +129,3 @@ def test_resolve_emits_info_log_when_recovering(caplog):
     info_records = [r for r in caplog.records if r.levelno == logging.INFO]
     assert len(info_records) == 1
     assert getattr(info_records[0], "alert_action", None) == "resolved"
-
-
-def test_resolve_pushes_zero_to_zabbix_to_clear_trigger():
-    calls: list[dict] = []
-
-    class _FakeTrapper:
-        def send(self, **k):
-            calls.append(k)
-            return True
-
-    resolve_sweep_unreachable(
-        ont_id="ont-1",
-        serial_number="x",
-        mgmt_ip="172.16.210.20",
-        before=5,
-        trapper=_FakeTrapper(),
-        zabbix_host="172.16.210.20",
-    )
-    assert len(calls) == 1
-    assert calls[0]["value"] == 0

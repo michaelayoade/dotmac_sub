@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
+from app.models.catalog import Subscription
 from app.models.domain_settings import SettingDomain
 from app.models.event_store import EventStatus, EventStore
 from app.models.network import (
@@ -93,6 +94,35 @@ def _normalize_cpe_data(data: dict) -> dict:
             normalized.get("device_type")
         )
     return normalized
+
+
+def _validate_cpe_subscription(
+    db: Session,
+    *,
+    subscriber_id: UUID | None,
+    subscription_id: UUID | None,
+    service_address_id: UUID | None,
+) -> None:
+    if subscription_id is None:
+        return
+    if subscriber_id is None:
+        raise HTTPException(
+            status_code=400, detail="subscription_id requires subscriber_id"
+        )
+    subscription = db.get(Subscription, subscription_id)
+    if subscription is None or subscription.subscriber_id != subscriber_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Subscription does not belong to the selected subscriber",
+        )
+    if (
+        service_address_id is not None
+        and subscription.service_address_id != service_address_id
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Service address does not belong to the selected subscription",
+        )
 
 
 def _auto_register_tr069_device(
@@ -455,6 +485,12 @@ class CPEDevices(CRUDManager[CPEDevice]):
                 status_code=400,
                 detail="service_address_id requires subscriber_id",
             )
+        _validate_cpe_subscription(
+            db,
+            subscriber_id=payload.subscriber_id,
+            subscription_id=payload.subscription_id,
+            service_address_id=payload.service_address_id,
+        )
         data = payload.model_dump()
         fields_set = payload.model_fields_set
         if "device_type" not in fields_set:
@@ -493,12 +529,12 @@ class CPEDevices(CRUDManager[CPEDevice]):
         limit: int = 50,
         offset: int = 0,
     ):
-        del subscription_id  # Reserved for legacy callers; CPEs are subscriber-scoped.
         query = db.query(CPEDevice).options(selectinload(CPEDevice.subscriber))
         query = apply_optional_equals(
             query,
             {
                 CPEDevice.subscriber_id: subscriber_id,
+                CPEDevice.subscription_id: subscription_id,
             },
         )
         query = _apply_ordering(
@@ -517,6 +553,7 @@ class CPEDevices(CRUDManager[CPEDevice]):
         data = payload.model_dump(exclude_unset=True)
         resolved_subscriber_id = data.get("subscriber_id", device.subscriber_id)
         service_address_id = data.get("service_address_id", device.service_address_id)
+        subscription_id = data.get("subscription_id", device.subscription_id)
         if resolved_subscriber_id is not None:
             network_validators.validate_cpe_device_links(
                 db,
@@ -528,6 +565,12 @@ class CPEDevices(CRUDManager[CPEDevice]):
                 status_code=400,
                 detail="service_address_id requires subscriber_id",
             )
+        _validate_cpe_subscription(
+            db,
+            subscriber_id=resolved_subscriber_id,
+            subscription_id=subscription_id,
+            service_address_id=service_address_id,
+        )
         data = _normalize_cpe_data(data)
         for key, value in data.items():
             setattr(device, key, value)

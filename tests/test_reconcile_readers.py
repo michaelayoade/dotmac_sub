@@ -19,9 +19,26 @@ import pytest
 from app.services.genieacs_client import GenieACSError
 from app.services.network.reconcile import (
     OntDesiredState,
+    Tr069WifiParameterPaths,
+    Tr181WanParameterPaths,
     read_acs_state,
     read_olt_state,
 )
+
+
+def _tr181_wan_paths() -> Tr181WanParameterPaths:
+    return Tr181WanParameterPaths(
+        ip_enable="Device.IP.Interface.1.Enable",
+        dhcp_enable="Device.DHCPv4.Client.1.Enable",
+        ip_address="Device.IP.Interface.1.IPv4Address.1.IPAddress",
+        subnet_mask="Device.IP.Interface.1.IPv4Address.1.SubnetMask",
+        gateway="Device.Routing.Router.1.IPv4Forwarding.1.GatewayIPAddress",
+        dns_primary="Device.DNS.Client.Server.1.DNSServer",
+        dns_secondary="Device.DNS.Client.Server.2.DNSServer",
+        nat_enable="Device.NAT.InterfaceSetting.1.Enable",
+        vlan_enable="Device.Ethernet.VLANTermination.1.Enable",
+        vlan_id="Device.Ethernet.VLANTermination.1.VLANID",
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -197,6 +214,7 @@ def test_olt_reader_populates_detail_fields_from_get_ont_info_detail(monkeypatch
                 "description": "Kolawole_Idiaro_2_authd_20260512",
                 "line_profile_id": 40,
                 "service_profile_id": 42,
+                "tr069_profile_id": 5,
                 "mgmt_ip": "172.16.210.20",
                 "mgmt_vlan": 201,
                 "distance_m": 4374,
@@ -209,6 +227,7 @@ def test_olt_reader_populates_detail_fields_from_get_ont_info_detail(monkeypatch
     assert obs.olt_description == "Kolawole_Idiaro_2_authd_20260512"
     assert obs.olt_line_profile_id == 40
     assert obs.olt_service_profile_id == 42
+    assert obs.olt_tr069_profile_id == 5
     assert obs.olt_mgmt_ip == "172.16.210.20"
     assert obs.olt_mgmt_vlan == 201
     assert obs.olt_distance_m == 4374
@@ -731,9 +750,18 @@ def _device_doc(*, serial: str = "HWTC8535819A", overrides=None) -> dict:
         "InternetGatewayDevice": {
             "DeviceInfo": {"SoftwareVersion": _leaf("V5R019C10S100")},
             "ManagementServer": {
+                "URL": _leaf("https://acs.example.net/cwmp"),
+                "Username": _leaf("cwmp-user"),
+                "Password": _leaf("configured"),
                 "PeriodicInformInterval": _leaf("300"),
                 "ConnectionRequestUsername": _leaf("admin"),
                 "ConnectionRequestPassword": _leaf("admin"),
+            },
+            "X_HW_UserInterface": {
+                "SSHEnable": _leaf("true"),
+                "SSHPort": _leaf("22"),
+                "TelnetEnable": _leaf("false"),
+                "TelnetPort": _leaf("23"),
             },
             "WANDevice": {
                 "1": {
@@ -755,7 +783,14 @@ def _device_doc(*, serial: str = "HWTC8535819A", overrides=None) -> dict:
             "LANDevice": {
                 "1": {
                     "LANHostConfigManagement": {"DHCPServerEnable": _leaf("true")},
-                    "WLANConfiguration": {"1": {"SSID": _leaf("KURSI")}},
+                    "WLANConfiguration": {
+                        "1": {
+                            "SSID": _leaf("KURSI"),
+                            "Enable": _leaf("true"),
+                            "Channel": _leaf("6"),
+                            "BeaconType": _leaf("11i"),
+                        }
+                    },
                 }
             },
         },
@@ -797,6 +832,26 @@ def test_acs_reader_uses_trailing_serial_regex_match():
     query, projection = client.list_calls[0]
     assert query == {"_id": {"$regex": r".*-HWTCABC123$"}}
     assert "InternetGatewayDevice.ManagementServer.PeriodicInformInterval" in projection
+    assert "Device.IP.Interface" in projection
+
+
+def test_acs_reader_never_projects_wifi_psk() -> None:
+    desired = _desired(
+        wifi_paths=Tr069WifiParameterPaths(
+            enabled="Device.WiFi.SSID.1.Enable",
+            ssid="Device.WiFi.SSID.1.SSID",
+            psk_path="Device.WiFi.AccessPoint.1.Security.KeyPassphrase",
+            channel="Device.WiFi.Radio.1.Channel",
+            security_mode="Device.WiFi.AccessPoint.1.Security.ModeEnabled",
+        )
+    )
+    client = _StubGenieAcsClient(devices=[])
+
+    read_acs_state(client, desired)
+
+    projection = client.list_calls[0][1]
+    assert "Device.WiFi.SSID.1.SSID" in projection
+    assert "KeyPassphrase" not in projection
 
 
 def test_acs_reader_parses_a_full_device_document():
@@ -813,13 +868,98 @@ def test_acs_reader_parses_a_full_device_document():
     assert obs.acs_observed_nat_enabled is True
     assert obs.acs_observed_dhcp_enabled is True
     assert obs.acs_observed_ssid == "KURSI"
+    assert obs.acs_observed_wifi_enabled is True
+    assert obs.acs_observed_wifi_channel == 6
+    assert obs.acs_observed_wifi_security_mode == "11i"
+    assert obs.acs_observed_wifi_instance_index == 1
+    assert obs.acs_observed_remote_ssh_enabled is True
+    assert obs.acs_observed_remote_ssh_port == 22
+    assert obs.acs_observed_remote_telnet_enabled is False
+    assert obs.acs_observed_remote_telnet_port == 23
     assert obs.acs_observed_periodic_inform_interval_sec == 300
     assert obs.acs_observed_cr_username == "admin"
     assert obs.acs_observed_cr_username_set is True
     assert obs.acs_observed_cr_password_set is True
+    assert obs.acs_observed_url == "https://acs.example.net/cwmp"
+    assert obs.acs_observed_username == "cwmp-user"
+    assert obs.acs_observed_password_set is True
     assert obs.acs_observed_wan_wcd_index == 1
     assert obs.acs_observed_wan_instance_index == 1
     assert obs.acs_observed_wan_ppp_locations == ((1, 1),)
+
+
+def test_acs_reader_selects_active_wifi_instance() -> None:
+    doc = _device_doc()
+    wlan = doc["InternetGatewayDevice"]["LANDevice"]["1"]["WLANConfiguration"]
+    wlan["1"] = {
+        "SSID": _leaf("placeholder"),
+        "Enable": _leaf("false"),
+        "Status": _leaf("Down"),
+    }
+    wlan["7"] = {
+        "SSID": _leaf("CUSTOMER"),
+        "Enable": _leaf("true"),
+        "Status": _leaf("Up"),
+        "Channel": _leaf("11"),
+        "BeaconType": _leaf("11i"),
+    }
+
+    observed = read_acs_state(_StubGenieAcsClient(devices=[doc]), _desired()).observed
+
+    assert observed is not None
+    assert observed.acs_observed_wifi_instance_index == 7
+    assert observed.acs_observed_ssid == "CUSTOMER"
+    assert observed.acs_observed_wifi_channel == 11
+
+
+def test_acs_reader_parses_tr098_static_wan_ip_state():
+    doc = _device_doc()
+    doc["InternetGatewayDevice"]["WANDevice"]["1"]["WANConnectionDevice"]["2"] = {
+        "WANIPConnection": {
+            "1": {
+                "Enable": _leaf("true"),
+                "AddressingType": _leaf("Static"),
+                "ExternalIPAddress": _leaf("198.51.100.10"),
+                "SubnetMask": _leaf("255.255.255.248"),
+                "DefaultGateway": _leaf("198.51.100.9"),
+                "X_HW_SERVICELIST": _leaf("INTERNET"),
+            }
+        }
+    }
+
+    observed = read_acs_state(_StubGenieAcsClient(devices=[doc]), _desired()).observed
+
+    assert observed.acs_observed_wan_ip_enable is True
+    assert observed.acs_observed_wan_addressing_type == "Static"
+    assert observed.acs_observed_wan_ip_address == "198.51.100.10"
+    assert observed.acs_observed_wan_gateway == "198.51.100.9"
+
+
+def test_acs_reader_prefers_internet_wan_ip_over_tr069_management():
+    doc = _device_doc()
+    wcd = doc["InternetGatewayDevice"]["WANDevice"]["1"]["WANConnectionDevice"]
+    wcd["1"]["WANIPConnection"] = {
+        "1": {
+            "Enable": _leaf("true"),
+            "AddressingType": _leaf("DHCP"),
+            "ExternalIPAddress": _leaf("172.16.201.10"),
+            "X_HW_SERVICELIST": _leaf("TR069"),
+        }
+    }
+    wcd["2"] = {
+        "WANIPConnection": {
+            "1": {
+                "Enable": _leaf("true"),
+                "AddressingType": _leaf("DHCP"),
+                "ExternalIPAddress": _leaf("100.64.0.10"),
+                "X_HW_SERVICELIST": _leaf("INTERNET"),
+            }
+        }
+    }
+
+    observed = read_acs_state(_StubGenieAcsClient(devices=[doc]), _desired()).observed
+
+    assert observed.acs_observed_wan_ip_address == "100.64.0.10"
 
 
 def test_acs_reader_locates_wan_ppp_on_alternate_wcd_slot():
@@ -881,15 +1021,75 @@ def test_acs_reader_uses_tr181_root_when_present():
         "Device": {
             "DeviceInfo": {"SoftwareVersion": _leaf("FW-1.0")},
             "ManagementServer": {"PeriodicInformInterval": _leaf("600")},
+            "IP": {"Interface": {"1": {"IPv6Enable": _leaf("true")}}},
         },
     }
     client = _StubGenieAcsClient(devices=[doc])
     result = read_acs_state(client, _desired())
     assert result.observed.acs_observed_software_version == "FW-1.0"
     assert result.observed.acs_observed_periodic_inform_interval_sec == 600
+    assert result.observed.acs_data_model_root == "Device"
+    assert result.observed.acs_observed_ipv6_enabled is True
     # No TR-098 → all WAN/LAN/WiFi fields None
     assert result.observed.acs_observed_pppoe_username is None
     assert result.observed.acs_observed_ssid is None
+
+
+def test_acs_reader_parses_model_resolved_tr181_static_wan():
+    doc = {
+        "_id": "00ABCD-EG8145V5-HWTC1111",
+        "Device": {
+            "IP": {
+                "Interface": {
+                    "1": {
+                        "Enable": _leaf("true"),
+                        "IPv4Address": {
+                            "1": {
+                                "IPAddress": _leaf("160.119.127.194"),
+                                "SubnetMask": _leaf("255.255.255.248"),
+                            }
+                        },
+                    }
+                }
+            },
+            "DHCPv4": {"Client": {"1": {"Enable": _leaf("false")}}},
+            "Routing": {
+                "Router": {
+                    "1": {
+                        "IPv4Forwarding": {
+                            "1": {"GatewayIPAddress": _leaf("160.119.127.193")}
+                        }
+                    }
+                }
+            },
+            "DNS": {
+                "Client": {
+                    "Server": {
+                        "1": {"DNSServer": _leaf("1.1.1.1")},
+                        "2": {"DNSServer": _leaf("8.8.8.8")},
+                    }
+                }
+            },
+            "NAT": {"InterfaceSetting": {"1": {"Enable": _leaf("false")}}},
+            "Ethernet": {
+                "VLANTermination": {
+                    "1": {"Enable": _leaf("true"), "VLANID": _leaf("203")}
+                }
+            },
+        },
+    }
+    desired = _desired(
+        tr069_data_model_root="Device", tr181_wan_paths=_tr181_wan_paths()
+    )
+
+    observed = read_acs_state(_StubGenieAcsClient(devices=[doc]), desired).observed
+
+    assert observed.acs_observed_wan_addressing_type == "Static"
+    assert observed.acs_observed_wan_ip_address == "160.119.127.194"
+    assert observed.acs_observed_wan_gateway == "160.119.127.193"
+    assert observed.acs_observed_wan_dns_servers == "1.1.1.1,8.8.8.8"
+    assert observed.acs_observed_nat_enabled is False
+    assert observed.acs_observed_wan_vlan == 203
 
 
 def test_acs_reader_handles_malformed_timestamps():

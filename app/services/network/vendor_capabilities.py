@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import builtins
 import logging
+from typing import Any
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
@@ -11,8 +12,44 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.models.network import Tr069ParameterMap, VendorModelCapability
 from app.services.common import apply_ordering, coerce_uuid
+from app.services.device_adapter_binding import stable_revision
 
 logger = logging.getLogger(__name__)
+
+
+class VendorCapabilityAmbiguous(ValueError):
+    """More than one active profile is equally eligible for a device."""
+
+
+def capability_revision(capability: VendorModelCapability) -> str:
+    """Fingerprint every capability field that can alter adapter behavior."""
+    parameter_maps = sorted(
+        (
+            {
+                "canonical_name": item.canonical_name,
+                "tr069_path": item.tr069_path,
+                "writable": item.writable,
+                "value_type": item.value_type,
+            }
+            for item in capability.parameter_maps
+        ),
+        key=lambda item: item["canonical_name"],
+    )
+    material: dict[str, Any] = {
+        "vendor": capability.vendor,
+        "model": capability.model,
+        "firmware_pattern": capability.firmware_pattern,
+        "tr069_root": capability.tr069_root,
+        "supported_features": capability.supported_features or {},
+        "max_wan_services": capability.max_wan_services,
+        "max_lan_ports": capability.max_lan_ports,
+        "max_ssids": capability.max_ssids,
+        "supports_vlan_tagging": capability.supports_vlan_tagging,
+        "supports_qinq": capability.supports_qinq,
+        "supports_ipv6": capability.supports_ipv6,
+        "parameter_maps": parameter_maps,
+    }
+    return stable_revision(material)
 
 
 class VendorCapabilities:
@@ -149,12 +186,16 @@ class VendorCapabilities:
         model: str,
         firmware: str | None = None,
     ) -> VendorModelCapability | None:
-        """Resolve the best-matching capability for a vendor+model+firmware.
+        """Resolve a deterministic capability for vendor, model, and firmware.
 
         Matching priority:
-        1. Exact vendor + model + firmware pattern match
-        2. Exact vendor + model (no firmware filter)
-        3. None if no match
+        1. Longest matching firmware prefix for exact vendor + model
+        2. Exact vendor + model profile with no firmware constraint
+        3. None when identity is insufficient or no safe profile exists
+
+        An equally specific match is rejected instead of relying on database row
+        order. Version-specific profiles are never selected without an observed
+        firmware version.
         """
         stmt = (
             select(VendorModelCapability)
@@ -169,14 +210,49 @@ class VendorCapabilities:
         if not candidates:
             return None
 
-        # If firmware provided, try to match firmware_pattern first
-        if firmware:
-            for cap in candidates:
-                if cap.firmware_pattern and firmware.startswith(cap.firmware_pattern):
-                    return cap
+        normalized_firmware = str(firmware or "").strip().casefold()
+        version_matches: list[VendorModelCapability] = []
+        if normalized_firmware:
+            version_matches = [
+                capability
+                for capability in candidates
+                if capability.firmware_pattern
+                and normalized_firmware.startswith(
+                    capability.firmware_pattern.strip().casefold()
+                )
+            ]
+        if version_matches:
+            max_specificity = max(
+                len(str(capability.firmware_pattern or ""))
+                for capability in version_matches
+            )
+            most_specific = [
+                capability
+                for capability in version_matches
+                if len(str(capability.firmware_pattern or "")) == max_specificity
+            ]
+            normalized_patterns = {
+                str(capability.firmware_pattern or "").strip().casefold()
+                for capability in most_specific
+            }
+            if len(most_specific) > 1 and len(normalized_patterns) == 1:
+                raise VendorCapabilityAmbiguous(
+                    f"Duplicate active firmware capability for {vendor} {model}"
+                )
+            if len(most_specific) > 1:
+                raise VendorCapabilityAmbiguous(
+                    f"Ambiguous active firmware capabilities for {vendor} {model}"
+                )
+            return most_specific[0]
 
-        # Fall back to first match (no firmware filter or no firmware_pattern set)
-        return candidates[0]
+        generic = [
+            capability for capability in candidates if not capability.firmware_pattern
+        ]
+        if len(generic) > 1:
+            raise VendorCapabilityAmbiguous(
+                f"Multiple active generic capabilities for {vendor} {model}"
+            )
+        return generic[0] if generic else None
 
     @staticmethod
     def list_vendors(db: Session) -> builtins.list[str]:

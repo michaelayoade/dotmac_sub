@@ -8,11 +8,13 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services.contracts import contract_signatures
+from app.services.customer_context import optional_customer_account_id
 from app.web.customer.auth import get_current_customer_from_request
 from app.web.customer.branding import get_customer_templates
 
 templates = get_customer_templates()
 router = APIRouter(prefix="/portal/service-orders", tags=["web-customer-contracts"])
+READ_ONLY_MUTATION_MESSAGE = "View-only sessions cannot make changes."
 
 
 @router.get("/{order_id}/contract", response_class=HTMLResponse)
@@ -28,9 +30,8 @@ def view_contract(
             url=f"/portal/auth/login?next=/portal/service-orders/{order_id}/contract",
             status_code=303,
         )
-
     result = contract_signatures.get_contract_context(
-        db, str(order_id), customer.get("account_id")
+        db, str(order_id), optional_customer_account_id(db, customer)
     )
 
     if "redirect" in result:
@@ -67,6 +68,17 @@ def sign_contract(
             url=f"/portal/auth/login?next=/portal/service-orders/{order_id}/contract",
             status_code=303,
         )
+    if customer.get("read_only"):
+        return templates.TemplateResponse(
+            "customer/errors/400.html",
+            {
+                "request": request,
+                "customer": customer,
+                "message": READ_ONLY_MUTATION_MESSAGE,
+                "active_page": "service-orders",
+            },
+            status_code=403,
+        )
 
     if not agree:
         raise HTTPException(
@@ -80,7 +92,7 @@ def sign_contract(
     result = contract_signatures.sign_contract_for_customer(
         db=db,
         order_id=str(order_id),
-        account_id=customer.get("account_id"),
+        account_id=optional_customer_account_id(db, customer),
         signer_name=signer_name,
         signer_email=signer_email,
         ip_address=ip_address,

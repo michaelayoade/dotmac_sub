@@ -16,7 +16,7 @@ from fastapi import HTTPException
 from app.api.crm_webhooks import receive_crm_work_order_event
 from app.config import settings
 from app.models.subscriber import Subscriber
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 
 SECRET = "test-webhook-secret"
 
@@ -103,10 +103,83 @@ def test_valid_event_reaches_service(db_session):
         code, resp = _post(db_session, body)
     assert code == 200, resp
     assert resp["status"] == "ok"
-    assert (
-        db_session.query(WorkOrderMirror).filter_by(crm_work_order_id="wo-1").count()
-        == 1
+    assert db_session.query(WorkOrder).filter_by(crm_work_order_id="wo-1").count() == 1
+
+
+def test_event_noop_when_pull_disabled(monkeypatch, db_session):
+    """Flip kill switch: crm.work_order_pull off -> 200 ack, mirror untouched."""
+    from app.services import control_registry
+
+    monkeypatch.setenv("CRM_WORK_ORDER_PULL_ENABLED", "true")
+    control_registry.update_canonical_feature_controls(
+        db_session, payload={"crm.work_order_pull": False}
     )
+    sub = _subscriber(db_session)
+    body = {
+        "subscriber_id": str(sub.id),
+        "work_order_id": "wo-killed",
+        "title": "Repair",
+        "status": "scheduled",
+    }
+    with _with_secret(SECRET), patch("app.services.push.send_push") as push:
+        code, resp = _post(db_session, body)
+    assert code == 200
+    assert resp == {
+        "status": "ignored",
+        "reason": "work_order_pull_disabled",
+        "event": "work_order.created",
+    }
+    push.assert_not_called()
+    assert (
+        db_session.query(WorkOrder).filter_by(crm_work_order_id="wo-killed").count()
+        == 0
+    )
+
+
+def test_event_processes_when_setting_missing(monkeypatch, db_session):
+    """No env, no DB row -> the control's on_missing default (ON) applies:
+    the switch is inert until the Phase 2 flip deliberately turns it off."""
+    monkeypatch.delenv("CRM_WORK_ORDER_PULL_ENABLED", raising=False)
+    sub = _subscriber(db_session)
+    body = {
+        "subscriber_id": str(sub.id),
+        "work_order_id": "wo-default-on",
+        "title": "Repair",
+        "status": "scheduled",
+    }
+    with _with_secret(SECRET), patch("app.services.push.send_push"):
+        code, resp = _post(db_session, body)
+    assert code == 200
+    assert resp["status"] == "ok"
+
+
+def test_branch_gated_by_canonical_control(monkeypatch, db_session):
+    from app.services import control_registry
+
+    monkeypatch.delenv("CRM_WORK_ORDER_PULL_ENABLED", raising=False)
+    control_registry.update_canonical_feature_controls(
+        db_session, payload={"crm.work_order_pull": False}
+    )
+
+    sub = _subscriber(db_session)
+    body = {
+        "subscriber_id": str(sub.id),
+        "work_order_id": "wo-row-gated",
+        "title": "Repair",
+        "status": "scheduled",
+    }
+    with _with_secret(SECRET), patch("app.services.push.send_push"):
+        code, resp = _post(db_session, body)
+    assert code == 200
+    assert resp["reason"] == "work_order_pull_disabled"
+
+    control_registry.update_canonical_feature_controls(
+        db_session, payload={"crm.work_order_pull": True}
+    )
+    with _with_secret(SECRET), patch("app.services.push.send_push"):
+        code, resp = _post(db_session, body)
+    assert code == 200
+    assert resp["status"] == "ok"
 
 
 def test_bad_signature_rejected(db_session):

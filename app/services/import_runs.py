@@ -15,9 +15,12 @@ commits in chunks so progress is durable and a crash doesn't lose work.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import cast
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.models.billing import Payment
 from app.models.imports import (
     ImportRowStatus,
     ImportRun,
@@ -51,8 +54,42 @@ def create_import_run(
     ``process_import_run`` (inline or from the Celery task)."""
     if module not in supported_modules():
         raise ValueError(f"Unsupported import module: {module}")
+    from app.services.financial_imports import FINANCIAL_IMPORT_MODULES
+
+    if module in FINANCIAL_IMPORT_MODULES and not dry_run:
+        raise ValueError(
+            "Financial and subscription imports must be validated as a dry run "
+            "and applied from that run"
+        )
+    return _create_import_run(
+        db,
+        module=module,
+        raw_text=raw_text,
+        data_format=data_format,
+        source_name=source_name,
+        column_mapping=column_mapping,
+        csv_delimiter=csv_delimiter,
+        dry_run=dry_run,
+        created_by=created_by,
+    )
+
+
+def _create_import_run(
+    db: Session,
+    *,
+    module: str,
+    raw_text: str,
+    data_format: str,
+    source_name: str | None,
+    column_mapping: dict | None,
+    csv_delimiter: str,
+    dry_run: bool,
+    created_by: str | None,
+    source_run_id=None,
+) -> ImportRun:
     run = ImportRun(
         module=module,
+        source_run_id=source_run_id,
         status=ImportRunStatus.pending,
         dry_run=dry_run,
         data_format=data_format,
@@ -81,22 +118,34 @@ def apply_from_dry_run(
 ) -> ImportRun:
     """Create and process an apply run from a dry-run-ready run's stored input.
     The dry-run record is preserved as the validation audit."""
-    src = db.get(ImportRun, coerce_uuid(run_id))
+    src = (
+        db.query(ImportRun)
+        .filter(ImportRun.id == coerce_uuid(run_id))
+        .with_for_update()
+        .one_or_none()
+    )
     if src is None:
         raise ValueError("Import run not found")
     if src.status != ImportRunStatus.dry_run_ready:
         raise ValueError("Only a validated (dry-run) run can be applied.")
-    run = create_import_run(
-        db,
-        module=src.module,
-        raw_text=src.input_text or "",
-        data_format=src.data_format,
-        source_name=src.source_name,
-        column_mapping=src.column_mapping,
-        csv_delimiter=src.csv_delimiter,
-        dry_run=False,
-        created_by=created_by,
-    )
+    if src.applied_run is not None:
+        raise ValueError(f"Import run was already applied as {src.applied_run.id}")
+    try:
+        run = _create_import_run(
+            db,
+            module=src.module,
+            raw_text=src.input_text or "",
+            data_format=src.data_format,
+            source_name=src.source_name,
+            column_mapping=src.column_mapping,
+            csv_delimiter=src.csv_delimiter,
+            dry_run=False,
+            created_by=created_by,
+            source_run_id=src.id,
+        )
+    except IntegrityError as exc:
+        db.rollback()
+        raise ValueError("Import run has already been applied") from exc
     return process_import_run(db, run.id)
 
 
@@ -109,6 +158,8 @@ def _record_row(
     *,
     error: str | None = None,
     result: dict | None = None,
+    payment_id=None,
+    record_created: bool | None = None,
 ) -> None:
     db.add(
         ImportRunRow(
@@ -118,6 +169,8 @@ def _record_row(
             status=status,
             error_message=error,
             result=result,
+            payment_id=payment_id,
+            record_created=record_created,
         )
     )
 
@@ -132,6 +185,17 @@ def process_import_run(db: Session, run_id) -> ImportRun:
         raise ValueError("Import run not found")
     if run.status != ImportRunStatus.pending:
         return run
+
+    from app.services.financial_imports import FINANCIAL_IMPORT_MODULES
+
+    if run.module in FINANCIAL_IMPORT_MODULES and not run.dry_run:
+        source = run.source_run
+        if source is None:
+            raise ValueError("Financial apply run is missing its validated source run")
+        if source.status != ImportRunStatus.dry_run_ready or not source.dry_run:
+            raise ValueError("Financial apply source is not a validated dry run")
+        if source.module != run.module or source.input_text != run.input_text:
+            raise ValueError("Financial apply input differs from its validated source")
 
     run.status = ImportRunStatus.running
     run.started_at = datetime.now(UTC)
@@ -171,7 +235,35 @@ def process_import_run(db: Session, run_id) -> ImportRun:
                 else:
                     nested = db.begin_nested()
                     try:
-                        obj = wiz._persist_row(db, run.module, parsed_row)
+                        persisted = wiz._persist_row(
+                            db,
+                            run.module,
+                            parsed_row,
+                            source_name=run.source_name or "import",
+                            with_provenance=run.module == "payments",
+                        )
+                        if run.module == "payments":
+                            from app.services.financial_imports import (
+                                FinancialImportPersistence,
+                            )
+
+                            if not isinstance(persisted, FinancialImportPersistence):
+                                raise RuntimeError(
+                                    "Payment import did not return provenance"
+                                )
+                            obj = cast(Payment, persisted.record)
+                            record_created = persisted.created_new
+                            if record_created:
+                                if obj.import_run_id not in {None, run.id}:
+                                    raise ValueError(
+                                        "Payment is already owned by another import run"
+                                    )
+                                obj.import_run_id = run.id
+                            payment_id = obj.id
+                        else:
+                            obj = persisted
+                            record_created = None
+                            payment_id = None
                         db.flush()
                         obj_id = getattr(obj, "id", None)
                         nested.commit()
@@ -188,7 +280,20 @@ def process_import_run(db: Session, run_id) -> ImportRun:
                             idx,
                             raw,
                             ImportRowStatus.ok,
-                            result={"id": str(obj_id)} if obj_id is not None else None,
+                            result=(
+                                {
+                                    "id": str(obj_id),
+                                    **(
+                                        {"created": record_created}
+                                        if run.module == "payments"
+                                        else {}
+                                    ),
+                                }
+                                if obj_id is not None
+                                else None
+                            ),
+                            payment_id=payment_id,
+                            record_created=record_created,
                         )
                         ok += 1
             if idx % _CHUNK_COMMIT == 0:

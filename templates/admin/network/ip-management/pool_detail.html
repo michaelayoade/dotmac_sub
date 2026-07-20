@@ -73,6 +73,16 @@
                             <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ pool.dns_secondary or '-' }}</dd>
                         </div>
                         <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">BNG / NAS Scope</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">
+                                {% if pool.nas_device %}
+                                <a href="/admin/network/nas/devices/{{ pool.nas_device.id }}" class="text-primary-600 hover:text-primary-700 dark:text-primary-400">{{ pool.nas_device.name }}</a>
+                                {% else %}
+                                Unassigned
+                                {% endif %}
+                            </dd>
+                        </div>
+                        <div>
                             <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">OLT Scope</dt>
                             <dd class="mt-1 text-sm text-slate-900 dark:text-white">
                                 {% if pool.olt_device %}
@@ -247,7 +257,7 @@
                     </div>
                     <div>
                         <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Created</p>
-                        <p class="text-sm text-slate-900 dark:text-white">{{ pool.created_at.strftime('%B %d, %Y') if pool.created_at else '-' }}</p>
+                        <p class="text-sm text-slate-900 dark:text-white">{{ pool.created_at | app_datetime('%B %d, %Y', '-', include_tz=False) }}</p>
                     </div>
                 </div>
             </div>
@@ -279,7 +289,7 @@
                         <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</div>
                         {% endif %}
                         {% if activity.occurred_at %}
-                        <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at.strftime('%b %d, %Y at %H:%M') }}</div>
+                        <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at | app_datetime('%b %d, %Y at %H:%M') }}</div>
                         {% endif %}
                     </div>
                     {% endfor %}

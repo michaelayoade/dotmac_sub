@@ -1,5 +1,7 @@
 # Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats
 
+> **Status: historical product research, not an approved requirement.** Revalidate all UI proposals against `docs/UI_INFORMATION_AND_ACTION_STANDARD.md` and the current network SOT.
+
 ## Source: legacy BSS ISP Management Platform & Related Tools
 These screenshots show legacy BSS's networking modules for GIS mapping, subscriber speed test tracking, network weathermap visualization, and DNS threat detection. Each feature is analyzed against DotMac Sub's current capabilities, and actionable improvements are proposed.
 

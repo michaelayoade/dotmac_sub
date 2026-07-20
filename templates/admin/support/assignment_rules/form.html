@@ -1,0 +1,217 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background %}
+
+{% block title %}{{ "Edit" if form_mode == "edit" else "New" }} Assignment Rule{% endblock %}
+
+{% block content %}
+{{ ambient_background('amber', 'orange') }}
+{% set form_action = "/admin/support/assignment-rules/" ~ rule.id ~ "/edit" if rule else "/admin/support/assignment-rules" %}
+{% set fv = form_values if form_values is defined else {} %}
+{% set cfg = rule.match_config if rule and rule.match_config is mapping else {} %}
+{% set current_name = (rule.name if rule else fv.get("name") or "") %}
+{% set current_priority = (rule.priority if rule else fv.get("priority") or 0) %}
+{% set current_strategy = (rule.strategy if rule else fv.get("strategy") or "round_robin") %}
+{% set current_team_id = ((rule.team_id | string) if rule and rule.team_id else fv.get("team_id") or "") %}
+{% set current_assign_manager = (rule.assign_manager if rule else fv.get("assign_manager")) %}
+{% set current_assign_spc = (rule.assign_spc if rule else fv.get("assign_spc")) %}
+{% set current_active = (rule.is_active if rule else fv.get("is_active")) %}
+{% set current_entity_types = (cfg.get("entity_types") or [] if rule else fv.get("entity_types") or []) %}
+{% set current_priorities = (cfg.get("priorities") or [] if rule else fv.get("priorities") or []) %}
+{% set current_ticket_types = (cfg.get("ticket_types") or [] if rule else fv.get("ticket_types") or []) %}
+{% set current_project_types = ((cfg.get("project_types") or []) | join(", ") if rule else fv.get("project_types_csv") or "") %}
+{% set current_regions = (cfg.get("regions") or [] if rule else fv.get("regions") or []) %}
+{% set current_sources = (cfg.get("sources") or [] if rule else fv.get("sources") or []) %}
+{% set current_service_team_ids = (cfg.get("service_team_ids") or [] if rule else fv.get("service_team_ids") or []) %}
+{% set current_tags_any = ((cfg.get("tags_any") or []) | join(", ") if rule else fv.get("tags_any_csv") or "") %}
+{% set current_target = ((cfg.get("assignment_target") or "technician") if rule else fv.get("assignment_target") or "technician") %}
+{% set current_assignee = ((cfg.get("assignee_person_id") or "") if rule else fv.get("assignee_person_id") or "") %}
+{% set input_cls = "mt-1 block w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" %}
+{% set label_cls = "block text-sm font-medium text-slate-700 dark:text-slate-300" %}
+{% set hint_cls = "mt-1 text-xs text-slate-500 dark:text-slate-400" %}
+
+<div class="relative z-10 mx-auto max-w-2xl space-y-6">
+    <div>
+        <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+            <a href="/admin/support/assignment-rules" class="hover:text-amber-600">Assignment Rules</a>
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            <span class="text-slate-900 dark:text-white">{{ "Edit Rule" if form_mode == "edit" else "New Rule" }}</span>
+        </nav>
+        <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ "Edit Rule" if form_mode == "edit" else "Create Rule" }}</h1>
+    </div>
+
+    {% if error %}
+    <div class="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-700 dark:bg-red-900/30 dark:text-red-300">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" action="{{ form_action }}" class="space-y-5 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+
+        <div>
+            <label class="{{ label_cls }}">Name</label>
+            <input name="name" required maxlength="160" value="{{ current_name }}" class="{{ input_cls }}" />
+        </div>
+
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+                <label class="{{ label_cls }}">Priority</label>
+                <input name="priority" type="number" min="0" max="9999" value="{{ current_priority }}" class="{{ input_cls }}" />
+                <p class="{{ hint_cls }}">Higher priority rules run first.</p>
+            </div>
+            <div class="flex items-center pt-6">
+                <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                    <input type="checkbox" name="is_active" value="true" {% if current_active %}checked{% endif %}
+                           class="rounded border-slate-300 text-amber-600 focus:ring-amber-500">
+                    Active
+                </label>
+            </div>
+        </div>
+
+        <fieldset class="space-y-4 rounded-xl border border-slate-200 p-4 dark:border-slate-600">
+            <legend class="px-1 text-sm font-semibold text-slate-800 dark:text-slate-100">Match conditions</legend>
+            <p class="text-xs text-slate-500 dark:text-slate-400">Every filled condition must match; leave a condition empty to match anything.</p>
+
+            <div>
+                <label class="{{ label_cls }}">Entity Types</label>
+                <div class="mt-1 flex flex-wrap gap-3">
+                    {% for value in entity_types %}
+                    <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                        <input type="checkbox" name="entity_types" value="{{ value }}" {% if value in current_entity_types %}checked{% endif %}
+                               class="rounded border-slate-300 text-amber-600 focus:ring-amber-500">
+                        {{ value | replace("_", " ") | title }}
+                    </label>
+                    {% endfor %}
+                </div>
+                <p class="{{ hint_cls }}">Sub only evaluates rules against tickets today; scoping to Ticket keeps the rule authoritative on creation.</p>
+            </div>
+
+            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div>
+                    <label class="{{ label_cls }}">Priorities</label>
+                    <select name="priorities" multiple size="4" class="{{ input_cls }}">
+                        {% for p in priorities %}
+                        <option value="{{ p }}" {% if p in current_priorities %}selected{% endif %}>{{ p | replace("_", " ") | title }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="{{ label_cls }}">Ticket Types</label>
+                    <select name="ticket_types" multiple size="4" class="{{ input_cls }}">
+                        {% for t in ticket_types %}
+                        <option value="{{ t }}" {% if t in current_ticket_types %}selected{% endif %}>{{ t }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="{{ label_cls }}">Regions</label>
+                    <select name="regions" multiple size="4" class="{{ input_cls }}">
+                        {% for r in regions %}
+                        <option value="{{ r }}" {% if r in current_regions %}selected{% endif %}>{{ r | replace("_", " ") | title }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="{{ label_cls }}">Sources (channels)</label>
+                    <select name="sources" multiple size="4" class="{{ input_cls }}">
+                        {% for s in sources %}
+                        <option value="{{ s }}" {% if s in current_sources %}selected{% endif %}>{{ s | replace("_", " ") | title }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+
+            <div>
+                <label class="{{ label_cls }}">Service Teams (match ticket's team)</label>
+                <select name="service_team_ids" multiple size="4" class="{{ input_cls }}">
+                    {% for team in team_options %}
+                    <option value="{{ team.id }}" {% if team.id in current_service_team_ids %}selected{% endif %}>{{ team.label }}</option>
+                    {% endfor %}
+                </select>
+                <p class="{{ hint_cls }}">Hold Ctrl/Cmd to select multiple options in any list above.</p>
+            </div>
+
+            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div>
+                    <label class="{{ label_cls }}">Project Types</label>
+                    <input name="project_types_csv" value="{{ current_project_types }}" placeholder="installation, survey" class="{{ input_cls }}" />
+                    <p class="{{ hint_cls }}">Comma-separated. Only used once projects flow through the engine.</p>
+                </div>
+                <div>
+                    <label class="{{ label_cls }}">Tags (any)</label>
+                    <input name="tags_any_csv" value="{{ current_tags_any }}" placeholder="vip, outage" class="{{ input_cls }}" />
+                    <p class="{{ hint_cls }}">Comma-separated. Matches when the ticket has any of these tags.</p>
+                </div>
+            </div>
+        </fieldset>
+
+        <fieldset class="space-y-4 rounded-xl border border-slate-200 p-4 dark:border-slate-600">
+            <legend class="px-1 text-sm font-semibold text-slate-800 dark:text-slate-100">Routing</legend>
+
+            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div>
+                    <label class="{{ label_cls }}">Strategy</label>
+                    <select name="strategy" required class="{{ input_cls }}">
+                        {% for s in strategies %}
+                        <option value="{{ s }}" {% if s == current_strategy %}selected{% endif %}>{{ s | replace("_", " ") | title }}</option>
+                        {% endfor %}
+                    </select>
+                    <p class="{{ hint_cls }}">How a technician is picked from the team.</p>
+                </div>
+                <div>
+                    <label class="{{ label_cls }}">Team</label>
+                    <select name="team_id" class="{{ input_cls }}">
+                        <option value="">— Ticket's own team —</option>
+                        {% for team in team_options %}
+                        <option value="{{ team.id }}" {% if team.id == current_team_id %}selected{% endif %}>{{ team.label }}</option>
+                        {% endfor %}
+                    </select>
+                    <p class="{{ hint_cls }}">Candidates come from this team; also used as the queue fallback.</p>
+                </div>
+            </div>
+
+            <div class="flex flex-wrap gap-4">
+                <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                    <input type="checkbox" name="assign_manager" value="true" {% if current_assign_manager %}checked{% endif %}
+                           class="rounded border-slate-300 text-amber-600 focus:ring-amber-500">
+                    Assign team manager
+                </label>
+                <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                    <input type="checkbox" name="assign_spc" value="true" {% if current_assign_spc %}checked{% endif %}
+                           class="rounded border-slate-300 text-amber-600 focus:ring-amber-500">
+                    Assign site coordinator
+                </label>
+            </div>
+
+            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div>
+                    <label class="{{ label_cls }}">Direct Assignee (optional)</label>
+                    <select name="assignee_person_id" class="{{ input_cls }}">
+                        <option value="">— Use strategy —</option>
+                        {% for person in staff_options %}
+                        <option value="{{ person.id }}" {% if (person.id | string) == current_assignee %}selected{% endif %}>{{ person.label or person.email or person.id }}</option>
+                        {% endfor %}
+                    </select>
+                    <p class="{{ hint_cls }}">Overrides the strategy: always assigns this person.</p>
+                </div>
+                <div>
+                    <label class="{{ label_cls }}">Assign As</label>
+                    <select name="assignment_target" class="{{ input_cls }}">
+                        {% for t in assignment_targets %}
+                        <option value="{{ t }}" {% if t == current_target %}selected{% endif %}>{{ t | replace("_", " ") | title }}</option>
+                        {% endfor %}
+                    </select>
+                    <p class="{{ hint_cls }}">Role the direct assignee fills on the ticket.</p>
+                </div>
+            </div>
+        </fieldset>
+
+        <div class="flex items-center justify-end gap-3 pt-2">
+            <a href="/admin/support/assignment-rules"
+               class="rounded-xl px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-700">Cancel</a>
+            <button type="submit"
+                    class="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 px-4 py-2 text-sm font-semibold text-white shadow-sm">
+                {{ "Save Changes" if form_mode == "edit" else "Create Rule" }}
+            </button>
+        </div>
+    </form>
+</div>
+{% endblock %}

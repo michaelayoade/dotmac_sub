@@ -37,6 +37,7 @@ from app.schemas.catalog import (
     OfferVersionPriceUpdate,
     OfferVersionUpdate,
 )
+from app.services import catalog_billing_governance as billing_governance
 from app.services import settings_spec
 from app.services.common import apply_ordering, apply_pagination, validate_enum
 from app.services.crud import CRUDManager
@@ -125,7 +126,13 @@ class Offers(CRUDManager[CatalogOffer]):
         }
 
     @staticmethod
-    def create(db: Session, payload: CatalogOfferCreate):
+    def create(
+        db: Session,
+        payload: CatalogOfferCreate,
+        *,
+        actor_id: str | None = None,
+        actor_type: str | None = None,
+    ):
         data = payload.model_dump()
         fields_set = payload.model_fields_set
         if "billing_cycle" not in fields_set:
@@ -160,6 +167,17 @@ class Offers(CRUDManager[CatalogOffer]):
                 data["status"] = validate_enum(default_status, OfferStatus, "status")
         offer = CatalogOffer(**data)
         db.add(offer)
+        db.flush()
+        billing_governance.stage_billing_catalog_change(
+            db,
+            action="created",
+            entity_type="catalog_offer",
+            entity_id=offer.id,
+            changes=data,
+            actor_id=actor_id,
+            actor_type=actor_type,
+            offer_id=offer.id,
+        )
         db.commit()
         db.refresh(offer)
         return offer
@@ -236,35 +254,95 @@ class Offers(CRUDManager[CatalogOffer]):
         return apply_pagination(query, limit, offset).all()
 
     @classmethod
-    def update(cls, db: Session, offer_id: str, payload: CatalogOfferUpdate):
-        offer = super().update(db, offer_id, payload, commit=False)
+    def update(
+        cls,
+        db: Session,
+        offer_id: str,
+        payload: CatalogOfferUpdate,
+        *,
+        actor_id: str | None = None,
+        actor_type: str | None = None,
+    ):
+        offer = cls._get_or_404(db, offer_id)
+        data = payload.model_dump(exclude_unset=True)
+        changes = billing_governance.billing_field_changes(offer, data)
+        billing_governance.assert_offer_update_safe(db, offer, changes)
+        for key, value in data.items():
+            setattr(offer, key, value)
         # Status is authoritative: the edit form exposes both the status select
         # and the is_active checkbox, and they used to drift (archived offers
         # left is_active=True stayed visible on the customer portal).
         if offer.status != OfferStatus.active and offer.is_active:
             offer.is_active = False
+            changes["is_active"] = False
+        critical_changes = billing_governance.billing_critical_changes(
+            "catalog_offer", changes
+        )
+        if critical_changes:
+            billing_governance.stage_billing_catalog_change(
+                db,
+                action="updated",
+                entity_type="catalog_offer",
+                entity_id=offer.id,
+                changes=critical_changes,
+                actor_id=actor_id,
+                actor_type=actor_type,
+                offer_id=offer.id,
+            )
         db.commit()
         db.refresh(offer)
         return offer
 
     @staticmethod
-    def delete(db: Session, offer_id: str):
+    def delete(
+        db: Session,
+        offer_id: str,
+        *,
+        actor_id: str | None = None,
+        actor_type: str | None = None,
+    ):
         """Soft-delete: archive the offer. Caller controls the transaction."""
         offer = db.get(CatalogOffer, offer_id)
         if not offer:
             raise HTTPException(status_code=404, detail="Offer not found")
         offer.status = OfferStatus.archived
         offer.is_active = False
+        billing_governance.stage_billing_catalog_change(
+            db,
+            action="archived",
+            entity_type="catalog_offer",
+            entity_id=offer.id,
+            changes={"status": OfferStatus.archived, "is_active": False},
+            actor_id=actor_id,
+            actor_type=actor_type,
+            offer_id=offer.id,
+        )
         db.flush()
 
     @staticmethod
-    def restore(db: Session, offer_id: str):
+    def restore(
+        db: Session,
+        offer_id: str,
+        *,
+        actor_id: str | None = None,
+        actor_type: str | None = None,
+    ):
         """Move an archived offer back to active. Caller controls the transaction."""
         offer = db.get(CatalogOffer, offer_id)
         if not offer:
             raise HTTPException(status_code=404, detail="Offer not found")
         offer.status = OfferStatus.active
         offer.is_active = True
+        billing_governance.stage_billing_catalog_change(
+            db,
+            action="restored",
+            entity_type="catalog_offer",
+            entity_id=offer.id,
+            changes={"status": OfferStatus.active, "is_active": True},
+            actor_id=actor_id,
+            actor_type=actor_type,
+            offer_id=offer.id,
+        )
         db.flush()
 
 
@@ -275,7 +353,14 @@ class OfferPrices(CRUDManager[OfferPrice]):
     soft_delete_value = False
 
     @staticmethod
-    def create(db: Session, payload: OfferPriceCreate):
+    def create(
+        db: Session,
+        payload: OfferPriceCreate,
+        *,
+        actor_id: str | None = None,
+        actor_type: str | None = None,
+    ):
+        billing_governance.assert_offer_price_create_safe(db, payload)
         data = payload.model_dump()
         fields_set = payload.model_fields_set
         if "price_type" not in fields_set:
@@ -294,6 +379,17 @@ class OfferPrices(CRUDManager[OfferPrice]):
                 data["currency"] = default_currency
         price = OfferPrice(**data)
         db.add(price)
+        db.flush()
+        billing_governance.stage_billing_catalog_change(
+            db,
+            action="price_created",
+            entity_type="offer_price",
+            entity_id=price.id,
+            changes=data,
+            actor_id=actor_id,
+            actor_type=actor_type,
+            offer_id=price.offer_id,
+        )
         db.commit()
         db.refresh(price)
         return price
@@ -324,12 +420,63 @@ class OfferPrices(CRUDManager[OfferPrice]):
         return apply_pagination(query, limit, offset).all()
 
     @classmethod
-    def update(cls, db: Session, price_id: str, payload: OfferPriceUpdate):
-        return super().update(db, price_id, payload)
+    def update(
+        cls,
+        db: Session,
+        price_id: str,
+        payload: OfferPriceUpdate,
+        *,
+        actor_id: str | None = None,
+        actor_type: str | None = None,
+    ):
+        price = cls._get_or_404(db, price_id)
+        data = payload.model_dump(exclude_unset=True)
+        changes = billing_governance.billing_field_changes(price, data)
+        billing_governance.assert_offer_price_update_safe(db, price, changes)
+        for key, value in data.items():
+            setattr(price, key, value)
+        critical_changes = billing_governance.billing_critical_changes(
+            "offer_price", changes
+        )
+        if critical_changes:
+            billing_governance.stage_billing_catalog_change(
+                db,
+                action="price_updated",
+                entity_type="offer_price",
+                entity_id=price.id,
+                changes=critical_changes,
+                actor_id=actor_id,
+                actor_type=actor_type,
+                offer_id=price.offer_id,
+            )
+        db.commit()
+        db.refresh(price)
+        return price
 
     @classmethod
-    def delete(cls, db: Session, price_id: str):
-        return super().delete(db, price_id)
+    def delete(
+        cls,
+        db: Session,
+        price_id: str,
+        *,
+        actor_id: str | None = None,
+        actor_type: str | None = None,
+    ):
+        price = cls._get_or_404(db, price_id)
+        changes = {"is_active": False}
+        billing_governance.assert_offer_price_update_safe(db, price, changes)
+        price.is_active = False
+        billing_governance.stage_billing_catalog_change(
+            db,
+            action="price_deactivated",
+            entity_type="offer_price",
+            entity_id=price.id,
+            changes=changes,
+            actor_id=actor_id,
+            actor_type=actor_type,
+            offer_id=price.offer_id,
+        )
+        db.commit()
 
 
 class OfferVersions(CRUDManager[OfferVersion]):
@@ -339,7 +486,13 @@ class OfferVersions(CRUDManager[OfferVersion]):
     soft_delete_value = False
 
     @staticmethod
-    def create(db: Session, payload: OfferVersionCreate):
+    def create(
+        db: Session,
+        payload: OfferVersionCreate,
+        *,
+        actor_id: str | None = None,
+        actor_type: str | None = None,
+    ):
         offer = db.get(CatalogOffer, payload.offer_id)
         if not offer:
             raise HTTPException(status_code=404, detail="Offer not found")
@@ -369,6 +522,17 @@ class OfferVersions(CRUDManager[OfferVersion]):
                 data["status"] = validate_enum(default_status, OfferStatus, "status")
         version = OfferVersion(**data)
         db.add(version)
+        db.flush()
+        billing_governance.stage_billing_catalog_change(
+            db,
+            action="version_created",
+            entity_type="offer_version",
+            entity_id=version.id,
+            changes=data,
+            actor_id=actor_id,
+            actor_type=actor_type,
+            offer_id=version.offer_id,
+        )
         db.commit()
         db.refresh(version)
         return version
@@ -402,24 +566,68 @@ class OfferVersions(CRUDManager[OfferVersion]):
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
-    def update(db: Session, version_id: str, payload: OfferVersionUpdate):
+    def update(
+        db: Session,
+        version_id: str,
+        payload: OfferVersionUpdate,
+        *,
+        actor_id: str | None = None,
+        actor_type: str | None = None,
+    ):
         version = db.get(OfferVersion, version_id)
         if not version:
             raise HTTPException(status_code=404, detail="Offer version not found")
         data = payload.model_dump(exclude_unset=True)
+        changes = billing_governance.billing_field_changes(version, data)
+        billing_governance.assert_offer_version_update_safe(db, version, changes)
         if "offer_id" in data:
             offer = db.get(CatalogOffer, data["offer_id"])
             if not offer:
                 raise HTTPException(status_code=404, detail="Offer not found")
         for key, value in data.items():
             setattr(version, key, value)
+        critical_changes = billing_governance.billing_critical_changes(
+            "offer_version", changes
+        )
+        if critical_changes:
+            billing_governance.stage_billing_catalog_change(
+                db,
+                action="version_updated",
+                entity_type="offer_version",
+                entity_id=version.id,
+                changes=critical_changes,
+                actor_id=actor_id,
+                actor_type=actor_type,
+                offer_id=version.offer_id,
+            )
         db.commit()
         db.refresh(version)
         return version
 
     @classmethod
-    def delete(cls, db: Session, version_id: str):
-        return super().delete(db, version_id)
+    def delete(
+        cls,
+        db: Session,
+        version_id: str,
+        *,
+        actor_id: str | None = None,
+        actor_type: str | None = None,
+    ):
+        version = cls._get_or_404(db, version_id)
+        changes = {"is_active": False}
+        billing_governance.assert_offer_version_update_safe(db, version, changes)
+        version.is_active = False
+        billing_governance.stage_billing_catalog_change(
+            db,
+            action="version_deactivated",
+            entity_type="offer_version",
+            entity_id=version.id,
+            changes=changes,
+            actor_id=actor_id,
+            actor_type=actor_type,
+            offer_id=version.offer_id,
+        )
+        db.commit()
 
 
 class OfferVersionPrices(CRUDManager[OfferVersionPrice]):
@@ -429,7 +637,14 @@ class OfferVersionPrices(CRUDManager[OfferVersionPrice]):
     soft_delete_value = False
 
     @staticmethod
-    def create(db: Session, payload: OfferVersionPriceCreate):
+    def create(
+        db: Session,
+        payload: OfferVersionPriceCreate,
+        *,
+        actor_id: str | None = None,
+        actor_type: str | None = None,
+    ):
+        billing_governance.assert_offer_version_price_create_safe(db, payload)
         version = db.get(OfferVersion, payload.offer_version_id)
         if not version:
             raise HTTPException(status_code=404, detail="Offer version not found")
@@ -451,6 +666,17 @@ class OfferVersionPrices(CRUDManager[OfferVersionPrice]):
                 data["currency"] = default_currency
         price = OfferVersionPrice(**data)
         db.add(price)
+        db.flush()
+        billing_governance.stage_billing_catalog_change(
+            db,
+            action="version_price_created",
+            entity_type="offer_version_price",
+            entity_id=price.id,
+            changes=data,
+            actor_id=actor_id,
+            actor_type=actor_type,
+            offer_id=version.offer_id,
+        )
         db.commit()
         db.refresh(price)
         return price
@@ -487,21 +713,67 @@ class OfferVersionPrices(CRUDManager[OfferVersionPrice]):
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
-    def update(db: Session, price_id: str, payload: OfferVersionPriceUpdate):
+    def update(
+        db: Session,
+        price_id: str,
+        payload: OfferVersionPriceUpdate,
+        *,
+        actor_id: str | None = None,
+        actor_type: str | None = None,
+    ):
         price = db.get(OfferVersionPrice, price_id)
         if not price:
             raise HTTPException(status_code=404, detail="Offer version price not found")
         data = payload.model_dump(exclude_unset=True)
+        changes = billing_governance.billing_field_changes(price, data)
+        billing_governance.assert_offer_version_price_update_safe(db, price, changes)
         if "offer_version_id" in data:
             version = db.get(OfferVersion, data["offer_version_id"])
             if not version:
                 raise HTTPException(status_code=404, detail="Offer version not found")
         for key, value in data.items():
             setattr(price, key, value)
+        version = db.get(OfferVersion, price.offer_version_id)
+        critical_changes = billing_governance.billing_critical_changes(
+            "offer_version_price", changes
+        )
+        if critical_changes:
+            billing_governance.stage_billing_catalog_change(
+                db,
+                action="version_price_updated",
+                entity_type="offer_version_price",
+                entity_id=price.id,
+                changes=critical_changes,
+                actor_id=actor_id,
+                actor_type=actor_type,
+                offer_id=version.offer_id if version else None,
+            )
         db.commit()
         db.refresh(price)
         return price
 
     @classmethod
-    def delete(cls, db: Session, price_id: str):
-        return super().delete(db, price_id)
+    def delete(
+        cls,
+        db: Session,
+        price_id: str,
+        *,
+        actor_id: str | None = None,
+        actor_type: str | None = None,
+    ):
+        price = cls._get_or_404(db, price_id)
+        changes = {"is_active": False}
+        billing_governance.assert_offer_version_price_update_safe(db, price, changes)
+        price.is_active = False
+        version = db.get(OfferVersion, price.offer_version_id)
+        billing_governance.stage_billing_catalog_change(
+            db,
+            action="version_price_deactivated",
+            entity_type="offer_version_price",
+            entity_id=price.id,
+            changes=changes,
+            actor_id=actor_id,
+            actor_type=actor_type,
+            offer_id=version.offer_id if version else None,
+        )
+        db.commit()

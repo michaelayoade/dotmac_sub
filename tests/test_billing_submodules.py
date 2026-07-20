@@ -224,6 +224,7 @@ class TestInvoiceWriteOffVoid:
             subtotal=Decimal("100.00"),
             total=Decimal("100.00"),
             balance_due=Decimal("100.00"),
+            status=InvoiceStatus.issued,
         )
         result = billing_service.invoices.write_off(db_session, str(invoice.id))
         assert result.balance_due == Decimal("0.00")
@@ -236,10 +237,11 @@ class TestInvoiceWriteOffVoid:
             subscriber.id,
             total=Decimal("0.00"),
             balance_due=Decimal("0.00"),
+            status=InvoiceStatus.issued,
         )
         with pytest.raises(HTTPException) as exc:
             billing_service.invoices.write_off(db_session, str(invoice.id))
-        assert exc.value.status_code == 400
+        assert exc.value.status_code == 409
 
     def test_void_invoice(self, db_session, subscriber):
         invoice = _make_invoice(
@@ -264,12 +266,15 @@ class TestInvoiceWriteOffVoid:
             subscriber.id,
             subtotal=Decimal("50.00"),
             total=Decimal("50.00"),
-            balance_due=Decimal("0.00"),
-            status=InvoiceStatus.paid,
+            balance_due=Decimal("50.00"),
+            status=InvoiceStatus.issued,
         )
+        invoice.status = InvoiceStatus.paid
+        invoice.balance_due = Decimal("0.00")
+        db_session.commit()
         with pytest.raises(HTTPException) as exc:
             billing_service.invoices.void(db_session, str(invoice.id))
-        assert exc.value.status_code == 400
+        assert exc.value.status_code == 409
         refreshed = db_session.get(Invoice, invoice.id)
         assert refreshed.status == InvoiceStatus.paid
 
@@ -284,7 +289,7 @@ class TestInvoiceWriteOffVoid:
         billing_service.invoices.void(db_session, str(invoice.id))
         with pytest.raises(HTTPException) as exc:
             billing_service.invoices.void(db_session, str(invoice.id))
-        assert exc.value.status_code == 400
+        assert exc.value.status_code == 409
 
     def test_bulk_write_off(self, db_session, subscriber):
         inv1 = _make_invoice(
@@ -293,6 +298,7 @@ class TestInvoiceWriteOffVoid:
             subtotal=Decimal("10.00"),
             total=Decimal("10.00"),
             balance_due=Decimal("10.00"),
+            status=InvoiceStatus.issued,
         )
         inv2 = _make_invoice(
             db_session,
@@ -300,6 +306,7 @@ class TestInvoiceWriteOffVoid:
             subtotal=Decimal("20.00"),
             total=Decimal("20.00"),
             balance_due=Decimal("20.00"),
+            status=InvoiceStatus.issued,
         )
         payload = InvoiceBulkWriteOffRequest(
             invoice_ids=[inv1.id, inv2.id], memo="Bulk write-off"
@@ -826,7 +833,13 @@ class TestLedgerEntryCRUD:
         for e in results:
             assert e.entry_type == LedgerEntryType.credit
 
-    def test_update_ledger_entry(self, db_session, subscriber):
+    def test_update_ledger_entry_is_refused(self, db_session, subscriber):
+        """The ledger is append-only: a posted entry cannot be mutated.
+
+        This previously asserted that ``update`` rewrote the entry. It accepted
+        ``amount``/``entry_type``/``is_active`` too, so it could silently rewrite
+        money that had already been counted. Correct the entry by reversing it.
+        """
         entry = billing_service.ledger_entries.create(
             db_session,
             LedgerEntryCreate(
@@ -836,23 +849,20 @@ class TestLedgerEntryCRUD:
                 amount=Decimal("30.00"),
             ),
         )
-        updated = billing_service.ledger_entries.update(
-            db_session,
-            str(entry.id),
-            LedgerEntryUpdate(memo="Updated memo"),
-        )
-        assert updated.memo == "Updated memo"
-
-    def test_update_ledger_entry_not_found(self, db_session):
         with pytest.raises(HTTPException) as exc:
             billing_service.ledger_entries.update(
                 db_session,
-                str(uuid.uuid4()),
-                LedgerEntryUpdate(memo="nope"),
+                str(entry.id),
+                LedgerEntryUpdate(memo="Updated memo"),
             )
-        assert exc.value.status_code == 404
+        assert exc.value.status_code == 409
 
-    def test_delete_ledger_entry_soft(self, db_session, subscriber):
+        db_session.refresh(entry)
+        assert entry.amount == Decimal("30.00")
+        assert entry.is_active is True
+
+    def test_delete_ledger_entry_is_refused(self, db_session, subscriber):
+        """Deleting a posted entry moved the balance with no record of why."""
         entry = billing_service.ledger_entries.create(
             db_session,
             LedgerEntryCreate(
@@ -862,14 +872,12 @@ class TestLedgerEntryCRUD:
                 amount=Decimal("5.00"),
             ),
         )
-        billing_service.ledger_entries.delete(db_session, str(entry.id))
-        db_session.refresh(entry)
-        assert entry.is_active is False
-
-    def test_delete_ledger_entry_not_found(self, db_session):
         with pytest.raises(HTTPException) as exc:
-            billing_service.ledger_entries.delete(db_session, str(uuid.uuid4()))
-        assert exc.value.status_code == 404
+            billing_service.ledger_entries.delete(db_session, str(entry.id))
+        assert exc.value.status_code == 409
+
+        db_session.refresh(entry)
+        assert entry.is_active is True
 
     def test_create_ledger_entry_with_invoice(self, db_session, subscriber):
         invoice = _make_invoice(db_session, subscriber.id)
@@ -1233,6 +1241,51 @@ class TestPaymentCRUD:
         assert payment.amount == Decimal("100.00")
         assert payment.currency == "USD"
 
+    def test_succeeded_payment_gets_paid_at_when_not_supplied(
+        self, db_session, subscriber
+    ):
+        # Regression: gateway/top-up reconciliation creates succeeded payments
+        # without an explicit paid_at. Missing paid_at blinds billing-enforcement
+        # health (counts recent settlements by paid_at) and blocks all
+        # collections suspensions. create() must stamp it.
+        payment = billing_service.payments.create(
+            db_session,
+            PaymentCreate(
+                account_id=subscriber.id,
+                amount=Decimal("42.00"),
+                currency="USD",
+                status=PaymentStatus.succeeded,
+            ),
+        )
+        assert payment.status == PaymentStatus.succeeded
+        assert payment.paid_at is not None
+
+    def test_explicit_paid_at_is_preserved(self, db_session, subscriber):
+        supplied = datetime(2026, 6, 1, tzinfo=UTC)
+        payment = billing_service.payments.create(
+            db_session,
+            PaymentCreate(
+                account_id=subscriber.id,
+                amount=Decimal("42.00"),
+                currency="USD",
+                status=PaymentStatus.succeeded,
+                paid_at=supplied,
+            ),
+        )
+        assert payment.paid_at.replace(tzinfo=None) == supplied.replace(tzinfo=None)
+
+    def test_pending_payment_has_no_paid_at(self, db_session, subscriber):
+        payment = billing_service.payments.create(
+            db_session,
+            PaymentCreate(
+                account_id=subscriber.id,
+                amount=Decimal("42.00"),
+                currency="USD",
+                status=PaymentStatus.pending,
+            ),
+        )
+        assert payment.paid_at is None
+
     def test_duplicate_manual_payment_blocked(self, db_session, subscriber):
         # #29: a double-clicked manual "record payment" must not double-credit.
         billing_service.payments.create(
@@ -1369,6 +1422,7 @@ class TestPaymentCRUD:
         subscription.billing_mode = BillingMode.prepaid
         subscription.start_at = datetime(2026, 6, 1, tzinfo=UTC)
         subscription.next_billing_at = next_billing
+        subscription.unit_price = Decimal("37625.00")
         subscriber.status = SubscriberStatus.blocked
         db_session.add(
             OfferPrice(
@@ -1416,6 +1470,56 @@ class TestPaymentCRUD:
         assert subscription.next_billing_at == datetime(2026, 8, 1)
         assert subscriber.status == SubscriberStatus.active
 
+    def test_succeeded_prepaid_payment_refuses_catalog_fallback_without_contract_price(
+        self, db_session, subscriber, subscription
+    ):
+        from app.models.catalog import (
+            BillingCycle,
+            BillingMode,
+            OfferPrice,
+            PriceType,
+            SubscriptionStatus,
+        )
+
+        paid_at = datetime(2026, 6, 28, tzinfo=UTC)
+        subscription.status = SubscriptionStatus.active
+        subscription.billing_mode = BillingMode.prepaid
+        subscription.start_at = datetime(2026, 6, 1, tzinfo=UTC)
+        subscription.next_billing_at = datetime(2026, 7, 1, tzinfo=UTC)
+        subscription.unit_price = None
+        db_session.add(
+            OfferPrice(
+                offer_id=subscription.offer_id,
+                price_type=PriceType.recurring,
+                amount=Decimal("2150000.00"),
+                currency="NGN",
+                billing_cycle=BillingCycle.monthly,
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
+        payment = billing_service.payments.create(
+            db_session,
+            PaymentCreate(
+                account_id=subscriber.id,
+                amount=Decimal("2150000.00"),
+                currency="NGN",
+                status=PaymentStatus.succeeded,
+                paid_at=paid_at,
+            ),
+        )
+
+        debits = (
+            db_session.query(LedgerEntry)
+            .filter(LedgerEntry.payment_id == payment.id)
+            .filter(LedgerEntry.entry_type == LedgerEntryType.debit)
+            .count()
+        )
+        assert debits == 0
+        db_session.refresh(subscription)
+        assert subscription.next_billing_at == datetime(2026, 7, 1)
+
     def test_succeeded_prepaid_payment_preserves_credit_when_paid_coverage_exists(
         self, db_session, subscriber, subscription
     ):
@@ -1435,6 +1539,7 @@ class TestPaymentCRUD:
         subscription.billing_mode = BillingMode.prepaid
         subscription.start_at = datetime(2026, 6, 1, tzinfo=UTC)
         subscription.next_billing_at = period_start
+        subscription.unit_price = Decimal("37625.00")
         db_session.add(
             OfferPrice(
                 offer_id=subscription.offer_id,
@@ -1453,9 +1558,12 @@ class TestPaymentCRUD:
             currency="NGN",
             subtotal=Decimal("37625.00"),
             total=Decimal("37625.00"),
-            balance_due=Decimal("0.00"),
-            status=InvoiceStatus.paid,
+            balance_due=Decimal("37625.00"),
+            status=InvoiceStatus.issued,
         )
+        paid_invoice.status = InvoiceStatus.paid
+        paid_invoice.balance_due = Decimal("0.00")
+        db_session.commit()
         paid_invoice.billing_period_start = period_start
         paid_invoice.billing_period_end = period_end
         db_session.add(paid_invoice)
@@ -1752,7 +1860,7 @@ class TestPaymentAllocationCRUD:
         )
         assert len(allocations) >= 1
 
-    def test_delete_allocation(self, db_session, subscriber):
+    def test_evidence_backed_allocation_cannot_be_deleted(self, db_session, subscriber):
         invoice = _make_invoice(
             db_session,
             subscriber.id,
@@ -1787,10 +1895,11 @@ class TestPaymentAllocationCRUD:
         )
         assert len(allocations) >= 1
         alloc = allocations[0]
-        billing_service.payment_allocations.delete(db_session, str(alloc.id))
-        # After deleting allocation, invoice should have balance restored
+        with pytest.raises(HTTPException) as blocked:
+            billing_service.payment_allocations.delete(db_session, str(alloc.id))
+        assert blocked.value.status_code == 409
         db_session.refresh(invoice)
-        assert invoice.balance_due > Decimal("0.00")
+        assert invoice.balance_due == Decimal("0.00")
 
     def test_delete_allocation_not_found(self, db_session):
         with pytest.raises(HTTPException) as exc:
@@ -1992,14 +2101,17 @@ class TestReportingHelpers:
 
     def test_overview_stats_with_invoices(self, db_session, subscriber):
         """Test overview stats correctly sums paid invoices."""
-        _make_invoice(
+        paid_invoice = _make_invoice(
             db_session,
             subscriber.id,
             subtotal=Decimal("100.00"),
             total=Decimal("100.00"),
-            balance_due=Decimal("0.00"),
-            status=InvoiceStatus.paid,
+            balance_due=Decimal("100.00"),
+            status=InvoiceStatus.issued,
         )
+        paid_invoice.status = InvoiceStatus.paid
+        paid_invoice.balance_due = Decimal("0.00")
+        db_session.commit()
         _make_invoice(
             db_session,
             subscriber.id,

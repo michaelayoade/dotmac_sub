@@ -25,3 +25,24 @@ def reconcile_project_mirror() -> dict[str, int]:
         raise
     finally:
         db.close()
+
+
+@celery_app.task(name="app.tasks.projects.refresh_project_mirror_for_subscriber")
+def refresh_project_mirror_for_subscriber(subscriber_id: str) -> dict[str, bool]:
+    """Refresh one subscriber's project mirror from the CRM — enqueued by a stale
+    on-view read so the request doesn't block on the CRM round-trip."""
+    from app.services import projects_mirror
+    from app.services.crm_client import CRMClientError
+
+    db = db_session_adapter.create_session()
+    try:
+        ok = projects_mirror.reconcile_subscriber(db, subscriber_id)
+        return {"refreshed": bool(ok)}
+    except CRMClientError as exc:
+        db.rollback()
+        logger.warning(
+            "refresh_project_mirror_failed subscriber=%s: %s", subscriber_id, exc
+        )
+        return {"refreshed": False}
+    finally:
+        db.close()

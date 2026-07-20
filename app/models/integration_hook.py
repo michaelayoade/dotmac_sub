@@ -65,6 +65,7 @@ class IntegrationHook(Base):
     auth_config: Mapped[dict | None] = mapped_column(JSON)
     retry_max: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
     retry_backoff_ms: Mapped[int] = mapped_column(Integer, default=500, nullable=False)
+    timeout_seconds: Mapped[int | None] = mapped_column(Integer)
     event_filters: Mapped[list[str] | None] = mapped_column(JSON)
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     notes: Mapped[str | None] = mapped_column(Text)

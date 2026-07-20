@@ -16,7 +16,7 @@
             </div>
             <div class="text-sm text-slate-500 dark:text-slate-400">
                 {% if last_inform_at %}
-                Last inform: {{ last_inform_at.strftime('%Y-%m-%d %H:%M:%S') if last_inform_at else 'Never' }}
+                Last inform: {{ last_inform_at | app_datetime('%Y-%m-%d %H:%M:%S', 'Never') }}
                 {% else %}
                 No TR-069 session recorded
                 {% endif %}

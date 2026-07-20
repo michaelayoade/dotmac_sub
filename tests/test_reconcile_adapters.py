@@ -8,15 +8,20 @@ where needed; no fixture sharing across tests.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from app.models.network import (
     OLTDevice,
     OntUnit,
+    OntWanServiceInstance,
+    VendorModelCapability,
+    WanConnectionType,
+    WanServiceType,
 )
 from app.models.ont_observation import OntObservation
+from app.models.tr069 import Tr069AcsServer
 from app.services.network.reconcile import (
     AcsObservedFields,
     OltObservedFields,
@@ -73,6 +78,24 @@ def test_desired_carries_identity_from_ont_unit(db_session, ont, olt):
     assert desired.olt_ont_id == 11
 
 
+def test_desired_inherits_acs_assignment_and_interval_from_olt(db_session, ont, olt):
+    server = Tr069AcsServer(
+        name="Inherited ACS",
+        base_url="http://genieacs:7557",
+        is_active=True,
+        periodic_inform_interval=420,
+    )
+    db_session.add(server)
+    db_session.flush()
+    olt.tr069_acs_server_id = server.id
+    db_session.commit()
+
+    desired = desired_from_ont_unit(db_session, ont)
+
+    assert desired.acs_server_id == str(server.id)
+    assert desired.periodic_inform_interval_sec == 420
+
+
 def test_desired_builds_fsp_from_board_and_port(db_session, ont):
     desired = desired_from_ont_unit(db_session, ont)
     assert desired.fsp == "0/1/3"
@@ -104,11 +127,54 @@ def test_desired_pppoe_credentials_round_trip_through_desired_config(db_session,
 
 
 def test_desired_wifi_credentials_round_trip(db_session, ont):
-    ont.desired_config = {"wifi": {"ssid": "KURSI", "password": "kursimining@98765"}}
+    ont.desired_config = {
+        "wifi": {
+            "ssid": "KURSI",
+            "password": "kursimining@98765",
+            "enabled": False,
+            "channel": "auto",
+            "security_mode": "WPA2-Personal",
+        }
+    }
     db_session.commit()
     desired = desired_from_ont_unit(db_session, ont)
     assert desired.wifi_ssid == "KURSI"
     assert desired.wifi_password_ref == "kursimining@98765"
+    assert desired.wifi_enabled is False
+    assert desired.wifi_channel == 0
+    assert desired.wifi_security_mode == "WPA2-Personal"
+    assert desired.wifi_paths is not None
+    assert desired.wifi_paths.ssid.endswith("WLANConfiguration.1.SSID")
+
+
+def test_desired_remote_access_expires_closed_and_resolves_paths(db_session, ont):
+    future = datetime.now(UTC) + timedelta(hours=1)
+    ont.desired_config = {
+        "access": {
+            "wan_remote": True,
+            "wan_remote_expires_at": future.isoformat(),
+            "wan_remote_source_cidrs": ["10.0.0.0/24"],
+        }
+    }
+    db_session.commit()
+
+    desired = desired_from_ont_unit(db_session, ont)
+
+    assert desired.wan_remote_access_enabled is True
+    assert desired.wan_remote_access_expires_at == future
+    assert desired.wan_remote_access_source_cidrs == ("10.0.0.0/24",)
+    assert desired.remote_access_paths is not None
+    assert desired.remote_access_paths.ssh_enabled.endswith(
+        "X_HW_UserInterface.SSHEnable"
+    )
+
+    access = dict(ont.desired_config["access"])
+    access["wan_remote_expires_at"] = (
+        datetime.now(UTC) - timedelta(minutes=1)
+    ).isoformat()
+    ont.desired_config = {"access": access}
+    db_session.commit()
+    assert desired_from_ont_unit(db_session, ont).wan_remote_access_enabled is False
 
 
 def test_desired_defaults_dhcp_pool_for_empty_lan_config(db_session, ont):
@@ -137,6 +203,25 @@ def test_desired_wan_mode_defaults_to_pppoe_when_unspecified(db_session, ont):
     assert desired.wan_mode == "pppoe"
 
 
+def test_desired_preserves_dhcp_and_static_wan_modes(db_session, ont):
+    ont.desired_config = {"wan": {"mode": "dhcp"}}
+    db_session.commit()
+    assert desired_from_ont_unit(db_session, ont).wan_mode == "dhcp"
+
+    ont.desired_config = {
+        "wan": {
+            "mode": "static_ip",
+            "static_ip": "198.51.100.10",
+            "static_subnet": "255.255.255.248",
+            "static_gateway": "198.51.100.9",
+        }
+    }
+    db_session.commit()
+    desired = desired_from_ont_unit(db_session, ont)
+    assert desired.wan_mode == "static"
+    assert desired.wan_static_ip == "198.51.100.10"
+
+
 def test_desired_nat_enabled_follows_wan_mode(db_session, ont):
     desired = desired_from_ont_unit(db_session, ont)
     assert desired.nat_enabled is True  # pppoe → NAT on
@@ -145,6 +230,91 @@ def test_desired_nat_enabled_follows_wan_mode(db_session, ont):
     db_session.commit()
     desired = desired_from_ont_unit(db_session, ont)
     assert desired.nat_enabled is False  # bridge → NAT off
+
+
+@pytest.mark.parametrize(
+    ("static_ip", "nat_enabled", "is_public"),
+    [
+        ("10.20.30.2", True, False),
+        ("160.119.127.194", False, True),
+    ],
+)
+def test_desired_static_nat_comes_from_primary_internet_service(
+    db_session, ont, static_ip, nat_enabled, is_public
+):
+    db_session.add(
+        VendorModelCapability(
+            vendor="Huawei",
+            model="EG8145V5",
+            tr069_root="Device",
+            is_active=True,
+        )
+    )
+    db_session.add(
+        OntWanServiceInstance(
+            ont_id=ont.id,
+            service_type=WanServiceType.internet,
+            connection_type=WanConnectionType.static,
+            nat_enabled=nat_enabled,
+            is_active=True,
+            priority=1,
+        )
+    )
+    ont.vendor = "Huawei"
+    ont.model = "EG8145V5"
+    ont.tr069_data_model = "Device"
+    ont.desired_config = {
+        "wan": {
+            "mode": "static_ip",
+            "static_ip": static_ip,
+            "static_subnet": "255.255.255.0",
+            "static_gateway": "10.20.30.1",
+        }
+    }
+    db_session.commit()
+
+    desired = desired_from_ont_unit(db_session, ont)
+
+    assert desired.nat_enabled is nat_enabled
+    assert desired.wan_static_ip_is_public is is_public
+    assert desired.tr181_wan_paths is not None
+    assert desired.tr181_wan_paths.gateway == (
+        "Device.Routing.Router.1.IPv4Forwarding.1.GatewayIPAddress"
+    )
+
+
+def test_desired_dual_stack_is_loaded_from_wan_intent(db_session, ont):
+    ont.desired_config = {"wan": {"ip_protocol": "dual_stack"}}
+    ont.tr069_data_model = "Device"
+    db_session.commit()
+
+    desired = desired_from_ont_unit(db_session, ont)
+
+    assert desired.ipv6_enabled is True
+    assert desired.tr069_data_model_root == "Device"
+
+
+def test_device_root_is_inferred_from_model_capability_before_first_inform(
+    db_session, ont
+):
+    db_session.add(
+        VendorModelCapability(
+            vendor="Huawei",
+            model="EG8145V5",
+            tr069_root="Device",
+            is_active=True,
+        )
+    )
+    ont.vendor = "Huawei"
+    ont.model = "EG8145V5"
+    ont.tr069_data_model = None
+    ont.desired_config = {"wan": {"mode": "dhcp"}}
+    db_session.commit()
+
+    desired = desired_from_ont_unit(db_session, ont)
+
+    assert desired.tr069_data_model_root == "Device"
+    assert desired.tr181_wan_paths is not None
 
 
 def test_desired_description_uses_serial_stub_when_no_subscriber_binding(
@@ -173,6 +343,17 @@ def test_apply_writes_wifi_to_desired_config(db_session, ont):
 
     assert ont.desired_config["wifi"]["ssid"] == "NEW_SSID"
     assert ont.desired_config["wifi"]["password"] == "new-pass"
+
+
+def test_apply_persists_dual_stack_intent(db_session, ont):
+    import dataclasses
+
+    target = dataclasses.replace(
+        desired_from_ont_unit(db_session, ont), ipv6_enabled=True
+    )
+    apply_proposed_change(ont, target)
+
+    assert ont.desired_config["wan"]["ip_protocol"] == "dual_stack"
 
 
 def test_apply_writes_pppoe_via_model_accessor(db_session, ont):
@@ -256,6 +437,14 @@ def test_observed_round_trips_olt_and_acs_fields(db_session, ont):
             acs_observed_nat_enabled=True,
             acs_observed_dhcp_enabled=True,
             acs_observed_ssid="KURSI",
+            acs_observed_wifi_enabled=True,
+            acs_observed_wifi_channel=6,
+            acs_observed_wifi_security_mode="11i",
+            acs_observed_wifi_instance_index=7,
+            acs_observed_remote_ssh_enabled=True,
+            acs_observed_remote_ssh_port=22,
+            acs_observed_remote_telnet_enabled=False,
+            acs_observed_remote_telnet_port=23,
             acs_observed_periodic_inform_interval_sec=300,
             acs_observed_cr_username="admin",
             acs_observed_cr_username_set=True,
@@ -276,6 +465,14 @@ def test_observed_round_trips_olt_and_acs_fields(db_session, ont):
     assert materialised.olt.olt_description.startswith("Kolawole_Idiaro_2")
     assert materialised.olt.olt_service_ports[0]["vlan"] == 203
     assert materialised.acs.acs_observed_ssid == "KURSI"
+    assert materialised.acs.acs_observed_wifi_enabled is True
+    assert materialised.acs.acs_observed_wifi_channel == 6
+    assert materialised.acs.acs_observed_wifi_security_mode == "11i"
+    assert materialised.acs.acs_observed_wifi_instance_index == 7
+    assert materialised.acs.acs_observed_remote_ssh_enabled is True
+    assert materialised.acs.acs_observed_remote_ssh_port == 22
+    assert materialised.acs.acs_observed_remote_telnet_enabled is False
+    assert materialised.acs.acs_observed_remote_telnet_port == 23
     assert materialised.acs.acs_observed_software_version == "V5R019C10S100"
 
 

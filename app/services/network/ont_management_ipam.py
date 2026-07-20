@@ -95,16 +95,6 @@ def _get_active_assignment(db: Session, ont: OntUnit) -> OntAssignment | None:
     ).first()
 
 
-def _get_or_create_active_assignment(db: Session, ont: OntUnit) -> OntAssignment:
-    assignment = _get_active_assignment(db, ont)
-    if assignment is not None:
-        return assignment
-    assignment = OntAssignment(ont_unit_id=ont.id, active=True)
-    db.add(assignment)
-    db.flush()
-    return assignment
-
-
 def _set_legacy_cache(
     ont: OntUnit,
     assignment: OntAssignment | None,
@@ -390,7 +380,10 @@ def allocate_ont_management_ip(
     ):
         raise ValueError("Management IP pool must be IPv4.")
 
-    assignment = _get_or_create_active_assignment(db, ont)
+    # The IPv4Address row and ONT desired configuration are authoritative for
+    # management IPAM.  A customer assignment is optional legacy projection;
+    # IPAM must never manufacture one merely to hold cached fields.
+    assignment = _get_active_assignment(db, ont)
     existing = get_ont_management_ip_record(db, ont)
     if existing is not None and str(existing.pool_id) == str(pool.id):
         if not selected or str(existing.address) == selected:

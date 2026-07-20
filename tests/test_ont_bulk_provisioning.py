@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any
 from uuid import UUID
 
@@ -81,18 +80,21 @@ def test_bulk_direct_compat_task_dedupes_and_executes(monkeypatch):
 
     provisioned: list[str] = []
 
-    def fake_provision(db, ont_id, **kwargs):  # type: ignore[no-untyped-def]
+    def fake_provision(db, *, ont_id, **kwargs):  # type: ignore[no-untyped-def]
         provisioned.append(ont_id)
-        return SimpleNamespace(
-            success=True,
-            message=f"provisioned {ont_id}",
-            duration_ms=1,
-            step_name="authorization_baseline",
-        )
+        return {
+            "success": True,
+            "waiting": False,
+            "message": f"provisioned {ont_id}",
+        }
 
     monkeypatch.setattr(
-        "app.services.network.ont_provision_steps.apply_authorization_baseline",
+        "app.services.network.ont_provisioning_execution.execute_ont_provisioning",
         fake_provision,
+    )
+    monkeypatch.setattr(
+        "app.tasks.ont_provisioning.db_session_adapter.session",
+        lambda: _SessionContext(object()),
     )
 
     result = queue_bulk_provisioning.run(
@@ -148,23 +150,24 @@ def test_bulk_direct_compat_task_uses_bulk_item_correlation(
 
     captured: dict[str, Any] = {}
 
-    def fake_provision(db, ont_id, **kwargs):  # type: ignore[no-untyped-def]
+    def fake_request(db, ont_id, **kwargs):  # type: ignore[no-untyped-def]
+        from app.services.network.ont_provisioning_commands import (
+            ProvisioningCommandResult,
+        )
+
         captured["ont_id"] = ont_id
-        return SimpleNamespace(
-            success=True,
-            message="ok",
-            duration_ms=1,
-            step_name="authorization_baseline",
+        captured.update(kwargs)
+        return ProvisioningCommandResult(
+            True,
+            True,
+            "accepted",
+            operation_id="operation-1",
+            dispatch_id="dispatch-1",
         )
 
     monkeypatch.setattr(
-        "app.services.network.ont_provision_steps.apply_authorization_baseline",
-        fake_provision,
-    )
-    monkeypatch.setattr(
-        provisioning_task_module.db_session_adapter,
-        "read_session",
-        lambda: _SessionContext(db_session),
+        "app.services.network.ont_provisioning_commands.request_ont_provisioning",
+        fake_request,
     )
     monkeypatch.setattr(
         provisioning_task_module.db_session_adapter,
@@ -181,29 +184,33 @@ def test_bulk_direct_compat_task_uses_bulk_item_correlation(
     assert result["processed"] == 1
     assert result["tasks"][0]["bulk_item_id"] == str(item.id)
     assert result["tasks"][0]["correlation_key"] == item.correlation_key
+    assert result["tasks"][0]["dispatch_id"] == "dispatch-1"
     assert captured["ont_id"] == str(ont.id)
     db_session.refresh(item)
-    assert item.status == BulkProvisioningItemStatus.succeeded
+    assert item.status == BulkProvisioningItemStatus.pending
 
 
 def test_bulk_direct_compat_task_counts_failed_results(monkeypatch):
     from app.tasks.ont_provisioning import queue_bulk_provisioning
 
-    def fake_provision(db, ont_id, **kwargs):  # type: ignore[no-untyped-def]
+    def fake_provision(db, *, ont_id, **kwargs):  # type: ignore[no-untyped-def]
         success = ont_id != "ont-fail"
-        return SimpleNamespace(
-            success=success,
-            message="ok" if success else "baseline failed",
-            duration_ms=1,
-            step_name="authorization_baseline",
-        )
+        return {
+            "success": success,
+            "waiting": False,
+            "message": "ok" if success else "baseline failed",
+        }
 
     monkeypatch.setattr(
-        "app.services.network.ont_provision_steps.apply_authorization_baseline",
+        "app.services.network.ont_provisioning_execution.execute_ont_provisioning",
         fake_provision,
     )
+    monkeypatch.setattr(
+        "app.tasks.ont_provisioning.db_session_adapter.session",
+        lambda: _SessionContext(object()),
+    )
 
-    result = queue_bulk_provisioning.run(["ont-ok", "ont-fail"])
+    result = queue_bulk_provisioning.run(["ont-ok", "ont-fail"], dry_run=True)
 
     assert result["processed"] == 2
     assert result["failed"] == 1

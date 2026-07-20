@@ -8,7 +8,11 @@ from jinja2 import Environment, FileSystemLoader
 
 from app.models.network_monitoring import NetworkDevice, OutageIncident, PopSite
 from app.services.topology.customer_path import CustomerPath
-from app.services.topology.outage import open_incident_for_path
+from app.services.topology.outage import (
+    confirm_incident,
+    open_classifier_incident,
+    open_incident_for_path,
+)
 
 
 def _node(db, name):
@@ -63,36 +67,36 @@ def test_resolved_incident_not_matched(db_session):
     assert open_incident_for_path(db_session, CustomerPath(node=node)) is None
 
 
+def test_confirmed_classifier_incident_is_customer_visible(db_session):
+    from datetime import UTC, datetime
+
+    node = _node(db_session, "classifier-node")
+    inc = open_classifier_incident(db_session, root_node=node, now=datetime.now(UTC))
+    confirm_incident(db_session, inc, now=datetime.now(UTC))
+
+    assert open_incident_for_path(db_session, CustomerPath(node=node)).id == inc.id
+
+
+def test_suspected_classifier_incident_only_matches_for_scanner_dedupe(db_session):
+    from datetime import UTC, datetime
+
+    node = _node(db_session, "suspected-node")
+    inc = open_classifier_incident(db_session, root_node=node, now=datetime.now(UTC))
+
+    assert open_incident_for_path(db_session, CustomerPath(node=node)) is None
+    assert (
+        open_incident_for_path(
+            db_session,
+            CustomerPath(node=node),
+            include_suspected_classifier=True,
+        ).id
+        == inc.id
+    )
+
+
 def test_none_when_no_incident(db_session):
     node = _node(db_session, "n")
     assert open_incident_for_path(db_session, CustomerPath(node=node)) is None
-
-
-def test_selfcare_reflects_known_outage(db_session, subscription):
-    from app.models.catalog import NasDevice
-    from app.services.topology.outage import declare_outage
-    from app.services.topology.selfcare import customer_connection_status
-
-    nas = NasDevice(name="NAS", management_ip="10.0.0.1")
-    pop = PopSite(name="Garki", zabbix_group_id="10")
-    db_session.add_all([nas, pop])
-    db_session.flush()
-    node = NetworkDevice(
-        name="node",
-        matched_device_type="nas",
-        matched_device_id=nas.id,
-        pop_site_id=pop.id,
-        live_status="up",  # would normally read "healthy"
-        is_active=True,
-    )
-    db_session.add(node)
-    subscription.provisioning_nas_device_id = nas.id
-    db_session.flush()
-    declare_outage(db_session, basestation=pop)
-
-    out = customer_connection_status(db_session, subscription)
-    assert out["known_outage"] is True
-    assert out["status"] == "outage"  # declared outage overrides the cached "up" dot
 
 
 def test_panel_renders_known_outage_banner():

@@ -12,13 +12,11 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.config import settings
-from app.models.network import OLTDevice, OntUnit
+from app.models.network import OLTDevice
 from app.models.network_monitoring import DeviceRole, DeviceType, NetworkDevice
 from app.models.tr069 import Tr069AcsServer
 from app.schemas.network import OLTDeviceCreate, OLTDeviceUpdate
 from app.services import network as network_service
-from app.services import tr069 as tr069_service
 from app.services.audit_helpers import diff_dicts, model_to_dict
 from app.services.common import coerce_uuid
 from app.services.credential_crypto import decrypt_credential, encrypt_credential
@@ -557,88 +555,13 @@ def create_olt(
         return None, integrity_error_message(exc)
 
 
-def _queue_acs_propagation(db: Session, olt: OLTDevice) -> dict[str, int]:
-    """Push ACS ManagementServer parameters to all active ONTs under an OLT."""
-    from app.models.tr069 import Tr069AcsServer
-    from app.services.credential_crypto import decrypt_credential
-    from app.services.network._resolve import resolve_genieacs_with_reason
-
-    stats = {
-        "attempted": 0,
-        "propagated": 0,
-        "unresolved": 0,
-        "errors": 0,
-    }
-
-    if not olt.tr069_acs_server_id:
-        return stats
-    server = db.get(Tr069AcsServer, str(olt.tr069_acs_server_id))
-    if not server or not server.cwmp_url:
-        return stats
-
-    onts = list(
-        db.scalars(
-            select(OntUnit)
-            .where(OntUnit.olt_device_id == olt.id)
-            .where(OntUnit.is_active.is_(True))
-        ).all()
+def _queue_acs_propagation(db: Session, olt: OLTDevice) -> dict[str, Any]:
+    """Queue tracked reconciliation for every active ONT under an OLT."""
+    from app.services.network.ont_reconcile_queue import (
+        queue_olt_acs_reconciliation,
     )
-    if not onts:
-        return stats
 
-    inform_interval = str(
-        server.periodic_inform_interval or settings.tr069_periodic_inform_interval
-    )
-    acs_params: dict[str, str] = {
-        "Device.ManagementServer.URL": server.cwmp_url,
-        "Device.ManagementServer.PeriodicInformEnable": "true",
-        "Device.ManagementServer.PeriodicInformInterval": inform_interval,
-        "InternetGatewayDevice.ManagementServer.URL": server.cwmp_url,
-        "InternetGatewayDevice.ManagementServer.PeriodicInformEnable": "true",
-        "InternetGatewayDevice.ManagementServer.PeriodicInformInterval": (
-            inform_interval
-        ),
-    }
-    if server.cwmp_username:
-        acs_params["Device.ManagementServer.Username"] = server.cwmp_username
-        acs_params["InternetGatewayDevice.ManagementServer.Username"] = (
-            server.cwmp_username
-        )
-    if server.cwmp_password:
-        password = decrypt_credential(server.cwmp_password)
-        if password:
-            acs_params["Device.ManagementServer.Password"] = password
-            acs_params["InternetGatewayDevice.ManagementServer.Password"] = password
-
-    # Send both TR-098 (InternetGatewayDevice) and TR-181 (Device) parameters.
-    # Devices will ignore unsupported paths, so sending both is safe and avoids
-    # needing to detect the data model before propagation.
-
-    for ont in onts:
-        stats["attempted"] += 1
-        try:
-            resolved, reason = resolve_genieacs_with_reason(db, ont)
-            if resolved:
-                client, device_id = resolved
-                # Fire and forget: send params without strict verification since
-                # only one data model will apply (device ignores unsupported paths).
-                client.set_parameter_values(device_id, acs_params)
-                logger.info("Propagated ACS config to ONT %s", ont.serial_number)
-                stats["propagated"] += 1
-            else:
-                stats["unresolved"] += 1
-                logger.info(
-                    "Skipped ACS propagation for ONT %s: %s",
-                    ont.serial_number,
-                    reason,
-                )
-        except Exception as exc:
-            logger.error(
-                "Failed to propagate ACS to ONT %s: %s", ont.serial_number, exc
-            )
-            stats["errors"] += 1
-
-    return stats
+    return queue_olt_acs_reconciliation(db, olt)
 
 
 def update_olt(
@@ -687,15 +610,6 @@ def update_olt(
         sync_monitoring_device(db, olt, payload_values)
         new_acs_id = str(olt.tr069_acs_server_id) if olt.tr069_acs_server_id else None
         if old_acs_id != new_acs_id and new_acs_id:
-            onts = list(
-                db.scalars(
-                    select(OntUnit)
-                    .where(OntUnit.olt_device_id == olt.id)
-                    .where(OntUnit.is_active.is_(True))
-                ).all()
-            )
-            for ont in onts:
-                tr069_service.sync_ont_acs_server(db, ont, olt.tr069_acs_server_id)
             db.commit()
             _queue_acs_propagation(db, olt)
         return olt, None

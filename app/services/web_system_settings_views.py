@@ -9,6 +9,11 @@ from sqlalchemy.orm import Session
 from app.models.domain_settings import SettingDomain
 from app.services import email as email_service
 from app.services import settings_spec
+from app.services.brand_theme import (
+    DEFAULT_HEX,
+    DEFAULT_SECONDARY_HEX,
+    DEFAULT_SEMANTIC_COLORS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -94,21 +99,17 @@ def resolve_settings_domain(value: str | None) -> SettingDomain:
 def enforcement_specs() -> list[settings_spec.SettingSpec]:
     ordered_keys = {
         SettingDomain.radius: [
-            "coa_enabled",
             "coa_dictionary_path",
             "coa_timeout_sec",
             "coa_retries",
             "refresh_sessions_on_profile_change",
         ],
         SettingDomain.usage: [
-            "usage_warning_enabled",
             "usage_warning_thresholds",
             "fup_action",
             "fup_throttle_radius_profile_id",
         ],
         SettingDomain.network: [
-            "mikrotik_session_kill_enabled",
-            "address_list_block_enabled",
             "default_mikrotik_address_list",
         ],
     }
@@ -195,7 +196,7 @@ def build_settings_context(db: Session, domain_value: str | None) -> dict:
             "brand_primary_color",
         )
         brand_primary_color = (
-            str(brand_color_raw).strip() if brand_color_raw else "#206a07"
+            str(brand_color_raw).strip() if brand_color_raw else DEFAULT_HEX
         )
         brand_secondary_raw = settings_spec.resolve_value(
             db,
@@ -203,8 +204,18 @@ def build_settings_context(db: Session, domain_value: str | None) -> dict:
             "brand_secondary_color",
         )
         brand_secondary_color = (
-            str(brand_secondary_raw).strip() if brand_secondary_raw else "#06b6d4"
+            str(brand_secondary_raw).strip()
+            if brand_secondary_raw
+            else DEFAULT_SECONDARY_HEX
         )
+        semantic_colors = {}
+        for tone, default in DEFAULT_SEMANTIC_COLORS.items():
+            raw = settings_spec.resolve_value(
+                db,
+                SettingDomain.comms,
+                f"brand_semantic_{tone}_color",
+            )
+            semantic_colors[tone] = str(raw).strip() if raw else default
         hero_urls: dict[str, str] = {}
         for portal in ("customer", "reseller", "admin"):
             hero_raw = settings_spec.resolve_value(
@@ -225,6 +236,7 @@ def build_settings_context(db: Session, domain_value: str | None) -> dict:
             "branding_favicon_url": favicon_url,
             "current_brand_primary_color": brand_primary_color,
             "current_brand_secondary_color": brand_secondary_color,
+            "current_brand_semantic_colors": semantic_colors,
             "current_login_hero_customer_url": hero_urls["customer"],
             "current_login_hero_reseller_url": hero_urls["reseller"],
             "current_login_hero_admin_url": hero_urls["admin"],

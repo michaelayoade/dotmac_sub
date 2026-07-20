@@ -64,8 +64,9 @@
                     <label for="attachments" class="block text-sm font-semibold text-stone-700 dark:text-stone-300 mb-2">Attachments <span class="font-normal text-stone-400">(optional)</span></label>
                     <input id="attachments" name="attachments" type="file" multiple
                            accept=".jpg,.jpeg,.png,.gif,.webp,.pdf,image/jpeg,image/png,image/gif,image/webp,application/pdf"
+                           data-max-bytes="{{ max_attachment_bytes or 5242880 }}"
                            class="block w-full rounded-xl border-2 border-stone-200 bg-white px-4 py-3 text-sm text-stone-900 file:mr-4 file:rounded-lg file:border-0 file:bg-stone-100 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-stone-700 hover:file:bg-stone-200 dark:border-stone-600 dark:bg-stone-700 dark:text-white dark:file:bg-stone-600 dark:file:text-stone-200">
-                    <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">Images or PDF, up to 5 MB each.</p>
+                    <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">Images or PDF, up to {{ max_attachment_mb or 5 }} MB each. Attachments stay with this portal ticket if CRM sync is delayed.</p>
                 </div>
             </div>
         </div>
@@ -84,4 +85,17 @@
         </div>
     </form>
 </div>
+<script>
+document.addEventListener("change", function (event) {
+    const input = event.target;
+    if (!input.matches('input[type="file"][data-max-bytes]')) return;
+    const maxBytes = Number(input.dataset.maxBytes || "0");
+    if (!maxBytes) return;
+    const oversized = Array.from(input.files || []).find((file) => file.size > maxBytes);
+    if (oversized) {
+        input.value = "";
+        alert(`"${oversized.name}" is larger than the attachment limit.`);
+    }
+});
+</script>
 {% endblock %}

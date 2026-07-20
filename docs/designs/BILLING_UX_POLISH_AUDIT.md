@@ -1,5 +1,7 @@
 # Billing modules — UX-polish & operator-control audit
 
+> **Status: historical audit evidence.** Revalidate unresolved recommendations against `docs/UI_INFORMATION_AND_ACTION_STANDARD.md` and the current domain SOT before implementation.
+
 **Date:** 2026-06-29
 **Method:** 6-agent parallel read-only review across the billing surface
 (~16 admin pages, ~40 services): invoices/ledger/tax, payments/gateways/proofs,
@@ -114,6 +116,12 @@ settings/integrity/reconcilers.
 - Credit and collection-account forms, consolidated payment routing, and the
   billing adapter now use `billing.default_currency` when no explicit currency is
   provided.
+- C-4 remainder: Flutterwave payment init now sends the invoice's own currency
+  (falling back to `billing.default_currency`), the billing-health
+  covered-but-locked SQL parameterizes its currency filter from the same
+  setting, and the manual payment form/currency partial plus payment-import
+  copy source their default currency from the setting instead of a hardcoded
+  NGN literal.
 - Admin Billing now has a read-only Billing Health page that combines billing
   health signals, integrity-launch blockers, runner heartbeats, and autopay
   mandate/failure visibility.
@@ -493,9 +501,6 @@ Format: `[POLISH|CONTROL] (severity) file:line — problem → recommendation [r
 - [CONTROL] (Med) `credit_form.html:39`, `collection_accounts.html:55`, `billing_consolidated.py:90`, `billing_adapter` — currency hardcoded NGN despite `default_currency` setting → seed from setting [resolved in draft]
 - [CONTROL] (Med) `app/services/web_billing_invoice_batch.py:410` / `invoice_batch.html:199` — run_day default 1, cap 1-28 hardcoded → consider end-of-month anchor option [defer]
 - [CONTROL] (Low) `app/services/reseller_portal_billing.py:38` — `_INTENT_TTL=30min` hardcoded → setting (default 30m) [defer]
-- [CONTROL] (Low) `app/services/vas_wallet.py:461` — dup-submit guard 60s hardcoded → setting if false positives [defer]
-- Verified: VAS top-up min/max/daily limits + billing-run schedule already settings/flag-driven.
-
 ### Customer pay portal (web + mobile)
 - [POLISH] (High) `app/web/customer/routes.py:1701-1708` — payment-return verify failure renders bare `errors/400.html` + raw exception even though card may be charged → dedicated "confirming your payment" state; reserve hard-error for genuine declines [resolved in draft]
 - [POLISH] (Med) `app/web/customer/routes.py:1638-1639` + `app/api/billing.py:1174` — pay routes only `except ValueError`; `charge_authorization` raises HTTPError on decline/5xx → 500 + generic JS → catch gateway errors, friendly decline copy [resolved in draft]
@@ -520,6 +525,6 @@ Format: `[POLISH|CONTROL] (severity) file:line — problem → recommendation [r
 - [CONTROL] (Med) `app/services/crm_billing_push.py:54` — currency via `os.getenv("BILLING_DEFAULT_CURRENCY","NGN")`, bypassing settings_spec → resolve through settings_spec [defer]
 - [CONTROL] (Med) `app/services/billing_health.py:256-280,307-338` — currency `'NGN'` hardcoded inside integrity SQL; single-currency assumption baked into correctness checks → derive from default currency [defer]
 - [POLISH] (Med) `account_status_reconcile.py`, `stale_overdue_lock_reconcile.py`, `billing/unwall_paid_accounts.py`, `billing_remediation.py` — CLI-only, no last-run/result in admin → record + surface last-run/counts [defer]
-- [CONTROL] (Med) `app/services/stale_overdue_lock_reconcile.py:65-72` — when no min-balance, silently defaults `Decimal("0.00")`; zero-balance treated as covered, could auto-restore → explicit/configurable fallback + log when defaulting [defer]
+- [CONTROL] (Med) `app/services/stale_overdue_lock_reconcile.py` — the former local minimum-balance fallback was removed; overdue repair now consumes the currency-typed native signed receivable position, excludes the archived Splynx mirror, and fails closed on mixed currencies [resolved]
 - [CONTROL] (Low) `app/services/billing_settings.py:75-101` (`check_billing_switch`) — `billing_enabled_expected` invariant read ad-hoc (DomainSetting→env→false), deliberately not a spec key, invisible in UI → register / surface next to `billing_enabled` [defer]
 - Verified: `billing_remediation.py` (snapshot-drift refusal, never-delete, dry-run default, rollback manifest) + reconcilers' dry-run/eligibility gating are solid.

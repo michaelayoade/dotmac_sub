@@ -16,6 +16,7 @@ from app.models.network_monitoring import (
     InterfaceStatus,
     MetricType,
 )
+from app.schemas.status_presentation import StatusPresentation
 
 
 class PopSiteBase(BaseModel):
@@ -132,6 +133,10 @@ class NetworkDeviceRead(NetworkDeviceBase):
     id: UUID
     created_at: datetime
     updated_at: datetime
+    operational_status: str | None = None
+    operational_reason: str | None = None
+    operational_retry_pending: bool = False
+    status_presentation: StatusPresentation | None = None
 
 
 class DeviceInterfaceBase(BaseModel):

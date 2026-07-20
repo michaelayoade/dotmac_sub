@@ -17,6 +17,10 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.models.network_operation import (
+    NetworkOperationTargetType,
+    NetworkOperationType,
+)
 from app.models.router_management import (
     Router,
     RouterConfigPush,
@@ -32,7 +36,16 @@ from app.schemas.router_management import (
     RouterConfigTemplateCreate,
     RouterConfigTemplateUpdate,
 )
-from app.services.router_management.connection import check_dangerous_commands
+from app.services.device_adapter_binding import attach_adapter_binding
+from app.services.network_operations import network_operations
+from app.services.router_management.sot_policy import (
+    RouterSotPolicyError,
+    parse_routeros_sot_intents,
+)
+from app.services.router_management.write_adapter import (
+    RouterWriteUnsupported,
+    routeros_adapter_binding,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +68,8 @@ class RouterConfigService:
         config_export: str,
         source: RouterSnapshotSource,
         captured_by: uuid.UUID | None = None,
+        *,
+        commit: bool = True,
     ) -> RouterConfigSnapshot:
         config_hash = hashlib.sha256(config_export.encode()).hexdigest()
 
@@ -66,7 +81,10 @@ class RouterConfigService:
             captured_by=captured_by,
         )
         db.add(snap)
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
         db.refresh(snap)
         logger.info("Config snapshot stored for router %s: %s", router_id, snap.id)
         return snap
@@ -77,11 +95,10 @@ class RouterConfigService:
         router: Router,
     ) -> RouterConfigSnapshot:
         """Connect to the router, export its config, and store the snapshot."""
-        from app.services.router_management.connection import RouterConnectionService
+        from app.services.router_management.config_export import fetch_config_export
 
         try:
-            data = RouterConnectionService.execute(router, "GET", "/export")
-            config_text = data if isinstance(data, str) else str(data)
+            config_text = fetch_config_export(router)
         except Exception as exc:
             raise RuntimeError(f"Failed to export config: {exc}") from exc
 
@@ -133,28 +150,104 @@ class RouterConfigService:
     @staticmethod
     def create_push(
         db: Session,
-        commands: list[str],
+        desired_state: list[object],
         router_ids: list[uuid.UUID],
         initiated_by: uuid.UUID,
         template_id: uuid.UUID | None = None,
         variable_values: dict | None = None,
+        dry_run: bool = False,
+        failure_policy: str = "continue",
+        allow_dangerous_commands: bool = False,
     ) -> RouterConfigPush:
-        check_dangerous_commands(commands)
+        if failure_policy not in {"continue", "abort"}:
+            raise ValueError("Failure policy must be 'continue' or 'abort'.")
+        if allow_dangerous_commands:
+            raise ValueError(
+                "Blocked-command override is disabled; use a reviewed typed operation."
+            )
+        try:
+            intents = parse_routeros_sot_intents(desired_state)
+        except RouterSotPolicyError as exc:
+            raise ValueError(str(exc)) from exc
+
+        unique_router_ids = list(dict.fromkeys(router_ids))
+        routers = list(
+            db.scalars(select(Router).where(Router.id.in_(unique_router_ids))).all()
+        )
+        found_ids = {router.id for router in routers}
+        missing = [
+            str(router_id)
+            for router_id in unique_router_ids
+            if router_id not in found_ids
+        ]
+        if missing:
+            raise ValueError(f"Router targets not found: {', '.join(missing)}")
+        inactive = [router.name for router in routers if not router.is_active]
+        if inactive:
+            raise ValueError(f"Router targets are inactive: {', '.join(inactive)}")
+        adapter_bindings = {}
+        if not dry_run:
+            for router in routers:
+                try:
+                    adapter_bindings[router.id] = routeros_adapter_binding(router)
+                except RouterWriteUnsupported as exc:
+                    raise ValueError(f"{router.name}: {exc}") from exc
 
         push = RouterConfigPush(
             template_id=template_id,
-            commands=commands,
+            commands=[intent.to_dict() for intent in intents],
             variable_values=variable_values,
+            dry_run=dry_run,
+            failure_policy=failure_policy,
+            allow_dangerous_commands=allow_dangerous_commands,
             initiated_by=initiated_by,
             status=RouterConfigPushStatus.pending,
         )
         db.add(push)
         db.flush()
 
-        for rid in router_ids:
+        parent_operation = network_operations.start(
+            db,
+            NetworkOperationType.router_bulk_push,
+            NetworkOperationTargetType.system,
+            str(push.id),
+            correlation_key=f"router-bulk-push:{push.id}",
+            input_payload={
+                "push_id": str(push.id),
+                "router_ids": [str(router_id) for router_id in unique_router_ids],
+                "intent_count": len(intents),
+                "resources": sorted({intent.resource.value for intent in intents}),
+                "dry_run": dry_run,
+                "failure_policy": failure_policy,
+            },
+            initiated_by=str(initiated_by),
+        )
+        push.operation_id = parent_operation.id
+
+        for rid in unique_router_ids:
+            child_payload = {
+                "push_id": str(push.id),
+                "intent_count": len(intents),
+                "dry_run": dry_run,
+            }
+            if not dry_run:
+                child_payload = attach_adapter_binding(
+                    child_payload, adapter_bindings[rid]
+                )
+            child_operation = network_operations.start(
+                db,
+                NetworkOperationType.router_config_push,
+                NetworkOperationTargetType.router,
+                str(rid),
+                correlation_key=f"router-config-push:{push.id}:{rid}",
+                input_payload=child_payload,
+                parent_id=str(parent_operation.id),
+                initiated_by=str(initiated_by),
+            )
             result = RouterConfigPushResult(
                 push_id=push.id,
                 router_id=rid,
+                operation_id=child_operation.id,
                 status=RouterPushResultStatus.pending,
             )
             db.add(result)
@@ -162,10 +255,10 @@ class RouterConfigService:
         db.commit()
         db.refresh(push)
         logger.info(
-            "Config push created: %s (%d routers, %d commands)",
+            "Config push created: %s (%d routers, %d desired resources)",
             push.id,
             len(router_ids),
-            len(commands),
+            len(intents),
         )
         return push
 

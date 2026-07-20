@@ -1,37 +1,11 @@
 {% extends "layouts/admin.html" %}
 {% from "components/ui/macros.html" import
     ambient_background, detail_header, card, info_grid, info_row,
-    status_badge, table_head, table_row, timeline_item,
+    status_badge, status_presentation_badge, table_head, table_row, timeline_item,
     action_button, icon_edit, animation_styles
 %}
 
 {% block title %}Service Order {{ order.id|string|truncate(8, True, '') }} - Admin{% endblock %}
-
-{% set status_variants = {
-    'draft': 'default',
-    'submitted': 'info',
-    'scheduled': 'warning',
-    'provisioning': 'pending',
-    'active': 'active',
-    'canceled': 'inactive',
-    'failed': 'error'
-} %}
-
-{% set appt_variants = {
-    'proposed': 'info',
-    'confirmed': 'success',
-    'completed': 'paid',
-    'no_show': 'warning',
-    'canceled': 'inactive'
-} %}
-
-{% set task_variants = {
-    'pending': 'default',
-    'in_progress': 'info',
-    'blocked': 'warning',
-    'completed': 'success',
-    'failed': 'error'
-} %}
 
 {% set run_variants = {
     'pending': 'default',
@@ -57,7 +31,8 @@
 {% block content %}
 {{ ambient_background("amber", "orange") }}
 
-{% set status_html %}{{ status_badge(order.status.value|replace('_', ' ')|title, variant=status_variants.get(order.status.value, 'default')) }}{% endset %}
+{# Status semantics from the service-order status presentation owner. #}
+{% set status_html %}{{ status_presentation_badge(service_order_status_presentation(order.status)) }}{% endset %}
 
 <div class="relative space-y-8">
     {# ── Detail Header ── #}
@@ -119,11 +94,11 @@
             </div>
             <div>
                 <p class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Created</p>
-                <p class="mt-1 text-sm text-slate-900 dark:text-white">{{ order.created_at.strftime('%Y-%m-%d %H:%M') if order.created_at else '-' }}</p>
+                <p class="mt-1 text-sm text-slate-900 dark:text-white">{{ order.created_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</p>
             </div>
             <div>
                 <p class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Updated</p>
-                <p class="mt-1 text-sm text-slate-900 dark:text-white">{{ order.updated_at.strftime('%Y-%m-%d %H:%M') if order.updated_at else '-' }}</p>
+                <p class="mt-1 text-sm text-slate-900 dark:text-white">{{ order.updated_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</p>
             </div>
             {% if order.notes %}
             <div class="sm:col-span-2 lg:col-span-3">
@@ -151,7 +126,7 @@
         {{ timeline_item(
             title=activity.title,
             description=activity.description|default(''),
-            time=activity.occurred_at.strftime('%b %d, %Y at %H:%M') if activity.occurred_at else '',
+            time=activity.occurred_at | app_datetime('%b %d, %Y at %H:%M', ''),
             color="amber",
             is_last=loop.last
         ) }}
@@ -200,11 +175,12 @@
                         {% for appt in order.appointments %}
                         {% call table_row(color="amber") %}
                             <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-900 dark:text-white">
-                                {{ appt.scheduled_start.strftime('%Y-%m-%d %H:%M') }} - {{ appt.scheduled_end.strftime('%H:%M') }}
+                                {{ appt.scheduled_start | app_datetime('%Y-%m-%d %H:%M', include_tz=False) }} - {{ appt.scheduled_end | app_datetime('%H:%M') }}
                             </td>
                             <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-300">{{ appt.technician or '-' }}</td>
                             <td class="whitespace-nowrap px-6 py-4">
-                                {{ status_badge(appt.status.value|replace('_', ' ')|title, variant=appt_variants.get(appt.status.value, 'default')) }}
+                                {# Status semantics from the appointment status presentation owner. #}
+                                {{ status_presentation_badge(appointment_status_presentation(appt.status)) }}
                             </td>
                             <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
                                 {% if appt.is_self_install %}
@@ -353,7 +329,7 @@
                     {% endset %}
                     {{ timeline_item(
                         title=desc,
-                        time=t.changed_at.strftime('%Y-%m-%d %H:%M') if t.changed_at else '-',
+                        time=t.changed_at | app_datetime('%Y-%m-%d %H:%M', '-'),
                         color="amber",
                         is_last=loop.last
                     ) }}
@@ -388,8 +364,8 @@
                             <td class="whitespace-nowrap px-6 py-4">
                                 {{ status_badge(run.status.value|replace('_', ' ')|title, variant=run_variants.get(run.status.value, 'default')) }}
                             </td>
-                            <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-400">{{ run.started_at.strftime('%Y-%m-%d %H:%M') if run.started_at else '-' }}</td>
-                            <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-400">{{ run.completed_at.strftime('%Y-%m-%d %H:%M') if run.completed_at else '-' }}</td>
+                            <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-400">{{ run.started_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</td>
+                            <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-400">{{ run.completed_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</td>
                             <td class="px-6 py-4 text-sm text-red-600 dark:text-red-400 max-w-xs truncate">{{ run.error_message or '-' }}</td>
                         {% endcall %}
                         {% else %}

@@ -170,9 +170,9 @@ class GenieAcsService:
         )
 
     def set_wifi_ssid(self, db: Session, ont_id: str, ssid: str) -> ActionResult:
-        from app.services.network.ont_action_wifi import set_wifi_ssid
+        from app.services.network.ont_features import OntFeatureService
 
-        return set_wifi_ssid(db, ont_id, ssid)
+        return OntFeatureService.set_wifi_config(db, ont_id, ssid=ssid)
 
     def queue_set_wifi_password(
         self,
@@ -191,9 +191,9 @@ class GenieAcsService:
         ont_id: str,
         password: str,
     ) -> ActionResult:
-        from app.services.network.ont_action_wifi import set_wifi_password
+        from app.services.network.ont_features import OntFeatureService
 
-        return set_wifi_password(db, ont_id, password)
+        return OntFeatureService.set_wifi_config(db, ont_id, password=password)
 
     def queue_set_wifi_config(
         self,
@@ -232,9 +232,9 @@ class GenieAcsService:
         channel: int | None = None,
         security_mode: str | None = None,
     ) -> ActionResult:
-        from app.services.network.ont_action_wifi import set_wifi_config
+        from app.services.network.ont_features import OntFeatureService
 
-        return set_wifi_config(
+        return OntFeatureService.set_wifi_config(
             db,
             ont_id,
             enabled=enabled,
@@ -539,44 +539,10 @@ class GenieAcsService:
     def firmware_upgrade(
         self, db: Session, ont_id: str, firmware_image_id: str
     ) -> ActionResult:
-        """Trigger ONT firmware download through the configured ACS backend."""
-        from app.models.network import OntFirmwareImage
+        """Create a tracked firmware intent; device work runs asynchronously."""
+        from app.services.network.ont_firmware import request_firmware_upgrade
 
-        firmware = db.get(OntFirmwareImage, firmware_image_id)
-        if firmware is None:
-            return ActionResult(success=False, message="Firmware image not found.")
-        if not firmware.is_active:
-            return ActionResult(success=False, message="Firmware image is not active.")
-
-        result = self.download(
-            db,
-            ont_id,
-            file_type="1 Firmware Upgrade Image",
-            file_url=firmware.file_url,
-            filename=firmware.filename,
-        )
-        if not result.success:
-            return result
-
-        data = dict(result.data or {})
-        data.update(
-            {
-                "firmware_image_id": str(firmware.id),
-                "firmware_vendor": firmware.vendor,
-                "firmware_model": firmware.model,
-                "firmware_version": firmware.version,
-                "checksum": firmware.checksum,
-                "file_size_bytes": firmware.file_size_bytes,
-            }
-        )
-        return ActionResult(
-            success=True,
-            message=(
-                f"Firmware upgrade to v{firmware.version} initiated. "
-                "The ONT will download the image and reboot if the device accepts it."
-            ),
-            data=data,
-        )
+        return request_firmware_upgrade(db, ont_id, firmware_image_id)
 
     # -------------------------------------------------------------------------
     # WAN TR-069 Actions

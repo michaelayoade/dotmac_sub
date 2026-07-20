@@ -1,16 +1,18 @@
 {% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import status_presentation_badge %}
 
 {% block title %}{{ reseller.name }} - Reseller{% endblock %}
 
 {% block content %}
-<div class="space-y-8">
+<div class="space-y-8" x-data="{ showLinkCustomerModal: false, showInviteUserModal: false }">
     <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
             <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ reseller.name }}</h1>
             <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Reseller 360 view across customers, billing, services, support, and catalog access.</p>
         </div>
         <div class="flex flex-wrap items-center gap-2">
-            <form method="post" action="/admin/resellers/{{ reseller.id }}/impersonate" class="inline-flex">
+            <form method="post" action="/admin/resellers/{{ reseller.id }}/impersonate" class="inline-flex"
+                  onsubmit="return confirm('Open a live reseller portal session as {{ reseller.name }}?');">
                 {% include "components/forms/csrf_input.html" %}
                 <button type="submit" class="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-200">
                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -31,6 +33,11 @@
         {{ error }}
     </div>
     {% endif %}
+    {% if notice %}
+    <div class="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200">
+        {{ notice }}
+    </div>
+    {% endif %}
 
     <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
@@ -41,7 +48,15 @@
         </div>
         <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Billing</p>
-            <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(outstanding_balance or 0) }}</p>
+            {% if outstanding_balance_by_currency %}
+            <div class="mt-2 space-y-1">
+                {% for balance in outstanding_balance_by_currency %}
+                <p class="text-2xl font-bold text-slate-900 dark:text-white">{{ balance.currency }} {{ "{:,.2f}".format(balance.amount or 0) }}</p>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">0.00</p>
+            {% endif %}
             <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ overdue_invoices }} overdue invoices, {{ payments_30d_count }} payments in 30d</p>
             <a href="{{ reseller_urls.invoices }}" class="mt-3 inline-flex text-xs font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">Open billing activity</a>
         </div>
@@ -61,7 +76,19 @@
 
     <div class="grid gap-6 lg:grid-cols-3">
         <div id="reseller-details" class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800 lg:col-span-1">
-            <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Reseller Details</h2>
+            <div class="flex items-center justify-between gap-4">
+                <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Reseller Details</h2>
+                <button type="button"
+                        class="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-primary-600 hover:text-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:text-primary-400 dark:hover:text-primary-300 dark:focus:ring-offset-slate-800"
+                        @click="showInviteUserModal = true; $nextTick(() => $refs.inviteUserFirstName.focus())"
+                        :aria-expanded="showInviteUserModal"
+                        aria-controls="invite-reseller-user-modal">
+                    Invite user
+                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 17L17 7M7 7h10v10"/>
+                    </svg>
+                </button>
+            </div>
             <dl class="mt-4 space-y-3 text-sm">
                 <div>
                     <dt class="text-slate-500 dark:text-slate-400">Code</dt>
@@ -80,6 +107,11 @@
                     <dd class="font-medium text-slate-900 dark:text-white">{{ 'Active' if reseller.is_active else 'Inactive' }}</dd>
                 </div>
                 <div>
+                    <dt class="text-slate-500 dark:text-slate-400">Dunning Policy</dt>
+                    {% set selected_policy = (policy_sets | selectattr('id', 'equalto', reseller.policy_set_id) | list | first) if reseller.policy_set_id else none %}
+                    <dd class="font-medium text-slate-900 dark:text-white">{{ selected_policy.name if selected_policy else 'Default policy' }}</dd>
+                </div>
+                <div>
                     <dt class="text-slate-500 dark:text-slate-400">Portal Users</dt>
                     <dd class="font-medium text-slate-900 dark:text-white">{{ reseller_portal_users }}</dd>
                 </div>
@@ -91,6 +123,16 @@
                 <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Linked Subscribers</h2>
                 <span class="text-xs text-slate-400">{{ reseller_subscribers_total|default(reseller_subscribers|length) }} total</span>
             </div>
+            <button type="button"
+                    class="mt-2 inline-flex items-center gap-1 text-sm font-medium text-primary-600 hover:text-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:text-primary-400 dark:hover:text-primary-300 dark:focus:ring-offset-slate-800"
+                    @click="showLinkCustomerModal = true; $nextTick(() => $refs.subscriberSearch.focus())"
+                    :aria-expanded="showLinkCustomerModal"
+                    aria-controls="link-customer-modal">
+                Link a customer
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 17L17 7M7 7h10v10"/>
+                </svg>
+            </button>
             <div class="mt-4 overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700">
                 <table class="w-full text-sm">
                     <thead class="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-800 dark:text-slate-400">
@@ -171,11 +213,11 @@
                     <div class="flex items-center justify-between gap-3">
                         <div>
                             <p class="text-sm font-medium text-slate-900 dark:text-white">{{ invoice.invoice_number or ('Invoice #' ~ invoice.id|string|truncate(8, True, '')) }}</p>
-                            <p class="text-xs text-slate-500 dark:text-slate-400">{{ invoice.account.account_number if invoice.account else 'Account' }}{% if invoice.created_at %} • {{ invoice.created_at.strftime('%b %d, %Y') }}{% endif %}</p>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">{{ invoice.account.account_number if invoice.account else 'Account' }}{% if invoice.created_at %} • {{ invoice.created_at | app_datetime('%b %d, %Y', include_tz=False) }}{% endif %}</p>
                         </div>
                         <div class="text-right">
                             <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ invoice.currency }} {{ "{:,.2f}".format(invoice.balance_due or 0) }}</p>
-                            <p class="text-xs text-slate-500 dark:text-slate-400">{{ invoice.status.value|replace('_', ' ')|title }}</p>
+                            {{ status_presentation_badge(invoice_status_presentations.get(invoice.id|string), size="sm") }}
                         </div>
                     </div>
                 </div>
@@ -187,11 +229,11 @@
                     <div class="flex items-center justify-between gap-3">
                         <div>
                             <p class="text-sm font-medium text-slate-900 dark:text-white">{{ payment.reference or 'Payment' }}</p>
-                            <p class="text-xs text-slate-500 dark:text-slate-400">{{ payment.account.account_number if payment.account else 'Account' }}{% if payment.created_at %} • {{ payment.created_at.strftime('%b %d, %Y') }}{% endif %}</p>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">{{ payment.account.account_number if payment.account else 'Account' }}{% if payment.created_at %} • {{ payment.created_at | app_datetime('%b %d, %Y', include_tz=False) }}{% endif %}</p>
                         </div>
                         <div class="text-right">
                             <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ payment.currency }} {{ "{:,.2f}".format(payment.amount or 0) }}</p>
-                            <p class="text-xs text-slate-500 dark:text-slate-400">{{ payment.status.value|replace('_', ' ')|title }}</p>
+                            {{ status_presentation_badge(payment_status_presentations.get(payment.id|string), size="sm") }}
                         </div>
                     </div>
                 </div>
@@ -217,7 +259,7 @@
                     <div class="flex items-center justify-between gap-3">
                         <div>
                             <p class="text-sm font-medium text-slate-900 dark:text-white">{{ subscription.offer.name if subscription.offer else 'Service' }}</p>
-                            <p class="text-xs text-slate-500 dark:text-slate-400">{{ subscription.subscriber.account_number if subscription.subscriber else 'Subscriber' }}{% if subscription.created_at %} • {{ subscription.created_at.strftime('%b %d, %Y') }}{% endif %}</p>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">{{ subscription.subscriber.account_number if subscription.subscriber else 'Subscriber' }}{% if subscription.created_at %} • {{ subscription.created_at | app_datetime('%b %d, %Y', include_tz=False) }}{% endif %}</p>
                         </div>
                         <p class="text-xs font-medium text-slate-600 dark:text-slate-300">{{ subscription.status.value|replace('_', ' ')|title }}</p>
                     </div>
@@ -240,7 +282,7 @@
                     {% for ticket in recent_tickets %}
                     <div class="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
                         <p class="text-sm font-medium text-slate-900 dark:text-white">{{ ticket.title }}</p>
-                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ ticket.number or 'Ticket' }} • {{ ticket.status.value|replace('_', ' ')|title }}{% if ticket.updated_at %} • {{ ticket.updated_at.strftime('%b %d, %Y') }}{% endif %}</p>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ ticket.number or 'Ticket' }} • {{ ticket.status.value|replace('_', ' ')|title }}{% if ticket.updated_at %} • {{ ticket.updated_at | app_datetime('%b %d, %Y', include_tz=False) }}{% endif %}</p>
                     </div>
                     {% else %}
                     <p class="text-sm text-slate-500 dark:text-slate-400">No support tickets found.</p>
@@ -271,10 +313,33 @@
         </div>
     </div>
 
-    <div class="grid gap-6 lg:grid-cols-2">
-        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Link Existing Subscriber</h2>
-            <form method="post" action="/admin/resellers/{{ reseller.id }}/users/link" class="mt-4 space-y-4">
+    <div id="link-customer-modal"
+         x-cloak
+         x-show="showLinkCustomerModal"
+         x-transition.opacity
+         @keydown.escape.window="showLinkCustomerModal = false"
+         @click.self="showLinkCustomerModal = false"
+         class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6 backdrop-blur-sm"
+         role="dialog"
+         aria-modal="true"
+         aria-labelledby="link-customer-modal-title">
+        <div class="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-800">
+            <div class="flex items-start justify-between gap-4">
+                <div>
+                    <h2 id="link-customer-modal-title" class="text-lg font-bold text-slate-900 dark:text-white">Link Existing Subscriber</h2>
+                    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Find an existing customer and link them to this reseller.</p>
+                </div>
+                <button type="button"
+                        @click="showLinkCustomerModal = false"
+                        aria-label="Close link customer dialog"
+                        class="rounded-lg p-1 text-slate-400 hover:text-slate-600 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:hover:text-slate-300 dark:focus:ring-offset-slate-800">
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                    </svg>
+                </button>
+            </div>
+
+            <form method="post" action="/admin/resellers/{{ reseller.id }}/users/link" class="mt-5 space-y-4">
                 {% include "components/forms/csrf_input.html" %}
                 <input type="hidden" name="page" value="{{ page|default(1) }}" />
                 <input type="hidden" name="per_page" value="{{ per_page|default(25) }}" />
@@ -283,6 +348,7 @@
                     <div class="relative mt-2" data-typeahead-url="/api/v1/search/reseller-subscribers" data-typeahead-min="2" data-typeahead-limit="8">
                         <input type="text"
                                id="subscriber_search"
+                               x-ref="subscriberSearch"
                                data-typeahead-input
                                autocomplete="off"
                                placeholder="Search by name, account number, or email..."
@@ -291,22 +357,52 @@
                         <div data-typeahead-results></div>
                     </div>
                 </div>
-                <button type="submit" class="inline-flex items-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800">Link Subscriber</button>
+                <div class="flex items-center justify-end gap-3">
+                    <button type="button"
+                            @click="showLinkCustomerModal = false"
+                            class="rounded-lg px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200">
+                        Cancel
+                    </button>
+                    <button type="submit" class="inline-flex items-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800">Link Subscriber</button>
+                </div>
             </form>
         </div>
-        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Create Reseller Portal User</h2>
-            <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                Creates login credentials and sends a welcome invite to the reseller portal.
-            </p>
-            <form method="post" action="/admin/resellers/{{ reseller.id }}/users/create" class="mt-4 space-y-4">
+    </div>
+
+    <div id="invite-reseller-user-modal"
+         x-cloak
+         x-show="showInviteUserModal"
+         x-transition.opacity
+         @keydown.escape.window="showInviteUserModal = false"
+         @click.self="showInviteUserModal = false"
+         class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6 backdrop-blur-sm"
+         role="dialog"
+         aria-modal="true"
+         aria-labelledby="invite-reseller-user-modal-title">
+        <div class="w-full max-w-xl rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-800">
+            <div class="flex items-start justify-between gap-4">
+                <div>
+                    <h2 id="invite-reseller-user-modal-title" class="text-lg font-bold text-slate-900 dark:text-white">Invite Reseller User</h2>
+                    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Create portal access and send the user a welcome invite.</p>
+                </div>
+                <button type="button"
+                        @click="showInviteUserModal = false"
+                        aria-label="Close invite reseller user dialog"
+                        class="rounded-lg p-1 text-slate-400 hover:text-slate-600 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:hover:text-slate-300 dark:focus:ring-offset-slate-800">
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                    </svg>
+                </button>
+            </div>
+
+            <form method="post" action="/admin/resellers/{{ reseller.id }}/users/create" class="mt-5 space-y-4">
                 {% include "components/forms/csrf_input.html" %}
                 <input type="hidden" name="page" value="{{ page|default(1) }}" />
                 <input type="hidden" name="per_page" value="{{ per_page|default(25) }}" />
                 <div class="grid gap-4 sm:grid-cols-2">
                     <div>
                         <label for="first_name" class="block text-sm font-medium text-slate-700 dark:text-slate-300">First Name</label>
-                        <input type="text" name="first_name" id="first_name" required class="mt-2 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
+                        <input type="text" name="first_name" id="first_name" x-ref="inviteUserFirstName" required class="mt-2 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
                     </div>
                     <div>
                         <label for="last_name" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Last Name</label>
@@ -317,7 +413,23 @@
                     <label for="email" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Email</label>
                     <input type="email" name="email" id="email" required class="mt-2 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
                 </div>
-                <button type="submit" class="inline-flex items-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800">Create User & Send Invite</button>
+                <div>
+                    <label for="role" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Role (optional)</label>
+                    <select name="role" id="role" class="mt-2 block w-full rounded-lg border border-slate-300 bg-white py-2 pl-3 pr-10 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">No role</option>
+                        {% for role in roles | default([]) %}
+                        <option value="{{ role.name }}">{{ role.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="flex items-center justify-end gap-3">
+                    <button type="button"
+                            @click="showInviteUserModal = false"
+                            class="rounded-lg px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200">
+                        Cancel
+                    </button>
+                    <button type="submit" class="inline-flex items-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800">Create User & Send Invite</button>
+                </div>
             </form>
         </div>
     </div>

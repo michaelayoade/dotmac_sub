@@ -42,11 +42,14 @@ def test_billing_health_threshold_settings_registered_and_resolved(monkeypatch):
             "billing_health_payment_baseline_min_daily": "3.0",
         }[key]
 
-    monkeypatch.setattr(billing_health.settings_spec, "resolve_value", fake_resolve_value)
+    monkeypatch.setattr(
+        billing_health.settings_spec, "resolve_value", fake_resolve_value
+    )
 
     thresholds = billing_health._health_thresholds(object())
 
     assert thresholds == (0.7, 0.9, 3.0)
-    assert "invoice_scan_count_low" in _snap(
-        scan_ratio=0.6, scan_min_ratio=thresholds[0]
-    ).anomalies
+    assert (
+        "invoice_scan_count_low"
+        in _snap(scan_ratio=0.6, scan_min_ratio=thresholds[0]).anomalies
+    )

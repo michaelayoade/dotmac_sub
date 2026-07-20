@@ -8,9 +8,14 @@ The CRM's webhook delivery task POSTs the raw JSON event payload with:
 Ticket events enqueue a single-ticket sync on the crm queue, so new CRM
 tickets appear locally in seconds instead of waiting for the 5-minute pull.
 Updates/comments have no CRM webhook events and remain covered by the pull.
+The ticket branch is gated by the same crm.ticket_pull control as the pull
+beat entries (legacy key crm_ticket_pull_enabled) — with it off, ticket
+events are acked as 200 noops. The work-order
+branch is gated the same way by crm.work_order_pull (legacy key
+crm_work_order_pull_enabled — flip kill switch).
 
 Mounted with no router-level auth (see main.py) — authentication is the HMAC
-signature, fail-closed like the Zabbix webhook: unconfigured secret → 503,
+signature, fail-closed: unconfigured secret → 503,
 bad/missing signature → 401, compared in constant time.
 """
 
@@ -20,6 +25,7 @@ import hashlib
 import hmac
 import json
 import logging
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
@@ -27,9 +33,10 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db import get_db
 from app.services import (
+    crm_native_sync,
+    crm_webhook_deliveries,
     projects_mirror,
     quotes_mirror,
-    referrals_mirror,
     work_orders_mirror,
 )
 from app.services.crm_customers import upsert_customer_from_payload
@@ -40,12 +47,34 @@ router = APIRouter(prefix="/webhooks/crm", tags=["crm-webhook"])
 
 SIGNATURE_HEADER = "X-Webhook-Signature-256"
 EVENT_HEADER = "X-Webhook-Event"
+DELIVERY_HEADER = "X-Webhook-Delivery-Id"
+
+# Stable namespace for deriving a delivery id from the HMAC signature when the
+# CRM sends no X-Webhook-Delivery-Id (the selfcare pushes don't). Deterministic
+# across processes, so identical redeliveries map to the same uuid.
+_DELIVERY_NAMESPACE = uuid.uuid5(
+    uuid.NAMESPACE_URL, "https://dotmac.io/crm-webhook-delivery"
+)
+
+
+def _delivery_uuid(request: Request) -> uuid.UUID:
+    """Stable id for this delivery: the CRM delivery header when present, else a
+    deterministic uuid5 of the signature (identical body -> identical signature
+    -> same id), so a byte-identical redelivery collides on the dedup PK."""
+    raw = (request.headers.get(DELIVERY_HEADER) or "").strip()
+    if raw:
+        try:
+            return uuid.UUID(raw)
+        except ValueError:
+            pass
+    signature = request.headers.get(SIGNATURE_HEADER) or ""
+    return uuid.uuid5(_DELIVERY_NAMESPACE, signature)
+
 
 # CRM ticket events that should refresh the local copy.
 TICKET_EVENTS = {"ticket.created", "ticket.resolved", "ticket.escalated"}
 CUSTOMER_EVENTS = {"customer.accepted"}
 CHAT_EVENTS = {"message.outbound"}
-REFERRAL_EVENTS = {"referral.captured", "referral.qualified", "referral.rewarded"}
 PROJECT_EVENTS = {
     "project.created",
     "project.updated",
@@ -111,13 +140,17 @@ async def receive_crm_customer(request: Request, db: Session = Depends(get_db)) 
             status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload."
         )
 
+    # Deliberately NO claim_delivery here (audit S4a): the upsert is itself
+    # idempotent, and CRM's create_customer retry contract depends on a
+    # redelivered push returning the existing subscriber id — a dedup drop
+    # would break the caller's linking. Replay safety comes from the upsert.
     response = upsert_customer_from_payload(db, payload)
     response["status"] = "ok"
     return response
 
 
 @router.post("")
-async def receive_crm_event(request: Request) -> dict:
+async def receive_crm_event(request: Request, db: Session = Depends(get_db)) -> dict:
     raw_body = await request.body()
     _verify_signature(raw_body, request.headers.get(SIGNATURE_HEADER))
 
@@ -135,6 +168,20 @@ async def receive_crm_event(request: Request) -> dict:
         # Acknowledge so the CRM doesn't retry events we don't consume.
         return {"status": "ignored", "event": event_type}
 
+    # Flip kill switch: the same crm.ticket_pull control (legacy scheduler key
+    # crm_ticket_pull_enabled) that gates the crm_ticket_pull beat entries also
+    # gates this branch — once sub stops treating the CRM as ticket upstream,
+    # ticket events are acked with a 200 noop so the CRM doesn't retry.
+    # Lazy import to match the rest of the branch (deleted whole at contract).
+    from app.services import control_registry
+
+    if not control_registry.is_enabled(db, "crm.ticket_pull"):
+        return {
+            "status": "ignored",
+            "reason": "ticket_pull_disabled",
+            "event": event_type,
+        }
+
     ticket_id = str(payload.get("ticket_id") or "").strip()
     if not ticket_id:
         logger.warning("crm_webhook_missing_ticket_id event=%s", event_type)
@@ -144,6 +191,13 @@ async def receive_crm_event(request: Request) -> dict:
     from app.tasks.crm_ticket_pull import sync_crm_ticket
 
     delivery_id = request.headers.get("X-Webhook-Delivery-Id") or ticket_id
+    # Dedup (audit S4a): the CRM's delivery task retries with the SAME
+    # X-Webhook-Delivery-Id; a replay must not enqueue a duplicate pull.
+    # (Re-pull is idempotent, so this is de-noising, not correctness.)
+    if not crm_webhook_deliveries.claim_delivery(
+        db, _delivery_uuid(request), event_type or "ticket"
+    ):
+        return {"status": "ignored", "reason": "duplicate", "event": event_type}
     try:
         enqueue_task(
             sync_crm_ticket,
@@ -174,11 +228,11 @@ async def receive_crm_chat_event(
     token — so message bodies here are advisory only.
     """
     raw_body = await request.body()
-    _verify_signature(
-        raw_body,
-        request.headers.get(SIGNATURE_HEADER),
-        secret=settings.crm_chat_webhook_secret,
-    )
+    # Verify with the shared CRM webhook secret — the same secret the selfcare
+    # client signs chat pushes with (dotmac_crm selfcare.notify_chat_message),
+    # like every other CRM webhook here. Avoids a separate, unconfigured chat
+    # secret that silently fails the signature check.
+    _verify_signature(raw_body, request.headers.get(SIGNATURE_HEADER))
 
     event_type = str(request.headers.get(EVENT_HEADER) or "").strip()
     if event_type and event_type not in CHAT_EVENTS:
@@ -193,65 +247,71 @@ async def receive_crm_chat_event(
     if not isinstance(payload, dict):
         payload = {}
 
+    # Dedup: a redelivered chat push must not wake the device twice.
+    if not crm_webhook_deliveries.claim_delivery(
+        db, _delivery_uuid(request), event_type
+    ):
+        return {"status": "ignored", "reason": "duplicate", "event": event_type}
+
     # The CRM wraps event data under "payload" (event envelope); tolerate a flat
     # body too so the contract isn't brittle.
     inner = payload.get("payload")
     body = inner if isinstance(inner, dict) else payload
 
-    subscriber_id = str(body.get("subscriber_id") or "").strip()
-    if not subscriber_id:
-        # Reseller-originated or unmapped chats have no device to wake; ack so
-        # the CRM doesn't retry.
-        return {"status": "ignored", "reason": "no_subscriber"}
-
     from app.services import push as push_service
 
     preview = str(body.get("preview") or "").strip() or "You have a new message."
-    push_service.send_push(
-        db,
-        subscriber_id,
-        title="New message from support",
-        body=preview,
-        data={
-            "type": "chat_message",
-            "conversation_id": str(body.get("conversation_id") or ""),
-        },
-    )
-    return {"status": "ok", "event": event_type}
+    conversation_id = str(body.get("conversation_id") or "")
+
+    def _wake(sid: str) -> None:
+        push_service.send_push(
+            db,
+            sid,
+            title="New message from support",
+            body=preview,
+            data={"type": "chat_message", "conversation_id": conversation_id},
+        )
+
+    subscriber_id = str(body.get("subscriber_id") or "").strip()
+    if subscriber_id:
+        _wake(subscriber_id)
+        return {"status": "ok", "event": event_type}
+
+    # Reseller-originated chat: the reseller org isn't a subscriber, but each
+    # active reseller-portal user is backed by a subscriber_id under which its
+    # device tokens register — wake all of them (best-effort; no-op when none
+    # have registered a device).
+    reseller_id = str(body.get("reseller_id") or "").strip()
+    if reseller_id:
+        from app.services import reseller_portal
+
+        sub_ids = reseller_portal.portal_user_subscriber_ids(db, reseller_id)
+        for sid in sub_ids:
+            _wake(sid)
+        return {"status": "ok" if sub_ids else "ignored", "event": event_type}
+
+    return {"status": "ignored", "reason": "no_target"}
 
 
 @router.post("/referrals")
 async def receive_crm_referral_event(
     request: Request, db: Session = Depends(get_db)
 ) -> dict:
-    """Apply a CRM referral lifecycle event to the local mirror (RFC #73).
+    """Authenticate and absorb a retired CRM referral delivery.
 
-    Handles ``referral.captured`` / ``referral.qualified`` / ``referral.rewarded``;
-    rewarded also posts an account credit (idempotent on the referral id via
-    ``external_ref``). HMAC-gated; the service acks unmapped/incomplete events so
-    the CRM doesn't retry forever. All DB/CRM logic lives in the service.
+    The route remains temporarily so already queued deliveries receive a 200
+    and stop retrying. It performs no parse-dependent decision, delivery claim,
+    mirror/native mutation, notification, credit, or outbound CRM interaction.
     """
     raw_body = await request.body()
     _verify_signature(raw_body, request.headers.get(SIGNATURE_HEADER))
 
     event_type = str(request.headers.get(EVENT_HEADER) or "").strip()
-    if event_type and event_type not in REFERRAL_EVENTS:
-        return {"status": "ignored", "event": event_type}
-
-    try:
-        payload = json.loads(raw_body or b"{}")
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload."
-        ) from None
-    if not isinstance(payload, dict):
-        payload = {}
-
-    # Tolerate both the CRM event envelope ({"payload": {...}}) and a flat body.
-    inner = payload.get("payload")
-    body = inner if isinstance(inner, dict) else payload
-
-    return referrals_mirror.apply_webhook(db, event_type, body)
+    return {
+        "status": "ignored",
+        "reason": "crm_referral_path_retired",
+        "event": event_type,
+    }
 
 
 @router.post("/projects")
@@ -280,10 +340,23 @@ async def receive_crm_project_event(
     if not isinstance(payload, dict):
         payload = {}
 
+    # Dedup: a redelivered lifecycle event must not re-fire the customer push
+    # or re-apply the delta (a redelivery of an older event can otherwise revert
+    # a newer status). The periodic reconcile is the backstop for the rare
+    # claim-then-fail case.
+    if not crm_webhook_deliveries.claim_delivery(
+        db, _delivery_uuid(request), event_type
+    ):
+        return {"status": "ignored", "reason": "duplicate", "event": event_type}
+
     inner = payload.get("payload")
     body = inner if isinstance(inner, dict) else payload
 
-    return projects_mirror.apply_webhook(db, event_type, body)
+    result = projects_mirror.apply_webhook(db, event_type, body)
+    # sync window: ALSO apply the thin delta to the
+    # native projects table (flag-gated inside; best-effort, never raises).
+    crm_native_sync.apply_webhook_delta(db, "project", event_type, body)
+    return result
 
 
 @router.post("/work-orders")
@@ -303,6 +376,22 @@ async def receive_crm_work_order_event(
     if event_type and event_type not in WORK_ORDER_EVENTS:
         return {"status": "ignored", "event": event_type}
 
+    # Flip kill switch: the same
+    # crm.work_order_pull control (legacy scheduler key
+    # crm_work_order_pull_enabled) that gates the work_order_mirror_reconcile
+    # beat entry also gates this branch — once sub is the work-order
+    # system-of-record, CRM lifecycle events are acked with a 200 noop so the
+    # CRM doesn't retry. Lazy import to match the ticket branch (deleted whole
+    # at contract).
+    from app.services import control_registry
+
+    if not control_registry.is_enabled(db, "crm.work_order_pull"):
+        return {
+            "status": "ignored",
+            "reason": "work_order_pull_disabled",
+            "event": event_type,
+        }
+
     try:
         payload = json.loads(raw_body or b"{}")
     except ValueError:
@@ -311,6 +400,15 @@ async def receive_crm_work_order_event(
         ) from None
     if not isinstance(payload, dict):
         payload = {}
+
+    # Dedup: a redelivered lifecycle event must not re-fire the customer push
+    # or re-apply the delta (a redelivery of an older event can otherwise revert
+    # a newer status). The periodic reconcile is the backstop for the rare
+    # claim-then-fail case.
+    if not crm_webhook_deliveries.claim_delivery(
+        db, _delivery_uuid(request), event_type
+    ):
+        return {"status": "ignored", "reason": "duplicate", "event": event_type}
 
     inner = payload.get("payload")
     body = inner if isinstance(inner, dict) else payload
@@ -343,7 +441,20 @@ async def receive_crm_quote_event(
     if not isinstance(payload, dict):
         payload = {}
 
+    # Dedup: a redelivered lifecycle event must not re-fire the customer push
+    # or re-apply the delta (a redelivery of an older event can otherwise revert
+    # a newer status). The periodic reconcile is the backstop for the rare
+    # claim-then-fail case.
+    if not crm_webhook_deliveries.claim_delivery(
+        db, _delivery_uuid(request), event_type
+    ):
+        return {"status": "ignored", "reason": "duplicate", "event": event_type}
+
     inner = payload.get("payload")
     body = inner if isinstance(inner, dict) else payload
 
-    return quotes_mirror.apply_webhook(db, event_type, body)
+    result = quotes_mirror.apply_webhook(db, event_type, body)
+    # sync window: ALSO apply the thin delta to the
+    # native quotes table (flag-gated inside; best-effort, never raises).
+    crm_native_sync.apply_webhook_delta(db, "quote", event_type, body)
+    return result

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from urllib.parse import urlencode
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -15,8 +16,9 @@ from app.models.network_monitoring import (
     InterfaceStatus,
     NetworkDevice,
 )
+from app.schemas.status_presentation import StatusTone
 from app.services.common import coerce_uuid
-from app.services.network.olt_web_topology import ensure_canonical_pon_port
+from app.services.ui_contracts import Kpi, StateValue
 
 _PON_TOKENS = ("pon", "gpon", "epon", "xgpon", "xgs")
 _ALIAS_PREFIX = "[[alias:"
@@ -113,6 +115,41 @@ def _status_label(status: str) -> str:
     }.get(status, "Unknown")
 
 
+def _status_state(status_value: str, *, monitoring_seen: bool) -> StateValue:
+    """Project a row's PON status as self-describing state.
+
+    A modeled port monitoring has never observed carries no truth to render, so
+    it becomes ``unknown`` (placeholder) instead of a made-up "Unknown" reading;
+    an actually observed up/down/unknown value is present.
+    """
+    if status_value == InterfaceStatus.unknown.value and not monitoring_seen:
+        return StateValue.unknown()
+    return StateValue.present(_status_label(status_value))
+
+
+def _pon_cohort_url(
+    *,
+    search: str | None,
+    olt_id: str | None,
+    status: str | None = None,
+    aliased: bool = False,
+) -> str:
+    """Drill-down to the PON list filtered to exactly the cohort a KPI counts.
+
+    The owner supplies this so a summary tile and the rows it summarises can
+    never diverge (KPI-parity rule): the active search/OLT filters travel with
+    the link and only ``status``/``aliased`` narrow it to the tile's slice.
+    """
+    params = {
+        "search": search or None,
+        "olt_id": olt_id or None,
+        "status": status,
+        "aliased": "1" if aliased else None,
+    }
+    query = urlencode({key: value for key, value in params.items() if value})
+    return "/admin/network/pon-interfaces" + (f"?{query}" if query else "")
+
+
 def parse_pon_port_notes(notes: str | None) -> tuple[str | None, str | None]:
     """Extract alias metadata from notes while preserving user-facing notes text."""
     text = str(notes or "").strip()
@@ -160,11 +197,13 @@ def build_page_data(
     search: str | None = None,
     status: str | None = None,
     olt_id: str | None = None,
+    aliased: str | None = None,
 ) -> dict[str, object]:
     filters = {
         "search": (search or "").strip(),
         "status": (status or "").strip(),
         "olt_id": (olt_id or "").strip(),
+        "aliased": (aliased or "").strip(),
     }
 
     olt_stmt = (
@@ -238,6 +277,9 @@ def build_page_data(
             or parse_pon_port_notes(getattr(port, "notes", None))[1],
             "status": status_value,
             "status_label": _status_label(status_value),
+            "status_state": _status_state(
+                status_value, monitoring_seen=iface_match is not None
+            ),
             "subscriber_count": assignment_counts.get(str(port.id), 0),
             "monitoring_seen": iface_match is not None,
             "onts_url": f"/admin/network/onts?olt_id={port.olt_id}&pon_port_id={port.id}",
@@ -268,18 +310,35 @@ def build_page_data(
                         if iface.status
                         else InterfaceStatus.unknown.value
                     ),
+                    "status_state": _status_state(
+                        iface.status.value
+                        if iface.status
+                        else InterfaceStatus.unknown.value,
+                        monitoring_seen=True,
+                    ),
                     "subscriber_count": 0,
                     "monitoring_seen": True,
                     "onts_url": f"/admin/network/onts?olt_id={olt_key}&pon_hint={_extract_pon_hint(iface.name) or iface.name}",
                 }
             )
 
+    # The summary tiles count the search + OLT cohort, BEFORE the status/aliased
+    # narrowing, so each KPI figure matches exactly the rows its cohort_url
+    # drills into (KPI-parity). The table itself still applies every filter.
     if filters["search"]:
         rows = [row for row in rows if _row_matches_search(row, filters["search"])]
-    if filters["status"] in {"up", "down", "unknown"}:
-        rows = [row for row in rows if row.get("status") == filters["status"]]
     if filters["olt_id"]:
         rows = [row for row in rows if row.get("olt_id") == filters["olt_id"]]
+    scope_rows = rows
+
+    table_rows = scope_rows
+    if filters["status"] in {"up", "down", "unknown"}:
+        table_rows = [
+            row for row in table_rows if row.get("status") == filters["status"]
+        ]
+    if filters["aliased"]:
+        table_rows = [row for row in table_rows if row.get("alias")]
+    rows = list(table_rows)
 
     rows.sort(
         key=lambda row: (
@@ -292,11 +351,52 @@ def build_page_data(
     )
 
     stats = {
-        "total": len(rows),
-        "up": sum(1 for row in rows if row.get("status") == "up"),
-        "down": sum(1 for row in rows if row.get("status") == "down"),
-        "unknown": sum(1 for row in rows if row.get("status") == "unknown"),
-        "aliased": sum(1 for row in rows if row.get("alias")),
+        "total": len(scope_rows),
+        "up": sum(1 for row in scope_rows if row.get("status") == "up"),
+        "down": sum(1 for row in scope_rows if row.get("status") == "down"),
+        "unknown": sum(1 for row in scope_rows if row.get("status") == "unknown"),
+        "aliased": sum(1 for row in scope_rows if row.get("alias")),
+    }
+
+    filter_search = filters["search"] or None
+    filter_olt = filters["olt_id"] or None
+    pon_kpis = {
+        "total": Kpi(
+            label="Total",
+            value=StateValue.present(stats["total"]),
+            cohort_url=_pon_cohort_url(search=filter_search, olt_id=filter_olt),
+        ),
+        "up": Kpi(
+            label="Up",
+            value=StateValue.present(stats["up"]),
+            cohort_url=_pon_cohort_url(
+                search=filter_search, olt_id=filter_olt, status="up"
+            ),
+            tone=StatusTone.positive,
+        ),
+        "down": Kpi(
+            label="Down",
+            value=StateValue.present(stats["down"]),
+            cohort_url=_pon_cohort_url(
+                search=filter_search, olt_id=filter_olt, status="down"
+            ),
+            tone=StatusTone.negative,
+        ),
+        "unknown": Kpi(
+            label="Unknown",
+            value=StateValue.present(stats["unknown"]),
+            cohort_url=_pon_cohort_url(
+                search=filter_search, olt_id=filter_olt, status="unknown"
+            ),
+        ),
+        "aliased": Kpi(
+            label="Aliased",
+            value=StateValue.present(stats["aliased"]),
+            cohort_url=_pon_cohort_url(
+                search=filter_search, olt_id=filter_olt, aliased=True
+            ),
+            tone=StatusTone.info,
+        ),
     }
 
     olt_options = [
@@ -307,6 +407,7 @@ def build_page_data(
     return {
         "filters": filters,
         "stats": stats,
+        "pon_kpis": pon_kpis,
         "rows": rows,
         "olts": olt_options,
     }
@@ -352,24 +453,15 @@ def save_alias(
             )
         ).first()
     if port is None:
-        olt = db.get(OLTDevice, coerce_uuid(olt_id))
-        if not olt:
-            raise HTTPException(status_code=404, detail="OLT device not found")
-        fsp_hint = _extract_pon_hint(interface_name)
-        board = None
-        port_number = None
-        if fsp_hint:
-            board, port_number = fsp_hint.rsplit("/", 1)
-        port = ensure_canonical_pon_port(
-            db,
-            olt_id=olt.id,
-            fsp=fsp_hint or interface_name,
-            board=board,
-            port=port_number,
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "PON interface is not modeled as an active port; review the PON "
+                "inventory before editing metadata"
+            ),
         )
-        port.notes = merge_pon_port_notes(getattr(port, "notes", None), alias_text)
-    else:
-        port.notes = merge_pon_port_notes(getattr(port, "notes", None), alias_text)
+
+    port.notes = merge_pon_port_notes(getattr(port, "notes", None), alias_text)
 
     db.commit()
     db.refresh(port)
@@ -384,7 +476,7 @@ def save_description(
     description: str | None,
     pon_port_id: str | None = None,
 ) -> PonPort:
-    """Save description to a PON port, creating it if necessary."""
+    """Save description to an already-modeled active PON port."""
     description_text = (description or "").strip() or None
     interface_name = (interface_name or "").strip()
     if not interface_name:
@@ -417,20 +509,12 @@ def save_description(
             )
         ).first()
     if port is None:
-        olt = db.get(OLTDevice, coerce_uuid(olt_id))
-        if not olt:
-            raise HTTPException(status_code=404, detail="OLT device not found")
-        fsp_hint = _extract_pon_hint(interface_name)
-        board = None
-        port_number = None
-        if fsp_hint:
-            board, port_number = fsp_hint.rsplit("/", 1)
-        port = ensure_canonical_pon_port(
-            db,
-            olt_id=olt.id,
-            fsp=fsp_hint or interface_name,
-            board=board,
-            port=port_number,
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "PON interface is not modeled as an active port; review the PON "
+                "inventory before editing metadata"
+            ),
         )
 
     port.description = description_text

@@ -47,10 +47,6 @@ class MFAPage(BasePage):
         """Assert redirect to admin dashboard after verification."""
         self.page.wait_for_url("**/admin/dashboard**")
 
-    def click_use_recovery_code(self) -> None:
-        """Click the use recovery code link."""
-        self.page.get_by_role("link", name="Use a recovery code").click()
-
     def click_back_to_login(self) -> None:
         """Click the back to login link."""
         self.page.get_by_role("link", name="Back to sign in").click()

@@ -19,11 +19,16 @@
     {% endcall %}
 
     <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-        {{ stats_card("Total", stats.total, icon=icon_server(), color="cyan", color2="blue") }}
-        {{ stats_card("Up", stats.up, icon=icon_server(), color="emerald", color2="teal") }}
-        {{ stats_card("Down", stats.down, icon=icon_server(), color="rose", color2="pink") }}
-        {{ stats_card("Unknown", stats.unknown, icon=icon_server(), color="slate", color2="gray") }}
-        {{ stats_card("Aliased", stats.aliased, icon=icon_server(), color="amber", color2="orange") }}
+        {{ stats_card(pon_kpis.total.label, pon_kpis.total.value.value, icon=icon_server(),
+            href=pon_kpis.total.cohort_url, tone=pon_kpis.total.tone) }}
+        {{ stats_card(pon_kpis.up.label, pon_kpis.up.value.value, icon=icon_server(),
+            href=pon_kpis.up.cohort_url, tone=pon_kpis.up.tone) }}
+        {{ stats_card(pon_kpis.down.label, pon_kpis.down.value.value, icon=icon_server(),
+            href=pon_kpis.down.cohort_url, tone=pon_kpis.down.tone) }}
+        {{ stats_card(pon_kpis.unknown.label, pon_kpis.unknown.value.value, icon=icon_server(),
+            href=pon_kpis.unknown.cohort_url, tone=pon_kpis.unknown.tone) }}
+        {{ stats_card(pon_kpis.aliased.label, pon_kpis.aliased.value.value, icon=icon_server(),
+            href=pon_kpis.aliased.cohort_url, tone=pon_kpis.aliased.tone) }}
     </div>
 
     <form method="GET" action="/admin/network/pon-interfaces" class="flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
@@ -83,12 +88,13 @@
                         </form>
                     </td>
                     <td class="px-6 py-4">
+                        {% set status_text = row.status_state.value if row.status_state.is_present else row.status_state.placeholder %}
                         {% if row.status == 'up' %}
-                        <span class="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"><span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>{{ row.status_label }}</span>
+                        <span class="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"><span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>{{ status_text }}</span>
                         {% elif row.status == 'down' %}
-                        <span class="inline-flex items-center gap-1.5 rounded-full bg-rose-100 px-2.5 py-0.5 text-xs font-medium text-rose-700 dark:bg-rose-900/30 dark:text-rose-300"><span class="h-1.5 w-1.5 rounded-full bg-rose-500"></span>{{ row.status_label }}</span>
+                        <span class="inline-flex items-center gap-1.5 rounded-full bg-rose-100 px-2.5 py-0.5 text-xs font-medium text-rose-700 dark:bg-rose-900/30 dark:text-rose-300"><span class="h-1.5 w-1.5 rounded-full bg-rose-500"></span>{{ status_text }}</span>
                         {% else %}
-                        <span class="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300"><span class="h-1.5 w-1.5 rounded-full bg-slate-400"></span>{{ row.status_label }}</span>
+                        <span class="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300"><span class="h-1.5 w-1.5 rounded-full bg-slate-400"></span>{{ status_text }}</span>
                         {% endif %}
                     </td>
                     <td class="px-6 py-4 tabular-nums text-slate-700 dark:text-slate-300">{{ row.subscriber_count }}</td>

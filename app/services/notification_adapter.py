@@ -236,9 +236,8 @@ class EmailProvider:
             from app.services.email import send_email
 
             subject = request.subject or request.title or "Notification"
-            html_body = self._render_html(request)
-
             with db_session_adapter.session() as db:
+                html_body = self._render_html(request, db=db)
                 success = send_email(
                     db=db,
                     to_email=request.recipient,
@@ -273,7 +272,7 @@ class EmailProvider:
                 error=str(exc),
             )
 
-    def _render_html(self, request: NotificationRequest) -> str:
+    def _render_html(self, request: NotificationRequest, db=None) -> str:
         """Render HTML email body."""
         if request.template_code:
             try:
@@ -298,7 +297,17 @@ class EmailProvider:
             f'<p style="margin: 0; font-size: 14px; line-height: 1.6;">'
             f"{escape(request.message or '')}</p>"
         )
-        return wrap_email_html(body, subject=title)
+        resolved_brand = None
+        subscriber_id = request.metadata.get("subscriber_id") or request.context.get(
+            "subscriber_id"
+        )
+        if db is not None and subscriber_id:
+            from app.services.brand_profiles import resolve_brand
+
+            resolved_brand = resolve_brand(
+                db, subscriber_id=str(subscriber_id)
+            ).to_dict()
+        return wrap_email_html(body, subject=title, brand=resolved_brand)
 
 
 # ---------------------------------------------------------------------------
@@ -371,16 +380,11 @@ class SmsProvider:
             from app.services.db_session_adapter import db_session_adapter
             from app.services.sms import send_sms
 
-            # Truncate message for SMS
-            message = (
-                request.message[:160] if len(request.message) > 160 else request.message
-            )
-
             with db_session_adapter.session() as db:
                 success = send_sms(
                     db=db,
                     to_phone=request.recipient,
-                    body=message,
+                    body=request.message,
                 )
             if not success:
                 return NotificationResult(
@@ -512,15 +516,11 @@ class WebSocketProvider:
 
     def is_available(self) -> bool:
         try:
-            import redis
+            from app.services.session_store import get_session_redis
 
-            from app.config import settings
-
-            redis_url = getattr(settings, "REDIS_URL", None)
-            if not redis_url:
+            client = get_session_redis()
+            if client is None:
                 return False
-
-            client = redis.from_url(redis_url, socket_timeout=2)
             client.ping()
             return True
         except Exception:
@@ -528,12 +528,11 @@ class WebSocketProvider:
 
     def send(self, request: NotificationRequest) -> NotificationResult:
         try:
-            import redis
+            from app.services.session_store import get_session_redis
 
-            from app.config import settings
-
-            redis_url = getattr(settings, "REDIS_URL", "redis://localhost:6379/0")
-            client = redis.from_url(redis_url)
+            client = get_session_redis()
+            if client is None:
+                raise RuntimeError("Redis is not configured")
 
             # Build WebSocket event payload
             payload = {
@@ -650,6 +649,7 @@ class NotificationAdapter:
         template_code: str | None = None,
         context: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
     ) -> NotificationResult:
         """Send a notification on a single channel.
 
@@ -687,6 +687,7 @@ class NotificationAdapter:
             template_code=template_code,
             context=context or {},
             metadata=metadata or {},
+            idempotency_key=idempotency_key,
         )
 
         provider = self.get_provider(channel)
@@ -707,6 +708,24 @@ class NotificationAdapter:
                 status=DeliveryStatus.failed,
                 error="Provider not configured",
             )
+
+        if request.idempotency_key:
+            try:
+                from app.services.session_store import get_session_redis
+
+                redis = get_session_redis()
+                if redis is not None:
+                    key = f"notification:idempotency:{request.idempotency_key}"
+                    reserved = redis.set(key, "1", nx=True, ex=86400)
+                    if not reserved:
+                        return NotificationResult(
+                            success=True,
+                            message="Duplicate notification skipped",
+                            channel=channel,
+                            status=DeliveryStatus.sent,
+                        )
+            except Exception:
+                logger.warning("Notification idempotency check failed", exc_info=True)
 
         return provider.send(request)
 

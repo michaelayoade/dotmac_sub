@@ -166,6 +166,56 @@ class TestVerifyOntAbsent:
         assert result.success is False
         assert "still appears" in result.message
 
+    def test_unrecognized_readback_does_not_certify_absence(self, monkeypatch) -> None:
+        """An unreadable port must fail closed, never be scored as 'ONT gone'."""
+        from app.services.network.olt_write_reconciliation import verify_ont_absent
+
+        monkeypatch.setattr(
+            "app.services.network.olt_ssh_ont.get_registered_ont_serials",
+            lambda *_args, **_kwargs: (
+                False,
+                "Huawei inventory response for 0/2/1 was not recognized",
+                [],
+            ),
+        )
+
+        result = verify_ont_absent(
+            _olt(),
+            fsp="0/2/1",
+            ont_id=7,
+            serial_number="HWTC-ABCD1234",
+        )
+
+        assert result.success is False
+        assert "readback failed" in result.message
+
+    def test_readback_failure_carries_sanitized_classifier_evidence(
+        self, monkeypatch
+    ) -> None:
+        from app.services.network.olt_write_reconciliation import verify_ont_absent
+
+        monkeypatch.setattr(
+            "app.services.network.olt_ssh_ont.get_registered_ont_serials",
+            lambda *_args, **_kwargs: (
+                False,
+                "% Unknown command secret-value",
+                [],
+            ),
+        )
+
+        result = verify_ont_absent(
+            _olt(),
+            fsp="0/2/1",
+            ont_id=7,
+            serial_number="HWTC-ABCD1234",
+        )
+
+        assert result.details["error_code"] == "unknown_command"
+        assert (
+            result.details["huawei_cli_response"]["response_code"] == "unknown_command"
+        )
+        assert "secret-value" not in repr(result.details)
+
 
 class TestVerifyServicePortPresent:
     def test_detects_missing_vlan_after_write(self, monkeypatch) -> None:
@@ -251,7 +301,15 @@ def test_get_ont_status_uses_space_separated_huawei_fsp(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "app.services.network.olt_ssh._open_shell",
-        lambda _olt: (_Transport(), _Channel(), None),
+        lambda _olt: (
+            _Transport(),
+            _Channel(),
+            SimpleNamespace(prompt_regex=r"#\s*$"),
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh._prepare_huawei_read_shell",
+        lambda _channel, prompt: prompt,
     )
     monkeypatch.setattr(
         "app.services.network.olt_ssh._read_until_prompt",

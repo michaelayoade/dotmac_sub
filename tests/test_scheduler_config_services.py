@@ -7,7 +7,18 @@ from unittest.mock import MagicMock, patch
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.scheduler import ScheduledTask, ScheduleType
 from app.models.subscription_engine import SettingValueType
-from app.services import scheduler_config
+from app.services import control_registry, scheduler_config
+
+
+def _control_overrides(values: dict[str, bool]):
+    """Patch selected canonical controls while preserving all other defaults."""
+    original = control_registry.is_enabled
+    return patch.object(
+        control_registry,
+        "is_enabled",
+        side_effect=lambda db, key: values.get(key, original(db, key)),
+    )
+
 
 # =============================================================================
 # Environment Variable Helper Tests
@@ -601,8 +612,103 @@ class TestBuildBeatSchedule:
         assert schedule["gis_sync"]["task"] == "app.tasks.gis.sync_gis_sources"
         assert schedule["gis_sync"]["schedule"] == timedelta(minutes=30)
 
-    def test_excludes_gis_sync_when_disabled(self, monkeypatch):
-        """Test excludes GIS sync schedule when disabled."""
+    def test_registers_device_login_sync_by_default(self, db_session, monkeypatch):
+        """The authoritative device-login reconcile is scheduled (default-on, 900s).
+
+        Without this backstop, populate_device_login only runs on a device-login
+        edit, so a deactivated/renamed staff member's router access would never
+        be revoked in RADIUS.
+        """
+        # build_beat_schedule() closes the session it opens; keep ours usable.
+        monkeypatch.setattr(db_session, "close", lambda: None)
+        with patch.object(scheduler_config, "SessionLocal", return_value=db_session):
+            with patch.object(
+                scheduler_config.integration_service,
+                "list_interval_jobs",
+                return_value=[],
+            ):
+                scheduler_config.build_beat_schedule()
+
+        row = (
+            db_session.query(ScheduledTask)
+            .filter(
+                ScheduledTask.task_name
+                == "app.tasks.radius_population.sync_device_login"
+            )
+            .first()
+        )
+        assert row is not None, "device_login_sync ScheduledTask not registered"
+        assert row.enabled is True
+        assert row.interval_seconds == 900
+
+    def test_registers_configured_event_outbox_dispatch(self, db_session, monkeypatch):
+        from app.services.domain_settings import scheduler_settings
+
+        scheduler_settings.ensure_by_key(
+            db_session,
+            key="event_dispatch_interval_seconds",
+            value_type=SettingValueType.integer,
+            value_text="30",
+        )
+        db_session.commit()
+        monkeypatch.setattr(db_session, "close", lambda: None)
+
+        with patch.object(scheduler_config, "SessionLocal", return_value=db_session):
+            with patch.object(
+                scheduler_config.integration_service,
+                "list_interval_jobs",
+                return_value=[],
+            ):
+                scheduler_config.build_beat_schedule()
+
+        row = (
+            db_session.query(ScheduledTask)
+            .filter(ScheduledTask.name == "event_dispatch_runner")
+            .one()
+        )
+        assert row.task_name == "app.tasks.events.dispatch_pending_events"
+        assert row.enabled is True
+        assert row.interval_seconds == 30
+
+    def test_disables_ont_reconcile_row_via_canonical_control(
+        self, db_session, monkeypatch
+    ):
+        db_session.add(
+            ScheduledTask(
+                name="ont_reconcile_sweep",
+                task_name="app.tasks.ont_reconcile.run_ont_reconcile_sweep",
+                schedule_type=ScheduleType.interval,
+                interval_seconds=900,
+                enabled=True,
+            )
+        )
+        db_session.commit()
+        control_registry.update_canonical_feature_controls(
+            db_session, payload={"network.ont_reconcile": False}
+        )
+        db_session.commit()
+        monkeypatch.setattr(db_session, "close", lambda: None)
+
+        with patch.object(scheduler_config, "SessionLocal", return_value=db_session):
+            with patch.object(
+                scheduler_config.integration_service,
+                "list_interval_jobs",
+                return_value=[],
+            ):
+                scheduler_config.build_beat_schedule()
+
+        row = (
+            db_session.query(ScheduledTask)
+            .filter(
+                ScheduledTask.task_name
+                == "app.tasks.ont_reconcile.run_ont_reconcile_sweep"
+            )
+            .first()
+        )
+        assert row is not None
+        assert row.enabled is False
+
+    def test_excludes_gis_sync_when_canonical_control_disabled(self, monkeypatch):
         monkeypatch.setenv("GIS_SYNC_ENABLED", "false")
         monkeypatch.delenv("USAGE_RATING_ENABLED", raising=False)
         monkeypatch.delenv("DUNNING_ENABLED", raising=False)
@@ -612,7 +718,10 @@ class TestBuildBeatSchedule:
         mock_session.query.return_value.filter.return_value.all.return_value = []
         mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
 
-        with patch.object(scheduler_config, "SessionLocal", return_value=mock_session):
+        with (
+            _control_overrides({"gis.sync": False}),
+            patch.object(scheduler_config, "SessionLocal", return_value=mock_session),
+        ):
             with patch.object(
                 scheduler_config.integration_service,
                 "list_interval_jobs",
@@ -654,6 +763,97 @@ class TestBuildBeatSchedule:
         assert schedule["integration_job_job-123"]["schedule"] == timedelta(minutes=15)
         assert schedule["integration_job_job-123"]["args"] == ["job-123"]
 
+    def test_skips_crm_ticket_pull_integration_interval_job(self, monkeypatch):
+        """Dedicated CRM beat must be the only scheduled ticket pull path."""
+        monkeypatch.setenv("GIS_SYNC_ENABLED", "false")
+        monkeypatch.delenv("USAGE_RATING_ENABLED", raising=False)
+        monkeypatch.delenv("DUNNING_ENABLED", raising=False)
+
+        mock_session = MagicMock()
+        mock_session.query.return_value.filter.return_value.filter.return_value.filter.return_value.first.return_value = None
+        mock_session.query.return_value.filter.return_value.all.return_value = []
+        mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
+
+        mock_job = MagicMock()
+        mock_job.id = "crm-job-123"
+        mock_job.adapter_key = "crm"
+        mock_job.action = "pull_tickets"
+        mock_job.interval_minutes = 15
+
+        with patch.object(scheduler_config, "SessionLocal", return_value=mock_session):
+            with patch.object(
+                scheduler_config.integration_service,
+                "list_interval_jobs",
+                return_value=[mock_job],
+            ):
+                schedule = scheduler_config.build_beat_schedule()
+
+        assert "integration_job_crm-job-123" not in schedule
+
+    def test_work_order_mirror_reconcile_gated_by_canonical_control(self, monkeypatch):
+        monkeypatch.setenv("GIS_SYNC_ENABLED", "false")
+        monkeypatch.setenv("CRM_WORK_ORDER_PULL_ENABLED", "false")
+        monkeypatch.delenv("USAGE_RATING_ENABLED", raising=False)
+        monkeypatch.delenv("DUNNING_ENABLED", raising=False)
+
+        mock_session = MagicMock()
+        mock_session.query.return_value.filter.return_value.filter.return_value.filter.return_value.first.return_value = None
+        mock_session.query.return_value.filter.return_value.all.return_value = []
+        mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
+
+        with (
+            _control_overrides({"gis.sync": False, "crm.work_order_pull": False}),
+            patch.object(scheduler_config, "SessionLocal", return_value=mock_session),
+        ):
+            with patch.object(
+                scheduler_config.integration_service,
+                "list_interval_jobs",
+                return_value=[],
+            ):
+                with patch.object(
+                    scheduler_config, "_sync_scheduled_task"
+                ) as sync_task:
+                    scheduler_config.build_beat_schedule()
+
+        by_name = {
+            call.kwargs.get("name"): call.kwargs for call in sync_task.call_args_list
+        }
+        assert by_name["work_order_mirror_reconcile"]["enabled"] is False
+        # Neighboring mirror reconciles stay unaffected by the WO flip lever.
+        assert by_name["project_mirror_reconcile"]["enabled"] is True
+
+    def test_work_order_mirror_reconcile_enabled_by_default(self, monkeypatch):
+        """No env, no rows -> the crm.work_order_pull control fails OPEN and the
+        reconcile beat stays registered (inert kill switch until the flip)."""
+        monkeypatch.setenv("GIS_SYNC_ENABLED", "false")
+        monkeypatch.delenv("CRM_WORK_ORDER_PULL_ENABLED", raising=False)
+        monkeypatch.delenv("USAGE_RATING_ENABLED", raising=False)
+        monkeypatch.delenv("DUNNING_ENABLED", raising=False)
+
+        mock_session = MagicMock()
+        mock_session.query.return_value.filter.return_value.filter.return_value.filter.return_value.first.return_value = None
+        mock_session.query.return_value.filter.return_value.all.return_value = []
+        mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
+
+        with (
+            _control_overrides({"gis.sync": False}),
+            patch.object(scheduler_config, "SessionLocal", return_value=mock_session),
+        ):
+            with patch.object(
+                scheduler_config.integration_service,
+                "list_interval_jobs",
+                return_value=[],
+            ):
+                with patch.object(
+                    scheduler_config, "_sync_scheduled_task"
+                ) as sync_task:
+                    scheduler_config.build_beat_schedule()
+
+        by_name = {
+            call.kwargs.get("name"): call.kwargs for call in sync_task.call_args_list
+        }
+        assert by_name["work_order_mirror_reconcile"]["enabled"] is True
+
     def test_builds_scheduled_task_schedules(self, monkeypatch):
         """Test builds scheduled task schedules."""
         monkeypatch.setenv("GIS_SYNC_ENABLED", "false")
@@ -675,7 +875,10 @@ class TestBuildBeatSchedule:
         ]
         mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
 
-        with patch.object(scheduler_config, "SessionLocal", return_value=mock_session):
+        with (
+            _control_overrides({"gis.sync": False}),
+            patch.object(scheduler_config, "SessionLocal", return_value=mock_session),
+        ):
             with patch.object(
                 scheduler_config.integration_service,
                 "list_interval_jobs",
@@ -737,6 +940,44 @@ class TestBuildBeatSchedule:
             for call in mock_session.add.call_args_list
         )
 
+    def test_prepaid_enforcement_sweep_uses_registered_cadence(self, monkeypatch):
+        monkeypatch.setenv("GIS_SYNC_ENABLED", "false")
+        monkeypatch.delenv("USAGE_RATING_ENABLED", raising=False)
+        monkeypatch.delenv("DUNNING_ENABLED", raising=False)
+
+        mock_session = MagicMock()
+        mock_session.query.return_value.filter.return_value.filter.return_value.filter.return_value.first.return_value = None
+        mock_session.query.return_value.filter.return_value.all.return_value = []
+        mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
+
+        original_resolve_int = scheduler_config._resolve_int
+
+        def resolve_int(db, domain, key, default):
+            if key == "prepaid_balance_sweep_interval_seconds":
+                return 1800
+            return original_resolve_int(db, domain, key, default)
+
+        with (
+            _control_overrides(
+                {"gis.sync": False, "collections.prepaid_balance_enforcement": True}
+            ),
+            patch.object(scheduler_config, "SessionLocal", return_value=mock_session),
+            patch.object(scheduler_config, "_resolve_int", side_effect=resolve_int),
+            patch.object(
+                scheduler_config.integration_service,
+                "list_interval_jobs",
+                return_value=[],
+            ),
+        ):
+            scheduler_config.build_beat_schedule()
+
+        assert any(
+            getattr(call.args[0], "name", None) == "prepaid_balance_sweep"
+            and getattr(call.args[0], "interval_seconds", None) == 1800
+            and getattr(call.args[0], "enabled", None) is True
+            for call in mock_session.add.call_args_list
+        )
+
     def test_ignores_retired_splynx_sync_settings(self, monkeypatch):
         """Retired legacy-sync env toggles must not create beat entries."""
         monkeypatch.setenv("GIS_SYNC_ENABLED", "false")
@@ -788,7 +1029,10 @@ class TestBuildBeatSchedule:
         mock_session.query.return_value.filter.return_value.all.return_value = []
         mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
 
-        with patch.object(scheduler_config, "SessionLocal", return_value=mock_session):
+        with (
+            _control_overrides({"gis.sync": False}),
+            patch.object(scheduler_config, "SessionLocal", return_value=mock_session),
+        ):
             with patch.object(
                 scheduler_config.integration_service,
                 "list_interval_jobs",
@@ -805,6 +1049,37 @@ class TestBuildBeatSchedule:
             for call in scheduled_calls
         )
 
+    def test_builds_operational_escalation_delivery_schedule(self, monkeypatch):
+        """Test operational escalation delivery runner is synced."""
+        monkeypatch.setenv("GIS_SYNC_ENABLED", "false")
+        monkeypatch.setenv("OPERATIONAL_ESCALATION_DELIVERY_ENABLED", "true")
+        monkeypatch.setenv("OPERATIONAL_ESCALATION_DELIVERY_INTERVAL_SECONDS", "45")
+        monkeypatch.delenv("USAGE_RATING_ENABLED", raising=False)
+        monkeypatch.delenv("DUNNING_ENABLED", raising=False)
+
+        mock_session = MagicMock()
+        mock_session.query.return_value.filter.return_value.filter.return_value.filter.return_value.first.return_value = None
+        mock_session.query.return_value.filter.return_value.all.return_value = []
+        mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
+
+        with patch.object(scheduler_config, "SessionLocal", return_value=mock_session):
+            with patch.object(
+                scheduler_config.integration_service,
+                "list_interval_jobs",
+                return_value=[],
+            ):
+                scheduler_config.build_beat_schedule()
+
+        assert any(
+            getattr(call.args[0], "task_name", None)
+            == (
+                "app.tasks.operational_escalations."
+                "dispatch_operational_escalation_deliveries"
+            )
+            and getattr(call.args[0], "interval_seconds", None) == 45
+            for call in mock_session.add.call_args_list
+        )
+
     def test_builds_olt_profile_sync_due_task_runner(self, monkeypatch):
         """Test OLT profile sync due-task runner is opt-in and interval clamped."""
         monkeypatch.setenv("GIS_SYNC_ENABLED", "false")
@@ -818,7 +1093,10 @@ class TestBuildBeatSchedule:
         mock_session.query.return_value.filter.return_value.all.return_value = []
         mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
 
-        with patch.object(scheduler_config, "SessionLocal", return_value=mock_session):
+        with (
+            _control_overrides({"gis.sync": False, "network.olt_profile_sync": True}),
+            patch.object(scheduler_config, "SessionLocal", return_value=mock_session),
+        ):
             with patch.object(
                 scheduler_config.integration_service,
                 "list_interval_jobs",
@@ -872,11 +1150,47 @@ class TestBuildBeatSchedule:
 
 
 class TestIntervalToBeatSchedule:
-    """Day-long intervals become wall-clock crontabs (restart-proof)."""
+    """Hour-multiple and day-long intervals become wall-clock crontabs
+    (restart-proof); everything else stays timedelta."""
 
-    def test_sub_daily_interval_stays_timedelta(self):
-        result = scheduler_config._interval_to_beat_schedule("task-1", 3600)
-        assert result == timedelta(seconds=3600)
+    def test_sub_hourly_interval_stays_timedelta(self):
+        result = scheduler_config._interval_to_beat_schedule("task-1", 300)
+        assert result == timedelta(seconds=300)
+
+    def test_hourly_interval_becomes_crontab(self):
+        # Hourly tasks starved for 17+ days when beat restarted more often
+        # than hourly (topology_lldp_poll / topology_reconcile never fired).
+        import uuid
+
+        from celery.schedules import crontab
+
+        result = scheduler_config._interval_to_beat_schedule(uuid.uuid4(), 3600)
+        assert isinstance(result, crontab)
+        # Fires every hour at one deterministic minute.
+        assert result.hour == set(range(24))
+        assert len(result.minute) == 1
+
+    def test_multi_hour_interval_becomes_stepped_crontab(self):
+        import uuid
+
+        from celery.schedules import crontab
+
+        result = scheduler_config._interval_to_beat_schedule(uuid.uuid4(), 4 * 3600)
+        assert isinstance(result, crontab)
+        assert result.hour == {0, 4, 8, 12, 16, 20}
+
+    def test_hourly_crontab_is_deterministic_per_task(self):
+        import uuid
+
+        task_id = uuid.uuid4()
+        first = scheduler_config._interval_to_beat_schedule(task_id, 3600)
+        second = scheduler_config._interval_to_beat_schedule(task_id, 3600)
+        assert first.minute == second.minute
+
+    def test_non_hour_multiple_stays_timedelta(self):
+        # crontab cannot express a 90-minute cadence without drift.
+        result = scheduler_config._interval_to_beat_schedule("task-1", 5400)
+        assert result == timedelta(seconds=5400)
 
     def test_daily_interval_becomes_crontab(self):
         import uuid

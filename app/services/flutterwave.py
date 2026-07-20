@@ -50,9 +50,21 @@ def _get_secret_hash(db: Session | None = None) -> str:
     return os.getenv("FLUTTERWAVE_SECRET_HASH", "")
 
 
+def _default_currency(db: Session | None = None) -> str:
+    """Resolve the billing default currency setting (NGN when unset)."""
+    if db:
+        value = resolve_value(db, SettingDomain.billing, "default_currency")
+        code = str(value or "").strip().upper()
+        if code:
+            return code
+    return "NGN"
+
+
 def _get_timeout_seconds(db: Session | None = None) -> int:
     if db:
-        value = resolve_value(db, SettingDomain.billing, "payment_gateway_timeout_seconds")
+        value = resolve_value(
+            db, SettingDomain.billing, "payment_gateway_timeout_seconds"
+        )
         try:
             parsed = int(value)
         except (TypeError, ValueError):
@@ -83,16 +95,19 @@ def initialize_transaction(
     reference: str,
     redirect_url: str,
     metadata: dict[str, Any] | None = None,
+    currency: str | None = None,
 ) -> dict[str, Any]:
     """Initialize a Flutterwave payment.
 
     Args:
         db: Database session for settings resolution.
         email: Customer email address.
-        amount: Amount in naira (major currency unit).
+        amount: Amount in the major currency unit (e.g. naira).
         reference: Unique transaction reference.
         redirect_url: URL Flutterwave redirects to after payment.
         metadata: Optional metadata dict attached to the transaction.
+        currency: ISO currency code; defaults to the billing
+            ``default_currency`` setting (NGN when unset).
 
     Returns:
         Dict with ``link`` (hosted payment URL) and other data.
@@ -110,7 +125,8 @@ def initialize_transaction(
     payload: dict[str, Any] = {
         "tx_ref": reference,
         "amount": float(Decimal(str(amount))),
-        "currency": "NGN",
+        "currency": (str(currency).strip().upper() if currency else None)
+        or _default_currency(db),
         "redirect_url": redirect_url,
         "customer": {"email": email},
     }
@@ -196,3 +212,73 @@ def verify_webhook_signature(
 def get_public_key(db: Session | None = None) -> str:
     """Return the Flutterwave public key for frontend use."""
     return _get_public_key(db)
+
+
+def refund_transaction(
+    db: Session,
+    transaction_id: str,
+    amount: Decimal | None = None,
+    *,
+    request_key: str | None = None,
+) -> dict[str, Any]:
+    """Refund a Flutterwave transaction back to its source."""
+    secret_key = _get_secret_key(db)
+    if not secret_key:
+        raise ValueError(
+            "Flutterwave secret key is not configured. Kindly use another payment option"
+        )
+    payload: dict[str, Any] = {}
+    if amount is not None:
+        payload["amount"] = float(Decimal(str(amount)))
+    if request_key:
+        payload["comments"] = request_key
+    resp = httpx.post(
+        f"{FLUTTERWAVE_API_BASE}/transactions/{transaction_id}/refund",
+        json=payload,
+        headers={"Authorization": f"Bearer {secret_key}"},
+        timeout=_get_timeout_seconds(db),
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    if data.get("status") != "success":
+        raise ValueError(data.get("message", "Flutterwave refund failed"))
+    return data.get("data") or {}
+
+
+def fetch_refund(db: Session, refund_id: str) -> dict[str, Any]:
+    """Fetch one Flutterwave refund by refund id."""
+    secret_key = _get_secret_key(db)
+    if not secret_key:
+        raise ValueError(
+            "Flutterwave secret key is not configured. Kindly use another payment option"
+        )
+    response = httpx.get(
+        f"{FLUTTERWAVE_API_BASE}/refunds/{refund_id}",
+        headers={"Authorization": f"Bearer {secret_key}"},
+        timeout=_get_timeout_seconds(db),
+    )
+    response.raise_for_status()
+    body = response.json()
+    if body.get("status") != "success":
+        raise ValueError(body.get("message", "Flutterwave refund lookup failed"))
+    return body.get("data") or {}
+
+
+def list_refunds(db: Session, *, transaction_id: str) -> list[dict[str, Any]]:
+    """List refunds for one Flutterwave funding transaction."""
+    secret_key = _get_secret_key(db)
+    if not secret_key:
+        raise ValueError(
+            "Flutterwave secret key is not configured. Kindly use another payment option"
+        )
+    response = httpx.get(
+        f"{FLUTTERWAVE_API_BASE}/refunds",
+        params={"id": transaction_id},
+        headers={"Authorization": f"Bearer {secret_key}"},
+        timeout=_get_timeout_seconds(db),
+    )
+    response.raise_for_status()
+    body = response.json()
+    if body.get("status") != "success":
+        raise ValueError(body.get("message", "Flutterwave refund lookup failed"))
+    return [dict(item) for item in body.get("data") or []]

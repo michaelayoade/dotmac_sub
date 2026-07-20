@@ -4,7 +4,14 @@ from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 from app.models.catalog import BillingMode
 from app.models.subscriber import (
@@ -15,6 +22,7 @@ from app.models.subscriber import (
     SubscriberCategory,
     SubscriberStatus,
 )
+from app.services.nin_matching import normalize_nin
 
 
 class OrganizationBase(BaseModel):
@@ -66,7 +74,9 @@ class ResellerBase(BaseModel):
     code: str | None = Field(default=None, max_length=60)
     contact_email: str | None = Field(default=None, max_length=255)
     contact_phone: str | None = Field(default=None, max_length=40)
+    policy_set_id: UUID | None = None
     is_active: bool = True
+    restrict_to_assigned_offers: bool | None = None
     notes: str | None = None
 
 
@@ -79,7 +89,9 @@ class ResellerUpdate(BaseModel):
     code: str | None = Field(default=None, max_length=60)
     contact_email: str | None = Field(default=None, max_length=255)
     contact_phone: str | None = Field(default=None, max_length=40)
+    policy_set_id: UUID | None = None
     is_active: bool | None = None
+    restrict_to_assigned_offers: bool | None = None
     notes: str | None = None
 
 
@@ -88,6 +100,20 @@ class ResellerRead(ResellerBase):
 
     id: UUID
     created_at: datetime
+    updated_at: datetime
+
+
+class ResellerSyncRead(BaseModel):
+    """Minimal reseller contract for cross-application synchronization."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    name: str
+    code: str | None = None
+    contact_email: str | None = None
+    contact_phone: str | None = None
+    is_active: bool
     updated_at: datetime
 
 
@@ -107,6 +133,7 @@ class SubscriberBase(BaseModel):
     email: EmailStr
     email_verified: bool = False
     phone: str | None = Field(default=None, max_length=40)
+    nin: str | None = Field(default=None, max_length=11)
     date_of_birth: date | None = None
     gender: Gender = Gender.unknown
     preferred_contact_method: ContactMethod | None = None
@@ -118,6 +145,9 @@ class SubscriberBase(BaseModel):
     address_line2: str | None = Field(default=None, max_length=120)
     city: str | None = Field(default=None, max_length=80)
     region: str | None = Field(default=None, max_length=80)
+    # NCC Local Government Area. Validated against `region` by the subscriber
+    # service (the merged-state gate); blank when unknown, never guessed.
+    lga: str | None = Field(default=None, max_length=80)
     postal_code: str | None = Field(default=None, max_length=20)
     country_code: str | None = Field(default=None, max_length=2)
 
@@ -151,7 +181,6 @@ class SubscriberBase(BaseModel):
     # Payment settings
     billing_mode: BillingMode = BillingMode.prepaid
     payment_method: str | None = Field(default=None, max_length=80)
-    deposit: Decimal | None = None
     billing_day: int | None = None
     payment_due_days: int | None = None
     grace_period_days: int | None = None
@@ -159,6 +188,18 @@ class SubscriberBase(BaseModel):
 
     notes: str | None = None
     metadata_: dict | None = Field(default=None, serialization_alias="metadata")
+
+    @field_validator("nin", mode="before")
+    @classmethod
+    def _validate_nin(cls, value):
+        if value is None:
+            return None
+        normalized = normalize_nin(str(value))
+        if not normalized:
+            return None
+        if len(normalized) != 11:
+            raise ValueError("NIN must be exactly 11 digits")
+        return normalized
 
 
 class SubscriberCreate(SubscriberBase):
@@ -195,6 +236,7 @@ class SubscriberUpdate(BaseModel):
     email: EmailStr | None = None
     email_verified: bool | None = None
     phone: str | None = Field(default=None, max_length=40)
+    nin: str | None = Field(default=None, max_length=11)
     date_of_birth: date | None = None
     gender: Gender | None = None
     preferred_contact_method: ContactMethod | None = None
@@ -206,6 +248,9 @@ class SubscriberUpdate(BaseModel):
     address_line2: str | None = Field(default=None, max_length=120)
     city: str | None = Field(default=None, max_length=80)
     region: str | None = Field(default=None, max_length=80)
+    # NCC Local Government Area. Validated against `region` by the subscriber
+    # service (the merged-state gate); blank when unknown, never guessed.
+    lga: str | None = Field(default=None, max_length=80)
     postal_code: str | None = Field(default=None, max_length=20)
     country_code: str | None = Field(default=None, max_length=2)
 
@@ -239,7 +284,6 @@ class SubscriberUpdate(BaseModel):
     # Payment settings
     billing_mode: BillingMode | None = None
     payment_method: str | None = Field(default=None, max_length=80)
-    deposit: Decimal | None = None
     billing_day: int | None = None
     payment_due_days: int | None = None
     grace_period_days: int | None = None
@@ -247,6 +291,18 @@ class SubscriberUpdate(BaseModel):
 
     notes: str | None = None
     metadata_: dict | None = Field(default=None, serialization_alias="metadata")
+
+    @field_validator("nin", mode="before")
+    @classmethod
+    def _validate_nin(cls, value):
+        if value is None:
+            return None
+        normalized = normalize_nin(str(value))
+        if not normalized:
+            return None
+        if len(normalized) != 11:
+            raise ValueError("NIN must be exactly 11 digits")
+        return normalized
 
 
 class SubscriberRead(SubscriberBase):
@@ -259,12 +315,46 @@ class SubscriberRead(SubscriberBase):
     email: str  # type: ignore[assignment]
 
     id: UUID
+    lifecycle_override_status: SubscriberStatus | None = None
+    lifecycle_override_reason: str | None = None
+    lifecycle_override_source: str | None = None
+    lifecycle_override_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
     addresses: list[AddressRead] = Field(default_factory=list)
     channels: list[SubscriberChannelRead] = Field(default_factory=list)
     custom_fields: list[SubscriberCustomFieldRead] = Field(default_factory=list)
+
+
+class SubscriberSyncRead(BaseModel):
+    """Bounded subscriber projection consumed by accounting integrations."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    first_name: str
+    last_name: str
+    display_name: str | None = None
+    company_name: str | None = None
+    legal_name: str | None = None
+    email: str
+    phone: str | None = None
+    status: SubscriberStatus
+    category: SubscriberCategory
+    is_active: bool
+    reseller_id: UUID | None = None
+    tax_id: str | None = None
+    subscriber_number: str | None = None
+    account_number: str | None = None
+    address_line1: str | None = None
+    address_line2: str | None = None
+    city: str | None = None
+    region: str | None = None
+    postal_code: str | None = None
+    country_code: str | None = None
+    created_at: datetime
+    updated_at: datetime
 
 
 class SubscriberChannelBase(BaseModel):
@@ -309,6 +399,8 @@ class AddressBase(BaseModel):
     address_line2: str | None = Field(default=None, max_length=120)
     city: str | None = Field(default=None, max_length=80)
     region: str | None = Field(default=None, max_length=80)
+    # NCC Local Government Area — see SubscriberBase.lga.
+    lga: str | None = Field(default=None, max_length=80)
     postal_code: str | None = Field(default=None, max_length=20)
     country_code: str | None = Field(default=None, max_length=2)
     latitude: float | None = None
@@ -329,6 +421,8 @@ class AddressUpdate(BaseModel):
     address_line2: str | None = Field(default=None, max_length=120)
     city: str | None = Field(default=None, max_length=80)
     region: str | None = Field(default=None, max_length=80)
+    # NCC Local Government Area — see SubscriberBase.lga.
+    lga: str | None = Field(default=None, max_length=80)
     postal_code: str | None = Field(default=None, max_length=20)
     country_code: str | None = Field(default=None, max_length=2)
     latitude: float | None = None

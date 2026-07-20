@@ -7,21 +7,10 @@ support.Tickets / TicketComments service so the portal works standalone.
 
 import uuid
 
-import pytest
-
 from app.models.support import Ticket, TicketCommentAuthorType
 from app.schemas.support import TicketCommentCreate
 from app.services import crm_portal
 from app.services import support as support_service
-
-
-@pytest.fixture(autouse=True)
-def _disable_ticket_numbering(monkeypatch):
-    # The SQLite test schema has no `document_sequences` table; ticket numbering
-    # is irrelevant to this behaviour, so skip it (number is nullable).
-    monkeypatch.setattr(
-        support_service.Tickets, "_resolve_ticket_number", lambda db: None
-    )
 
 
 def test_create_uses_local_ticket_module(db_session, subscriber):

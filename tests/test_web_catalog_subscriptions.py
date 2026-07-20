@@ -14,8 +14,10 @@ from app.models.catalog import (
     AddOn,
     AddOnPrice,
     AddOnType,
+    BillingMode,
     NasDevice,
     PriceType,
+    Subscription,
     SubscriptionAddOn,
     SubscriptionStatus,
 )
@@ -48,8 +50,15 @@ from app.models.subscription_engine import SettingValueType
 from app.schemas.catalog import SubscriptionCreate
 from app.services import auth_flow as auth_flow_service
 from app.services import catalog as catalog_service
+from app.services import (
+    web_catalog_subscription_workflows as web_catalog_subscription_workflows_service,
+)
 from app.services import web_catalog_subscriptions as web_catalog_subscriptions_service
 from app.services import web_network_ip as web_network_ip_service
+from app.services.subscription_lifecycle import (
+    SubscriptionCommandOutcome,
+    SubscriptionCommandOutcomeStatus,
+)
 
 
 def _public_ip_addon(
@@ -211,6 +220,62 @@ def test_upsert_access_credential_does_not_clear_password_when_blank_on_edit(
     assert credential.username == "10004167"
     assert credential.secret_hash == original_hash
     assert auth_flow_service.verify_password("InitialPass123", credential.secret_hash)
+
+
+def test_generic_edit_preserves_lifecycle_and_commercial_facts(
+    db_session,
+    subscriber,
+    catalog_offer,
+):
+    subscription = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(
+            account_id=subscriber.id,
+            offer_id=catalog_offer.id,
+            status=SubscriptionStatus.active,
+        ),
+    )
+    subscription.start_at = datetime(2026, 7, 1, tzinfo=UTC)
+    subscription.next_billing_at = datetime(2026, 8, 1, tzinfo=UTC)
+    db_session.commit()
+    original_offer_id = subscription.offer_id
+    original_billing_mode = subscription.billing_mode
+
+    web_catalog_subscriptions_service.update_subscription_with_audit(
+        db_session,
+        str(subscription.id),
+        {
+            "offer_id": uuid4(),
+            "status": SubscriptionStatus.suspended,
+            "billing_mode": (
+                BillingMode.postpaid
+                if original_billing_mode == BillingMode.prepaid
+                else BillingMode.prepaid
+            ),
+            "start_at": datetime(2025, 1, 1, tzinfo=UTC),
+            "next_billing_at": datetime(2025, 2, 1, tzinfo=UTC),
+            "end_at": datetime(2025, 3, 1, tzinfo=UTC),
+            "canceled_at": datetime(2025, 3, 1, tzinfo=UTC),
+            "cancel_reason": "bypass lifecycle owner",
+            "service_description": "technical metadata remains editable",
+        },
+        "",
+        [],
+        [],
+        None,
+        None,
+    )
+
+    db_session.refresh(subscription)
+    assert subscription.offer_id == original_offer_id
+    assert subscription.status == SubscriptionStatus.active
+    assert subscription.billing_mode == original_billing_mode
+    assert subscription.start_at.date().isoformat() == "2026-07-01"
+    assert subscription.next_billing_at.date().isoformat() == "2026-08-01"
+    assert subscription.end_at is None
+    assert subscription.canceled_at is None
+    assert subscription.cancel_reason is None
+    assert subscription.service_description == "technical metadata remains editable"
 
 
 def test_upsert_access_credential_prefers_active_matching_username(
@@ -488,6 +553,136 @@ def test_parse_subscription_form_keeps_single_ipv4_row():
 
     assert parsed["ipv4_block_ids"] == ["first-block"]
     assert parsed["ipv4_addresses"] == ["10.0.0.2"]
+
+
+def test_parse_subscription_create_rejects_forged_lifecycle_facts():
+    form = FormData(
+        {
+            "status": "active",
+            "start_at": "2025-01-01T00:00",
+            "end_at": "2025-12-31T00:00",
+            "next_billing_at": "2025-02-01T00:00",
+            "canceled_at": "2025-01-02T00:00",
+            "cancel_reason": "bypass lifecycle owner",
+        }
+    )
+
+    parsed = web_catalog_subscriptions_service.parse_subscription_form(form)
+
+    assert parsed["status"] == "pending"
+    for field in (
+        "start_at",
+        "end_at",
+        "next_billing_at",
+        "canceled_at",
+        "cancel_reason",
+    ):
+        assert parsed[field] == ""
+
+
+def test_activate_after_create_stages_pending_before_canonical_command():
+    payload = {
+        "status": "active",
+        "start_at": "2025-01-01T00:00:00+00:00",
+        "next_billing_at": "2025-02-01T00:00:00+00:00",
+    }
+
+    flags = web_catalog_subscriptions_service.apply_create_quick_options(
+        payload,
+        FormData({"activate_immediately": "1"}),
+    )
+
+    assert flags == (True, False, False)
+    assert payload == {"status": "pending"}
+
+
+def test_subscription_create_activates_through_canonical_lifecycle(
+    db_session,
+    subscriber,
+    catalog_offer,
+):
+    result = web_catalog_subscription_workflows_service.handle_subscription_create_form(
+        db_session,
+        form=FormData(
+            {
+                "account_id": str(subscriber.id),
+                "offer_id": str(catalog_offer.id),
+                "status": "canceled",
+                "start_at": "2025-01-01T00:00",
+                "ipv4_method": "dynamic",
+                "activate_immediately": "1",
+            }
+        ),
+        request=None,
+        actor_id="operator-1",
+    )
+
+    created = (
+        db_session.query(Subscription)
+        .filter(Subscription.subscriber_id == subscriber.id)
+        .filter(Subscription.offer_id == catalog_offer.id)
+        .one()
+    )
+    db_session.refresh(created)
+    assert created.status == SubscriptionStatus.active
+    assert created.start_at is not None
+    assert result["redirect_url"].endswith(f"/{subscriber.id}#subscriptions")
+
+
+def test_subscription_create_keeps_pending_and_redirects_to_record_on_activation_failure(
+    db_session,
+    subscriber,
+    catalog_offer,
+    monkeypatch,
+):
+    captured = {}
+
+    def fail_activation(db, command, **kwargs):
+        captured["command"] = command
+        return SubscriptionCommandOutcome(
+            command=command,
+            status=SubscriptionCommandOutcomeStatus.failed,
+            message="Provisioning owner unavailable",
+            previous_head=str(command.expected_head),
+            current_head=str(command.expected_head),
+            error_code="command_execution_failed",
+        )
+
+    monkeypatch.setattr(
+        web_catalog_subscription_workflows_service,
+        "execute_subscription_command",
+        fail_activation,
+    )
+
+    result = web_catalog_subscription_workflows_service.handle_subscription_create_form(
+        db_session,
+        form=FormData(
+            {
+                "account_id": str(subscriber.id),
+                "offer_id": str(catalog_offer.id),
+                "ipv4_method": "dynamic",
+                "activate_immediately": "1",
+            }
+        ),
+        request=None,
+        actor_id="operator-2",
+    )
+
+    created = (
+        db_session.query(Subscription)
+        .filter(Subscription.subscriber_id == subscriber.id)
+        .filter(Subscription.offer_id == catalog_offer.id)
+        .one()
+    )
+    assert created.status == SubscriptionStatus.pending
+    assert captured["command"].expected_head
+    assert captured["command"].idempotency_key == (
+        f"admin-create-activate:{created.id}"
+    )
+    assert result["redirect_url"].startswith(
+        f"/admin/catalog/subscriptions/{created.id}?error="
+    )
+    assert "Provisioning+owner+unavailable" in result["redirect_url"]
 
 
 def test_subscription_detail_context_exposes_events_notifications_and_radius_sync(
@@ -1183,6 +1378,12 @@ def test_create_subscription_with_audit_persists_additional_routes(
     assert route.metric == 2
     assert route.is_active is True
     assert route.source == "admin_subscription_form"
+    assert (
+        db_session.query(SubscriptionAddOn)
+        .filter(SubscriptionAddOn.subscription_id == created.id)
+        .count()
+        == 0
+    )
 
 
 def test_create_subscription_with_audit_persists_public_ip_addon(
@@ -2056,6 +2257,53 @@ def test_additional_route_update_creates_matching_public_ip_addon(
     assert sub_addon.quantity == 1
 
 
+def test_additional_route_update_without_addon_does_not_create_billing_addon(
+    db_session,
+    subscriber,
+    catalog_offer,
+):
+    _public_ip_addon(
+        db_session,
+        name="/30 IP",
+        ip_prefix_length=30,
+    )
+    subscription = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(
+            account_id=subscriber.id,
+            offer_id=catalog_offer.id,
+        ),
+    )
+
+    web_catalog_subscriptions_service.update_subscription_with_audit(
+        db_session,
+        str(subscription.id),
+        {"login": "10004167"},
+        "",
+        [],
+        [],
+        None,
+        None,
+        additional_route_cidrs=["160.119.125.24/30"],
+        additional_route_metrics=["1"],
+        ip_addon_id="",
+        ip_addon_quantity="1",
+    )
+
+    route = (
+        db_session.query(SubscriberAdditionalRoute)
+        .filter(SubscriberAdditionalRoute.subscriber_id == subscriber.id)
+        .one()
+    )
+    assert route.cidr == "160.119.125.24/30"
+    assert (
+        db_session.query(SubscriptionAddOn)
+        .filter(SubscriptionAddOn.subscription_id == subscription.id)
+        .count()
+        == 0
+    )
+
+
 def test_additional_route_update_sets_public_ip_addon_quantity_by_prefix(
     db_session,
     subscriber,
@@ -2503,3 +2751,216 @@ def test_ensure_ipv4_blocks_allocatable_rejects_duplicate_manual_ipv4_selection(
             [str(first_block.id), str(second_block.id)],
             ["10.81.0.5", "10.81.0.5"],
         )
+
+
+def test_bulk_update_status_reports_partial_success(
+    db_session, subscriber, catalog_offer
+):
+    from app.schemas.catalog import SubscriptionCreate
+    from app.services import catalog as catalog_service
+    from app.services.web_catalog_subscriptions import bulk_update_status
+
+    active = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(
+            account_id=subscriber.id,
+            offer_id=catalog_offer.id,
+            status=SubscriptionStatus.active,
+        ),
+    )
+    from app.models.subscriber import Subscriber
+
+    other = Subscriber(
+        first_name="Bulk",
+        last_name="Partial",
+        email=f"bulk-{uuid4().hex[:8]}@t.example",
+    )
+    db_session.add(other)
+    db_session.commit()
+    pending = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(
+            account_id=other.id,
+            offer_id=catalog_offer.id,
+            status=SubscriptionStatus.pending,
+        ),
+    )
+    active_id = str(active.id)
+    pending_id = str(pending.id)
+    bogus = str(uuid4())
+
+    result = bulk_update_status(
+        db_session,
+        f"{active.id},{pending.id},{bogus}",
+        target_status=SubscriptionStatus.suspended,
+        allowed_from=[SubscriptionStatus.active],
+        request=None,
+        actor_id=None,
+    )
+
+    assert result["changed"] == 1
+    assert pending_id in result["skipped_ids"]
+    assert bogus in result["failed_ids"]
+    outcome = result["outcomes"][0]
+    assert outcome["subscription_id"] == active_id
+    assert outcome["kind"] == "suspend"
+    assert outcome["status"] == "applied"
+    assert outcome["artifact_ids"]
+    db_session.refresh(active)
+    assert active.status == SubscriptionStatus.suspended
+
+
+def _make_active_and_suspended(db_session, subscriber, offer):
+    """Create one active + one suspended subscription on ``offer``."""
+    active = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(
+            account_id=subscriber.id,
+            offer_id=offer.id,
+            status=SubscriptionStatus.active,
+        ),
+    )
+    other = Subscriber(
+        first_name="Susp",
+        last_name="Ended",
+        email=f"susp-{uuid4().hex[:8]}@t.example",
+    )
+    db_session.add(other)
+    db_session.commit()
+    suspended = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(
+            account_id=other.id,
+            offer_id=offer.id,
+            status=SubscriptionStatus.suspended,
+        ),
+    )
+    return active, suspended
+
+
+def test_bulk_change_plan_excludes_suspended_by_default(
+    db_session, subscriber, catalog_offer
+):
+    from app.models.catalog import AccessType, PriceBasis, ServiceType
+    from app.schemas.catalog import CatalogOfferCreate
+    from app.services.web_catalog_subscriptions import bulk_change_plan
+
+    # Same plan_family so the change-plan family guard permits the migration.
+    catalog_offer.plan_family = "std"
+    target = catalog_service.offers.create(
+        db_session,
+        CatalogOfferCreate(
+            name="Target Plan",
+            code=f"TGT-{uuid4().hex[:6]}",
+            service_type=ServiceType.residential,
+            access_type=AccessType.fiber,
+            price_basis=PriceBasis.flat,
+            plan_family="std",
+        ),
+    )
+    db_session.commit()
+    active, suspended = _make_active_and_suspended(
+        db_session, subscriber, catalog_offer
+    )
+
+    result = bulk_change_plan(
+        db_session,
+        f"{active.id},{suspended.id}",
+        str(target.id),
+        request=None,
+        actor_id=None,
+        effective_timing="next_cycle",
+    )
+
+    assert result["changed"] == 1
+    assert str(suspended.id) in result["skipped_ids"]
+    db_session.refresh(active)
+    db_session.refresh(suspended)
+    assert active.offer_id == catalog_offer.id
+    assert suspended.offer_id == catalog_offer.id
+
+
+def test_bulk_change_plan_include_suspended_opt_in(
+    db_session, subscriber, catalog_offer
+):
+    from app.models.catalog import AccessType, PriceBasis, ServiceType
+    from app.schemas.catalog import CatalogOfferCreate
+    from app.services.web_catalog_subscriptions import bulk_change_plan
+
+    # Same plan_family so the change-plan family guard permits the migration.
+    catalog_offer.plan_family = "std"
+    target = catalog_service.offers.create(
+        db_session,
+        CatalogOfferCreate(
+            name="Target Plan",
+            code=f"TGT-{uuid4().hex[:6]}",
+            service_type=ServiceType.residential,
+            access_type=AccessType.fiber,
+            price_basis=PriceBasis.flat,
+            plan_family="std",
+        ),
+    )
+    db_session.commit()
+    active, suspended = _make_active_and_suspended(
+        db_session, subscriber, catalog_offer
+    )
+
+    result = bulk_change_plan(
+        db_session,
+        f"{active.id},{suspended.id}",
+        str(target.id),
+        request=None,
+        actor_id=None,
+        effective_timing="next_cycle",
+        include_suspended=True,
+    )
+
+    assert result["changed"] == 2
+    assert result["skipped_ids"] == []
+    db_session.refresh(active)
+    db_session.refresh(suspended)
+    assert active.offer_id == catalog_offer.id
+    assert suspended.offer_id == catalog_offer.id
+
+
+def test_bulk_tariff_change_preview_excludes_suspended_by_default(
+    db_session, subscriber, catalog_offer
+):
+    from app.services.bulk_tariff_change import bulk_tariff_change
+
+    active, _suspended = _make_active_and_suspended(
+        db_session, subscriber, catalog_offer
+    )
+
+    preview = bulk_tariff_change.preview(
+        db_session,
+        source_offer_id=str(catalog_offer.id),
+        target_offer_id=str(catalog_offer.id),
+    )
+
+    assert preview["total_count"] == 1
+    assert preview["include_suspended"] is False
+    ids = {str(s.id) for s in preview["affected_subscriptions"]}
+    assert ids == {str(active.id)}
+
+
+def test_bulk_tariff_change_include_suspended_opt_in(
+    db_session, subscriber, catalog_offer
+):
+    from app.services.bulk_tariff_change import bulk_tariff_change
+
+    active, suspended = _make_active_and_suspended(
+        db_session, subscriber, catalog_offer
+    )
+
+    preview = bulk_tariff_change.preview(
+        db_session,
+        source_offer_id=str(catalog_offer.id),
+        target_offer_id=str(catalog_offer.id),
+        include_suspended=True,
+    )
+
+    assert preview["total_count"] == 2
+    assert preview["include_suspended"] is True
+    ids = {str(s.id) for s in preview["affected_subscriptions"]}
+    assert ids == {str(active.id), str(suspended.id)}

@@ -62,6 +62,13 @@ def validate_desired(
     if not sp_check.ok:
         return sp_check
 
+    if target.tr069_profile_id <= 0:
+        return Validation(False, "tr069_profile_id must be a positive integer")
+
+    wifi_check = _check_wifi(target, current)
+    if not wifi_check.ok:
+        return wifi_check
+
     contradiction = _check_mode_contradictions(target)
     if not contradiction.ok:
         return contradiction
@@ -116,18 +123,58 @@ def _check_service_port_immutability(
     return Validation(True)
 
 
+def _check_wifi(target: OntDesiredState, current: OntDesiredState) -> Validation:
+    if target.wifi_ssid and len(target.wifi_ssid) > 32:
+        return Validation(False, "wifi_ssid must be at most 32 characters")
+    if (
+        target.wifi_password_ref != current.wifi_password_ref
+        and not 8 <= len(target.wifi_password_ref) <= 63
+    ):
+        return Validation(False, "WiFi password must be 8-63 characters")
+    if target.wifi_channel is not None and not 0 <= target.wifi_channel <= 196:
+        return Validation(False, "wifi_channel must be between 0 and 196")
+    if target.wifi_security_mode and len(target.wifi_security_mode) > 40:
+        return Validation(False, "wifi_security_mode must be at most 40 characters")
+    return Validation(True)
+
+
 def _check_mode_contradictions(target: OntDesiredState) -> Validation:
     if target.wan_mode == "bridge" and target.nat_enabled:
         return Validation(False, "bridge mode is incompatible with nat_enabled=True")
     if target.wan_mode == "pppoe" and target.mgmt_vlan is None:
         return Validation(False, "wan_mode=pppoe requires a management VLAN")
-    if target.wan_pppoe_provisioning_method == "omci":
+    if target.wan_mode == "pppoe" and target.wan_pppoe_provisioning_method == "omci":
         if target.wan_config_profile_id is None or target.wan_config_profile_id <= 0:
             return Validation(
                 False,
                 "wan_pppoe_provisioning_method=omci requires "
                 "wan_config_profile_id to be a positive integer",
             )
+    if target.wan_mode in {"dhcp", "static"} and target.wan_vlan is None:
+        return Validation(False, f"wan_mode={target.wan_mode} requires a WAN VLAN")
+    if target.wan_mode == "static":
+        if not (
+            target.wan_static_ip
+            and target.wan_static_subnet
+            and target.wan_static_gateway
+        ):
+            return Validation(
+                False,
+                "wan_mode=static requires IP address, subnet mask, and gateway",
+            )
+        if target.wan_static_ip_is_public is True and target.nat_enabled:
+            return Validation(False, "public static WAN requires nat_enabled=False")
+        if target.wan_static_ip_is_public is False and not target.nat_enabled:
+            return Validation(False, "private static WAN requires nat_enabled=True")
+    if (
+        target.wan_mode in {"dhcp", "static"}
+        and target.tr069_data_model_root == "Device"
+        and target.tr181_wan_paths is None
+    ):
+        return Validation(
+            False,
+            "TR-181 routed WAN requires a supported vendor/model parameter map",
+        )
     return Validation(True)
 
 

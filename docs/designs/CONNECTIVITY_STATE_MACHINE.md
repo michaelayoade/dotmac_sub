@@ -33,20 +33,20 @@ projection.
 | Input | Where | Grain |
 | --- | --- | --- |
 | `subscription.status` | `catalog.py:769` | subscription |
-| `subscriber.captive_redirect_enabled` + `hard_reject` (fraud) | subscriber / lock reason | subscriber |
-| active `EnforcementLock` rows | `enforcement_lock.py` | subscription+reason (governs *restore eligibility*, not desired connectivity directly — status already reflects them) |
+| active `EnforcementLock.access_mode` rows | `enforcement_lock.py` | subscription+reason; most restrictive active lock wins |
+| residential opt-in + direct-house ownership + captive network readiness | `walled_garden_policy.py` | subscriber + global RADIUS contract |
 | the active **assignment set**: `IPAssignment` (v4/v6) ∪ `SubscriberAdditionalRoute` (routed blocks) | `network.py:498` / additional-routes | subscriber |
 
 **Derived outputs (the reconciler is the sole writer of all of these):**
 
 | Output | Field/target | Today's writer count |
 | --- | --- | --- |
-| Access state | `subscription.access_state` + `radusergroup` (via `set_subscription_access_state`) | 1 (already centralized) |
+| Access state | `subscription.access_state`; `radusergroup` is projected by `radius_population` | 1 (already centralized) |
 | Internal RADIUS user flag | `RadiusUser.is_active` | 6 |
 | Credential flag | `AccessCredential.is_active` | 7 |
 | IP activation | `IPAssignment.is_active` | 12 |
 | Served-IP cache | `subscription.ipv4_address` / `ipv6_address` | 11 / 3 |
-| External RADIUS | `radcheck`/`radreply`/`radusergroup` | 1 (`_external_sync_users` sweep — already single-writer, reconciler *enqueues* it) |
+| External RADIUS | `radcheck`/`radreply`/`radusergroup` | 1 (`radius_population`; adapters request scoped/full reconciliation) |
 | Live session | CoA-disconnect / SSH kick | `disconnect_subscription_sessions` (keep) |
 
 The reconciler computes the desired value of each output from the source of truth and
@@ -62,12 +62,16 @@ converges. Everything else may only mutate the **source** (status, the assignmen
 `derive_access_state` (`radius_access_state.py:83`) already maps status→AccessState. The
 reconciler extends that single derivation to every dimension:
 
+Hard reject is the default for every reversible restriction. Captive is an
+exception validated from persisted lock intent, residential eligibility,
+explicit opt-in, and network readiness.
+
 | Lifecycle state | access_state | Cred / RadiusUser.is_active | IP assignment set | `ipv4_address` cache | external RADIUS rows | live session |
 | --- | --- | --- | --- | --- | --- | --- |
 | `pending` / `hidden` / `archived` | none (no row) | inactive (or absent) | none | null | none | n/a |
 | `active` | `active` | **active** | **active**, pinned | = served (IPAM after 2b) | full radcheck+radreply, `dotmac-active` | leave running |
-| `suspended`/`blocked`/`stopped` (default) | `captive` | **active** (reversible) | **retained active** | **retained** | `dotmac-captive` (+ walled-garden attrs) | CoA-disconnect once |
-| `suspended` + `hard_reject` (fraud) | `suspended` | active | retained | retained | `Auth-Type := Reject` only | CoA-disconnect once |
+| `suspended`/`blocked`/`stopped` (default) | `suspended` | **active** (reversible) | **retained active** | **retained** | `Auth-Type := Reject` / `dotmac-suspended` | CoA-disconnect once |
+| eligible residential explicit opt-in + persisted `captive` lock + ready network contract | `captive` | active | retained active | retained | `dotmac-captive` (+ walled-garden attrs) | CoA-disconnect once |
 | `canceled`/`expired`/`disabled` | `terminated` | **inactive** | **released** | **null** | none (user-not-found) | CoA-disconnect once |
 
 **Load-bearing invariants encoded here (each is a past incident):**
@@ -100,7 +104,9 @@ class DesiredConnectivity:
     kick_live_session: bool               # CoA if a session is up
 
 def derive_desired_connectivity(
-    status: SubscriptionStatus, *, hard_reject: bool = False
+    status: SubscriptionStatus,
+    *,
+    restriction_mode: AccessRestrictionMode | None = None,
 ) -> DesiredConnectivity: ...
 ```
 

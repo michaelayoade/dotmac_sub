@@ -168,6 +168,23 @@ def test_live_audit_detects_missing_wan_profile_zero(monkeypatch, db_session) ->
     )
     db_session.add(olt)
     db_session.flush()
+    db_session.add_all(
+        [
+            OltLineProfile(olt_id=olt.id, profile_id=40, name="HG8546M"),
+            OltServiceProfile(olt_id=olt.id, profile_id=41, name="HG8546M"),
+        ]
+    )
+    db_session.flush()
+    db_session.add(
+        OltOnuTypeProfileMapping(
+            olt_id=olt.id,
+            equipment_id="HG8546M",
+            line_profile_id=40,
+            service_profile_id=41,
+            wan_config_profile_id=0,
+        )
+    )
+    db_session.flush()
 
     monkeypatch.setattr(
         "app.services.network.olt_config_pack_live_audit.get_tr069_server_profiles",
@@ -212,6 +229,23 @@ def test_live_audit_allows_missing_wan_profile_zero_when_enabled(
         wan_provisioning_mode="omci_wan_config",
     )
     db_session.add(olt)
+    db_session.flush()
+    db_session.add_all(
+        [
+            OltLineProfile(olt_id=olt.id, profile_id=40, name="HG8546M"),
+            OltServiceProfile(olt_id=olt.id, profile_id=41, name="HG8546M"),
+        ]
+    )
+    db_session.flush()
+    db_session.add(
+        OltOnuTypeProfileMapping(
+            olt_id=olt.id,
+            equipment_id="HG8546M",
+            line_profile_id=40,
+            service_profile_id=41,
+            wan_config_profile_id=0,
+        )
+    )
     db_session.flush()
 
     monkeypatch.setattr(

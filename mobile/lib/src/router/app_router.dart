@@ -5,7 +5,6 @@ import 'package:go_router/go_router.dart';
 import '../core/observability.dart';
 import '../features/auth/forgot_password_screen.dart';
 import '../features/billing/topup_screen.dart';
-import '../features/billing/wallet_screen.dart';
 import '../features/auth/lock_screen.dart';
 import '../features/auth/login_screen.dart';
 import '../features/auth/mfa_screen.dart';
@@ -16,6 +15,7 @@ import '../features/profile/contacts_screen.dart';
 import '../features/profile/installation_tracker_screen.dart';
 import '../features/profile/refer_and_earn_screen.dart';
 import '../features/profile/service_location_screen.dart';
+import '../features/profile/technician_track_screen.dart';
 import '../features/profile/work_orders_screen.dart';
 import '../features/billing/invoice_detail_screen.dart';
 import '../features/billing/invoices_screen.dart';
@@ -31,7 +31,6 @@ import '../features/reseller/reseller_accounts_screen.dart';
 import '../features/reseller/reseller_billing_screen.dart';
 import '../features/reseller/reseller_crm_screen.dart';
 import '../features/reseller/reseller_fiber_map_screen.dart';
-import '../features/reseller/reseller_vas_screen.dart';
 import '../features/reseller/reseller_home_screen.dart';
 import '../features/reseller/reseller_payment_methods_screen.dart';
 import '../features/reseller/reseller_profile_screen.dart';
@@ -39,6 +38,7 @@ import '../features/reseller/reseller_revenue_screen.dart';
 import '../features/reseller/reseller_service_requests_screen.dart';
 import '../features/service/add_ons_screen.dart';
 import '../features/service/change_plan_screen.dart';
+import '../features/service/connection_status_screen.dart';
 import '../features/service/data_bundle_screen.dart';
 import '../features/service/quote_request_screen.dart';
 import '../features/service/quotes_screen.dart';
@@ -152,7 +152,20 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (_, state) =>
             TopUpScreen(saveCardInitial: state.extra == true),
       ),
-      GoRoute(path: '/wallet', builder: (_, __) => const WalletScreen()),
+      // Connection troubleshooter (outage classifier P4) — reached from the
+      // slim Home banner and the Service tab; a drill-in that keeps the shell.
+      GoRoute(
+        path: '/connection',
+        builder: (_, __) => const ConnectionStatusScreen(),
+      ),
+      // Live technician tracking for an in-progress visit — a full-screen map
+      // on its own, reached from the Home visit banner or Help → Visits (kept
+      // off the dashboard so Home stays calm).
+      GoRoute(
+        path: '/track/:id',
+        builder: (_, state) =>
+            TechnicianTrackScreen(workOrderId: state.pathParameters['id']!),
+      ),
       // Live chat now lives INSIDE the Support tab (so the bottom bar stays and
       // it's not a detached full-screen page). Keep /chat as a redirect so push
       // notifications and old deep links land on the nested screen.
@@ -167,6 +180,49 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/quotes/request',
         builder: (_, __) => const QuoteRequestScreen(),
+      ),
+      // Account — identity & settings, reached from the header avatar
+      // (AccountAvatarButton) instead of a bottom-nav tab. A top-level route
+      // above the shell, so it opens full-screen with a back button. Every
+      // /profile/* sub-route is unchanged, so existing pushes, notification
+      // deep links, and `context.push('/profile/...')` all keep working.
+      GoRoute(
+        path: '/profile',
+        builder: (_, __) => const ProfileScreen(),
+        routes: [
+          GoRoute(
+            path: 'sessions',
+            builder: (_, __) => const SessionsScreen(),
+          ),
+          GoRoute(
+            path: 'payment-methods',
+            builder: (_, __) => const PaymentMethodsScreen(),
+          ),
+          GoRoute(
+            path: 'settings',
+            builder: (_, __) => const SettingsScreen(),
+          ),
+          GoRoute(
+            path: 'service-location',
+            builder: (_, __) => const ServiceLocationScreen(),
+          ),
+          GoRoute(
+            path: 'contacts',
+            builder: (_, __) => const ContactsScreen(),
+          ),
+          GoRoute(
+            path: 'refer-and-earn',
+            builder: (_, __) => const ReferAndEarnScreen(),
+          ),
+          GoRoute(
+            path: 'installation-progress',
+            builder: (_, __) => const InstallationTrackerScreen(),
+          ),
+          GoRoute(
+            path: 'technician-visits',
+            builder: (_, __) => const WorkOrdersScreen(),
+          ),
+        ],
       ),
       // Reseller portal — a standalone landing (resellers manage many customer
       // accounts), outside the customer bottom-nav shell.
@@ -189,7 +245,6 @@ final routerProvider = Provider<GoRouter>((ref) {
               fallbackRoute: '/reseller',
             ),
           ),
-          GoRoute(path: 'vas', builder: (_, __) => const ResellerVasScreen()),
           GoRoute(
             path: 'fiber-map',
             builder: (_, __) => const ResellerFiberMapScreen(),
@@ -287,6 +342,16 @@ final routerProvider = Provider<GoRouter>((ref) {
           ),
           StatefulShellBranch(
             routes: [
+              // Path kept as /usage so old deep links and notifications keep working;
+              // the tab itself is now the Service tab (plan + data + add-ons + usage).
+              GoRoute(
+                path: '/usage',
+                builder: (_, __) => const ServiceTabScreen(),
+              ),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
               GoRoute(
                 path: '/billing',
                 builder: (_, __) => const InvoicesScreen(),
@@ -302,16 +367,6 @@ final routerProvider = Provider<GoRouter>((ref) {
                     ),
                   ),
                 ],
-              ),
-            ],
-          ),
-          StatefulShellBranch(
-            routes: [
-              // Path kept as /usage so old deep links and notifications keep working;
-              // the tab itself is now the Service tab (plan + data + add-ons + usage).
-              GoRoute(
-                path: '/usage',
-                builder: (_, __) => const ServiceTabScreen(),
               ),
             ],
           ),
@@ -333,48 +388,6 @@ final routerProvider = Provider<GoRouter>((ref) {
                     builder: (_, state) => TicketDetailScreen(
                       ticketId: state.pathParameters['id']!,
                     ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-          StatefulShellBranch(
-            routes: [
-              GoRoute(
-                path: '/profile',
-                builder: (_, __) => const ProfileScreen(),
-                routes: [
-                  GoRoute(
-                    path: 'sessions',
-                    builder: (_, __) => const SessionsScreen(),
-                  ),
-                  GoRoute(
-                    path: 'payment-methods',
-                    builder: (_, __) => const PaymentMethodsScreen(),
-                  ),
-                  GoRoute(
-                    path: 'settings',
-                    builder: (_, __) => const SettingsScreen(),
-                  ),
-                  GoRoute(
-                    path: 'service-location',
-                    builder: (_, __) => const ServiceLocationScreen(),
-                  ),
-                  GoRoute(
-                    path: 'contacts',
-                    builder: (_, __) => const ContactsScreen(),
-                  ),
-                  GoRoute(
-                    path: 'refer-and-earn',
-                    builder: (_, __) => const ReferAndEarnScreen(),
-                  ),
-                  GoRoute(
-                    path: 'installation-progress',
-                    builder: (_, __) => const InstallationTrackerScreen(),
-                  ),
-                  GoRoute(
-                    path: 'technician-visits',
-                    builder: (_, __) => const WorkOrdersScreen(),
                   ),
                 ],
               ),

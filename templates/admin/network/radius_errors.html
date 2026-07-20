@@ -79,7 +79,7 @@
                         'policy_violation': 'bg-violet-100 text-violet-800 dark:bg-violet-900/30 dark:text-violet-300',
                     } %}
                     <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
-                        <td class="px-4 py-3 text-xs text-slate-500 dark:text-slate-400 whitespace-nowrap">{{ error.occurred_at.strftime('%b %d %H:%M:%S') if error.occurred_at else '—' }}</td>
+                        <td class="px-4 py-3 text-xs text-slate-500 dark:text-slate-400 whitespace-nowrap">{{ error.occurred_at | app_datetime('%b %d %H:%M:%S', '—') }}</td>
                         <td class="px-4 py-3 font-mono text-sm text-slate-900 dark:text-white">{{ error.username }}</td>
                         <td class="px-4 py-3 font-mono text-sm text-slate-700 dark:text-slate-300">{{ error.nas_ip_address or '—' }}</td>
                         <td class="px-4 py-3">

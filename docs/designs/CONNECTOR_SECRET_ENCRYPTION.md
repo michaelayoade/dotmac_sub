@@ -44,9 +44,9 @@ the old one no longer does.
 
 ## Backfill
 
-`scripts/one_off/encrypt_connector_auth_config.py` re-encrypts legacy plaintext
-rows (dry-run by default; `--apply` to persist). Idempotent. (A key rotation also
-encrypts any remaining legacy blobs.)
+`scripts/one_off/remediate_credential_encryption.py` re-encrypts legacy plaintext
+values across the shared credential inventory (dry-run default, `--execute`). It
+is idempotent and publishes the resulting aggregate integrity state.
 
 ## Tests
 

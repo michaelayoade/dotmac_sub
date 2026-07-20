@@ -30,38 +30,50 @@ def alert_policies_list_data(
     *,
     page: int,
     per_page: int,
+    channel: str | None = None,
+    status: str | None = None,
+    severity_min: str | None = None,
+    active: str | None = None,
 ) -> dict[str, object]:
     """Build template context for the alert notification policies list."""
     offset = (page - 1) * per_page
+    active_filter = str(active or "").strip().lower()
+    is_active = (
+        True
+        if active_filter == "active"
+        else False
+        if active_filter == "inactive"
+        else None
+    )
     policies = notification_service.alert_notification_policies.list(
         db=db,
-        channel=None,
-        status=None,
-        severity_min=None,
-        is_active=None,
+        channel=channel,
+        status=status,
+        severity_min=severity_min,
+        is_active=is_active,
         order_by="created_at",
         order_dir="desc",
         limit=per_page,
         offset=offset,
     )
-    # Total count for pagination
-    all_policies = notification_service.alert_notification_policies.list(
+    total = notification_service.alert_notification_policies.count(
         db=db,
-        channel=None,
-        status=None,
-        severity_min=None,
-        is_active=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=10000,
-        offset=0,
+        channel=channel,
+        status=status,
+        severity_min=severity_min,
+        is_active=is_active,
     )
-    total = len(all_policies)
     total_pages = (total + per_page - 1) // per_page if total else 1
 
     return {
         "policies": policies,
         "channels": [c.value for c in NotificationChannel],
+        "statuses": ["open", "acknowledged", "resolved"],
+        "severities": [s.value for s in AlertSeverity],
+        "channel": channel or "",
+        "status": status or "",
+        "severity_min": severity_min or "",
+        "active": active_filter,
         "page": page,
         "per_page": per_page,
         "total": total,
@@ -95,6 +107,7 @@ def alert_policy_detail_data(
         db=db,
         channel=None,
         is_active=True,
+        search=None,
         order_by="name",
         order_dir="asc",
         limit=500,
@@ -125,6 +138,7 @@ def alert_policy_form_data(db: Session) -> dict[str, object]:
         db=db,
         channel=None,
         is_active=True,
+        search=None,
         order_by="name",
         order_dir="asc",
         limit=500,

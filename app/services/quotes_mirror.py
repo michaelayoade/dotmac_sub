@@ -193,6 +193,23 @@ def _row_to_item(row: QuoteMirror) -> dict:
     }
 
 
+def _enqueue_lazy_refresh(subscriber_id: str) -> None:
+    """Enqueue a background mirror refresh (best-effort — the periodic reconcile
+    is the backstop, so an enqueue failure must not break the read)."""
+    from app.services.queue_adapter import enqueue_task
+
+    try:
+        enqueue_task(
+            "app.tasks.quotes.refresh_quote_mirror_for_subscriber",
+            args=[subscriber_id],
+            source="quote_lazy_refresh",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "quote_lazy_refresh_enqueue_failed subscriber=%s: %s", subscriber_id, exc
+        )
+
+
 def read_for_subscriber(
     db: Session,
     subscriber_id: str,
@@ -205,12 +222,20 @@ def read_for_subscriber(
     sync = db.get(QuoteSyncState, sub_uuid)
     cutoff = datetime.now(UTC) - timedelta(seconds=max(0, refresh_ttl_seconds))
     synced = _as_utc(sync.synced_at) if sync else None
-    if sync is None or synced is None or synced < cutoff:
+    if sync is None or synced is None:
+        # Cold cache — fetch synchronously so the first load is populated.
         try:
             reconcile_subscriber(db, str(subscriber_id))
         except CRMClientError as exc:
             db.rollback()
             logger.warning("quote_lazy_refresh_failed subscriber=%s: %s", sub_uuid, exc)
+    elif synced < cutoff:
+        # Warm but stale — serve the stale copy now and refresh in the background.
+        # Optimistically stamp synced_at so concurrent reads within the TTL don't
+        # each enqueue (debounce); the refresh task re-stamps after pulling.
+        sync.synced_at = datetime.now(UTC)
+        db.commit()
+        _enqueue_lazy_refresh(str(subscriber_id))
 
     rows = db.scalars(
         select(QuoteMirror)

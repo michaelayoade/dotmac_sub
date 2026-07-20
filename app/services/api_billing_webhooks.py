@@ -30,18 +30,24 @@ from uuid import UUID
 
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.billing import (
+    Payment,
+    PaymentProviderEvent,
     PaymentProviderType,
     PaymentStatus,
     PaymentWebhookDeadLetter,
     PaymentWebhookDeadLetterStatus,
     TopupIntent,
 )
-from app.schemas.billing import PaymentProviderEventIngest
+from app.schemas.billing import (
+    PaymentProviderEventIngest,
+    PaymentWebhookDeadLetterRead,
+)
 from app.services import billing as billing_service
-from app.services.common import apply_pagination, get_by_id
+from app.services.common import apply_pagination
 from app.services.flutterwave import (
     verify_webhook_signature as verify_flutterwave_signature,
 )
@@ -50,6 +56,8 @@ from app.services.response import list_response
 from app.services.topup_intents import set_topup_intent_status
 
 logger = logging.getLogger(__name__)
+
+_UNLINKED_SUCCESS_ERROR = "Successful settlement did not post or link a payment"
 
 _PROVIDER_TYPE_BY_NAME = {
     "paystack": PaymentProviderType.paystack,
@@ -149,6 +157,9 @@ class _Settlement:
     currency: str | None = None
     reference: str | None = None
     metadata: dict | None = None
+    # Gateway fee withheld from settlement (same currency as ``amount``). The
+    # bank receives ``amount - fee``; ERP books the fee as a bank charge.
+    fee: Decimal = Decimal("0.00")
 
 
 def _extract_settlement(
@@ -173,6 +184,8 @@ def _extract_settlement(
             currency=str(data.get("currency") or "NGN"),
             reference=str(data.get("reference") or "") or None,
             metadata=metadata if isinstance(metadata, dict) else {},
+            # Paystack reports its fee (in kobo) on the charge payload.
+            fee=kobo_to_naira(data.get("fees") or 0),
         )
     if provider_type == "flutterwave":
         # Flutterwave reuses charge.completed for both outcomes; the charge
@@ -188,6 +201,8 @@ def _extract_settlement(
                 currency=str(data.get("currency") or "NGN"),
                 reference=str(data.get("tx_ref") or "") or None,
                 metadata=metadata if isinstance(metadata, dict) else {},
+                # Flutterwave reports its fee (in the charge currency) as app_fee.
+                fee=Decimal(str(data.get("app_fee") or 0)),
             )
         if charge_status == "failed":
             return _Settlement(
@@ -214,9 +229,11 @@ def _resolve_settlement_topup_intent(
     transaction reference in the provider payload.
     """
     intent_id = _coerce_uuid((settlement.metadata or {}).get("topup_intent_id"))
-    if intent_id is None:
-        return None
-    intent = db.get(TopupIntent, intent_id)
+    intent = db.get(TopupIntent, intent_id) if intent_id is not None else None
+    if intent is None and settlement.reference:
+        intent = db.scalar(
+            select(TopupIntent).where(TopupIntent.reference == settlement.reference)
+        )
     if intent is None:
         return None
     if settlement.reference and intent.reference != settlement.reference:
@@ -227,6 +244,200 @@ def _resolve_settlement_topup_intent(
         )
         return None
     return intent
+
+
+def _prepare_provider_event_ingest(
+    db: Session,
+    *,
+    provider_id,
+    provider_type: str,
+    event_type: str,
+    external_id: str | None,
+    idempotency_key: str | None,
+    payload: dict,
+) -> tuple[PaymentProviderEventIngest, _Settlement | None, TopupIntent | None]:
+    """Build the canonical ingest command from a verified stored payload.
+
+    Live delivery and dead-letter replay must use this exact projection.  A
+    replay that forwards only the raw payload creates an idempotency event but
+    omits the amount/account/status facts needed to post the payment.
+    """
+    data = payload.get("data", {}) or {}
+    settlement = _extract_settlement(provider_type, event_type, data)
+    topup_intent: TopupIntent | None = None
+    ingest_payload = PaymentProviderEventIngest(
+        provider_id=provider_id,
+        event_type=event_type,
+        external_id=external_id or "",
+        idempotency_key=idempotency_key,
+        payload=payload,
+    )
+    if settlement is None:
+        return ingest_payload, None, None
+
+    ingest_payload.status_hint = settlement.status_hint
+    metadata = settlement.metadata or {}
+    invoice_id = _coerce_uuid(metadata.get("invoice_id"))
+    account_id = _coerce_uuid(metadata.get("account_id"))
+    billing_account_id = _coerce_uuid(metadata.get("billing_account_id"))
+    topup_intent = _resolve_settlement_topup_intent(db, settlement)
+    if topup_intent is not None and topup_intent.account_id is not None:
+        account_id = topup_intent.account_id
+    if topup_intent is not None and topup_intent.billing_account_id is not None:
+        billing_account_id = topup_intent.billing_account_id
+    if (
+        settlement.status_hint == PaymentStatus.succeeded
+        and settlement.amount is not None
+        and settlement.amount > Decimal("0.00")
+    ):
+        ingest_payload.amount = settlement.amount
+        ingest_payload.provider_fee = settlement.fee
+        ingest_payload.net_amount = (
+            topup_intent.requested_amount
+            if topup_intent is not None
+            else settlement.amount - settlement.fee
+        )
+        ingest_payload.provider_reference = settlement.reference
+        ingest_payload.topup_intent_id = (
+            topup_intent.id if topup_intent is not None else None
+        )
+        ingest_payload.currency = settlement.currency
+        ingest_payload.invoice_id = invoice_id
+        ingest_payload.account_id = account_id
+        ingest_payload.billing_account_id = billing_account_id
+    return ingest_payload, settlement, topup_intent
+
+
+def _apply_post_settlement_bookkeeping(
+    db: Session,
+    *,
+    event,
+    settlement: _Settlement | None,
+    topup_intent: TopupIntent | None,
+    ingest_payload: PaymentProviderEventIngest,
+) -> None:
+    """Run the recoverable consequences after the payment is durably posted."""
+    if (
+        settlement is None
+        or settlement.status_hint != PaymentStatus.succeeded
+        or event.payment_id is None
+    ):
+        return
+
+    if settlement.fee and settlement.fee > Decimal("0.00"):
+        try:
+            pay = db.get(Payment, event.payment_id)
+            if pay is not None and not pay.provider_fee:
+                pay.provider_fee = settlement.fee
+                db.commit()
+        except Exception:
+            logger.warning(
+                "Failed to persist provider_fee after webhook settlement",
+                exc_info=True,
+            )
+            db.rollback()
+    if topup_intent is not None and topup_intent.purpose == "account_credit_deposit":
+        # The deposit owner already linked intent/payment, applied any eligible
+        # credit, and emitted its outbox event atomically. In particular, do not
+        # run the legacy wallet/prepaid restore consequence below.
+        return
+    if topup_intent is not None:
+        try:
+            _finalize_webhook_topup_intent(
+                db, topup_intent, event.payment_id, settlement.amount
+            )
+        except Exception:
+            logger.warning(
+                "Failed to finalize topup intent after webhook settlement",
+                exc_info=True,
+            )
+            db.rollback()
+    account_for_restore = ingest_payload.account_id or (
+        topup_intent.account_id if topup_intent is not None else None
+    )
+    if account_for_restore is None:
+        return
+    try:
+        from app.services import collections as collections_service
+        from app.services.billing.reconcile_unposted import (
+            settle_prepaid_draft_invoices_from_credit,
+        )
+
+        settled = settle_prepaid_draft_invoices_from_credit(
+            db, str(account_for_restore)
+        )
+        if settled.changed:
+            logger.info(
+                "Settled %d prepaid draft invoice(s) after webhook top-up for %s",
+                len(settled.invoices_settled),
+                account_for_restore,
+            )
+            db.commit()
+        collections_service.restore_account_services(db, str(account_for_restore))
+    except Exception:
+        logger.warning(
+            "Failed to auto-restore after webhook settlement for %s",
+            account_for_restore,
+            exc_info=True,
+        )
+        db.rollback()
+
+
+def _successful_settlement_is_unlinked(
+    settlement: _Settlement | None, event: PaymentProviderEvent
+) -> bool:
+    """A provider success is incomplete until it identifies posted money."""
+    return (
+        settlement is not None
+        and settlement.status_hint == PaymentStatus.succeeded
+        and event.payment_id is None
+    )
+
+
+def _settle_typed_account_credit_deposit(
+    db: Session,
+    *,
+    provider_type: str,
+    external_id: str | None,
+    settlement: _Settlement | None,
+    topup_intent: TopupIntent | None,
+    ingest_payload: PaymentProviderEventIngest,
+) -> None:
+    """Route a typed deposit webhook through the same owner as portal verify."""
+    if (
+        settlement is None
+        or settlement.status_hint != PaymentStatus.succeeded
+        or topup_intent is None
+        or topup_intent.purpose != "account_credit_deposit"
+    ):
+        return
+    if settlement.amount is None or not external_id:
+        raise HTTPException(
+            status_code=409,
+            detail="Deposit provider confirmation omitted amount or transaction id",
+        )
+    from app.services.account_credit_deposits import (
+        AccountCreditDeposits,
+        DepositEligibilityError,
+    )
+    from app.services.payment_gateway_adapter import PaymentGatewayTransaction
+
+    try:
+        result = AccountCreditDeposits.settle_verified(
+            db,
+            intent_id=topup_intent.id,
+            transaction=PaymentGatewayTransaction(
+                provider_type=provider_type,
+                external_id=external_id,
+                amount=settlement.amount,
+                currency=settlement.currency or topup_intent.currency,
+                metadata=settlement.metadata or {},
+                memo_prefix=provider_type.title(),
+            ),
+        )
+    except DepositEligibilityError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    ingest_payload.payment_id = result.payment.id
 
 
 def _finalize_webhook_topup_intent(
@@ -296,44 +507,18 @@ def _process_webhook(
         )
         return JSONResponse({"status": "provider not configured"}, status_code=503)
 
-    # Extract the money facts (amount/currency/invoice/top-up intent) from the
-    # signature-verified payload so ingest can actually settle the payment.
-    # Without these, a customer who paid but never returned to the verify URL
-    # would have captured funds and an invoice that never gets marked paid.
-    settlement = _extract_settlement(provider_type, event_type, data)
-    topup_intent: TopupIntent | None = None
-    ingest_payload = PaymentProviderEventIngest(
+    # Project the verified payload through the same command builder manual
+    # dead-letter replay uses. This is the single mapping from provider facts
+    # to the payment-ingest owner.
+    ingest_payload, settlement, topup_intent = _prepare_provider_event_ingest(
+        db,
         provider_id=provider.id,
+        provider_type=provider_type,
         event_type=event_type,
-        external_id=external_id or "",
+        external_id=external_id,
         idempotency_key=idempotency_key,
         payload=payload,
     )
-    if settlement is not None:
-        ingest_payload.status_hint = settlement.status_hint
-        metadata = settlement.metadata or {}
-        invoice_id = _coerce_uuid(metadata.get("invoice_id"))
-        account_id = _coerce_uuid(metadata.get("account_id"))
-        billing_account_id = _coerce_uuid(metadata.get("billing_account_id"))
-        topup_intent = _resolve_settlement_topup_intent(db, settlement)
-        if topup_intent is not None and topup_intent.account_id is not None:
-            account_id = topup_intent.account_id
-        # Reseller-consolidated top-ups carry billing_account_id (and no
-        # account_id) on the intent. Without forwarding it, the webhook payment
-        # posts with billing_account_id NULL and never credits the billing
-        # account / settles member invoices — the cutover posting gap. (#cutover)
-        if topup_intent is not None and topup_intent.billing_account_id is not None:
-            billing_account_id = topup_intent.billing_account_id
-        if (
-            settlement.status_hint == PaymentStatus.succeeded
-            and settlement.amount is not None
-            and settlement.amount > Decimal("0.00")
-        ):
-            ingest_payload.amount = settlement.amount
-            ingest_payload.currency = settlement.currency
-            ingest_payload.invoice_id = invoice_id
-            ingest_payload.account_id = account_id
-            ingest_payload.billing_account_id = billing_account_id
 
     # 2. Process inside a SAVEPOINT so a failure rolls back only ingest's own
     #    partial writes, leaving the committed dead-letter row (and the outer
@@ -342,7 +527,19 @@ def _process_webhook(
     #    Honest status codes drive the provider's retry behaviour.
     nested = db.begin_nested()
     try:
-        event = billing_service.payment_provider_events.ingest(db, ingest_payload)
+        _settle_typed_account_credit_deposit(
+            db,
+            provider_type=provider_type,
+            external_id=external_id,
+            settlement=settlement,
+            topup_intent=topup_intent,
+            ingest_payload=ingest_payload,
+        )
+        event = billing_service.payment_provider_events.ingest(
+            db,
+            ingest_payload,
+            trusted_financial_effects=True,
+        )
     except HTTPException as exc:
         # Deterministic rejection (e.g. invoice/account mismatch). Retrying the
         # same payload won't help — surface the 4xx and park for human review.
@@ -379,44 +576,23 @@ def _process_webhook(
         )
         return JSONResponse({"status": "error"}, status_code=500)
 
-    # 3. Post-settlement bookkeeping (best-effort: the money is recorded; a
-    #    failure here must not make the provider retry and is recoverable via
-    #    the customer's own verify flow or the reconciliation sweep).
-    if (
-        settlement is not None
-        and settlement.status_hint == PaymentStatus.succeeded
-        and event.payment_id is not None
-    ):
-        if topup_intent is not None:
-            try:
-                _finalize_webhook_topup_intent(
-                    db, topup_intent, event.payment_id, settlement.amount
-                )
-            except Exception:
-                logger.warning(
-                    "Failed to finalize topup intent after webhook settlement",
-                    exc_info=True,
-                )
-                db.rollback()
-        account_for_restore = ingest_payload.account_id or (
-            topup_intent.account_id if topup_intent is not None else None
+    if _successful_settlement_is_unlinked(settlement, event):
+        _resolve_dead_letter(
+            db,
+            dead_letter,
+            PaymentWebhookDeadLetterStatus.failed,
+            error=_UNLINKED_SUCCESS_ERROR,
         )
-        if account_for_restore is not None:
-            # Invoice-paid restores already ran inside the payment pipeline;
-            # this additionally covers prepaid/balance-based suspensions.
-            try:
-                from app.services import collections as collections_service
+        return JSONResponse({"status": "error"}, status_code=500)
 
-                collections_service.restore_account_services(
-                    db, str(account_for_restore)
-                )
-            except Exception:
-                logger.warning(
-                    "Failed to auto-restore after webhook settlement for %s",
-                    account_for_restore,
-                    exc_info=True,
-                )
-                db.rollback()
+    # 3. Best-effort consequences after the money is durably recorded.
+    _apply_post_settlement_bookkeeping(
+        db,
+        event=event,
+        settlement=settlement,
+        topup_intent=topup_intent,
+        ingest_payload=ingest_payload,
+    )
 
     # 4. Recorded as a PaymentProviderEvent — the insurance row is redundant.
     _delete_dead_letter(db, dead_letter)
@@ -476,47 +652,83 @@ def list_payment_webhook_dead_letters(
 
 def replay_payment_webhook_dead_letter(
     db: Session, dead_letter_id: str
-) -> PaymentWebhookDeadLetter:
+) -> PaymentWebhookDeadLetterRead:
     """Reprocess a parked webhook through ingest using its stored payload.
 
     For ops/cron use. Signature was already verified at receipt, so we go
-    straight to ingest. ``ingest`` is idempotent, so replaying an event that
-    actually did land is a no-op. On success the row is marked ``replayed``.
+    straight to the canonical verified-payload projection and ingest owner.
+    ``ingest`` is idempotent and repairs legacy incomplete event rows. A
+    successful replay deletes the insurance row, matching live delivery; rows
+    remain health-gated on every failure or process interruption.
     """
-    row = get_by_id(db, PaymentWebhookDeadLetter, dead_letter_id)
+    row = db.execute(
+        select(PaymentWebhookDeadLetter)
+        .where(PaymentWebhookDeadLetter.id == dead_letter_id)
+        .with_for_update()
+    ).scalar_one_or_none()
     if not row:
         raise HTTPException(status_code=404, detail="Dead-letter event not found")
 
+    row.status = PaymentWebhookDeadLetterStatus.received
+    row.error = None
+    row.retry_count = (row.retry_count or 0) + 1
+    row.last_attempt_at = _now()
+
     provider_enum = _PROVIDER_TYPE_BY_NAME.get(row.provider_type)
     if provider_enum is None:
+        detail = f"Unknown provider type: {row.provider_type}"
+        _resolve_dead_letter(
+            db, row, PaymentWebhookDeadLetterStatus.rejected, error=detail
+        )
         raise HTTPException(
-            status_code=400, detail=f"Unknown provider type: {row.provider_type}"
+            status_code=400,
+            detail=detail,
         )
     provider = billing_service.payment_providers.get_by_type(db, provider_enum)
     if not provider:
+        detail = f"No {row.provider_type} payment provider configured"
+        _resolve_dead_letter(
+            db, row, PaymentWebhookDeadLetterStatus.failed, error=detail
+        )
         raise HTTPException(
             status_code=400,
-            detail=f"No {row.provider_type} payment provider configured",
+            detail=detail,
         )
 
     payload = row.payload or {}
+    event_type = row.event_type or payload.get("event", "unknown")
     nested = db.begin_nested()
     try:
-        billing_service.payment_provider_events.ingest(
+        ingest_payload, settlement, topup_intent = _prepare_provider_event_ingest(
             db,
-            PaymentProviderEventIngest(
-                provider_id=provider.id,
-                event_type=row.event_type or payload.get("event", "unknown"),
-                external_id=row.external_id or "",
-                idempotency_key=row.idempotency_key,
-                payload=payload,
-            ),
+            provider_id=provider.id,
+            provider_type=row.provider_type,
+            event_type=event_type,
+            external_id=row.external_id,
+            idempotency_key=row.idempotency_key,
+            payload=payload,
         )
-    except HTTPException:
+        _settle_typed_account_credit_deposit(
+            db,
+            provider_type=row.provider_type,
+            external_id=row.external_id,
+            settlement=settlement,
+            topup_intent=topup_intent,
+            ingest_payload=ingest_payload,
+        )
+        event = billing_service.payment_provider_events.ingest(
+            db,
+            ingest_payload,
+            trusted_financial_effects=True,
+        )
+    except HTTPException as exc:
         if nested.is_active:
             nested.rollback()
         _resolve_dead_letter(
-            db, row, PaymentWebhookDeadLetterStatus.rejected, error="replay rejected"
+            db,
+            row,
+            PaymentWebhookDeadLetterStatus.rejected,
+            error=f"{exc.status_code}: {exc.detail}",
         )
         raise
     except Exception as exc:
@@ -527,5 +739,30 @@ def replay_payment_webhook_dead_letter(
         )
         raise
 
-    _resolve_dead_letter(db, row, PaymentWebhookDeadLetterStatus.replayed)
-    return row
+    if _successful_settlement_is_unlinked(settlement, event):
+        _resolve_dead_letter(
+            db,
+            row,
+            PaymentWebhookDeadLetterStatus.failed,
+            error=_UNLINKED_SUCCESS_ERROR,
+        )
+        raise RuntimeError(_UNLINKED_SUCCESS_ERROR)
+
+    _apply_post_settlement_bookkeeping(
+        db,
+        event=event,
+        settlement=settlement,
+        topup_intent=topup_intent,
+        ingest_payload=ingest_payload,
+    )
+
+    # Return an audit snapshot to the API, then remove the insurance row. The
+    # durable PaymentProviderEvent is the success record; a retained dead-letter
+    # must always mean unresolved work and must continue to block enforcement.
+    row.status = PaymentWebhookDeadLetterStatus.replayed
+    row.error = None
+    row.last_attempt_at = _now()
+    db.flush()
+    result = PaymentWebhookDeadLetterRead.model_validate(row)
+    _delete_dead_letter(db, row)
+    return result

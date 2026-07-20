@@ -4,7 +4,6 @@ import uuid
 
 from app.models.network import OntAssignment, OntUnit, OnuOnlineStatus
 from app.models.subscriber import Address, Subscriber
-from app.services import zabbix_ont_status
 from app.services.web_subscriber_details import build_subscriber_detail_snapshot
 from app.web.admin import subscribers as subscribers_web
 
@@ -89,9 +88,7 @@ def test_subscriber_geocode_endpoint_updates_coordinates(db_session):
     assert round(float(address.longitude), 6) == 3.300001
 
 
-def test_subscriber_detail_snapshot_equipment_uses_zabbix_ont_status(
-    db_session, monkeypatch
-):
+def test_subscriber_detail_snapshot_equipment_lists_ont_offline(db_session):
     subscriber = _create_subscriber(db_session)
     ont = OntUnit(
         serial_number="ONT-SUB-1",
@@ -108,15 +105,12 @@ def test_subscriber_detail_snapshot_equipment_uses_zabbix_ont_status(
         )
     )
     db_session.commit()
-    monkeypatch.setattr(
-        zabbix_ont_status,
-        "get_ont_signal_from_zabbix",
-        lambda _ont: zabbix_ont_status.OntSignalData(online=True),
-    )
 
     snapshot = build_subscriber_detail_snapshot(db_session, subscriber, subscriber.id)
 
+    # The live ONT status source was retired with the native monitoring
+    # cutover; equipment lists ONTs as offline (degraded state).
     equipment = snapshot["equipment"]
     assert len(equipment) == 1
     assert equipment[0]["type"] == "ONT"
-    assert equipment[0]["online"] is True
+    assert equipment[0]["online"] is False

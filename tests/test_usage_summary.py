@@ -321,6 +321,36 @@ def test_cycle_unlimited_uses_session_octets(
     assert out["is_authoritative"] is True
 
 
+def test_cycle_authoritative_zero_is_a_complete_total(
+    db_session, subscriber, subscription, monkeypatch
+):
+    """Zero session octets is a valid cycle total, not a missing-data marker."""
+
+    async def _no_vm(db, sub_ids, start, end):
+        return []
+
+    monkeypatch.setattr(svc, "_vm_points", _no_vm)
+    now = datetime(2026, 6, 15, 12, 0, tzinfo=UTC)
+    db_session.add(
+        QuotaBucket(
+            subscription_id=subscription.id,
+            period_start=now - timedelta(days=10),
+            period_end=now + timedelta(days=20),
+            included_gb=None,
+            used_gb=0,
+        )
+    )
+    db_session.commit()
+
+    out = _run_async(
+        svc.get_usage_summary(db_session, str(subscriber.id), "cycle", now=now)
+    )
+
+    assert out["total_bytes"] == 0
+    assert out["total_source"] == "sessions"
+    assert out["is_authoritative"] is True
+
+
 def test_cycle_includes_peak_over_window(
     db_session, subscriber, subscription, monkeypatch
 ):

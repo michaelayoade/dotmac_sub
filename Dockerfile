@@ -18,7 +18,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wireguard-tools \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install poetry && poetry config virtualenvs.create false
+ENV POETRY_VERSION=2.4.1 \
+    POETRY_HOME=/opt/poetry \
+    VIRTUAL_ENV=/opt/venv
+
+RUN python -m venv "$POETRY_HOME" \
+    && "$POETRY_HOME/bin/pip" install --no-cache-dir "poetry==$POETRY_VERSION" \
+    && python -m venv "$VIRTUAL_ENV"
+
+ENV PATH="$VIRTUAL_ENV/bin:$POETRY_HOME/bin:$PATH"
+
+RUN poetry config virtualenvs.create false
 
 COPY pyproject.toml poetry.lock ./
 RUN poetry install --only main --no-interaction --no-ansi
