@@ -1,6 +1,6 @@
 """Make operational SLA event selection explicit and UI-owned.
 
-Revision ID: 373_operational_sla_policy_events
+Revision ID: 381_operational_sla_policy_events
 Revises: 372_vendor_payment_projection
 """
 
@@ -10,8 +10,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "373_operational_sla_policy_events"
-down_revision = "372_vendor_payment_projection"
+revision = "381_operational_sla_policy_events"
+down_revision = "380_integration_platform_cutover"
 branch_labels = None
 depends_on = None
 
