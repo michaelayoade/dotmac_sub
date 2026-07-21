@@ -23,6 +23,7 @@ from app.services.audit_helpers import (
     log_audit_event,
 )
 from app.services.auth_dependencies import require_permission
+from app.services.domain_errors import DomainError
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/billing", tags=["web-admin-billing"])
@@ -255,7 +256,7 @@ def billing_wht_transition(
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     try:
-        record = web_billing_tax_accounting_service.transition_wht(
+        result = web_billing_tax_accounting_service.transition_wht(
             db,
             record_id=record_id,
             target_status=target_status,
@@ -263,23 +264,10 @@ def billing_wht_transition(
             certificate_reference=certificate_reference,
             notes=notes,
         )
-        log_audit_event(
-            db=db,
-            request=request,
-            action="transition",
-            entity_type="withholding_tax_record",
-            entity_id=str(record.id),
-            actor_id=_actor_id(request),
-            metadata={
-                "status": record.status.value,
-                "certificate_reference": record.certificate_reference,
-            },
-        )
-    except Exception as exc:
-        db.rollback()
-        return _tax_accounting_redirect(error=str(exc))
+    except DomainError as exc:
+        return _tax_accounting_redirect(error=exc.message)
     return _tax_accounting_redirect(
-        message=f"WHT record moved to {record.status.value.replace('_', ' ')}"
+        message=f"WHT record moved to {result.status.value.replace('_', ' ')}"
     )
 
 

@@ -12,8 +12,8 @@ import hmac
 import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from types import SimpleNamespace
 from unittest.mock import patch
+from uuid import uuid4
 
 import pytest
 
@@ -23,7 +23,6 @@ from app.models.billing import (
     PaymentAllocationReconciliationException,
     PaymentProvider,
     PaymentProviderEvent,
-    PaymentProviderEventStatus,
     PaymentProviderType,
     PaymentStatus,
     TopupIntent,
@@ -38,8 +37,15 @@ from app.services.api_billing_webhooks import (
     process_paystack_webhook,
 )
 from app.services.billing_enforcement_guards import payment_channel_health
+from app.services.db_session_adapter import db_session_adapter
 from app.services.integrations.payment_capability import PaymentCapabilityError
-from app.services.payment_reconciliation import reconcile_pending_topups
+from app.services.owner_commands import CommandContext
+from app.services.payment_gateway_adapter import PaymentGatewayTransaction
+from app.services.payment_reconciliation import (
+    RECONCILIATION_SCOPE,
+    RunTopupReconciliationCommand,
+    reconcile_pending_topups,
+)
 from app.services.settings_cache import SettingsCache
 from app.services.settings_spec import get_spec
 from tests.integration_platform_helpers import enable_payment_provider
@@ -264,15 +270,35 @@ def test_flutterwave_webhook_captures_app_fee(db_session, subscriber):
 
 
 def test_extract_settlement_defaults_fee_to_zero_when_absent(db_session):
-    from app.services.api_billing_webhooks import _extract_settlement
-
-    s = _extract_settlement(
-        "paystack",
-        "charge.success",
-        {"amount": 100000, "currency": "NGN", "reference": "r"},
+    from app.services.payment_webhook_commands import (
+        PaymentWebhookProvider,
+        _settlement_observation,
     )
-    assert s is not None
-    assert s.fee == Decimal("0.00")
+
+    settlement = _settlement_observation(
+        PaymentWebhookProvider.PAYSTACK,
+        event_type="charge.success",
+        data={"amount": 100000, "currency": "NGN", "reference": "r"},
+    )
+    assert settlement is not None
+    assert settlement.provider_fee == Decimal("0.00")
+
+
+def test_successful_webhook_requires_observed_currency():
+    from app.services.payment_webhook_commands import (
+        PaymentWebhookError,
+        PaymentWebhookProvider,
+        _settlement_observation,
+    )
+
+    with pytest.raises(PaymentWebhookError) as captured:
+        _settlement_observation(
+            PaymentWebhookProvider.PAYSTACK,
+            event_type="charge.success",
+            data={"amount": 100000, "reference": "r"},
+        )
+
+    assert captured.value.code == "financial.payment_webhooks.payload_invalid"
 
 
 def test_paystack_webhook_replay_creates_one_payment(db_session, subscriber):
@@ -300,7 +326,7 @@ def test_paystack_webhook_replay_creates_one_payment(db_session, subscriber):
     assert len(events) == 1
 
 
-def test_live_success_without_settlement_owner_keeps_inbox_failure(db_session):
+def test_live_success_without_settlement_owner_rolls_back_consequence(db_session):
     _make_provider(db_session)
     body = _paystack_body(
         reference="DMAC-WH-UNLINKED",
@@ -312,9 +338,10 @@ def test_live_success_without_settlement_owner_keeps_inbox_failure(db_session):
     response = _post_paystack(db_session, body)
 
     assert response.status_code == 500
-    event = db_session.query(PaymentProviderEvent).filter_by(external_id="990019").one()
-    assert event.status == PaymentProviderEventStatus.failed
-    assert event.payment_id is None
+    assert (
+        db_session.query(PaymentProviderEvent).filter_by(external_id="990019").count()
+        == 0
+    )
     receipt = (
         db_session.query(IntegrationInbox)
         .filter_by(provider_event_id="paystack-DMAC-WH-UNLINKED")
@@ -323,6 +350,104 @@ def test_live_success_without_settlement_owner_keeps_inbox_failure(db_session):
     assert receipt.state == "retryable"
     assert "did not post or link a payment" in (receipt.error_detail or "")
     assert "payment_inbox_failures" in payment_channel_health(db_session).reasons
+
+
+def test_invalid_invoice_identifier_is_dead_lettered_without_money(db_session):
+    _make_provider(db_session)
+    body = _paystack_body(
+        reference="DMAC-WH-INVALID-INVOICE",
+        tx_id="990021",
+        amount_kobo=100000,
+        metadata={"invoice_id": "not-a-uuid"},
+    )
+
+    response = _post_paystack(db_session, body)
+
+    assert response.status_code == 400
+    assert db_session.query(Payment).filter_by(external_id="990021").count() == 0
+    assert (
+        db_session.query(PaymentProviderEvent).filter_by(external_id="990021").count()
+        == 0
+    )
+    receipt = (
+        db_session.query(IntegrationInbox)
+        .filter_by(provider_event_id="paystack-DMAC-WH-INVALID-INVOICE")
+        .one()
+    )
+    assert receipt.state == "dead_letter"
+    assert receipt.error_code == "payment_event_rejected"
+
+
+def test_explicit_unknown_topup_intent_cannot_fall_back_to_reference(
+    db_session, subscriber
+):
+    provider = _make_provider(db_session)
+    intent = TopupIntent(
+        account_id=subscriber.id,
+        provider_id=provider.id,
+        reference="DMAC-WH-EXACT-INTENT",
+        provider_type="paystack",
+        currency="NGN",
+        requested_amount=Decimal("1000.00"),
+        status="pending",
+    )
+    db_session.add(intent)
+    db_session.commit()
+    body = _paystack_body(
+        reference=intent.reference,
+        tx_id="990022",
+        amount_kobo=100000,
+        metadata={"topup_intent_id": str(uuid4())},
+    )
+
+    response = _post_paystack(db_session, body)
+
+    assert response.status_code == 409
+    assert db_session.query(Payment).filter_by(external_id="990022").count() == 0
+    db_session.refresh(intent)
+    assert intent.status == "pending"
+
+
+def test_processed_receipt_failure_rolls_back_payment_and_event(
+    db_session, subscriber, monkeypatch
+):
+    _make_provider(db_session)
+    invoice = _make_invoice(
+        db_session,
+        subscriber.id,
+        amount="3000.00",
+        invoice_number="INV-WH-ATOMIC",
+    )
+    body = _paystack_body(
+        reference="DMAC-WH-ATOMIC",
+        tx_id="990020",
+        amount_kobo=300000,
+        metadata={"invoice_id": str(invoice.id)},
+    )
+    monkeypatch.setattr(
+        "app.services.payment_webhook_commands.integration_inbox.mark_processed",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("receipt projection unavailable")
+        ),
+    )
+
+    response = _post_paystack(db_session, body)
+
+    assert response.status_code == 500
+    assert db_session.query(Payment).filter_by(external_id="990020").count() == 0
+    assert (
+        db_session.query(PaymentProviderEvent).filter_by(external_id="990020").count()
+        == 0
+    )
+    db_session.refresh(invoice)
+    assert invoice.balance_due == Decimal("3000.00")
+    receipt = (
+        db_session.query(IntegrationInbox)
+        .filter_by(provider_event_id="paystack-DMAC-WH-ATOMIC")
+        .one()
+    )
+    assert receipt.state == "retryable"
+    assert receipt.error_code == "payment_event_processing_failed"
 
 
 def test_webhook_does_not_double_credit_verify_path_payment(db_session, subscriber):
@@ -347,6 +472,7 @@ def test_webhook_does_not_double_credit_verify_path_payment(db_session, subscrib
         reference="DMAC-WH-3",
         tx_id="990003",
         amount_kobo=400000,
+        fees_kobo=4500,
         metadata={"invoice_id": str(invoice.id)},
     )
 
@@ -355,6 +481,7 @@ def test_webhook_does_not_double_credit_verify_path_payment(db_session, subscrib
     assert response.status_code == 200
     payments = db_session.query(Payment).filter_by(external_id="990003").all()
     assert len(payments) == 1
+    assert payments[0].provider_fee == Decimal("45.00")
 
 
 def test_webhook_matches_legacy_payment_without_provider_id(db_session, subscriber):
@@ -508,28 +635,93 @@ def _stale_intent(db, subscriber, *, reference: str, minutes_old: int = 60):
     return intent
 
 
+def _run_reconciliation(db):
+    observed_at = datetime.now(UTC)
+    db_session_adapter.release_read_transaction(db)
+    return reconcile_pending_topups(
+        db,
+        RunTopupReconciliationCommand(observed_at=observed_at),
+        context=CommandContext.system(
+            actor="pytest",
+            scope=RECONCILIATION_SCOPE,
+            reason="Test stranded top-up reconciliation",
+        ),
+    )
+
+
 def test_reconciliation_recovers_stranded_topup(db_session, subscriber):
     _make_provider(db_session)
     intent = _stale_intent(db_session, subscriber, reference="DMAC-RECON-1")
 
     with patch(
         "app.services.payment_reconciliation.payment_gateway_adapter.verify",
-        return_value=SimpleNamespace(
+        return_value=PaymentGatewayTransaction(
+            provider_type="paystack",
             amount=Decimal("5000.00"),
             currency="NGN",
             external_id="660001",
             memo_prefix="Paystack",
         ),
     ):
-        result = reconcile_pending_topups(db_session)
+        result = _run_reconciliation(db_session)
 
-    assert result["recovered"] == 1
-    assert result["errors"] == 0
+    assert result.recovered == 1
+    assert result.errors == 0
     payment = db_session.query(Payment).filter_by(external_id="660001").one()
     assert payment.status == PaymentStatus.succeeded
     db_session.refresh(intent)
     assert intent.status == "completed"
     assert intent.completed_payment_id == payment.id
+
+
+def test_reconciliation_routes_typed_deposit_through_deposit_owner(
+    db_session, subscriber
+):
+    provider = _make_provider(db_session)
+    intent = TopupIntent(
+        account_id=subscriber.id,
+        provider_id=provider.id,
+        purpose="account_credit_deposit",
+        allocation_policy="credit_only",
+        credit_application_policy="pay_eligible_invoices",
+        policy_version=1,
+        preview_fingerprint="a" * 64,
+        idempotency_key="typed-reconciliation-deposit",
+        channel="customer_selfcare",
+        created_by="pytest",
+        reference="DMAC-RECON-TYPED-DEPOSIT",
+        provider_type="paystack",
+        currency="NGN",
+        requested_amount=Decimal("5000.00"),
+        status="pending",
+        expires_at=datetime.now(UTC) - timedelta(minutes=30),
+        metadata_={"payment_flow": "account_credit_deposit"},
+    )
+    db_session.add(intent)
+    db_session.commit()
+    intent.created_at = datetime.now(UTC) - timedelta(minutes=60)
+    db_session.commit()
+
+    with patch(
+        "app.services.payment_reconciliation.payment_gateway_adapter.verify",
+        return_value=PaymentGatewayTransaction(
+            provider_type="paystack",
+            amount=Decimal("5000.00"),
+            currency="NGN",
+            external_id="typed-reconciliation-deposit-payment",
+            memo_prefix="Paystack",
+        ),
+    ):
+        result = _run_reconciliation(db_session)
+
+    db_session.refresh(intent)
+    payment = db_session.get(Payment, intent.completed_payment_id)
+    assert result.recovered == 1
+    assert payment is not None
+    assert payment.settlement is not None
+    assert payment.settlement.unallocated_amount == Decimal("5000.00")
+    assert intent.status == "completed"
+    assert intent.metadata_["settlement_payment_id"] == str(payment.id)
 
 
 def test_reconciliation_links_existing_payment_without_duplicating(
@@ -550,17 +742,18 @@ def test_reconciliation_links_existing_payment_without_duplicating(
 
     with patch(
         "app.services.payment_reconciliation.payment_gateway_adapter.verify",
-        return_value=SimpleNamespace(
+        return_value=PaymentGatewayTransaction(
+            provider_type="paystack",
             amount=Decimal("5000.00"),
             currency="NGN",
             external_id="660002",
             memo_prefix="Paystack",
         ),
     ):
-        result = reconcile_pending_topups(db_session)
+        result = _run_reconciliation(db_session)
 
-    assert result["linked"] == 1
-    assert result["recovered"] == 0
+    assert result.linked == 1
+    assert result.recovered == 0
     assert db_session.query(Payment).filter_by(external_id="660002").count() == 1
     db_session.refresh(intent)
     assert intent.status == "completed"
@@ -576,9 +769,9 @@ def test_reconciliation_expires_long_dead_intent(db_session, subscriber):
         "app.services.payment_reconciliation.payment_gateway_adapter.verify",
         side_effect=ValueError("Payment was not successful (status: abandoned)"),
     ):
-        result = reconcile_pending_topups(db_session)
+        result = _run_reconciliation(db_session)
 
-    assert result["expired"] == 1
+    assert result.expired == 1
     assert db_session.query(Payment).count() == 0
     db_session.refresh(intent)
     assert intent.status == "expired"
@@ -602,9 +795,9 @@ def test_reconciliation_skips_fresh_pending_intent(db_session, subscriber):
     with patch(
         "app.services.payment_reconciliation.payment_gateway_adapter.verify"
     ) as verify_mock:
-        result = reconcile_pending_topups(db_session)
+        result = _run_reconciliation(db_session)
 
-    assert result["checked"] == 0
+    assert result.checked == 0
     verify_mock.assert_not_called()
     db_session.refresh(intent)
     assert intent.status == "pending"
@@ -614,6 +807,8 @@ def test_reconciliation_uses_configured_sweep_windows(db_session, subscriber):
     specs = {
         "topup_reconciliation_stale_minutes": (15, 1, 1440),
         "topup_reconciliation_max_age_days": (7, 1, 30),
+        "topup_reconciliation_expiry_grace_hours": (24, 0, 168),
+        "topup_reconciliation_batch_size": (50, 1, 500),
     }
     for key, (default, min_value, max_value) in specs.items():
         spec = get_spec(SettingDomain.billing, key)
@@ -653,9 +848,9 @@ def test_reconciliation_uses_configured_sweep_windows(db_session, subscriber):
     with patch(
         "app.services.payment_reconciliation.payment_gateway_adapter.verify"
     ) as verify_mock:
-        result = reconcile_pending_topups(db_session)
+        result = _run_reconciliation(db_session)
 
-    assert result["checked"] == 0
+    assert result.checked == 0
     verify_mock.assert_not_called()
 
 
@@ -676,10 +871,10 @@ def test_reconciliation_expires_intent_on_gateway_not_found(db_session, subscrib
         "app.services.payment_reconciliation.payment_gateway_adapter.verify",
         side_effect=_capability_http_error(400),
     ):
-        result = reconcile_pending_topups(db_session)
+        result = _run_reconciliation(db_session)
 
-    assert result["expired"] == 1
-    assert result["errors"] == 0
+    assert result.expired == 1
+    assert result.errors == 0
     db_session.refresh(intent)
     assert intent.status == "expired"
 
@@ -696,10 +891,10 @@ def test_reconciliation_keeps_5xx_as_retryable_error(db_session, subscriber):
         "app.services.payment_reconciliation.payment_gateway_adapter.verify",
         side_effect=_capability_http_error(503),
     ):
-        result = reconcile_pending_topups(db_session)
+        result = _run_reconciliation(db_session)
 
-    assert result["errors"] == 1
-    assert result["expired"] == 0
+    assert result.errors == 1
+    assert result.expired == 0
     db_session.refresh(intent)
     assert intent.status == "pending"
 
@@ -717,9 +912,9 @@ def test_reconciliation_skips_non_gateway_provider(db_session, subscriber):
     with patch(
         "app.services.payment_reconciliation.payment_gateway_adapter.verify"
     ) as verify_mock:
-        result = reconcile_pending_topups(db_session)
+        result = _run_reconciliation(db_session)
 
-    assert result["checked"] == 0
+    assert result.checked == 0
     verify_mock.assert_not_called()
     db_session.refresh(intent)
     assert intent.status == "pending"

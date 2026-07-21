@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import logging
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.billing import Payment, PaymentStatus
+from app.models.billing import Payment, PaymentSettlement, PaymentStatus
 from app.services.common import coerce_uuid
 from app.services.events.types import Event, EventType
 from app.services.prepaid_service_renewals import (
@@ -30,12 +31,21 @@ class PrepaidRenewalHandler:
         if not payment_id:
             return
         payment = db.get(Payment, coerce_uuid(payment_id))
+        settlement_id = (
+            db.scalar(
+                select(PaymentSettlement.id).where(
+                    PaymentSettlement.payment_id == payment.id
+                )
+            )
+            if payment is not None
+            else None
+        )
         if (
             payment is None
             or payment.account_id != event.account_id
             or payment.status != PaymentStatus.succeeded
             or not payment.is_active
-            or payment.settlement is None
+            or settlement_id is None
         ):
             return
         effective_at = payment.paid_at or payment.created_at

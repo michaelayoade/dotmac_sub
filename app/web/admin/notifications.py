@@ -1,7 +1,7 @@
 """Admin notifications management routes."""
 
 import json
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Form, Query, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -18,10 +18,32 @@ from app.services import (
     web_notifications_sla_policies as web_sla_policies_service,
 )
 from app.services.auth_dependencies import require_permission, require_user_auth
+from app.services.db_session_adapter import db_session_adapter
+from app.services.domain_errors import DomainError
+from app.services.owner_commands import CommandContext
 from app.timezone import APP_TIMEZONE_NAME
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/notifications", tags=["web-admin-notifications"])
+
+
+def _sla_policy_command_context(
+    request: Request,
+    *,
+    scope: str,
+    reason: str,
+) -> CommandContext:
+    auth = getattr(request.state, "auth", None) or {}
+    actor_id = auth.get("principal_id") or auth.get("person_id")
+    principal_type = str(auth.get("principal_type") or "system_user")
+    command_id = uuid4()
+    return CommandContext(
+        command_id=command_id,
+        correlation_id=command_id,
+        actor=f"{principal_type}:{actor_id}" if actor_id else "",
+        scope=scope,
+        reason=reason,
+    )
 
 
 def _htmx_error_response(
@@ -891,9 +913,16 @@ def sla_policy_create(
     is_active: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
+    context = _sla_policy_command_context(
+        request,
+        scope=f"{entity_type}:{trigger}:{level}",
+        reason="admin_operational_sla_policy_creation",
+    )
+    db_session_adapter.release_read_transaction(db)
     try:
         policy = web_sla_policies_service.create_policy(
             db,
+            context=context,
             name=name,
             entity_type=entity_type,
             trigger=trigger,
@@ -909,8 +938,7 @@ def sla_policy_create(
             url=f"/admin/notifications/sla-policies/{policy.id}",
             status_code=303,
         )
-    except ValueError as exc:
-        db.rollback()
+    except DomainError as exc:
         state = web_sla_policies_service.form_data(db)
         assert state is not None
         return templates.TemplateResponse(
@@ -922,7 +950,7 @@ def sla_policy_create(
                 action_url="/admin/notifications/sla-policies",
                 form_title="New SLA Policy",
                 submit_label="Create Policy",
-                error=str(exc),
+                error=exc.message,
             ),
             status_code=400,
         )
@@ -978,9 +1006,16 @@ def sla_policy_update(
     is_active: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
+    context = _sla_policy_command_context(
+        request,
+        scope=str(policy_id),
+        reason="admin_operational_sla_policy_update",
+    )
+    db_session_adapter.release_read_transaction(db)
     try:
         web_sla_policies_service.update_policy(
             db,
+            context=context,
             policy_id=policy_id,
             name=name,
             entity_type=entity_type,
@@ -997,8 +1032,7 @@ def sla_policy_update(
             url=f"/admin/notifications/sla-policies/{policy_id}",
             status_code=303,
         )
-    except ValueError as exc:
-        db.rollback()
+    except DomainError as exc:
         state = web_sla_policies_service.form_data(db, policy_id=policy_id)
         if state is None:
             return templates.TemplateResponse(
@@ -1015,7 +1049,7 @@ def sla_policy_update(
                 action_url=f"/admin/notifications/sla-policies/{policy_id}",
                 form_title="Edit SLA Policy",
                 submit_label="Update Policy",
-                error=str(exc),
+                error=exc.message,
             ),
             status_code=400,
         )
@@ -1025,8 +1059,22 @@ def sla_policy_update(
     "/sla-policies/{policy_id}/delete",
     dependencies=[Depends(require_permission("notification:write"))],
 )
-def sla_policy_delete(policy_id: UUID, db: Session = Depends(get_db)):
-    web_sla_policies_service.deactivate_policy(db, policy_id=policy_id)
+def sla_policy_delete(
+    policy_id: UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    context = _sla_policy_command_context(
+        request,
+        scope=str(policy_id),
+        reason="admin_operational_sla_policy_deactivation",
+    )
+    db_session_adapter.release_read_transaction(db)
+    web_sla_policies_service.deactivate_policy(
+        db,
+        context=context,
+        policy_id=policy_id,
+    )
     return RedirectResponse(url="/admin/notifications/sla-policies", status_code=303)
 
 

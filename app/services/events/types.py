@@ -53,8 +53,24 @@ class EventType(enum.Enum):
     payment_failed = "payment.failed"
     payment_refunded = "payment.refunded"
     payment_reversed = "payment.reversed"
+    payment_provider_event_processed = "payment_provider_event.processed"
+    payment_provider_event_failed = "payment_provider_event.failed"
     account_credit_deposited = "account_credit.deposited"
     prepaid_service_renewed = "prepaid_service.renewed"
+
+    # Billing - Bank-transfer evidence lifecycle
+    payment_proof_submitted = "payment_proof.submitted"
+    payment_proof_verified = "payment_proof.verified"
+    payment_proof_rejected = "payment_proof.rejected"
+    topup_intent_direct_transfer_created = "topup_intent.direct_transfer_created"
+    topup_intent_direct_transfer_canceled = "topup_intent.direct_transfer_canceled"
+    topup_intent_direct_transfer_submitted = "topup_intent.direct_transfer_submitted"
+    topup_intent_completed = "topup_intent.completed"
+    topup_intent_expired = "topup_intent.expired"
+    topup_intent_gateway_created = "topup_intent.gateway_created"
+    topup_intent_failed = "topup_intent.failed"
+    withholding_tax_receivable_recorded = "withholding_tax.receivable_recorded"
+    withholding_tax_status_changed = "withholding_tax.status_changed"
 
     # Billing - Consolidated billing account payment (1)
     billing_account_payment_received = "billing_account.payment_received"
@@ -255,6 +271,21 @@ class EventType(enum.Enum):
 
     # Custom event type for extensibility
     custom = "custom"
+
+
+class AccountCreditFundingOrigin(str, enum.Enum):
+    """Closed provenance vocabulary for account-credit funding events."""
+
+    account_credit_deposit = "account_credit_deposit"
+    verified_invoice_payment = "verified_invoice_payment"
+
+
+class AccountCreditApplicationState(str, enum.Enum):
+    """Closed application outcome carried by account-credit funding events."""
+
+    allocated = "allocated"
+    no_allocatable_balance = "no_allocatable_balance"
+    retained_as_account_credit = "retained_as_account_credit"
 
 
 # Mapping from EventType to LifecycleEventType for subscription events

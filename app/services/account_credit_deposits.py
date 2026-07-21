@@ -15,9 +15,9 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+from enum import Enum
 
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType
@@ -43,16 +43,59 @@ from app.services.billing.account_credit import (
 from app.services.billing.payments import Payments
 from app.services.common import round_money, to_decimal
 from app.services.events import emit_event
-from app.services.events.types import EventType
+from app.services.events.types import AccountCreditFundingOrigin, EventType
 from app.services.locking import lock_for_update
-from app.services.payment_gateway_adapter import PaymentGatewayTransaction
-from app.services.topup_intents import TopupIntentStatus, set_topup_intent_status
+from app.services.owner_commands import (
+    CommandContext,
+    OwnerCommandDefinition,
+    execute_owner_command,
+)
+from app.services.topup_intents import (
+    CompleteTopupIntentCommand,
+    TopupIntentChannel,
+    TopupIntentCompletionSource,
+    TopupIntentStatus,
+    stage_topup_intent_completion,
+)
 
 PURPOSE = TopupIntentPurpose.account_credit_deposit.value
 ALLOCATION_POLICY = TopupAllocationPolicy.credit_only.value
 CREDIT_APPLICATION_POLICY = AccountCreditApplicationPolicy.pay_eligible_invoices.value
 POLICY_VERSION = 1
 SUPPORTED_CURRENCY = "NGN"
+SETTLEMENT_SCOPE = "account-credit-deposit:settle"
+SETTLEMENT_PARTICIPANT_SCOPE = "account-credit-deposit:settle-participant"
+
+_SETTLE_COMMAND = OwnerCommandDefinition(
+    owner="financial.account_credit_deposits",
+    concern="verified Deposit Account Credit settlement command",
+    name="settle_verified_account_credit_deposit",
+)
+
+
+class AccountCreditDepositSettlementSource(str, Enum):
+    """Named observation paths allowed to settle a deposit intent."""
+
+    customer_gateway_verify = "customer_gateway_verify"
+    provider_webhook = "provider_webhook"
+    gateway_reconciliation = "gateway_reconciliation"
+    payment_proof = "payment_proof"
+
+
+_SETTLEMENT_ORIGIN_BY_SOURCE = {
+    AccountCreditDepositSettlementSource.customer_gateway_verify: (
+        PaymentSettlementOrigin.provider_event
+    ),
+    AccountCreditDepositSettlementSource.provider_webhook: (
+        PaymentSettlementOrigin.provider_event
+    ),
+    AccountCreditDepositSettlementSource.gateway_reconciliation: (
+        PaymentSettlementOrigin.provider_event
+    ),
+    AccountCreditDepositSettlementSource.payment_proof: (
+        PaymentSettlementOrigin.manual
+    ),
+}
 
 
 class DepositEligibilityError(ValueError):
@@ -77,11 +120,43 @@ class DepositPreview:
     fingerprint: str
 
 
-@dataclass(frozen=True)
-class DepositSettlementResult:
+@dataclass(frozen=True, slots=True)
+class SettleAccountCreditDepositCommand:
+    """Typed verified receipt evidence admitted by settlement owners."""
+
+    intent_id: uuid.UUID
+    provider_type: str
+    external_transaction_id: str
+    amount: Decimal
+    currency: str
+    provider_intent_id: uuid.UUID
+    source: AccountCreditDepositSettlementSource
+    provider_fee: Decimal = Decimal("0.00")
+
+
+@dataclass(frozen=True, slots=True)
+class StagedDepositSettlement:
+    """Flush-only result for a wider caller-owned financial transaction."""
+
     intent: TopupIntent
     payment: Payment
     application: AccountCreditApplicationResult
+    already_recorded: bool
+
+
+@dataclass(frozen=True, slots=True)
+class DepositSettlementResult:
+    """Immutable public result returned after the root command commits."""
+
+    intent_id: uuid.UUID
+    payment_id: uuid.UUID
+    account_id: uuid.UUID
+    amount: Decimal
+    provider_fee: Decimal
+    currency: str
+    applied_amount: Decimal
+    allocation_ids: tuple[str, ...]
+    remaining_account_credit: Decimal
     already_recorded: bool
 
 
@@ -251,7 +326,7 @@ class AccountCreditDeposits:
         )
 
     @staticmethod
-    def create_intent(
+    def stage_intent(
         db: Session,
         *,
         account_id: uuid.UUID,
@@ -264,7 +339,7 @@ class AccountCreditDeposits:
         provider_id: uuid.UUID | None,
         expires_at: datetime,
         idempotency_key: str,
-        channel: str,
+        channel: TopupIntentChannel,
         created_by: str | None,
         metadata: dict | None = None,
     ) -> tuple[TopupIntent, DepositPreview, bool]:
@@ -312,7 +387,7 @@ class AccountCreditDeposits:
             policy_version=POLICY_VERSION,
             preview_fingerprint=preview.fingerprint,
             idempotency_key=key,
-            channel=channel,
+            channel=channel.value,
             created_by=created_by,
             reference=reference,
             provider_type=provider_type,
@@ -323,35 +398,74 @@ class AccountCreditDeposits:
             metadata_=dict(metadata or {}),
         )
         db.add(intent)
-        try:
-            db.commit()
-            db.refresh(intent)
-        except IntegrityError as exc:
-            db.rollback()
-            winner = db.scalar(
-                select(TopupIntent).where(
-                    TopupIntent.account_id == account_id,
-                    TopupIntent.purpose == PURPOSE,
-                    TopupIntent.idempotency_key == key,
-                )
-            )
-            if winner:
-                return winner, preview, True
-            raise DepositEligibilityError(
-                "deposit_intent_conflict", "Deposit request is already being created"
-            ) from exc
+        db.flush()
         return intent, preview, False
 
     @staticmethod
     def settle_verified(
         db: Session,
+        command: SettleAccountCreditDepositCommand,
         *,
-        intent_id: uuid.UUID,
-        transaction: PaymentGatewayTransaction,
-        origin: PaymentSettlementOrigin = PaymentSettlementOrigin.provider_event,
-        commit: bool = True,
+        context: CommandContext,
     ) -> DepositSettlementResult:
-        initial = db.get(TopupIntent, intent_id)
+        """Settle verified receipt evidence in one owner-managed transaction."""
+
+        return execute_owner_command(
+            db,
+            definition=_SETTLE_COMMAND,
+            context=context,
+            operation=lambda: AccountCreditDeposits._settle_result(
+                db,
+                command=command,
+                context=context,
+            ),
+        )
+
+    @staticmethod
+    def _settle_result(
+        db: Session,
+        *,
+        command: SettleAccountCreditDepositCommand,
+        context: CommandContext,
+    ) -> DepositSettlementResult:
+        staged = AccountCreditDeposits.stage_verified_settlement(
+            db,
+            command,
+            context=context,
+        )
+        if staged.intent.account_id is None:
+            raise DepositEligibilityError(
+                "deposit_intent_not_found", "Deposit intent has no billing account"
+            )
+        return DepositSettlementResult(
+            intent_id=staged.intent.id,
+            payment_id=staged.payment.id,
+            account_id=staged.intent.account_id,
+            amount=round_money(staged.payment.amount),
+            provider_fee=round_money(staged.payment.provider_fee),
+            currency=staged.payment.currency,
+            applied_amount=round_money(staged.application.applied),
+            allocation_ids=tuple(staged.application.allocation_ids),
+            remaining_account_credit=round_money(
+                get_account_credit_balance(
+                    db,
+                    str(staged.intent.account_id),
+                    currency=staged.intent.currency,
+                )
+            ),
+            already_recorded=staged.already_recorded,
+        )
+
+    @staticmethod
+    def stage_verified_settlement(
+        db: Session,
+        command: SettleAccountCreditDepositCommand,
+        *,
+        context: CommandContext,
+    ) -> StagedDepositSettlement:
+        """Stage a verified deposit inside a wider caller-owned transaction."""
+
+        initial = db.get(TopupIntent, command.intent_id)
         if initial is None or initial.account_id is None:
             raise DepositEligibilityError(
                 "deposit_intent_not_found", "Deposit intent was not found"
@@ -376,27 +490,42 @@ class AccountCreditDeposits:
                 "deposit_contract_invalid", "Deposit intent policy is invalid"
             )
         _account(db, intent.account_id)
-        amount = round_money(transaction.amount)
+        amount = round_money(to_decimal(command.amount))
+        provider_fee = round_money(to_decimal(command.provider_fee))
         if amount != round_money(intent.requested_amount):
             raise DepositEligibilityError(
                 "deposit_amount_mismatch",
                 "Provider amount did not match the authorized deposit amount",
             )
-        currency = transaction.currency.upper()
+        if provider_fee < Decimal("0.00") or provider_fee > amount:
+            raise DepositEligibilityError(
+                "deposit_provider_fee_invalid",
+                "Provider fee must be between zero and the confirmed amount",
+            )
+        currency = command.currency.strip().upper()
         if currency != intent.currency:
             raise DepositEligibilityError(
                 "deposit_currency_mismatch",
                 "Provider currency did not match the authorized deposit currency",
             )
-        if transaction.provider_type != intent.provider_type:
+        provider_type = command.provider_type.strip().lower()
+        external_transaction_id = command.external_transaction_id.strip()
+        if not provider_type or not external_transaction_id:
+            raise DepositEligibilityError(
+                "deposit_provider_identity_invalid",
+                "Provider and external transaction identities are required",
+            )
+        if len(external_transaction_id) > 120:
+            raise DepositEligibilityError(
+                "deposit_provider_identity_invalid",
+                "External transaction identity is too long",
+            )
+        if provider_type != intent.provider_type:
             raise DepositEligibilityError(
                 "deposit_provider_mismatch",
                 "Provider did not match the authorized deposit provider",
             )
-        metadata_intent_id = str(
-            (transaction.metadata or {}).get("topup_intent_id") or ""
-        )
-        if metadata_intent_id != str(intent.id):
+        if command.provider_intent_id != intent.id:
             raise DepositEligibilityError(
                 "deposit_provider_correlation_mismatch",
                 "Provider confirmation did not match the authorized deposit intent",
@@ -409,7 +538,16 @@ class AccountCreditDeposits:
                     "deposit_settlement_incomplete",
                     "Deposit settlement evidence is incomplete",
                 )
-            return DepositSettlementResult(
+            stage_topup_intent_completion(
+                db,
+                CompleteTopupIntentCommand(
+                    intent_id=intent.id,
+                    payment_id=payment.id,
+                    source=TopupIntentCompletionSource.account_credit_deposit,
+                ),
+                context=context,
+            )
+            return StagedDepositSettlement(
                 intent=intent,
                 payment=payment,
                 application=AccountCreditApplicationResult(
@@ -421,7 +559,7 @@ class AccountCreditDeposits:
         existing = db.scalar(
             select(Payment).where(
                 Payment.provider_id == intent.provider_id,
-                Payment.external_id == transaction.external_id,
+                Payment.external_id == external_transaction_id,
                 Payment.is_active.is_(True),
             )
         )
@@ -444,18 +582,20 @@ class AccountCreditDeposits:
                 PaymentCreate(
                     account_id=intent.account_id,
                     amount=amount,
+                    provider_fee=provider_fee,
                     currency=currency,
                     status=PaymentStatus.succeeded,
                     provider_id=intent.provider_id,
-                    external_id=transaction.external_id,
+                    external_id=external_transaction_id,
                     memo=(
-                        f"{transaction.memo_prefix} Deposit Account Credit "
+                        f"{provider_type.replace('_', ' ').title()} "
+                        "Deposit Account Credit "
                         f"ref: {intent.reference}"
                     ),
                     allocations=[],
                 ),
                 idempotency_key=f"account-credit-deposit-{intent.id}",
-                origin=origin,
+                origin=_SETTLEMENT_ORIGIN_BY_SOURCE[command.source],
                 commit=False,
             )
             payment = creation.payment
@@ -464,13 +604,6 @@ class AccountCreditDeposits:
         # Race policy: cash is accepted, then any invoice that appeared after
         # intent creation immediately consumes the evidenced credit.
         application = AccountCreditApplications.apply(db, str(intent.account_id))
-        intent.completed_payment_id = payment.id
-        intent.external_id = transaction.external_id
-        intent.actual_amount = amount
-        intent.completed_at = datetime.now(UTC)
-        set_topup_intent_status(
-            intent, TopupIntentStatus.completed, source="deposit_settlement"
-        )
         metadata = dict(intent.metadata_ or {})
         metadata.update(
             {
@@ -488,6 +621,15 @@ class AccountCreditDeposits:
         )
         intent.metadata_ = metadata
         db.add(intent)
+        stage_topup_intent_completion(
+            db,
+            CompleteTopupIntentCommand(
+                intent_id=intent.id,
+                payment_id=payment.id,
+                source=TopupIntentCompletionSource.account_credit_deposit,
+            ),
+            context=context,
+        )
         AuditEvents.stage(
             db,
             AuditEventCreate(
@@ -498,12 +640,18 @@ class AccountCreditDeposits:
                 metadata_={
                     "payment_id": str(payment.id),
                     "amount": str(amount),
+                    "provider_fee": str(provider_fee),
                     "currency": currency,
                     "allocation_policy": intent.allocation_policy,
                     "credit_application_policy": intent.credit_application_policy,
                     "policy_version": intent.policy_version,
                     "application_allocation_ids": application.allocation_ids,
-                    "access_consequence": "invoice_owner_rechecks_only_if_fully_funded",
+                    "access_consequence": (
+                        "invoice_owner_rechecks_only_if_fully_funded"
+                    ),
+                    "settlement_source": command.source.value,
+                    "command_id": str(context.command_id),
+                    "correlation_id": str(context.correlation_id),
                 },
             ),
         )
@@ -511,23 +659,23 @@ class AccountCreditDeposits:
             db,
             EventType.account_credit_deposited,
             {
+                "schema_version": 1,
                 "intent_id": str(intent.id),
                 "payment_id": str(payment.id),
                 "amount": str(amount),
+                "provider_fee": str(provider_fee),
                 "currency": currency,
                 "applied_amount": str(application.applied),
                 "allocation_ids": application.allocation_ids,
-                "origin": "account_credit_deposit",
+                "origin": AccountCreditFundingOrigin.account_credit_deposit.value,
+                "source": command.source.value,
+                "command_id": str(context.command_id),
+                "correlation_id": str(context.correlation_id),
             },
             account_id=intent.account_id,
         )
-        if commit:
-            db.commit()
-            db.refresh(intent)
-            db.refresh(payment)
-        else:
-            db.flush()
-        return DepositSettlementResult(
+        db.flush()
+        return StagedDepositSettlement(
             intent=intent,
             payment=payment,
             application=application,
@@ -536,8 +684,13 @@ class AccountCreditDeposits:
 
 
 __all__ = [
+    "SETTLEMENT_PARTICIPANT_SCOPE",
+    "SETTLEMENT_SCOPE",
     "AccountCreditDeposits",
+    "AccountCreditDepositSettlementSource",
     "DepositEligibilityError",
     "DepositPreview",
     "DepositSettlementResult",
+    "SettleAccountCreditDepositCommand",
+    "StagedDepositSettlement",
 ]

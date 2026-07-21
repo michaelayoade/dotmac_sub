@@ -228,6 +228,7 @@ def fail_consequence(
     receipt: IntegrationInbox,
     error_code: str,
     error_detail: str | None = None,
+    max_attempts: int = 10,
 ) -> None:
     """Discard partial consequence writes, then record retry evidence."""
 
@@ -240,6 +241,29 @@ def fail_consequence(
             current,
             error_code=error_code,
             error_detail=error_detail,
+            max_attempts=max_attempts,
+        )
+
+    execute_command(db, operation)
+
+
+def fail_claimed_consequence(
+    db: Session,
+    *,
+    receipt_id: UUID,
+    error_code: str,
+    error_detail: str | None = None,
+    max_attempts: int = 10,
+) -> None:
+    """Record failure after a separate consequence owner already rolled back."""
+
+    def operation() -> None:
+        receipt = get_receipt(db, receipt_id=receipt_id)
+        mark_failed(
+            receipt,
+            error_code=error_code,
+            error_detail=error_detail,
+            max_attempts=max_attempts,
         )
 
     execute_command(db, operation)

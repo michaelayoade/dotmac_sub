@@ -23,6 +23,7 @@ from app.models.operational_escalation import (
     OperationalWatcherRole,
 )
 from app.models.subscriber import Reseller, Subscriber
+from app.services.domain_errors import DomainError
 
 DIRECT_ADDRESS_CHANNELS = {"email", "sms", "whatsapp", "webhook"}
 DEFAULT_ESCALATION_PARTICIPANTS = {
@@ -41,6 +42,22 @@ SEVERITY_RANK = {
     "major": 3,
     "critical": 4,
 }
+
+
+class OperationalEscalationError(DomainError, ValueError):
+    """Stable rejection from the operational escalation participant."""
+
+
+def _error(
+    suffix: str,
+    message: str,
+    **details: object,
+) -> OperationalEscalationError:
+    return OperationalEscalationError(
+        code=f"operations.sla_escalation.{suffix}",
+        message=message,
+        details=details,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,15 +136,30 @@ def validate_sla_event(*, entity_type: str, trigger: str) -> tuple[str, str]:
     normalized_entity_type = entity_type.strip().lower()
     normalized_trigger = trigger.strip().lower()
     if normalized_entity_type not in OPERATIONAL_ENTITY_TYPES:
-        raise ValueError(f"Unsupported operational entity type: {entity_type}")
+        raise _error(
+            "invalid_event",
+            f"Unsupported operational entity type: {entity_type}",
+            entity_type=entity_type,
+        )
     if not re.fullmatch(r"[a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+", normalized_trigger):
-        raise ValueError(
-            "Event key must use dotted lower-case names, for example ticket.unowned"
+        raise _error(
+            "invalid_event",
+            "Event key must use dotted lower-case names, for example ticket.unowned",
+            trigger=trigger,
         )
     if len(normalized_trigger) > 80:
-        raise ValueError("Event key must be 80 characters or fewer")
+        raise _error(
+            "invalid_event",
+            "Event key must be 80 characters or fewer",
+            trigger=trigger,
+        )
     if normalized_trigger.split(".", 1)[0] != normalized_entity_type:
-        raise ValueError("Event key prefix must match the operational entity type")
+        raise _error(
+            "invalid_event",
+            "Event key prefix must match the operational entity type",
+            entity_type=entity_type,
+            trigger=trigger,
+        )
     known = next(
         (
             definition
@@ -137,8 +169,11 @@ def validate_sla_event(*, entity_type: str, trigger: str) -> tuple[str, str]:
         None,
     )
     if known is not None and known.entity_type != normalized_entity_type:
-        raise ValueError(
-            f"{normalized_trigger} belongs to operational entity {known.entity_type}"
+        raise _error(
+            "invalid_event",
+            f"{normalized_trigger} belongs to operational entity {known.entity_type}",
+            entity_type=entity_type,
+            trigger=trigger,
         )
     return normalized_entity_type, normalized_trigger
 
@@ -226,7 +261,10 @@ def _participant_type(
         external,
     ]
     if sum(1 for item in selected if item) != 1:
-        raise ValueError("exactly one participant target is required")
+        raise _error(
+            "invalid_participant",
+            "exactly one participant target is required",
+        )
     if service_team_id is not None:
         return OperationalParticipantType.team
     if person_id is not None:
@@ -486,20 +524,6 @@ def update_policy(
     return policy
 
 
-def commit_policy(
-    db: Session,
-    policy: OperationalEscalationPolicy,
-    *,
-    is_active: bool | None = None,
-) -> OperationalEscalationPolicy:
-    """Commit a policy mutation through the canonical owner."""
-    if is_active is not None:
-        policy.is_active = is_active
-    db.commit()
-    db.refresh(policy)
-    return policy
-
-
 def deactivate_policy(
     db: Session,
     policy: OperationalEscalationPolicy,
@@ -508,14 +532,6 @@ def deactivate_policy(
     policy.is_active = False
     db.flush()
     return policy
-
-
-def deactivate_policy_committed(
-    db: Session,
-    policy: OperationalEscalationPolicy,
-) -> OperationalEscalationPolicy:
-    deactivate_policy(db, policy)
-    return commit_policy(db, policy)
 
 
 def record_event(

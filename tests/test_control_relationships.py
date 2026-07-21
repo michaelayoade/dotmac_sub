@@ -174,10 +174,7 @@ def test_payment_chain_renews_before_access_recheck():
 
     assert by_name["PrepaidRenewalHandler"].dependencies == ()
     assert by_name["EnforcementHandler"].dependencies == ("PrepaidRenewalHandler",)
-    assert set(by_name["WebhookHandler"].dependencies) == {
-        "PrepaidRenewalHandler",
-        "EnforcementHandler",
-    }
+    assert by_name["WebhookHandler"].dependencies == ()
 
 
 def test_account_credit_chain_renews_before_access_recheck():

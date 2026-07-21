@@ -33,8 +33,19 @@ from app.services.billing_payment_receipts import (
     get_payment_receipt_context,
     render_receipt_document_html,
 )
-from app.services.payment_gateway_adapter import payment_gateway_adapter
-from app.services.payment_reconciliation import _settle_intent
+from app.services.db_session_adapter import db_session_adapter
+from app.services.owner_commands import CommandContext
+from app.services.payment_gateway_adapter import (
+    PaymentGatewayTransaction,
+    payment_gateway_adapter,
+)
+from app.services.payment_reconciliation import (
+    VERIFIED_SETTLEMENT_SCOPE,
+    ReconcileVerifiedTopupCommand,
+    TopupReconciliationCandidate,
+    TopupReconciliationDisposition,
+    settle_verified_reconciled_topup,
+)
 from app.services.provider_payment_settlements import (
     settle_verified_invoice_payment,
 )
@@ -402,15 +413,32 @@ def test_recovery_completes_intent_after_cash_recording_when_allocation_fails(
     db_session.commit()
     db_session.refresh(intent)
 
-    created = _settle_intent(
+    observed_at = datetime.now(UTC)
+    command = ReconcileVerifiedTopupCommand(
+        candidate=TopupReconciliationCandidate(
+            intent_id=intent.id,
+            provider_type=PaymentProviderType.paystack,
+            reference=intent.reference,
+        ),
+        transaction=PaymentGatewayTransaction(
+            provider_type=PaymentProviderType.paystack.value,
+            external_id="paystack-recovery-draft-1",
+            amount=Decimal("1020.00"),
+            provider_fee=Decimal("20.00"),
+            currency="NGN",
+            memo_prefix="Paystack",
+        ),
+        observed_at=observed_at,
+    )
+    db_session_adapter.release_read_transaction(db_session)
+    result = settle_verified_reconciled_topup(
         db_session,
-        intent,
-        external_id="paystack-recovery-draft-1",
-        amount=Decimal("1020.00"),
-        provider_fee=Decimal("20.00"),
-        currency="NGN",
-        memo="Recovered Paystack invoice payment",
-        now=datetime.now(UTC),
+        command,
+        context=CommandContext.system(
+            actor="pytest",
+            scope=VERIFIED_SETTLEMENT_SCOPE,
+            reason="Test cash-first reconciliation allocation failure",
+        ),
     )
 
     db_session.refresh(intent)
@@ -424,7 +452,7 @@ def test_recovery_completes_intent_after_cash_recording_when_allocation_fails(
         .filter_by(payment_id=payment.id, invoice_id=invoice.id)
         .one()
     )
-    assert created is True
+    assert result.disposition is TopupReconciliationDisposition.recovered
     assert intent.status == "completed"
     assert intent.completed_payment_id == payment.id
     assert payment.amount == Decimal("1020.00")

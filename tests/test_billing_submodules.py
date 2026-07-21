@@ -25,9 +25,11 @@ from app.models.billing import (
     LedgerEntry,
     LedgerEntryType,
     LedgerSource,
+    Payment,
     PaymentChannelType,
     PaymentProviderType,
     PaymentStatus,
+    ServiceEntitlement,
     TaxApplication,
 )
 from app.models.domain_settings import DomainSetting, SettingDomain
@@ -65,12 +67,26 @@ from app.services.billing._common import (
 )
 from app.services.billing.configuration import _parse_bool, _parse_json
 from app.services.billing.reporting import BillingReporting
+from app.services.events.handlers.prepaid_renewal import PrepaidRenewalHandler
+from app.services.events.types import Event, EventType
 from app.services.settings_cache import SettingsCache
 from app.services.settings_spec import get_spec
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _deliver_prepaid_renewal(db_session: Session, payment: Payment) -> None:
+    """Deliver the deferred payment consequence inside the nested test session."""
+    PrepaidRenewalHandler().handle(
+        db_session,
+        Event(
+            event_type=EventType.payment_received,
+            payload={"payment_id": str(payment.id)},
+            account_id=payment.account_id,
+        ),
+    )
 
 
 def _make_subscriber(db_session: object) -> Subscriber:
@@ -1505,7 +1521,7 @@ class TestPaymentCRUD:
             billing_service.payments.delete(db_session, str(uuid.uuid4()))
         assert exc.value.status_code == 404
 
-    def test_succeeded_prepaid_payment_consumes_credit_and_advances_billing(
+    def test_succeeded_due_prepaid_payment_event_renews_canonical_entitlement(
         self, db_session, subscriber, subscription
     ):
         from app.models.catalog import (
@@ -1515,16 +1531,14 @@ class TestPaymentCRUD:
             PriceType,
             SubscriptionStatus,
         )
-        from app.models.subscriber import SubscriberStatus
 
-        paid_at = datetime(2026, 6, 28, tzinfo=UTC)
         next_billing = datetime(2026, 7, 1, tzinfo=UTC)
+        paid_at = next_billing
         subscription.status = SubscriptionStatus.active
         subscription.billing_mode = BillingMode.prepaid
         subscription.start_at = datetime(2026, 6, 1, tzinfo=UTC)
         subscription.next_billing_at = next_billing
         subscription.unit_price = Decimal("37625.00")
-        subscriber.status = SubscriberStatus.blocked
         db_session.add(
             OfferPrice(
                 offer_id=subscription.offer_id,
@@ -1547,6 +1561,7 @@ class TestPaymentCRUD:
                 paid_at=paid_at,
             ),
         )
+        _deliver_prepaid_renewal(db_session, payment)
 
         credit = (
             db_session.query(LedgerEntry)
@@ -1555,21 +1570,23 @@ class TestPaymentCRUD:
             .filter(LedgerEntry.source == LedgerSource.payment)
             .one()
         )
-        debit = (
-            db_session.query(LedgerEntry)
-            .filter(LedgerEntry.payment_id == payment.id)
-            .filter(LedgerEntry.invoice_id.is_(None))
-            .filter(LedgerEntry.source == LedgerSource.invoice)
+        entitlement = (
+            db_session.query(ServiceEntitlement)
+            .filter(ServiceEntitlement.subscription_id == subscription.id)
             .one()
         )
+        debit = db_session.get(LedgerEntry, entitlement.source_ledger_entry_id)
+        assert debit is not None
         assert credit.entry_type == LedgerEntryType.credit
         assert credit.amount == Decimal("37625.00")
         assert debit.entry_type == LedgerEntryType.debit
+        assert debit.source == LedgerSource.adjustment
+        assert debit.payment_id is None
         assert debit.amount == Decimal("37625.00")
+        application = billing_service.payments.application_summary(db_session, payment)
+        assert application.prepaid_amount_applied == Decimal("37625.00")
         db_session.refresh(subscription)
-        db_session.refresh(subscriber)
         assert subscription.next_billing_at == datetime(2026, 8, 1)
-        assert subscriber.status == SubscriberStatus.active
 
     def test_succeeded_prepaid_payment_refuses_catalog_fallback_without_contract_price(
         self, db_session, subscriber, subscription
@@ -1621,7 +1638,7 @@ class TestPaymentCRUD:
         db_session.refresh(subscription)
         assert subscription.next_billing_at == datetime(2026, 7, 1)
 
-    def test_succeeded_prepaid_payment_preserves_credit_when_paid_coverage_exists(
+    def test_succeeded_prepaid_payment_ignores_paid_invoice_without_entitlement(
         self, db_session, subscriber, subscription
     ):
         from app.models.billing import InvoiceLine
@@ -1633,9 +1650,9 @@ class TestPaymentCRUD:
             SubscriptionStatus,
         )
 
-        paid_at = datetime(2026, 6, 28, tzinfo=UTC)
         period_start = datetime(2026, 7, 1, tzinfo=UTC)
         period_end = datetime(2026, 8, 1, tzinfo=UTC)
+        paid_at = period_start
         subscription.status = SubscriptionStatus.active
         subscription.billing_mode = BillingMode.prepaid
         subscription.start_at = datetime(2026, 6, 1, tzinfo=UTC)
@@ -1692,15 +1709,19 @@ class TestPaymentCRUD:
                 paid_at=paid_at,
             ),
         )
+        _deliver_prepaid_renewal(db_session, payment)
 
-        debit = (
-            db_session.query(LedgerEntry)
-            .filter(LedgerEntry.payment_id == payment.id)
-            .filter(LedgerEntry.invoice_id.is_(None))
-            .filter(LedgerEntry.source == LedgerSource.invoice)
-            .first()
+        entitlement = (
+            db_session.query(ServiceEntitlement)
+            .filter(ServiceEntitlement.subscription_id == subscription.id)
+            .one()
         )
-        assert debit is None
+        debit = db_session.get(LedgerEntry, entitlement.source_ledger_entry_id)
+        assert debit is not None
+        assert debit.amount == Decimal("37625.00")
+        assert debit.entry_type == LedgerEntryType.debit
+        assert debit.source == LedgerSource.adjustment
+        assert debit.payment_id is None
         db_session.refresh(subscription)
         assert subscription.next_billing_at == period_end.replace(tzinfo=None)
 

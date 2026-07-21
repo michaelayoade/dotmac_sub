@@ -1,8 +1,7 @@
 """A reseller bank transfer must be credited once, not twice.
 
-F16. ``verify_proof`` dispatches a reseller (consolidated) proof to
-``_verify_consolidated_proof`` BEFORE it takes the account lock and re-checks the
-status — the subscriber path does both, this one did neither.
+All review paths must lock the exact ``PaymentProof`` before checking its state,
+then take the canonical credited-account lock before creating money evidence.
 
 So the status check in front of the dispatch was an UNLOCKED read: two reviewers
 clicking Verify at the same time both passed it and both created a succeeded
@@ -20,12 +19,31 @@ import uuid
 from decimal import Decimal
 
 import pytest
-from fastapi import HTTPException
 
 from app.models.billing import BillingAccount, Payment
 from app.models.payment_proof import PaymentProof, PaymentProofStatus
 from app.models.subscriber import Reseller, Subscriber
 from app.services import payment_proofs
+from app.services.db_session_adapter import db_session_adapter
+from app.services.owner_commands import CommandContext
+
+
+def _context() -> CommandContext:
+    return CommandContext.system(
+        actor="test:payment-proof-reviewer",
+        scope=payment_proofs.REVIEW_SCOPE,
+        reason="Payment-proof concurrency behavior test",
+    )
+
+
+def _verify(db_session, proof_id: str, *, verified_by: str):
+    db_session_adapter.release_read_transaction(db_session)
+    return payment_proofs.verify_proof(
+        db_session,
+        proof_id,
+        context=_context(),
+        verified_by=verified_by,
+    )
 
 
 def _reseller_billing_account(db) -> BillingAccount:
@@ -98,16 +116,16 @@ def test_verifying_a_reseller_proof_twice_credits_it_once(db_session):
     ba = _reseller_billing_account(db_session)
     proof = _submitted_proof(db_session, ba, "500000.00")
 
-    payment_proofs.verify_proof(db_session, str(proof.id), verified_by="reviewer-1")
+    _verify(db_session, str(proof.id), verified_by="reviewer-1")
     db_session.commit()
 
     assert len(_payments_for(db_session, ba)) == 1
 
     # The second reviewer's click. Before the fix this passed the unlocked status
     # check and created a SECOND payment for the same bank transfer.
-    with pytest.raises(HTTPException) as exc:
-        payment_proofs.verify_proof(db_session, str(proof.id), verified_by="reviewer-2")
-    assert exc.value.status_code == 400
+    with pytest.raises(payment_proofs.PaymentProofError) as exc:
+        _verify(db_session, str(proof.id), verified_by="reviewer-2")
+    assert exc.value.code == "financial.payment_proofs.already_reviewed"
 
     payments = _payments_for(db_session, ba)
     assert len(payments) == 1, (
@@ -119,7 +137,7 @@ def test_a_verified_reseller_proof_is_terminal(db_session):
     ba = _reseller_billing_account(db_session)
     proof = _submitted_proof(db_session, ba, "100000.00")
 
-    payment_proofs.verify_proof(db_session, str(proof.id), verified_by="reviewer")
+    _verify(db_session, str(proof.id), verified_by="reviewer")
     db_session.commit()
     db_session.refresh(proof)
 
@@ -131,9 +149,7 @@ def test_the_first_verification_still_credits_the_reseller(db_session):
     ba = _reseller_billing_account(db_session)
     proof = _submitted_proof(db_session, ba, "250000.00")
 
-    result = payment_proofs.verify_proof(
-        db_session, str(proof.id), verified_by="reviewer"
-    )
+    result = _verify(db_session, str(proof.id), verified_by="reviewer")
     db_session.commit()
 
     assert result is not None
@@ -155,16 +171,19 @@ def test_the_losing_racer_is_refused_under_the_lock(db_session):
     proof = _submitted_proof(db_session, ba, "500000.00")
 
     # Reviewer 1 wins the race.
-    payment_proofs.verify_proof(db_session, str(proof.id), verified_by="reviewer-1")
+    _verify(db_session, str(proof.id), verified_by="reviewer-1")
     db_session.commit()
     assert len(_payments_for(db_session, ba)) == 1
 
     # Reviewer 2 already passed the unlocked check and is now inside the dispatch.
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(payment_proofs.PaymentProofError) as exc:
         payment_proofs._verify_consolidated_proof(
-            db_session, proof, verified_by="reviewer-2"
+            db_session,
+            proof,
+            context=_context(),
+            verified_by="reviewer-2",
         )
-    assert exc.value.status_code == 400
+    assert exc.value.code == "financial.payment_proofs.already_reviewed"
 
     payments = _payments_for(db_session, ba)
     assert len(payments) == 1, (
@@ -180,22 +199,24 @@ def test_reseller_payment_stays_in_the_locked_proof_transaction(
 
     ba = _reseller_billing_account(db_session)
     proof = _submitted_proof(db_session, ba, "500000.00")
-    original_settle = billing_service.consolidated_payment_settlements.settle_verified
-    commit_values = []
+    original_settle = (
+        billing_service.consolidated_payment_settlements.stage_settle_verified
+    )
+    participant_calls = []
 
     def tracking_settle(*args, **kwargs):
-        commit_values.append(kwargs.get("commit"))
+        participant_calls.append("commit" in kwargs)
         return original_settle(*args, **kwargs)
 
     monkeypatch.setattr(
         billing_service.consolidated_payment_settlements,
-        "settle_verified",
+        "stage_settle_verified",
         tracking_settle,
     )
 
-    payment_proofs.verify_proof(db_session, str(proof.id), verified_by="reviewer")
+    _verify(db_session, str(proof.id), verified_by="reviewer")
 
-    assert commit_values == [False]
+    assert participant_calls == [False]
 
 
 def test_subscriber_payment_stays_in_the_locked_proof_transaction(
@@ -205,15 +226,15 @@ def test_subscriber_payment_stays_in_the_locked_proof_transaction(
     from app.services import billing as billing_service
 
     proof = _submitted_subscriber_proof(db_session, "50000.00")
-    original_create = billing_service.payments.create
-    commit_values = []
+    original_create = billing_service.payments.stage_create
+    participant_calls = []
 
     def tracking_create(*args, **kwargs):
-        commit_values.append(kwargs.get("commit"))
+        participant_calls.append("commit" in kwargs)
         return original_create(*args, **kwargs)
 
-    monkeypatch.setattr(billing_service.payments, "create", tracking_create)
+    monkeypatch.setattr(billing_service.payments, "stage_create", tracking_create)
 
-    payment_proofs.verify_proof(db_session, str(proof.id), verified_by="reviewer")
+    _verify(db_session, str(proof.id), verified_by="reviewer")
 
-    assert commit_values == [False]
+    assert participant_calls == [False]

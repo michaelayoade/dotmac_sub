@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.models.billing import PaymentProvider, PaymentProviderType, TopupIntent
 from app.models.domain_settings import SettingDomain
+from app.schemas.billing import PaymentProviderCreate, PaymentProviderUpdate
 from app.services import settings_spec
 from app.services.integrations import installations
 from app.services.integrations.connectors.payment_gateway import (
@@ -24,6 +25,55 @@ SUPPORTED_PROVIDER_TYPES: tuple[PaymentProviderType, ...] = (
     PaymentProviderType.flutterwave,
 )
 _BOOL_TRUE_VALUES = {"1", "true", "yes", "on"}
+
+
+def create_configured_provider(
+    db: Session,
+    command: PaymentProviderCreate,
+) -> PaymentProvider:
+    """Persist one provider configuration for the legacy routing owner."""
+
+    provider = PaymentProvider(
+        name=command.name,
+        provider_type=command.provider_type,
+        is_active=command.is_active,
+        notes=command.notes,
+    )
+    db.add(provider)
+    db.commit()
+    db.refresh(provider)
+    return provider
+
+
+def update_configured_provider(
+    db: Session,
+    provider: PaymentProvider,
+    command: PaymentProviderUpdate,
+) -> PaymentProvider:
+    """Apply the explicit provider configuration fields supplied by an adapter."""
+
+    fields = command.model_fields_set
+    if "name" in fields:
+        assert command.name is not None
+        provider.name = command.name
+    if "provider_type" in fields:
+        assert command.provider_type is not None
+        provider.provider_type = command.provider_type
+    if "is_active" in fields:
+        assert command.is_active is not None
+        provider.is_active = command.is_active
+    if "notes" in fields:
+        provider.notes = command.notes
+    db.commit()
+    db.refresh(provider)
+    return provider
+
+
+def deactivate_configured_provider(db: Session, provider: PaymentProvider) -> None:
+    """Soft-deactivate one configured provider."""
+
+    provider.is_active = False
+    db.commit()
 
 
 @dataclass(frozen=True)

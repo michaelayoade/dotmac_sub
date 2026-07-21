@@ -25,6 +25,11 @@ authoritative documents in the same change that updates the contract.
 - Adapters create and close sessions. A registered public command owner controls
   the atomic business transaction. Nested helpers use `flush()` and never
   commit independently.
+- An optional participant consequence may use only
+  `app.services.owner_commands.execute_owner_savepoint`; its callback remains
+  flush-only, and the owner must record durable failure evidence after rollback.
+  Direct `begin_nested()`, savepoint completion, commit, or rollback in a
+  participant is forbidden.
 - New and migrated write owners enter
   `app.services.owner_commands.execute_owner_command` once on a
   transaction-free session. Adapters and nested helpers never call it.

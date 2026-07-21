@@ -17,6 +17,9 @@ from sqlalchemy.orm import Session
 from app.schemas.billing import BillingAccountCreditAllocationConfirm
 from app.services import customer_portal_flow_payments as customer_payments
 from app.services import payment_proofs, reseller_portal, reseller_portal_billing
+from app.services.db_session_adapter import db_session_adapter
+from app.services.domain_errors import DomainError
+from app.services.owner_commands import CommandContext
 from app.web.reseller.branding import get_reseller_templates
 
 logger = logging.getLogger(__name__)
@@ -340,21 +343,30 @@ async def billing_submit_transfer_proof(
     try:
         ba = billing_service.billing_accounts.get_for_reseller(db, reseller_id)
         path = await payment_proofs.save_proof_file(file)
+        submitted_by = _login_subscriber_id(context)
+        currency = ba.currency
+        billing_account_id = str(ba.id)
+        db_session_adapter.release_read_transaction(db)
         payment_proofs.submit_proof(
             db,
             None,
-            submitted_by=_login_subscriber_id(context),
+            context=CommandContext.system(
+                actor=f"reseller:{submitted_by or reseller_id}",
+                scope=payment_proofs.SUBMISSION_SCOPE,
+                reason="Reseller portal consolidated transfer evidence submission",
+            ),
+            submitted_by=submitted_by,
             amount=amount,
-            currency=ba.currency,
+            currency=currency,
             bank_name=bank_name,
             reference=reference,
             file_path=path,
-            billing_account_id=str(ba.id),
+            billing_account_id=billing_account_id,
             gross_amount=gross_amount,
             wht_rate=wht_rate,
         )
     except Exception as exc:  # noqa: BLE001 - surface as a friendly redirect
-        detail = getattr(exc, "detail", None) or str(exc)
+        detail = exc.message if isinstance(exc, DomainError) else str(exc)
         return RedirectResponse(
             url="/reseller/billing?error="
             + quote_plus(f"Could not submit receipt: {detail}"),

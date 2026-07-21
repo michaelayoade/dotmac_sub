@@ -990,27 +990,1116 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="financial.topup_intents",
+                module="app.services.topup_intents",
+                owns=(
+                    "direct bank-transfer availability and configured-account projection",
+                    "invoice direct-transfer intent record creation and replacement",
+                    "direct-transfer top-up intent proof submission transition",
+                    "gateway invoice and reseller checkout intent record creation",
+                    "saved-card top-up intent failure projection",
+                    "top-up intent completed-payment projection",
+                    "gateway top-up intent expiry decision",
+                ),
+                depends_on=(
+                    "control.feature_registry",
+                    "control.settings_spec",
+                    "customer.accounts",
+                    "events.dispatcher",
+                    "financial.billing_accounts",
+                    "financial.collection_accounts",
+                    "financial.payments",
+                ),
+                notes=(
+                    "The participant derives direct-transfer availability from the feature "
+                    "control, canonical collection-account destinations, and customer "
+                    "instructions. It is the canonical invoice-intent, proof-link, "
+                    "completed-payment, and gateway-expiry projection writer. Cash remains "
+                    "authoritative in the payment owner; callers compose or idempotently "
+                    "repair the intent projection without parallel field writers."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name=(
+                                "direct bank-transfer availability and configured-account "
+                                "projection"
+                            ),
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical direct-transfer feature control",
+                                "canonical direct-transfer bank destinations",
+                                "canonical direct-transfer customer instructions",
+                            ),
+                        ),
+                        ConcernContract(
+                            name=(
+                                "invoice direct-transfer intent record creation and "
+                                "replacement"
+                            ),
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical direct-transfer top-up intent",
+                                "direct-transfer creation command evidence",
+                                "top-up intent transition protocol",
+                            ),
+                            canonical_writer="financial.topup_intents",
+                        ),
+                        ConcernContract(
+                            name=(
+                                "direct-transfer top-up intent proof submission transition"
+                            ),
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical direct-transfer top-up intent",
+                                "direct-transfer proof-link command evidence",
+                                "top-up intent transition protocol",
+                            ),
+                            canonical_writer="financial.topup_intents",
+                        ),
+                        ConcernContract(
+                            name=(
+                                "gateway invoice and reseller checkout intent record "
+                                "creation"
+                            ),
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical gateway checkout creation evidence",
+                                "top-up intent transition protocol",
+                            ),
+                            canonical_writer="financial.topup_intents",
+                        ),
+                        ConcernContract(
+                            name="saved-card top-up intent failure projection",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical top-up intent projection target",
+                                "typed saved-card failure evidence",
+                                "top-up intent transition protocol",
+                            ),
+                            canonical_writer="financial.topup_intents",
+                        ),
+                        ConcernContract(
+                            name="top-up intent completed-payment projection",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical top-up intent projection target",
+                                "canonical succeeded payment evidence",
+                                "typed top-up intent completion evidence",
+                            ),
+                            canonical_writer="financial.topup_intents",
+                        ),
+                        ConcernContract(
+                            name="gateway top-up intent expiry decision",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical top-up intent projection target",
+                                "canonical top-up reconciliation expiry policy",
+                                "typed gateway expiry observation",
+                            ),
+                            canonical_writer="financial.topup_intents",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical direct-transfer feature control",
+                            owner="control.feature_registry",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "billing.direct_bank_transfer module-composed feature "
+                                "resolution with fail-closed missing behavior"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical direct-transfer bank destinations",
+                            owner="financial.collection_accounts",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active, complete, currency-matched collection-account "
+                                "identities in explicit customer-presentment order"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical direct-transfer customer instructions",
+                            owner="control.settings_spec",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed billing-domain customer transfer instructions with "
+                                "a checked-in default"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical direct-transfer top-up intent",
+                            owner="financial.topup_intents",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked TopupIntent identity, subscriber account, provider, "
+                                "reference, requested amount, status, and metadata evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical top-up intent projection target",
+                            owner="financial.topup_intents",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked TopupIntent identity, subscriber or billing-account "
+                                "scope, provider, currency, status, expiry, and current "
+                                "completed-payment projection"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical gateway checkout creation evidence",
+                            owner="financial.gateway_topup_intent_commands",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed invoice or reseller scope, provider, reference, "
+                                "amount, currency, lifetime, actor, and flow evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="typed saved-card failure evidence",
+                            owner="financial.gateway_topup_intent_commands",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed intent identity, named failure source, reason code, "
+                                "and correlated command context"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical succeeded payment evidence",
+                            owner="financial.payments",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked active succeeded Payment scope, provider, gross "
+                                "amount, currency, external transaction, and paid timestamp"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="typed top-up intent completion evidence",
+                            owner="financial.topup_intents",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed intent/payment identities and named completion source "
+                                "with correlated command context"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical top-up reconciliation expiry policy",
+                            owner="control.settings_spec",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "bounded database-authoritative expiry grace setting plus "
+                                "the intent's canonical expiry timestamp"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="typed gateway expiry observation",
+                            owner="external:payment_provider",
+                            kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                            source=(
+                                "provider not-found or definitive unsuccessful verification "
+                                "evidence normalized with its observation time"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="direct-transfer creation command evidence",
+                            owner="financial.direct_transfer_intent_commands",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed account, invoice, amount, actor, command, correlation, "
+                                "and idempotency evidence admitted by the creation coordinator"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="direct-transfer proof-link command evidence",
+                            owner="financial.topup_intents",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed PaymentProof identity, selected configured bank "
+                                "account snapshot, and correlated CommandContext admitted "
+                                "by the payment-proof owner"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="top-up intent transition protocol",
+                            owner="financial.topup_intents",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "canonical provider identity, status vocabulary, pending-to-"
+                                "submitted eligibility, proof-link uniqueness, and event "
+                                "vocabulary"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.PARTICIPANT,
+                        boundary=(
+                            "A creation, payment-proof, payment-settlement, webhook, portal, "
+                            "reseller, or reconciliation caller supplies the transaction; "
+                            "this participant stages intent creation, replacement, proof, "
+                            "failure/completion/expiry projection, and events without "
+                            "committing or rolling back. Cash-first payment owners may commit confirmed "
+                            "money before invoking this idempotent repairable projection."
+                        ),
+                        locking=(
+                            "Creation holds the canonical account lock before pending intent "
+                            "replacement. Gateway creation locks the account or billing "
+                            "account before its reference; proof submission locks the exact intent. Completion "
+                            "locks subscriber or billing-account scope, exact intent, then "
+                            "succeeded Payment before scope/provider/currency/link evidence "
+                            "is rechecked; expiry uses the same scope and intent locks."
+                        ),
+                        idempotency=(
+                            "A stable creation key replays the matching pending invoice "
+                            "intent; a fresh creation explicitly cancels prior pending "
+                            "attempts. One pending intent accepts one proof link. Replaying "
+                            "the same succeeded Payment or expired state performs no second "
+                            "field transition or event; a different payment link conflicts."
+                        ),
+                        retries=(
+                            "Only the caller retries after rollback. If cash was already "
+                            "committed, webhook or scheduled reconciliation safely replays "
+                            "the projection from canonical Payment evidence; this participant "
+                            "never retries or completes a transaction independently."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "financial.topup_intents.invalid_status",
+                            "financial.topup_intents.invalid_bank_account_evidence",
+                            "financial.topup_intents.not_found",
+                            "financial.topup_intents.account_mismatch",
+                            "financial.topup_intents.provider_mismatch",
+                            "financial.topup_intents.invalid_transition",
+                            "financial.topup_intents.proof_link_conflict",
+                            "financial.topup_intents.amount_non_positive",
+                            "financial.topup_intents.idempotency_key_invalid",
+                            "financial.topup_intents.idempotency_conflict",
+                            "financial.topup_intents.billing_account_not_found",
+                            "financial.topup_intents.scope_missing",
+                            "financial.topup_intents.payment_not_found",
+                            "financial.topup_intents.payment_not_succeeded",
+                            "financial.topup_intents.payment_scope_mismatch",
+                            "financial.topup_intents.payment_currency_mismatch",
+                            "financial.topup_intents.payment_provider_mismatch",
+                            "financial.topup_intents.payment_amount_invalid",
+                            "financial.topup_intents.completion_conflict",
+                            "financial.topup_intents.external_id_conflict",
+                            "financial.topup_intents.expiry_grace_invalid",
+                            "financial.topup_intents.expiry_time_invalid",
+                            "financial.topup_intents.gateway_scope_invalid",
+                            "financial.topup_intents.gateway_identity_invalid",
+                            "financial.topup_intents.gateway_currency_invalid",
+                            "financial.topup_intents.gateway_expiry_invalid",
+                            "financial.topup_intents.gateway_reference_conflict",
+                        ),
+                        mapping_owner=(
+                            "payment, webhook, portal, reseller, and reconciliation adapters"
+                        ),
+                        retryable_codes=(),
+                        fail_closed_on=(
+                            "missing or wrong-account intent identity",
+                            "non-direct-transfer provider identity",
+                            "incomplete configured-bank evidence",
+                            "non-pending intent lifecycle state",
+                            "an existing proof evidence link",
+                            "missing or conflicting creation idempotency evidence",
+                            "missing, inactive, unsettled, wrong-scope, wrong-currency, or "
+                            "wrong-provider payment evidence",
+                            "a conflicting completed-payment or external transaction link",
+                            "invalid expiry evidence or non-pending expiry transition",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "topup_intent.direct_transfer_created",
+                            "topup_intent.direct_transfer_canceled",
+                            "topup_intent.direct_transfer_submitted",
+                            "topup_intent.completed",
+                            "topup_intent.expired",
+                            "topup_intent.gateway_created",
+                            "topup_intent.failed",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 retains intent, optional proof/replacement/payment, "
+                            "account scope, provider, flow/source, status, amount/time, "
+                            "command, and correlation evidence; evolution is additive."
+                        ),
+                        replay=(
+                            "Event-store rows are replayable for projections and delivery. "
+                            "Event replay never mutates TopupIntent or creates intent, proof, "
+                            "or payment evidence. Command replay idempotently repairs the "
+                            "projection from the canonical Payment."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "customer portal invoice-intent construction/replacement plus "
+                            "follow-up proof-link mutation and completion/expiry field writes "
+                            "spread across deposit, webhook, portal, reconciliation, and "
+                            "reseller services"
+                        ),
+                        new_owner="financial.topup_intents",
+                        verification=(
+                            "Configured-account projection, atomic create/replace/proof-link, "
+                            "typed completion/expiry success, idempotent replay/repair, "
+                            "rollback, mismatch rejection, caller, event, and architecture "
+                            "tests."
+                        ),
+                        cutover_gate=(
+                            "Every completion/expiry caller supplies typed evidence; only "
+                            "this participant writes completion identity, provider evidence, "
+                            "amount/time, completed/expired status, and lifecycle events."
+                        ),
+                        fallback_retirement=(
+                            "Portal-owned direct-transfer construction/replacement/proof "
+                            "writes and all caller-owned completion/expiry field assignments "
+                            "are removed; local reconciliation expiry constants are retired."
+                        ),
+                    ),
+                    steward="finance operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
+                    ),
+                    test_refs=(
+                        "tests/test_payment_proofs.py",
+                        "tests/test_direct_transfer_intents.py",
+                        "tests/test_topup_intent_projection.py",
+                        "tests/test_payment_webhook_settlement.py",
+                        "tests/test_topup_intent_status.py",
+                        "tests/architecture/test_topup_intent_ownership.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="financial.direct_transfer_intent_commands",
+                module="app.services.direct_transfer_intents",
+                owns=("customer direct-transfer intent creation coordination",),
+                depends_on=(
+                    "control.settings_spec",
+                    "customer.accounts",
+                    "financial.account_credit_deposits",
+                    "financial.invoices",
+                    "financial.topup_intents",
+                ),
+                notes=(
+                    "This coordinator admits one typed customer creation command, resolves "
+                    "configuration and invoice/deposit policy from their owners, and "
+                    "commits the selected canonical intent participant exactly once."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="customer direct-transfer intent creation coordination",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "authenticated direct-transfer creation command",
+                                "canonical customer account",
+                                "canonical payable invoice",
+                                "canonical direct-transfer configuration",
+                                "canonical direct-transfer lifetime and amount policy",
+                                "canonical deposit intent protocol",
+                                "canonical invoice direct-transfer intent protocol",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="authenticated direct-transfer creation command",
+                            owner="financial.direct_transfer_intent_commands",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed account, optional invoice/amount, actor, scope, reason, "
+                                "command, correlation, and optional idempotency evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical customer account",
+                            owner="customer.accounts",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="locked authenticated subscriber account identity",
+                        ),
+                        AuthorityInput(
+                            name="canonical payable invoice",
+                            owner="financial.invoices",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked invoice account, lifecycle status, currency, and "
+                                "current outstanding balance"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical direct-transfer configuration",
+                            owner="financial.topup_intents",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "feature-controlled enabled configured-bank projection"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical direct-transfer lifetime and amount policy",
+                            owner="control.settings_spec",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed top-up minimum/maximum and direct-transfer intent "
+                                "lifetime settings with checked-in defaults and bounds"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical deposit intent protocol",
+                            owner="financial.account_credit_deposits",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "flush-only deposit eligibility, preview, idempotency, and "
+                                "typed TopupIntent staging"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical invoice direct-transfer intent protocol",
+                            owner="financial.topup_intents",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "flush-only invoice intent creation, explicit replacement, "
+                                "idempotency, metadata, status, and event staging"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        boundary=(
+                            "execute_owner_command admits a transaction-free session, "
+                            "resolves current policy, stages exactly one deposit or invoice "
+                            "intent path plus events, and commits or rolls back once."
+                        ),
+                        locking=(
+                            "Invoice creation locks the customer account then exact invoice "
+                            "and pending direct-transfer attempts. Deposit creation uses the "
+                            "account-credit owner's canonical account lock."
+                        ),
+                        idempotency=(
+                            "A stable account-scoped digest of supplied idempotency evidence "
+                            "replays the matching intent. Without a caller key, command_id "
+                            "provides one-attempt identity; invoice replacement is explicit."
+                        ),
+                        retries=(
+                            "Adapters retry only the complete command after rollback using "
+                            "the same context/idempotency evidence. Domain conflicts fail "
+                            "closed and are not partially retried."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "financial.direct_transfer_intent_commands.unavailable",
+                            "financial.direct_transfer_intent_commands.created_by_required",
+                            "financial.direct_transfer_intent_commands.configuration_invalid",
+                            "financial.direct_transfer_intent_commands.invoice_not_found",
+                            "financial.direct_transfer_intent_commands.invoice_not_payable",
+                            "financial.direct_transfer_intent_commands.currency_unsupported",
+                            "financial.direct_transfer_intent_commands.amount_invalid",
+                            "financial.direct_transfer_intent_commands.deposit_rejected",
+                            "financial.direct_transfer_intent_commands.intent_conflict",
+                            "financial.direct_transfer_intent_commands.record_invalid",
+                            "financial.direct_transfer_intent_commands.invalid_command_context",
+                            "financial.direct_transfer_intent_commands.command_contract_violation",
+                            "financial.direct_transfer_intent_commands.nested_owner_command",
+                            "financial.direct_transfer_intent_commands.active_caller_transaction",
+                            "financial.direct_transfer_intent_commands.nested_transaction_completion",
+                        ),
+                        mapping_owner="customer portal and self-service API adapters",
+                        retryable_codes=(),
+                        fail_closed_on=(
+                            "disabled feature or no enabled configured bank",
+                            "invalid lifetime or amount policy",
+                            "missing, wrong-account, draft, terminal, zero-balance, or "
+                            "unsupported-currency invoice",
+                            "deposit policy rejection or concurrent intent conflict",
+                            "active caller transaction or manifest mismatch",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "topup_intent.direct_transfer_created",
+                            "topup_intent.direct_transfer_canceled",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 carries canonical intent/account/flow identifiers, "
+                            "replacement evidence, and command correlation only."
+                        ),
+                        replay=(
+                            "Creation/cancellation events replay to projections only and "
+                            "never re-enter the creation command."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "customer portal amount/limit/TTL decisions, direct TopupIntent "
+                            "construction, pending replacement, and branch-local commits"
+                        ),
+                        new_owner="financial.direct_transfer_intent_commands",
+                        verification=(
+                            "Configuration, deposit/invoice creation, idempotent replay, "
+                            "replacement, rollback, event, portal, manifest, and "
+                            "architecture tests."
+                        ),
+                        cutover_gate=(
+                            "Customer portal direct-transfer creation constructs only a "
+                            "typed command on a transaction-free session."
+                        ),
+                        fallback_retirement=(
+                            "Portal feature/limit/TTL decisions, direct constructors, "
+                            "replacement loops, and creation commits are absent."
+                        ),
+                    ),
+                    steward="finance operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
+                    ),
+                    test_refs=(
+                        "tests/test_direct_transfer_intents.py",
+                        "tests/test_customer_portal_topup_flow.py",
+                        "tests/architecture/test_topup_intent_ownership.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="financial.gateway_topup_intent_commands",
+                module="app.services.gateway_topup_intents",
+                owns=(
+                    "customer gateway top-up intent creation coordination",
+                    "reseller gateway top-up intent creation coordination",
+                    "saved-card charge failure coordination",
+                ),
+                depends_on=(
+                    "control.settings_spec",
+                    "customer.accounts",
+                    "financial.account_credit_deposits",
+                    "financial.billing_accounts",
+                    "financial.invoices",
+                    "financial.topup_intents",
+                ),
+                notes=(
+                    "This coordinator admits typed customer or reseller gateway "
+                    "creation commands, resolves canonical amount/lifetime policy, and "
+                    "commits one intent participant. A failed saved-card transport call "
+                    "re-enters a separate command that atomically fails the intent and "
+                    "releases any unused retry reservation."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="customer gateway top-up intent creation coordination",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "authenticated customer gateway creation command",
+                                "canonical payable invoice",
+                                "canonical gateway lifetime and amount policy",
+                                "canonical deposit intent protocol",
+                                "canonical gateway intent protocol",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="reseller gateway top-up intent creation coordination",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "authenticated reseller gateway creation command",
+                                "canonical reseller billing account",
+                                "canonical gateway lifetime and amount policy",
+                                "canonical gateway intent protocol",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="saved-card charge failure coordination",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "typed saved-card failure command",
+                                "canonical gateway intent protocol",
+                                "canonical saved-card retry reservation",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="authenticated customer gateway creation command",
+                            owner="financial.gateway_topup_intent_commands",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed customer account, flow, invoice or amount, provider, "
+                                "reference, actor, command, correlation, and idempotency evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="authenticated reseller gateway creation command",
+                            owner="financial.gateway_topup_intent_commands",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed reseller and billing-account identities, amount, "
+                                "provider, reference, card choices, actor, and correlation"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="typed saved-card failure command",
+                            owner="financial.gateway_topup_intent_commands",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed intent and optional reservation identities plus "
+                                "named reservation scope and correlated command context"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical payable invoice",
+                            owner="financial.invoices",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked invoice account, lifecycle status, currency, and "
+                                "current outstanding balance"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical reseller billing account",
+                            owner="financial.billing_accounts",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked active billing-account identity, reseller owner, "
+                                "status, and currency"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical gateway lifetime and amount policy",
+                            owner="control.settings_spec",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "bounded gateway intent lifetime and account-credit "
+                                "minimum/maximum settings"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical deposit intent protocol",
+                            owner="financial.account_credit_deposits",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "flush-only deposit eligibility, preview, idempotency, and "
+                                "typed intent staging"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical gateway intent protocol",
+                            owner="financial.topup_intents",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "flush-only creation, replay, status, failure, metadata, "
+                                "scope lock, and event staging"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical saved-card retry reservation",
+                            owner="financial.gateway_topup_intent_commands",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked IdempotencyKey identity, scope, customer account, "
+                                "and unbound result evidence"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        boundary=(
+                            "Each execute_owner_command call admits a transaction-free "
+                            "session and commits or rolls back one creation or failure "
+                            "operation exactly once. External gateway transport is outside "
+                            "the database command."
+                        ),
+                        locking=(
+                            "Customer creation locks account then invoice/intent; reseller "
+                            "creation locks billing account then intent reference. Failure "
+                            "locks intent scope and intent before an optional retry reservation."
+                        ),
+                        idempotency=(
+                            "Deposit creation derives a stable account-scoped digest; "
+                            "invoice/reseller references replay only identical evidence. "
+                            "A repeated failure is a no-op and an already-removed retry "
+                            "reservation remains released."
+                        ),
+                        retries=(
+                            "Adapters retry the complete database command with the same "
+                            "context evidence. Gateway transport is never retried inside "
+                            "the owner transaction."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "financial.gateway_topup_intent_commands.configuration_invalid",
+                            "financial.gateway_topup_intent_commands.amount_invalid",
+                            "financial.gateway_topup_intent_commands.created_by_required",
+                            "financial.gateway_topup_intent_commands.flow_evidence_invalid",
+                            "financial.gateway_topup_intent_commands.invoice_not_found",
+                            "financial.gateway_topup_intent_commands.invoice_not_payable",
+                            "financial.gateway_topup_intent_commands.deposit_rejected",
+                            "financial.gateway_topup_intent_commands.intent_conflict",
+                            "financial.gateway_topup_intent_commands.record_invalid",
+                            "financial.gateway_topup_intent_commands.billing_account_unavailable",
+                            "financial.gateway_topup_intent_commands.reservation_mismatch",
+                            "financial.gateway_topup_intent_commands.invalid_command_context",
+                            "financial.gateway_topup_intent_commands.command_contract_violation",
+                            "financial.gateway_topup_intent_commands.nested_owner_command",
+                            "financial.gateway_topup_intent_commands.active_caller_transaction",
+                            "financial.gateway_topup_intent_commands.nested_transaction_completion",
+                        ),
+                        mapping_owner="customer and reseller portal/API adapters",
+                        retryable_codes=(),
+                        fail_closed_on=(
+                            "invalid amount, flow, lifetime, account, invoice, provider, or "
+                            "reference evidence",
+                            "inactive or wrong-reseller billing account",
+                            "deposit policy rejection or concurrent creation conflict",
+                            "mismatched or already-bound saved-card retry reservation",
+                            "active caller transaction or manifest mismatch",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "topup_intent.gateway_created",
+                            "topup_intent.failed",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 carries canonical intent/scope/flow/provider "
+                            "identities and command correlation; failure adds a named "
+                            "source and non-sensitive reason code."
+                        ),
+                        replay=(
+                            "Events replay to projections only and never charge a card or "
+                            "re-enter creation/failure commands."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "customer and reseller portals constructing TopupIntent rows, "
+                            "hard-coding lifetime, and separately failing intents/releasing keys"
+                        ),
+                        new_owner="financial.gateway_topup_intent_commands",
+                        verification=(
+                            "Customer invoice/deposit, reseller consolidated, failure, "
+                            "rollback, settings, manifest, and canonical-writer tests."
+                        ),
+                        cutover_gate=(
+                            "Portal adapters construct only typed commands on "
+                            "transaction-free sessions and retain gateway transport only."
+                        ),
+                        fallback_retirement=(
+                            "Portal TopupIntent constructors, local 30-minute constants, "
+                            "and split saved-card failure/retry-release commits are absent."
+                        ),
+                    ),
+                    steward="finance operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
+                    ),
+                    test_refs=(
+                        "tests/test_gateway_topup_intents.py",
+                        "tests/test_customer_portal_topup_flow.py",
+                        "tests/architecture/test_topup_intent_ownership.py",
+                    ),
+                ),
+            ),
+            SOTService(
                 name="financial.account_credit_deposits",
                 module="app.services.account_credit_deposits",
                 owns=(
                     "Deposit Account Credit eligibility and preview",
                     "typed deposit intent lifecycle and provider correlation",
-                    "atomic deposit settlement composition",
+                    "verified Deposit Account Credit settlement command",
                     "deposit-to-payment evidence link",
                     "post-application funding-change outbox event",
                 ),
                 depends_on=(
-                    "financial.payments",
+                    "customer.accounts",
+                    "events.dispatcher",
                     "financial.account_credit_applications",
                     "financial.prepaid_service_renewals",
                     "financial.access_resolution",
+                    "financial.invoices",
+                    "financial.payments",
+                    "financial.topup_intents",
+                    "observability.audit_log",
                 ),
                 notes=(
                     "A deposit first records the whole confirmed receipt as "
                     "unallocated account credit, grants no service duration, and "
                     "then asks the canonical applicator to settle eligible debt. "
                     "Only after that application completes does its chained event "
-                    "request due-service renewal before access reconciliation."
+                    "request due-service renewal before access reconciliation. "
+                    "Customer verification and reconciliation enter the typed public "
+                    "command; webhook and proof owners compose the same flush-only "
+                    "participant inside their wider evidence transactions."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="Deposit Account Credit eligibility and preview",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical deposit customer account",
+                                "canonical payable invoice set",
+                                "canonical payment-backed account credit",
+                                "canonical deposit eligibility policy",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="typed deposit intent lifecycle and provider correlation",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "typed deposit intent creation evidence",
+                                "canonical deposit customer account",
+                                "canonical deposit eligibility policy",
+                            ),
+                            canonical_writer="financial.account_credit_deposits",
+                        ),
+                        ConcernContract(
+                            name="verified Deposit Account Credit settlement command",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "typed verified deposit settlement evidence",
+                                "canonical typed deposit intent",
+                                "canonical subscriber payment settlement protocol",
+                                "canonical account-credit application protocol",
+                                "canonical top-up intent completion protocol",
+                            ),
+                            canonical_writer="financial.account_credit_deposits",
+                        ),
+                        ConcernContract(
+                            name="deposit-to-payment evidence link",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "canonical typed deposit intent",
+                                "canonical subscriber payment settlement protocol",
+                            ),
+                            canonical_writer="financial.account_credit_deposits",
+                        ),
+                        ConcernContract(
+                            name="post-application funding-change outbox event",
+                            role=OwnerRole.EVENT_POLICY,
+                            input_names=(
+                                "typed verified deposit settlement evidence",
+                                "canonical typed deposit intent",
+                                "canonical subscriber payment settlement protocol",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical deposit customer account",
+                            owner="customer.accounts",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked active subscriber identity and lifecycle state"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical payable invoice set",
+                            owner="financial.invoices",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "current active same-currency issued, partially paid, or "
+                                "overdue invoice balances"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical payment-backed account credit",
+                            owner="financial.payments",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "ledger-derived unconsumed succeeded-payment settlement "
+                                "credit with exact structural evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical deposit eligibility policy",
+                            owner="financial.account_credit_deposits",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed purpose, allocation/application policy, version, "
+                                "supported currency, amount bounds, and pending-intent rule"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="typed deposit intent creation evidence",
+                            owner="financial.account_credit_deposits",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed coordinator-admitted account, amount, provider, "
+                                "reference, expiry, channel, actor, and idempotency evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="typed verified deposit settlement evidence",
+                            owner="financial.account_credit_deposits",
+                            kind=AuthorityKind.OBSERVATION,
+                            source=(
+                                "typed intent/provider/external-transaction identities, "
+                                "amount, currency, named source, and correlated CommandContext"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical typed deposit intent",
+                            owner="financial.account_credit_deposits",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked TopupIntent account, purpose, policies, provider, "
+                                "amount, currency, reference, and completion link"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical subscriber payment settlement protocol",
+                            owner="financial.payments",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "flush-only succeeded account-credit payment creation, "
+                                "idempotency, settlement, and ledger evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical account-credit application protocol",
+                            owner="financial.account_credit_applications",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "locked deterministic eligible-invoice application from "
+                                "exact payment-backed credit"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical top-up intent completion protocol",
+                            owner="financial.topup_intents",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "flush-only completion projection derived from canonical "
+                                "succeeded Payment evidence"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "settle_verified admits a transaction-free session through "
+                            "execute_owner_command and commits or rolls back payment, credit "
+                            "application, intent projection, audit, and event once. "
+                            "stage_intent and stage_verified_settlement never complete a "
+                            "transaction and are callable only inside named coordinator/owner "
+                            "transactions."
+                        ),
+                        locking=(
+                            "Intent creation and settlement lock the subscriber account "
+                            "first; settlement then locks the exact intent before composing "
+                            "payment and oldest-debt application owners."
+                        ),
+                        idempotency=(
+                            "Intent creation uses one account/purpose/key identity. Settlement "
+                            "uses the intent-scoped payment key plus provider external identity; "
+                            "a completed intent replays the same Payment without a second event."
+                        ),
+                        retries=(
+                            "Adapters retry the complete public command with the same evidence. "
+                            "Webhook/proof owners retry their wider command; staging helpers "
+                            "never retry or commit independently."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "deposit_account_not_found",
+                            "deposit_account_inactive",
+                            "deposit_currency_unsupported",
+                            "deposit_amount_below_minimum",
+                            "deposit_amount_above_maximum",
+                            "deposit_payable_invoices_exist",
+                            "deposit_intent_already_pending",
+                            "deposit_idempotency_invalid",
+                            "deposit_idempotency_conflict",
+                            "deposit_intent_not_found",
+                            "deposit_contract_invalid",
+                            "deposit_amount_mismatch",
+                            "deposit_provider_fee_invalid",
+                            "deposit_currency_mismatch",
+                            "deposit_provider_identity_invalid",
+                            "deposit_provider_mismatch",
+                            "deposit_provider_correlation_mismatch",
+                            "deposit_settlement_incomplete",
+                            "deposit_provider_reference_conflict",
+                            "financial.account_credit_deposits.invalid_command_context",
+                            "financial.account_credit_deposits.command_contract_violation",
+                            "financial.account_credit_deposits.nested_owner_command",
+                            "financial.account_credit_deposits.active_caller_transaction",
+                            "financial.account_credit_deposits.nested_transaction_completion",
+                        ),
+                        mapping_owner=(
+                            "customer, webhook, reconciliation, and payment-proof adapters"
+                        ),
+                        retryable_codes=(),
+                        fail_closed_on=(
+                            "inactive or missing account, incompatible payable debt, or invalid "
+                            "amount/currency policy",
+                            "missing, untyped, wrong-provider, wrong-amount, wrong-currency, or "
+                            "uncorrelated intent/receipt evidence",
+                            "conflicting provider transaction or incomplete completed-payment link",
+                            "active caller transaction or manifest mismatch",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("account_credit.deposited",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 carries exact intent/payment/account amount, currency, "
+                            "application allocations, named source, and command correlation."
+                        ),
+                        replay=(
+                            "The event projects committed evidence only and never creates money "
+                            "or re-enters settlement."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "portal, webhook, proof, and reconciliation callers selecting "
+                            "commit behavior and passing transport-shaped gateway transactions"
+                        ),
+                        new_owner="financial.account_credit_deposits",
+                        verification=(
+                            "Root/participant settlement, replay, mismatch, rollback, caller, "
+                            "manifest, and canonical-transaction tests."
+                        ),
+                        cutover_gate=(
+                            "Customer/reconciliation callers use the public typed command; "
+                            "webhook/proof owners use only typed flush-only staging."
+                        ),
+                        fallback_retirement=(
+                            "The create_intent transaction wrapper, settlement commit flag, "
+                            "PaymentGatewayTransaction domain input, and caller settlement "
+                            "commits are absent."
+                        ),
+                    ),
+                    steward="finance operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/ACCOUNT_CREDIT_DEPOSITS.md",
+                        "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
+                    ),
+                    test_refs=(
+                        "tests/test_account_credit_deposits.py",
+                        "tests/test_customer_portal_topup_flow.py",
+                        "tests/test_payment_webhook_settlement.py",
+                        "tests/test_payment_proofs.py",
+                        "tests/architecture/test_account_credit_deposit_ownership.py",
+                    ),
                 ),
             ),
             SOTService(
@@ -1034,12 +2123,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 name="financial.payment_routing",
                 module="app.services.payment_routing",
                 owns=(
+                    "payment-provider configuration lifecycle",
                     "health-aware customer gateway eligibility",
                     "ordered customer gateway presentment policy",
                 ),
                 notes=(
-                    "Payment channels classify recorded settlement and never "
-                    "replace this provider-health-aware presentment owner."
+                    "Payment-provider configuration remains a legacy transaction "
+                    "boundary owned here while its separate typed migration is "
+                    "pending. Payment channels classify recorded settlement and "
+                    "never replace this provider-health-aware presentment owner."
                 ),
             ),
             SOTService(
@@ -1154,11 +2246,310 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "payment-proof review lifecycle",
                     "proof-backed payment request",
                     "payment-proof reviewer notification request lifecycle",
-                    "withholding-tax receivable source records",
                 ),
                 depends_on=(
+                    "auth.permission_gate",
+                    "customer.accounts",
+                    "financial.account_credit_deposits",
+                    "financial.billing_accounts",
+                    "financial.consolidated_payments",
                     "financial.payments",
+                    "financial.tax_accounting",
+                    "financial.topup_intents",
+                    "communications.intents",
+                    "communications.notification_service",
                     "communications.staff_notifications",
+                    "events.dispatcher",
+                    "observability.audit_log",
+                ),
+                notes=(
+                    "The proof owner records submitted transfer evidence and review "
+                    "state, then composes the canonical payment, WHT lifecycle, staff "
+                    "work-item, audit, customer-intent, and event participants in one "
+                    "owner-managed transaction. HTTP adapters only map typed results "
+                    "and domain errors."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="payment-proof review lifecycle",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "payment-proof command context",
+                                "submitted transfer evidence",
+                                "canonical payment-proof record",
+                                "payment-proof lifecycle protocol",
+                                "canonical direct-transfer top-up intent protocol",
+                            ),
+                            canonical_writer="financial.payment_proofs",
+                        ),
+                        ConcernContract(
+                            name="proof-backed payment request",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "payment-proof command context",
+                                "canonical payment-proof record",
+                                "canonical subscriber account target",
+                                "canonical reseller billing-account target",
+                                "canonical subscriber payment settlement protocol",
+                                "canonical consolidated settlement protocol",
+                                "canonical deposit intent evidence",
+                                "canonical withholding-tax recognition protocol",
+                            ),
+                            canonical_writer="financial.payment_proofs",
+                        ),
+                        ConcernContract(
+                            name=(
+                                "payment-proof reviewer notification request lifecycle"
+                            ),
+                            role=OwnerRole.EVENT_POLICY,
+                            input_names=(
+                                "canonical payment-proof record",
+                                "canonical proof-review audience",
+                                "payment-proof lifecycle protocol",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="payment-proof command context",
+                            owner="financial.payment_proofs",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed command, correlation, actor, scope, reason, and "
+                                "optional idempotency evidence supplied by the adapter"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="submitted transfer evidence",
+                            owner="external:bank-transfer-submitter",
+                            kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                            source=(
+                                "receipt file, claimed net/gross/WHT values, currency, "
+                                "bank, reference, and transfer timestamp"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical payment-proof record",
+                            owner="financial.payment_proofs",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked PaymentProof identity, target, evidence, status, "
+                                "review result, and resulting Payment link"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="payment-proof lifecycle protocol",
+                            owner="financial.payment_proofs",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed submitted, verified, and rejected transitions, "
+                                "duplicate-reference policy, amount/WHT validation, and "
+                                "versioned event vocabulary"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical subscriber account target",
+                            owner="customer.accounts",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "exact subscriber account selected by the authenticated "
+                                "customer or reseller adapter"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical reseller billing-account target",
+                            owner="financial.billing_accounts",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "exact reseller BillingAccount selected through the "
+                                "canonical reseller/account ownership boundary"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical direct-transfer top-up intent protocol",
+                            owner="financial.topup_intents",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "locked pending intent validation plus participant staging "
+                                "of the submitted status, exact proof/configured-bank link, "
+                                "and versioned intent event"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical subscriber payment settlement protocol",
+                            owner="financial.payments",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "participant subscriber payment creation, allocation, "
+                                "account locking, and settlement provenance contract"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical consolidated settlement protocol",
+                            owner="financial.consolidated_payments",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "participant reseller billing-account settlement, locking, "
+                                "allocation, idempotency, and provenance contract"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical deposit intent evidence",
+                            owner="financial.account_credit_deposits",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "TopupIntent account, reference, purpose, provider, and "
+                                "settlement eligibility evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical withholding-tax recognition protocol",
+                            owner="financial.tax_accounting",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "participant WHT receivable source creation and initial "
+                                "official-timeline evidence staging contract"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical proof-review audience",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "active staff principals granted billing:proof:verify, "
+                                "resolved by communications.staff_notifications"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "Each submit, verify, or reject command starts on a clean "
+                            "adapter session and commits proof state, any direct-transfer "
+                            "intent link, canonical payment, "
+                            "tax-owner WHT source evidence, review work items, audit rows, "
+                            "customer delivery intents, and outbox events exactly once at "
+                            "the public owner boundary."
+                        ),
+                        locking=(
+                            "Direct-transfer submission locks the exact TopupIntent before "
+                            "creating proof evidence. Review commands select the "
+                            "PaymentProof FOR UPDATE before rechecking submitted state, "
+                            "then lock the credited subscriber or billing account through "
+                            "its canonical settlement owner."
+                        ),
+                        idempotency=(
+                            "A locked pending direct-transfer intent accepts one proof "
+                            "link. A locked proof can leave submitted state once; payment and "
+                            "consolidated-settlement provenance keys bind the resulting "
+                            "money movement to the proof identity. Duplicate submitted "
+                            "references remain explicit review evidence, not silent replay."
+                        ),
+                        retries=(
+                            "Adapters may retry only after a transient transaction failure. "
+                            "A completed proof returns already_reviewed, while duplicate "
+                            "transfer evidence and invalid decisions fail closed."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "financial.payment_proofs.unsupported_file_type",
+                            "financial.payment_proofs.file_too_large",
+                            "financial.payment_proofs.empty_file",
+                            "financial.payment_proofs.file_not_found",
+                            "financial.payment_proofs.invalid_target",
+                            "financial.payment_proofs.file_required",
+                            "financial.payment_proofs.invalid_amount",
+                            "financial.payment_proofs.amount_non_positive",
+                            "financial.payment_proofs.invalid_withholding_tax",
+                            "financial.payment_proofs.not_found",
+                            "financial.payment_proofs.already_reviewed",
+                            "financial.payment_proofs.invalid_verified_amount",
+                            "financial.payment_proofs.verified_amount_non_positive",
+                            "financial.payment_proofs.duplicate_transfer_reference",
+                            "financial.payment_proofs.deposit_settlement_rejected",
+                            "financial.payment_proofs.billing_account_not_found",
+                            "financial.payment_proofs.verified_net_exceeds_gross",
+                            "financial.payment_proofs.rejection_reason_required",
+                            "financial.payment_proofs.invalid_command_context",
+                            "financial.payment_proofs.command_contract_violation",
+                            "financial.payment_proofs.nested_owner_command",
+                            "financial.payment_proofs.active_caller_transaction",
+                            "financial.payment_proofs.nested_transaction_completion",
+                        ),
+                        mapping_owner="app.api.payment_proof_errors",
+                        retryable_codes=(),
+                        fail_closed_on=(
+                            "missing or malformed transfer evidence",
+                            "non-submitted or concurrently reviewed proof state",
+                            "duplicate verified transfer references",
+                            "unreconciled withholding-tax values",
+                            "failure to stage an eligible payment, tax source, review work "
+                            "item, top-up intent link, audit, notification, or event "
+                            "consequence",
+                            "active caller transaction or manifest mismatch",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "payment_proof.submitted",
+                            "payment_proof.verified",
+                            "payment_proof.rejected",
+                            "withholding_tax.receivable_recorded",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Additive payload evolution within schema version 1; event "
+                            "names and identifiers remain stable."
+                        ),
+                        replay=(
+                            "The transactional event-store row is replayable by the event "
+                            "dispatcher; replay never re-enters a proof command or reposts "
+                            "the underlying payment."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "payment-proof helpers with direct commits, FastAPI exceptions, "
+                            "request-shaped audit calls, best-effort nested savepoints, and "
+                            "primitive dictionaries at the domain boundary"
+                        ),
+                        new_owner="financial.payment_proofs",
+                        verification=(
+                            "Submission, direct-transfer intent linkage, duplicate, "
+                            "subscriber settlement, consolidated/WHT, reviewer notification, "
+                            "customer notification, route, locking, rollback, typed-result, "
+                            "and architecture tests."
+                        ),
+                        cutover_gate=(
+                            "Every API, admin web, customer portal, reseller portal, and "
+                            "test caller supplies CommandContext on a clean session and "
+                            "serializes only PaymentProofResult; direct transfer supplies a "
+                            "typed intent/bank evidence command."
+                        ),
+                        fallback_retirement=(
+                            "Service HTTPException inheritance, Request parameters, helper "
+                            "commit/rollback, nested savepoints, swallowed audit/delivery "
+                            "failures, and caller-visible primitive command dictionaries "
+                            "are removed."
+                        ),
+                    ),
+                    steward="finance operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
+                    ),
+                    test_refs=(
+                        "tests/test_payment_proofs.py",
+                        "tests/test_payment_proofs_reseller_wht.py",
+                        "tests/test_payment_proof_reviewer_notifications.py",
+                        "tests/test_reseller_proof_double_credit.py",
+                        "tests/test_payment_proof_admin_routes.py",
+                        "tests/architecture/test_payment_proof_reviewer_notification_ownership.py",
+                    ),
                 ),
             ),
             SOTService(
@@ -1170,14 +2561,18 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "withholding-tax receivable projection",
                     "tax report period and currency aggregation",
                     "credit-note tax recognition point",
+                    "withholding-tax receivable source records",
                     "withholding-tax lifecycle",
                     "withholding-tax official timeline",
                     "net output-tax liability projection",
                 ),
                 depends_on=(
+                    "events.dispatcher",
+                    "financial.credit_notes",
                     "financial.invoices",
+                    "financial.payments",
                     "financial.tax_configuration",
-                    "financial.payment_proofs",
+                    "observability.audit_log",
                 ),
                 notes=(
                     "Issued output tax less issued credit-note tax adjustments is "
@@ -1188,6 +2583,333 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "account mappings, balanced journals, tax transactions, and "
                     "financial statements; Sub exports line tax treatment and WHT "
                     "facts through bounded sync feeds and has no local posting path."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="tax report semantics",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical invoice tax source documents",
+                                "canonical credit-note tax source documents",
+                                "canonical WHT source records",
+                                "canonical tax-application configuration",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="output-tax invoice projection",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical invoice tax source documents",
+                                "canonical tax-application configuration",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="withholding-tax receivable projection",
+                            role=OwnerRole.RESOLVER,
+                            input_names=("canonical WHT source records",),
+                        ),
+                        ConcernContract(
+                            name="tax report period and currency aggregation",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "typed tax report filter",
+                                "canonical invoice tax source documents",
+                                "canonical credit-note tax source documents",
+                                "canonical WHT source records",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="credit-note tax recognition point",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical credit-note tax source documents",
+                                "canonical tax-application configuration",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="withholding-tax receivable source records",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "verified proof-backed WHT evidence",
+                                "canonical payment settlement evidence",
+                                "WHT command context",
+                            ),
+                            canonical_writer="financial.tax_accounting",
+                        ),
+                        ConcernContract(
+                            name="withholding-tax lifecycle",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical WHT source records",
+                                "WHT lifecycle protocol",
+                                "WHT command context",
+                            ),
+                            canonical_writer="financial.tax_accounting",
+                        ),
+                        ConcernContract(
+                            name="withholding-tax official timeline",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "canonical WHT source records",
+                                "WHT lifecycle protocol",
+                                "WHT command context",
+                            ),
+                            canonical_writer="financial.tax_accounting",
+                        ),
+                        ConcernContract(
+                            name="net output-tax liability projection",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical invoice tax source documents",
+                                "canonical credit-note tax source documents",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical invoice tax source documents",
+                            owner="financial.invoices",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active non-proforma invoice issue timestamp, lifecycle, "
+                                "currency, tax total, and gross total"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical credit-note tax source documents",
+                            owner="financial.credit_notes",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active issued credit-note recognition timestamp, lifecycle, "
+                                "currency, tax adjustment, and gross credit"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="verified proof-backed WHT evidence",
+                            owner="financial.payment_proofs",
+                            kind=AuthorityKind.OBSERVATION,
+                            source=(
+                                "typed billing-account, reseller, payment, proof, gross, net, "
+                                "WHT, rate, currency, actor, and correlation evidence admitted "
+                                "by the payment-proof coordinator"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical payment settlement evidence",
+                            owner="financial.payments",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "canonical settled Payment identity linked to the proof-backed "
+                                "WHT receivable and ERP sync freshness marker"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical WHT source records",
+                            owner="financial.tax_accounting",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked WithholdingTaxRecord amount, currency, source links, "
+                                "status, certificate, and temporal evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="WHT lifecycle protocol",
+                            owner="financial.tax_accounting",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "pending/certified/reclaimed/written-off transition graph, "
+                                "certificate requirement, write-off reason, replay, and append-"
+                                "only timeline rules"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="WHT command context",
+                            owner="financial.tax_accounting",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed command, actor, scope, reason, idempotency, command, "
+                                "correlation, and causation evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="typed tax report filter",
+                            owner="financial.tax_accounting",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "validated inclusive report date range, WHT lifecycle filter, "
+                                "search text, and bounded pagination"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical tax-application configuration",
+                            owner="financial.tax_configuration",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "canonical source-document tax application and recognition "
+                                "classification; ERP account mappings remain external"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "transition_withholding_tax enters execute_owner_command once on a "
+                            "transaction-free session and atomically commits the locked record, "
+                            "append-only timeline, payment freshness marker, audit, and event. "
+                            "Proof-backed receivable creation is a flush-only participant of "
+                            "financial.payment_proofs; report and operator queries are read-only."
+                        ),
+                        locking=(
+                            "Lifecycle transitions lock the exact WHT record first and its linked "
+                            "Payment second. Proof-backed creation is serialized by the payment "
+                            "owner and the unique payment-to-WHT constraint."
+                        ),
+                        idempotency=(
+                            "Receivable creation replays only exact evidence for the unique "
+                            "Payment. Lifecycle replay returns the existing target state and "
+                            "rejects conflicting certificate evidence."
+                        ),
+                        retries=(
+                            "Adapters retry the complete command with the same record, target, "
+                            "evidence, and context. Participant creation retries only with its "
+                            "wider payment-proof command and never commits independently."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "financial.tax_accounting.actor_required",
+                            "financial.tax_accounting.certificate_required",
+                            "financial.tax_accounting.certification_required",
+                            "financial.tax_accounting.currency_invalid",
+                            "financial.tax_accounting.date_filter_invalid",
+                            "financial.tax_accounting.filter_invalid",
+                            "financial.tax_accounting.illegal_transition",
+                            "financial.tax_accounting.pagination_invalid",
+                            "financial.tax_accounting.receivable_conflict",
+                            "financial.tax_accounting.receivable_invalid",
+                            "financial.tax_accounting.record_id_invalid",
+                            "financial.tax_accounting.record_not_found",
+                            "financial.tax_accounting.replay_conflict",
+                            "financial.tax_accounting.target_status_invalid",
+                            "financial.tax_accounting.write_off_reason_required",
+                            "financial.tax_accounting.invalid_command_context",
+                            "financial.tax_accounting.command_contract_violation",
+                            "financial.tax_accounting.nested_owner_command",
+                            "financial.tax_accounting.active_caller_transaction",
+                            "financial.tax_accounting.nested_transaction_completion",
+                        ),
+                        mapping_owner="tax report and admin billing web adapters",
+                        retryable_codes=(),
+                        fail_closed_on=(
+                            "missing or malformed currency, date, filter, page, actor, or record "
+                            "identity",
+                            "non-positive or unreconciled gross/net/WHT source evidence",
+                            "illegal, unexplained, uncertified, or conflicting lifecycle evidence",
+                            "active caller transaction or manifest mismatch",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "withholding_tax.receivable_recorded",
+                            "withholding_tax.status_changed",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 carries canonical WHT, payment/proof/account, lifecycle, "
+                            "money, currency, time, command, correlation, and causation evidence "
+                            "without certificate content or customer PII."
+                        ),
+                        replay=(
+                            "Events project committed WHT facts and ERP sync eligibility only; "
+                            "they never create money or re-enter a lifecycle command."
+                        ),
+                    ),
+                    projections=(
+                        ProjectionContract(
+                            name="output-tax invoice projection",
+                            input_names=(
+                                "canonical invoice tax source documents",
+                                "canonical tax-application configuration",
+                            ),
+                            writer="financial.tax_accounting",
+                            freshness="computed from committed source documents on every query",
+                            stale_behavior=(
+                                "invalid dates, currencies, or source evidence fail closed"
+                            ),
+                            drift_signal=(
+                                "report totals or row counts disagree with the same bounded "
+                                "invoice-source query"
+                            ),
+                            rebuild_operation="build_tax_report recomputes the full bounded view",
+                            repair_owner="financial.tax_accounting",
+                        ),
+                        ProjectionContract(
+                            name="withholding-tax receivable projection",
+                            input_names=("canonical WHT source records",),
+                            writer="financial.tax_accounting",
+                            freshness="computed from committed WHT records on every query",
+                            stale_behavior=(
+                                "unknown lifecycle or malformed money/currency evidence fails closed"
+                            ),
+                            drift_signal=(
+                                "projection count or currency/status totals disagree with the "
+                                "canonical WHT source query"
+                            ),
+                            rebuild_operation="build_tax_report recomputes WHT rows and totals",
+                            repair_owner="financial.tax_accounting",
+                        ),
+                        ProjectionContract(
+                            name="net output-tax liability projection",
+                            input_names=(
+                                "canonical invoice tax source documents",
+                                "canonical credit-note tax source documents",
+                            ),
+                            writer="financial.tax_accounting",
+                            freshness="computed per currency from committed source documents",
+                            stale_behavior="currencies remain separate and invalid evidence fails",
+                            drift_signal=(
+                                "net liability differs from invoice output tax less recognized "
+                                "credit-note tax adjustments for the same currency and period"
+                            ),
+                            rebuild_operation="build_tax_report recomputes per-currency liability",
+                            repair_owner="financial.tax_accounting",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "tax report and admin route dictionaries plus a WHT helper with a "
+                            "caller-selected commit flag and route-owned audit"
+                        ),
+                        new_owner="financial.tax_accounting",
+                        verification=(
+                            "Typed report/operator outcomes, participant creation, transition, "
+                            "replay, rollback, audit/event, PostgreSQL row-lock concurrency, "
+                            "manifest, and adapter-boundary tests."
+                        ),
+                        cutover_gate=(
+                            "The admin adapter submits only a typed command on a transaction-free "
+                            "session; proof review uses only typed flush-only WHT staging."
+                        ),
+                        fallback_retirement=(
+                            "The transition commit flag, route rollback/audit, primitive report "
+                            "bags, public lifecycle initializer, and duplicate WHT event staging "
+                            "are absent."
+                        ),
+                    ),
+                    steward="finance operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
+                    ),
+                    test_refs=(
+                        "tests/test_tax_accounting.py",
+                        "tests/test_payment_proofs_reseller_wht.py",
+                        "tests/integration/test_tax_accounting_concurrency.py",
+                        "tests/architecture/test_tax_accounting_ownership.py",
+                    ),
                 ),
             ),
             SOTService(
@@ -2926,7 +4648,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             ),
             SOTService(
                 name="financial.payment_provider_events",
-                module="app.services.billing.providers",
+                module="app.services.payment_provider_events",
                 owns=(
                     "payment-provider event ingestion",
                     "normalized provider monetary observations",
@@ -2934,20 +4656,470 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "incomplete provider settlement resumption",
                 ),
                 depends_on=(
+                    "events.dispatcher",
+                    "financial.consolidated_payments",
+                    "financial.invoices",
                     "financial.payments",
+                    "financial.payment_routing",
                     "financial.provider_payment_settlements",
+                    "observability.audit_log",
+                ),
+                notes=(
+                    "Signature verification and gateway verification remain external "
+                    "observation admission boundaries. This owner persists the exact "
+                    "normalized identity, source, digest, status, money, processing "
+                    "result, audit, and event before delegating financial consequences "
+                    "to named participants. Administrative observations cannot change "
+                    "payment state. Provider fee policy is intentionally not decided "
+                    "here; the unresolved route policy remains with financial.payments."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="payment-provider event ingestion",
+                            role=OwnerRole.OBSERVATION_COLLECTOR,
+                            input_names=(
+                                "verified external provider observation",
+                                "administrative provider observation",
+                                "active provider identity",
+                                "provider-event command context",
+                            ),
+                            canonical_writer="financial.payment_provider_events",
+                        ),
+                        ConcernContract(
+                            name="normalized provider monetary observations",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "verified external provider observation",
+                                "active provider identity",
+                            ),
+                            canonical_writer="financial.payment_provider_events",
+                        ),
+                        ConcernContract(
+                            name="provider-event idempotency",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "canonical provider-event record",
+                                "provider-event command context",
+                            ),
+                            canonical_writer="financial.payment_provider_events",
+                        ),
+                        ConcernContract(
+                            name="incomplete provider settlement resumption",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical provider-event record",
+                                "canonical payment participant protocol",
+                                "canonical consolidated-payment participant protocol",
+                                "canonical invoice-settlement participant protocol",
+                                "provider-event command context",
+                            ),
+                            canonical_writer="financial.payment_provider_events",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="verified external provider observation",
+                            owner="external:payment_provider",
+                            kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                            source=(
+                                "signature-verified webhook or gateway-verified transaction "
+                                "identity, event type, gross, fee, net observation, currency, "
+                                "provider reference, status, and bounded raw payload"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="administrative provider observation",
+                            owner="financial.payment_provider_events",
+                            kind=AuthorityKind.OBSERVATION,
+                            source=(
+                                "authenticated operator-supplied informational event with no "
+                                "payment-state or refund/reversal authority"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="active provider identity",
+                            owner="financial.payment_routing",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "configured provider identity and active eligibility admitted "
+                                "for the verified receipt or reconciliation path"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical provider-event record",
+                            owner="financial.payment_provider_events",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked provider/event identity, source, observation digest, "
+                                "normalized money/status/effect, processing state, error code, "
+                                "and linked payment/invoice"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical payment participant protocol",
+                            owner="financial.payments",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "flush-only settlement, fee observation, payment status, "
+                                "allocation, refund, and reversal participants"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical consolidated-payment participant protocol",
+                            owner="financial.consolidated_payments",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "flush-only consolidated settlement, refund, and reversal "
+                                "participants"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical invoice-settlement participant protocol",
+                            owner="financial.provider_payment_settlements",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "cash-first verified invoice-payment and allocation-exception "
+                                "participant"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="provider-event command context",
+                            owner="financial.payment_provider_events",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed actor, trust scope, reason, command, idempotency, "
+                                "correlation, and causation evidence"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "The administrative command enters execute_owner_command once and "
+                            "can record informational observations only. Verified webhook and "
+                            "reconciliation methods are flush-only participants of their named "
+                            "coordinator transactions; all record, payment, audit, event, and "
+                            "processed-receipt consequences commit or roll back together."
+                        ),
+                        locking=(
+                            "After the wider coordinator locks its receipt or top-up intent, "
+                            "this owner locks the exact provider row, then matching provider "
+                            "event, invoice/payment, and downstream participant scopes. The "
+                            "provider lock serializes first insert for both unique identities."
+                        ),
+                        idempotency=(
+                            "Provider plus idempotency key or external transaction identifies "
+                            "one row. A canonical SHA-256 digest includes the admission trust "
+                            "class and all normalized decision evidence. Signature-verified "
+                            "webhook and gateway-verified observations may converge only when "
+                            "those normalized fields match exactly; administrative evidence "
+                            "cannot converge with either. A legacy incomplete row may resume "
+                            "once from verified evidence and receives canonical provenance."
+                        ),
+                        retries=(
+                            "Retry the complete owning coordinator with the same normalized "
+                            "observation and context. Conflicting identity evidence never "
+                            "retries as the existing event and no participant commits alone."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "financial.payment_provider_events.currency_invalid",
+                            "financial.payment_provider_events.currency_required",
+                            "financial.payment_provider_events.event_not_found",
+                            "financial.payment_provider_events.financial_consequence_rejected",
+                            "financial.payment_provider_events.financial_effect_conflict",
+                            "financial.payment_provider_events.financial_effect_required",
+                            "financial.payment_provider_events.identity_collision",
+                            "financial.payment_provider_events.identity_required",
+                            "financial.payment_provider_events.invoice_account_mismatch",
+                            "financial.payment_provider_events.invoice_not_found",
+                            "financial.payment_provider_events.money_invalid",
+                            "financial.payment_provider_events.observation_invalid",
+                            "financial.payment_provider_events.pagination_invalid",
+                            "financial.payment_provider_events.payment_not_found",
+                            "financial.payment_provider_events.provider_not_found",
+                            "financial.payment_provider_events.replay_conflict",
+                            "financial.payment_provider_events.status_conflict",
+                            "financial.payment_provider_events.untrusted_financial_effect",
+                            "financial.payment_provider_events.untrusted_financial_observation",
+                            "financial.payment_provider_events.invalid_command_context",
+                            "financial.payment_provider_events.command_contract_violation",
+                            "financial.payment_provider_events.command_scope_mismatch",
+                            "financial.payment_provider_events.nested_owner_command",
+                            "financial.payment_provider_events.active_caller_transaction",
+                            "financial.payment_provider_events.nested_transaction_completion",
+                            "financial.payment_provider_events.net_amount_required",
+                        ),
+                        mapping_owner=(
+                            "billing API, payment-webhook coordinator, and payment-"
+                            "reconciliation coordinator adapters"
+                        ),
+                        retryable_codes=(
+                            "financial.payment_provider_events.financial_consequence_rejected",
+                        ),
+                        fail_closed_on=(
+                            "missing verified identity, malformed money or currency, and "
+                            "contradictory event/status/effect evidence",
+                            "identity reuse with a different trust class or normalized digest",
+                            "administrative attempts to change payment, refund, or reversal state",
+                            "admission source invoked with the wrong command scope",
+                            "invoice settlement without an explicit normalized net amount",
+                            "active caller transaction or manifest mismatch",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "payment_provider_event.processed",
+                            "payment_provider_event.failed",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 exposes canonical event/payment/invoice/provider "
+                            "identities, trust source, normalized status/effect, processing "
+                            "state, stable error code, and command lineage without raw provider "
+                            "payloads, credentials, or customer PII."
+                        ),
+                        replay=(
+                            "Consumers project committed observation facts only and never "
+                            "re-enter settlement, refund, reversal, or allocation commands."
+                        ),
+                    ),
+                    projections=(),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "billing.providers mixed provider configuration with a mutable "
+                            "event helper, caller-selected trust boolean, helper commit, "
+                            "non-exact replay, and administrative financial consequences"
+                        ),
+                        new_owner="financial.payment_provider_events",
+                        verification=(
+                            "Typed admission, exact replay/conflict, provenance, rollback, "
+                            "audit/event, adapter-boundary, manifest, and PostgreSQL concurrent "
+                            "identity tests."
+                        ),
+                        cutover_gate=(
+                            "Only payment_webhooks and payment_reconciliation call verified "
+                            "participants with typed context; the API root admits only "
+                            "non-financial administrative observations."
+                        ),
+                        fallback_retirement=(
+                            "The trusted_financial_effects boolean, event helper commit, "
+                            "billing_adapter gateway ingress, mutable transport payload, "
+                            "source-free record, and return-on-identity-without-proof paths "
+                            "are absent."
+                        ),
+                    ),
+                    steward="finance operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
+                    ),
+                    test_refs=(
+                        "tests/test_payment_provider_events.py",
+                        "tests/test_api_billing_webhooks.py",
+                        "tests/test_payment_webhook_settlement.py",
+                        "tests/architecture/test_payment_provider_event_ownership.py",
+                        "tests/architecture/test_payment_settlement_participants.py",
+                        "tests/integration/test_payment_provider_event_concurrency.py",
+                    ),
                 ),
             ),
             SOTService(
                 name="financial.payment_webhooks",
-                module="app.services.api_billing_webhooks",
+                module="app.services.payment_webhook_commands",
                 owns=(
                     "verified payment webhook projection",
                     "billing consequence submission from verified receipts",
                 ),
                 depends_on=(
                     "integration.inbox",
+                    "financial.account_credit_deposits",
                     "financial.payment_provider_events",
+                    "financial.topup_intents",
+                ),
+                notes=(
+                    "Signature adapters persist and claim the verified receipt through "
+                    "integration.inbox, then submit only its typed identity. This "
+                    "coordinator normalizes the stored external observation and commits "
+                    "all billing consequences with processed-receipt evidence once."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="verified payment webhook projection",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "claimed signature-verified payment receipt",
+                                "external provider payment observation",
+                                "canonical provider-event settlement protocol",
+                            ),
+                        ),
+                        ConcernContract(
+                            name=(
+                                "billing consequence submission from verified receipts"
+                            ),
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "claimed signature-verified payment receipt",
+                                "canonical provider-event settlement protocol",
+                                "canonical account-credit deposit protocol",
+                                "canonical top-up completion protocol",
+                                "canonical inbox consequence protocol",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="claimed signature-verified payment receipt",
+                            owner="integration.inbox",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked IntegrationInbox identity, verified payload digest, "
+                                "provider header, processing state, and attempt evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="external provider payment observation",
+                            owner="external:payment_provider",
+                            kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                            source=(
+                                "signature-verified Paystack or Flutterwave event type, "
+                                "transaction identity, amount, fee, currency, status, and "
+                                "provider-reflected checkout metadata"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical provider-event settlement protocol",
+                            owner="financial.payment_provider_events",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "flush-only idempotent provider-event, payment, allocation, "
+                                "refund, reversal, status, and exception participants"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical account-credit deposit protocol",
+                            owner="financial.account_credit_deposits",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "flush-only typed deposit correlation, settlement, credit "
+                                "application, intent projection, audit, and event protocol"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical top-up completion protocol",
+                            owner="financial.topup_intents",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "flush-only locked payment-to-intent completion projection"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical inbox consequence protocol",
+                            owner="integration.inbox",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "flush-only processed consequence projection and separate "
+                                "owner-managed failure/dead-letter recording"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        boundary=(
+                            "After integration.inbox durably records and claims the receipt, "
+                            "execute_owner_command admits a transaction-free session and "
+                            "commits or rolls back provider event, money, allocation, intent, "
+                            "audit/event, and processed-receipt evidence exactly once."
+                        ),
+                        locking=(
+                            "The coordinator locks the exact claimed inbox receipt first; "
+                            "participants then use their canonical account, invoice, payment, "
+                            "billing-account, and top-up intent lock order."
+                        ),
+                        idempotency=(
+                            "IntegrationInbox binding/provider-event identity owns receipt "
+                            "replay. Provider-event and monetary participants reuse that "
+                            "identity or exact provider transaction evidence; a processed "
+                            "receipt returns its stored consequence."
+                        ),
+                        retries=(
+                            "Retryable failure rolls back the complete billing consequence, "
+                            "then the adapter separately records inbox retry evidence. "
+                            "Deterministic payload/correlation rejection is dead-lettered."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "financial.payment_webhooks.payload_invalid",
+                            "financial.payment_webhooks.receipt_not_found",
+                            "financial.payment_webhooks.receipt_not_claimed",
+                            "financial.payment_webhooks.receipt_provider_mismatch",
+                            "financial.payment_webhooks.topup_intent_mismatch",
+                            "financial.payment_webhooks.provider_not_configured",
+                            "financial.payment_webhooks.deposit_rejected",
+                            "financial.payment_webhooks.provider_event_rejected",
+                            "financial.payment_webhooks.settlement_unlinked",
+                            "financial.payment_webhooks.topup_projection_rejected",
+                            "financial.payment_webhooks.invalid_command_context",
+                            "financial.payment_webhooks.command_contract_violation",
+                            "financial.payment_webhooks.nested_owner_command",
+                            "financial.payment_webhooks.active_caller_transaction",
+                            "financial.payment_webhooks.nested_transaction_completion",
+                        ),
+                        mapping_owner="Paystack and Flutterwave webhook HTTP adapters",
+                        retryable_codes=(
+                            "financial.payment_webhooks.provider_not_configured",
+                            "financial.payment_webhooks.settlement_unlinked",
+                            "financial.payment_webhooks.topup_projection_rejected",
+                        ),
+                        fail_closed_on=(
+                            "unclaimed, missing, provider-mismatched, or malformed receipt",
+                            "invalid amount, fee, currency, top-up, invoice, or deposit "
+                            "correlation evidence",
+                            "provider success without structurally linked payment evidence",
+                            "active caller transaction or manifest mismatch",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "app.services.api_billing_webhooks mixed signature transport, "
+                            "provider normalization, direct receipt/payment/intent writes, "
+                            "savepoints, commits, rollbacks, and best-effort access decisions"
+                        ),
+                        new_owner="financial.payment_webhooks",
+                        verification=(
+                            "Signature, identity collision, provider normalization, invoice, "
+                            "deposit, top-up, fee, replay, dead-letter, atomic rollback, "
+                            "manifest, and adapter-boundary tests."
+                        ),
+                        cutover_gate=(
+                            "Adapters verify signatures, serialize HTTP, and invoke one typed "
+                            "coordinator on a transaction-free session; every business write "
+                            "uses a named flush-only participant."
+                        ),
+                        fallback_retirement=(
+                            "Adapter-owned ORM writes, provider mappings, savepoints, "
+                            "commit/rollback calls, direct provider-fee edits, and synchronous "
+                            "service-restoration fallback are absent."
+                        ),
+                    ),
+                    steward="finance operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
+                    ),
+                    test_refs=(
+                        "tests/test_api_billing_webhooks.py",
+                        "tests/test_payment_webhook_settlement.py",
+                        "tests/architecture/test_payment_webhook_ownership.py",
+                        "tests/architecture/test_payment_settlement_participants.py",
+                    ),
                 ),
             ),
             SOTService(
@@ -2959,9 +5131,213 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "verified provider settlement then allocation orchestration",
                 ),
                 depends_on=(
-                    "financial.ledger",
+                    "control.settings_spec",
+                    "integration.runtime",
+                    "financial.account_credit_deposits",
+                    "financial.payments",
                     "financial.payment_provider_events",
-                    "financial.provider_payment_settlements",
+                    "financial.topup_intents",
+                ),
+                notes=(
+                    "The bounded sweep selects immutable candidates, releases its read "
+                    "transaction, and treats gateway verification as an external fact. "
+                    "Each consequence is a separate typed coordinator transaction that "
+                    "composes canonical financial participants."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="stranded top-up reconciliation",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "canonical top-up reconciliation policy",
+                                "canonical pending top-up intent",
+                                "external gateway verification observation",
+                                "canonical top-up expiry protocol",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="scheduled top-up reconciliation execution",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "canonical top-up reconciliation policy",
+                                "canonical pending top-up intent",
+                                "external gateway verification observation",
+                            ),
+                        ),
+                        ConcernContract(
+                            name=(
+                                "verified provider settlement then allocation "
+                                "orchestration"
+                            ),
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "canonical pending top-up intent",
+                                "external gateway verification observation",
+                                "canonical account-credit deposit protocol",
+                                "canonical provider-event settlement protocol",
+                                "canonical top-up completion protocol",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical top-up reconciliation policy",
+                            owner="control.settings_spec",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed stale window, maximum age, expiry grace, and batch "
+                                "size settings with bounded defaults"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical pending top-up intent",
+                            owner="financial.topup_intents",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked intent identity, account scope, provider, reference, "
+                                "purpose, currency, invoice instruction, and completion state"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="external gateway verification observation",
+                            owner="external:payment_provider",
+                            kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                            source=(
+                                "normalized Paystack or Flutterwave transaction identity, "
+                                "gross amount, provider fee, currency, and outcome"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical account-credit deposit protocol",
+                            owner="financial.account_credit_deposits",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "flush-only typed deposit correlation, payment, credit "
+                                "application, audit, and event participant"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical provider-event settlement protocol",
+                            owner="financial.payment_provider_events",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "flush-only idempotent provider-event, payment, fee, invoice, "
+                                "consolidated settlement, and allocation participants"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical top-up completion protocol",
+                            owner="financial.topup_intents",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="flush-only locked payment-to-intent completion projection",
+                        ),
+                        AuthorityInput(
+                            name="canonical top-up expiry protocol",
+                            owner="financial.topup_intents",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="flush-only locked expiry projection from canonical time",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        boundary=(
+                            "Candidate selection completes its read transaction before any "
+                            "gateway call. Each definitive observation enters exactly one "
+                            "execute_owner_command root that commits or rolls back settlement, "
+                            "provider event, intent projection, audit, and domain events."
+                        ),
+                        locking=(
+                            "The coordinator locks the canonical subscriber or billing-account "
+                            "scope and top-up intent first; named participants then use their "
+                            "account, invoice, payment, and settlement lock order."
+                        ),
+                        idempotency=(
+                            "Provider type plus intent reference reuses the webhook provider-"
+                            "event identity. Provider transaction identity and canonical "
+                            "participant keys prevent duplicate cash, allocation, and intent "
+                            "consequences."
+                        ),
+                        retries=(
+                            "Provider unavailability leaves the intent pending. Each candidate "
+                            "is an independent transaction, so one rejection cannot roll back "
+                            "or repeat another candidate's completed consequence."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "financial.payment_reconciliation.policy_missing",
+                            "financial.payment_reconciliation.provider_mismatch",
+                            "financial.payment_reconciliation.reference_mismatch",
+                            "financial.payment_reconciliation.transaction_identity_invalid",
+                            "financial.payment_reconciliation.amount_invalid",
+                            "financial.payment_reconciliation.provider_fee_invalid",
+                            "financial.payment_reconciliation.currency_invalid",
+                            "financial.payment_reconciliation.currency_mismatch",
+                            "financial.payment_reconciliation.invoice_correlation_invalid",
+                            "financial.payment_reconciliation.completion_conflict",
+                            "financial.payment_reconciliation.provider_not_configured",
+                            "financial.payment_reconciliation.provider_configuration_mismatch",
+                            "financial.payment_reconciliation.deposit_rejected",
+                            "financial.payment_reconciliation.provider_event_rejected",
+                            "financial.payment_reconciliation.settlement_unlinked",
+                            "financial.payment_reconciliation.topup_projection_rejected",
+                            "financial.payment_reconciliation.outcome_invalid",
+                            "financial.payment_reconciliation.observation_incomplete",
+                            "financial.payment_reconciliation.invalid_command_context",
+                            "financial.payment_reconciliation.command_contract_violation",
+                            "financial.payment_reconciliation.nested_owner_command",
+                            "financial.payment_reconciliation.active_caller_transaction",
+                            "financial.payment_reconciliation.nested_transaction_completion",
+                        ),
+                        mapping_owner="scheduled payment reconciliation task adapter",
+                        retryable_codes=(
+                            "financial.payment_reconciliation.provider_not_configured",
+                            "financial.payment_reconciliation.settlement_unlinked",
+                            "financial.payment_reconciliation.topup_projection_rejected",
+                        ),
+                        fail_closed_on=(
+                            "provider, reference, transaction, amount, fee, or currency mismatch",
+                            "missing or invalid explicit invoice instruction",
+                            "successful observation without linked payment evidence",
+                            "active caller transaction or manifest mismatch",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "app.services.payment_reconciliation mixed scheduled session "
+                            "lifecycle, gateway calls, direct payment decisions, commits, "
+                            "rollbacks, private provider lookup, allocation fallback, prepaid "
+                            "invoice settlement, and synchronous access restoration"
+                        ),
+                        new_owner="financial.payment_reconciliation",
+                        verification=(
+                            "Gateway outcome, deposit, invoice, consolidated, existing-payment, "
+                            "expiry, replay, transaction-boundary, manifest, and task-adapter "
+                            "tests."
+                        ),
+                        cutover_gate=(
+                            "The task owns only session lifecycle and serialization; the sweep "
+                            "submits typed immutable evidence to per-intent coordinator roots."
+                        ),
+                        fallback_retirement=(
+                            "Service commit/rollback/session creation, direct payment creation, "
+                            "private provider lookup, guessed invoice allocation, synchronous "
+                            "prepaid settlement, and access restoration are absent."
+                        ),
+                    ),
+                    steward="finance operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
+                    ),
+                    test_refs=(
+                        "tests/test_payment_webhook_settlement.py",
+                        "tests/test_reconcile_honours_invoice_intent.py",
+                        "tests/architecture/test_payment_reconciliation_ownership.py",
+                        "tests/architecture/test_payment_settlement_participants.py",
+                    ),
                 ),
             ),
         ),
@@ -4597,10 +6973,297 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "operational escalation event and delivery planning",
                     "operational escalation acknowledgement and cancellation",
                 ),
+                depends_on=("auth.permission_gate", "events.dispatcher"),
                 notes=(
                     "Operational domains emit named facts. Operators configure "
                     "entity type, event key, levels, delays and delivery channels "
                     "in the admin UI; domain services do not embed SLA timings."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="operational SLA event policy lifecycle",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "validated SLA policy command",
+                                "current operational SLA records",
+                            ),
+                            canonical_writer="operations.sla_escalation",
+                        ),
+                        ConcernContract(
+                            name="event-scoped escalation timing and channel policy",
+                            role=OwnerRole.EVENT_POLICY,
+                            input_names=(
+                                "current operational SLA records",
+                                "validated operational event observation",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="operational escalation event and delivery planning",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "current operational SLA records",
+                                "validated operational event observation",
+                                "operational participant records",
+                            ),
+                            canonical_writer="operations.sla_escalation",
+                        ),
+                        ConcernContract(
+                            name=(
+                                "operational escalation acknowledgement and cancellation"
+                            ),
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "authenticated escalation command evidence",
+                                "current operational SLA records",
+                            ),
+                            canonical_writer="operations.sla_escalation",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="validated SLA policy command",
+                            owner="operations.sla_escalation_commands",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed create, update, or deactivate command admitted by "
+                                "the operational SLA policy coordinator"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="current operational SLA records",
+                            owner="operations.sla_escalation",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "OperationalEscalationPolicy, OperationalEscalationEvent, "
+                                "and OperationalEscalationDelivery rows"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="validated operational event observation",
+                            owner="operations.sla_escalation",
+                            kind=AuthorityKind.OBSERVATION,
+                            source=(
+                                "normalized entity type, dotted event key, severity, "
+                                "affected-customer count, and owner-supplied metadata"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="operational participant records",
+                            owner="operations.sla_escalation",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active OperationalOwner, OperationalWatcher, and "
+                                "OperationalRoomLink records"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="authenticated escalation command evidence",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "authorized actor and target carried by the calling domain "
+                                "or admin command boundary"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.PARTICIPANT,
+                        boundary=(
+                            "The calling domain or operations.sla_escalation_commands "
+                            "owns the root transaction; this service stages rows and "
+                            "flushes but never commits or rolls back."
+                        ),
+                        locking=(
+                            "Database uniqueness protects active event-policy levels and "
+                            "delivery deduplication; callers serialize command targets."
+                        ),
+                        idempotency=(
+                            "Open event identity and delivery deduplication keys return "
+                            "existing records for repeated observations."
+                        ),
+                        retries=(
+                            "Only the root transaction owner retries the complete fact, "
+                            "event, and delivery-plan operation."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "operations.sla_escalation.invalid_event",
+                            "operations.sla_escalation.invalid_participant",
+                        ),
+                        mapping_owner=(
+                            "operations.sla_escalation_commands and calling domain adapters"
+                        ),
+                        fail_closed_on=(
+                            "unsupported operational entity",
+                            "invalid event key",
+                            "ambiguous participant target",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "operational.sla_escalation.recorded",
+                            "operational.sla_escalation.acknowledged",
+                            "operational.sla_escalation.canceled",
+                            "operational.sla_delivery.planned",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 identifies the operational entity, event key, "
+                            "policy level, lifecycle state, and delivery-plan identity."
+                        ),
+                        replay=(
+                            "Operational policy, event, participant, and delivery rows "
+                            "reconstruct escalation state and pending delivery plans."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "domain-specific hard-coded SLA durations and direct "
+                            "notification branches"
+                        ),
+                        new_owner="operations.sla_escalation",
+                        verification=(
+                            "Operational SLA ownership, policy UI, ticket SLA, payment "
+                            "proof, project, and outage behavior tests."
+                        ),
+                        cutover_gate=(
+                            "Operational emitters provide named facts and read configured "
+                            "policy instead of embedding escalation timings."
+                        ),
+                        fallback_retirement=(
+                            "Hard-coded domain SLA timing and direct delivery branches are "
+                            "absent from migrated emitters."
+                        ),
+                    ),
+                    steward="operations platform",
+                    design_refs=(
+                        "docs/ARCHITECTURE.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
+                    ),
+                    test_refs=(
+                        "tests/test_operational_escalation.py",
+                        "tests/test_operational_sla_policy_ui.py",
+                        "tests/architecture/test_operational_sla_policy_ownership.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="operations.sla_escalation_commands",
+                module="app.services.web_notifications_sla_policies",
+                owns=("operational SLA policy command confirmation",),
+                depends_on=(
+                    "auth.permission_gate",
+                    "operations.sla_escalation",
+                ),
+                notes=(
+                    "This coordinator admits typed admin policy commands and owns the "
+                    "root transaction. The operational escalation participant validates "
+                    "and stages the canonical policy record."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="operational SLA policy command confirmation",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "authenticated SLA policy command evidence",
+                                "current operational SLA records",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="authenticated SLA policy command evidence",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "CommandContext plus normalized admin policy form values"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="current operational SLA records",
+                            owner="operations.sla_escalation",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "current policy identity and active entity/event/level "
+                                "uniqueness evidence"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        boundary=(
+                            "execute_owner_command admits a transaction-free session, "
+                            "runs one create, update, or deactivate operation, and commits "
+                            "or rolls back the complete command."
+                        ),
+                        locking=(
+                            "Policy identity is resolved inside the owned transaction and "
+                            "database uniqueness closes concurrent active-level races."
+                        ),
+                        idempotency=(
+                            "Create rejects an existing active entity/event/level owner; "
+                            "update and deactivate target one immutable policy id."
+                        ),
+                        retries=(
+                            "Adapters may retry only with a fresh transaction after a "
+                            "complete rollback and preserved command evidence."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "operations.sla_escalation_commands.invalid_policy",
+                            "operations.sla_escalation_commands.not_found",
+                            "operations.sla_escalation_commands.duplicate_active_policy",
+                            "operations.sla_escalation_commands.active_caller_transaction",
+                            "operations.sla_escalation_commands.command_contract_violation",
+                            "operations.sla_escalation_commands.invalid_command_context",
+                            "operations.sla_escalation_commands.nested_owner_command",
+                            "operations.sla_escalation_commands.nested_transaction_completion",
+                        ),
+                        mapping_owner="admin notification routes",
+                        fail_closed_on=(
+                            "missing authenticated actor",
+                            "invalid event or channel policy",
+                            "duplicate active policy level",
+                            "missing policy identity",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "admin notification handlers and service helpers with manual "
+                            "commit and rollback ownership"
+                        ),
+                        new_owner="operations.sla_escalation_commands",
+                        verification=(
+                            "Owner-command transaction tests and operational SLA policy UI "
+                            "behavior tests."
+                        ),
+                        cutover_gate=(
+                            "Admin routes carry CommandContext and perform no transaction "
+                            "completion around policy commands."
+                        ),
+                        fallback_retirement=(
+                            "Operational escalation participant commit helpers and route "
+                            "rollback branches are removed."
+                        ),
+                    ),
+                    steward="operations platform",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
+                    ),
+                    test_refs=(
+                        "tests/test_operational_sla_policy_ui.py",
+                        "tests/architecture/test_operational_sla_policy_ownership.py",
+                        "tests/architecture/test_owner_command_boundary.py",
+                    ),
                 ),
             ),
             SOTService(
@@ -4734,6 +7397,138 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "app.services.realtime_subscriptions; workqueue topics are "
                     "derived by its scope owner. WebSocket and SSE modules are "
                     "transport adapters only."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="versioned real-time event envelope",
+                            role=OwnerRole.POLICY,
+                            input_names=("real-time schema contract",),
+                        ),
+                        ConcernContract(
+                            name="Redis topic naming and best-effort publication",
+                            role=OwnerRole.TRANSPORT,
+                            input_names=(
+                                "real-time schema contract",
+                                "committed projection request",
+                                "Redis delivery availability observation",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="shared WebSocket and SSE delivery semantics",
+                            role=OwnerRole.TRANSPORT,
+                            input_names=(
+                                "real-time schema contract",
+                                "authorized subscription topics",
+                                "Redis delivery availability observation",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="reconnect and no-replay refresh contract",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "real-time schema contract",
+                                "Redis delivery availability observation",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="real-time schema contract",
+                            owner="runtime.realtime_projection",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "RealtimeEvent schema version, event/topic validation, "
+                                "and refresh_required semantics"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="committed projection request",
+                            owner="runtime.realtime_projection",
+                            kind=AuthorityKind.OBSERVATION,
+                            source=(
+                                "best-effort invalidation request accepted only after the "
+                                "calling domain owner commits durable state"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="authorized subscription topics",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "object-level conversation or operation topic decision "
+                                "from app.services.realtime_subscriptions"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="Redis delivery availability observation",
+                            owner="external:redis",
+                            kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                            source=(
+                                "Redis publish and pub/sub connection outcome; never a "
+                                "durable delivery receipt"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.NOT_APPLICABLE,
+                        boundary=(
+                            "The platform never opens or completes a domain database "
+                            "transaction; callers publish only after durable state commits."
+                        ),
+                        locking=(
+                            "Immutable envelopes and topic strings require no database "
+                            "lock; Redis pub/sub provides no durable ordering lock."
+                        ),
+                        idempotency=(
+                            "Event identifiers distinguish repeated invalidations, while "
+                            "clients converge by refetching the canonical read model."
+                        ),
+                        retries=(
+                            "Publication failure returns false and is not retried inside "
+                            "the domain transaction; reconnecting clients refetch state."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(),
+                        mapping_owner="WebSocket and SSE transport adapters",
+                        fail_closed_on=(
+                            "invalid event envelope",
+                            "unauthorized client-selected topic",
+                            "channel and envelope topic mismatch",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "app.websocket.realtime and transport-specific Redis "
+                            "publication helpers"
+                        ),
+                        new_owner="runtime.realtime_projection",
+                        verification=(
+                            "Shared envelope, broker, subscription authorization, and "
+                            "transport-boundary tests."
+                        ),
+                        cutover_gate=(
+                            "All application publishers use realtime_platform and no "
+                            "domain service imports app.websocket transports."
+                        ),
+                        fallback_retirement=(
+                            "The legacy inbox_ws broker prefix and app.websocket.realtime "
+                            "publication module are removed."
+                        ),
+                    ),
+                    steward="platform runtime",
+                    design_refs=(
+                        "docs/REALTIME_PLATFORM.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
+                    ),
+                    test_refs=(
+                        "tests/test_realtime_platform.py",
+                        "tests/test_realtime_subscriptions.py",
+                        "tests/architecture/test_realtime_platform_boundary.py",
+                    ),
                 ),
             ),
             SOTService(
@@ -4893,6 +7688,153 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "support.ticket_lifecycle",
                     "support.ticket_configuration",
                     "operations.sla_escalation",
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="ticket SLA policy assignment",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical ticket lifecycle state",
+                                "configured ticket SLA targets",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="ticket SLA clock lifecycle",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "canonical ticket lifecycle state",
+                                "configured ticket SLA targets",
+                                "current ticket SLA records",
+                            ),
+                            canonical_writer="support.ticket_sla_clock",
+                        ),
+                        ConcernContract(
+                            name="ticket SLA breach records",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "canonical ticket lifecycle state",
+                                "current ticket SLA records",
+                            ),
+                            canonical_writer="support.ticket_sla_clock",
+                        ),
+                        ConcernContract(
+                            name="ticket SLA breach event emission",
+                            role=OwnerRole.EVENT_POLICY,
+                            input_names=(
+                                "canonical ticket lifecycle state",
+                                "current ticket SLA records",
+                                "configured operational escalation policy",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical ticket lifecycle state",
+                            owner="support.ticket_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "Ticket identity, status, priority, type, assignments, "
+                                "created_at, and due_at"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="configured ticket SLA targets",
+                            owner="support.ticket_configuration",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "operator-managed priority and ticket-type resolution "
+                                "targets plus the active ticket SlaPolicy"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="current ticket SLA records",
+                            owner="support.ticket_sla_clock",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="SlaClock and SlaBreach rows for the ticket",
+                        ),
+                        AuthorityInput(
+                            name="configured operational escalation policy",
+                            owner="operations.sla_escalation",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "active ticket.sla_breached escalation policies and "
+                                "participant delivery rules"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.PARTICIPANT,
+                        boundary=(
+                            "The support ticket lifecycle or scheduled breach evaluator "
+                            "owns the root transaction; this service stages clock, breach, "
+                            "watcher, event, and delivery-plan rows without committing."
+                        ),
+                        locking=(
+                            "Ticket and active-clock visibility is re-evaluated inside the "
+                            "caller transaction; clock identity prevents duplicate policy "
+                            "assignment and breached_at guards repeated breach writes."
+                        ),
+                        idempotency=(
+                            "An existing ticket/policy clock is reused and only running "
+                            "clocks without breached_at can create a breach."
+                        ),
+                        retries=(
+                            "The root transaction owner retries the complete ticket, clock, "
+                            "breach, and escalation operation after rollback."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=("support.ticket_sla_clock.invalid_ticket_id",),
+                        mapping_owner=(
+                            "support ticket lifecycle and scheduled task adapters"
+                        ),
+                        fail_closed_on=("invalid ticket identifier",),
+                    ),
+                    events=EventContract(
+                        event_types=("ticket.sla_breached",),
+                        schema_version=1,
+                        delivery_owner="operations.sla_escalation",
+                        compatibility=(
+                            "Version 1 carries ticket identity, configured due time, "
+                            "priority, title, target URL, and support category metadata."
+                        ),
+                        replay=(
+                            "Ticket, SlaClock, SlaBreach, and configured operational "
+                            "escalation rows reconstruct the breach consequence."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "support ticket lifecycle methods and hard-coded ticket-type "
+                            "breach notification branches"
+                        ),
+                        new_owner="support.ticket_sla_clock",
+                        verification=(
+                            "Ticket SLA assignment, configured target, breach, and generic "
+                            "operational escalation tests."
+                        ),
+                        cutover_gate=(
+                            "Ticket lifecycle delegates clock writes and breach evaluation "
+                            "to this owner and reads operator-managed targets."
+                        ),
+                        fallback_retirement=(
+                            "Hard-coded ticket SLA duration sets and direct breach delivery "
+                            "branches are absent."
+                        ),
+                    ),
+                    steward="support operations",
+                    design_refs=(
+                        "docs/ARCHITECTURE.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
+                    ),
+                    test_refs=(
+                        "tests/test_sla_assignment.py",
+                        "tests/test_operational_sla_policy_ui.py",
+                        "tests/architecture/test_operational_sla_policy_ownership.py",
+                    ),
                 ),
             ),
             SOTService(

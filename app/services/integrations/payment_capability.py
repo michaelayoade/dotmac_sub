@@ -38,6 +38,12 @@ class PaymentCapabilityError(ValueError):
                 pass
 
 
+def is_verification_not_found(error: PaymentCapabilityError) -> bool:
+    """Classify provider evidence that proves no charge exists for a reference."""
+
+    return error.status_code in {400, 404}
+
+
 def _connector(provider_type: str) -> str:
     provider = provider_type.strip().lower()
     if provider not in {"paystack", "flutterwave"}:

@@ -563,7 +563,7 @@ class TestBillingMasterSwitchGates:
 class TestPaymentReconciliationTask:
     """Tests for the top-up reconciliation task boundary."""
 
-    def test_reconcile_topups_delegates_to_scheduled_service(self):
+    def test_reconcile_topups_delegates_to_typed_owner_service(self):
         expected = {
             "checked": 4,
             "recovered": 1,
@@ -571,15 +571,35 @@ class TestPaymentReconciliationTask:
             "expired": 0,
             "errors": 0,
         }
-        with patch(
-            "app.tasks.payment_reconciliation.reconcile_topups_scheduled",
-            return_value=expected,
-        ) as reconcile:
+        db = MagicMock()
+        summary = MagicMock()
+        summary.as_dict.return_value = expected
+
+        @contextmanager
+        def owner_session():
+            yield db
+
+        with (
+            patch(
+                "app.tasks.payment_reconciliation.db_session_adapter."
+                "owner_command_session",
+                side_effect=owner_session,
+            ) as session,
+            patch(
+                "app.tasks.payment_reconciliation.reconcile_pending_topups",
+                return_value=summary,
+            ) as reconcile,
+        ):
             from app.tasks.payment_reconciliation import reconcile_topups
 
             result = reconcile_topups()
 
-        reconcile.assert_called_once_with()
+        session.assert_called_once_with()
+        reconcile.assert_called_once()
+        assert reconcile.call_args.args[0] is db
+        assert reconcile.call_args.args[1].observed_at.tzinfo is not None
+        assert reconcile.call_args.kwargs["context"].scope == "topup-payment:reconcile"
+        summary.as_dict.assert_called_once_with()
         assert result == expected
 
 

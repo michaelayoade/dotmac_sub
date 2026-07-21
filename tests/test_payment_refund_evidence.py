@@ -29,6 +29,7 @@ from app.schemas.billing import (
 from app.services import billing as billing_service
 from app.services.billing._common import get_account_credit_balance
 from app.services.customer_financial_ledger import calculate_customer_balance
+from tests.payment_provider_event_helpers import stage_verified_provider_event
 
 
 def _payment(db, subscriber, amount: str = "100.00", *, invoice=None, provider=None):
@@ -158,7 +159,7 @@ def test_provider_refund_requires_normalized_event_amount(db_session, subscriber
         )
     assert manual.value.status_code == 409
 
-    event = billing_service.payment_provider_events.ingest(
+    event = stage_verified_provider_event(
         db_session,
         PaymentProviderEventIngest(
             provider_id=provider.id,
@@ -168,7 +169,6 @@ def test_provider_refund_requires_normalized_event_amount(db_session, subscriber
             currency="NGN",
             idempotency_key=f"provider-refund-{uuid4().hex}",
         ),
-        trusted_financial_effects=True,
     )
     refund = db_session.query(PaymentRefund).one()
     db_session.refresh(payment)

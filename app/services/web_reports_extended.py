@@ -242,7 +242,7 @@ def get_tax_report_data(
         db,
         date_from=date_from,
         date_to=date_to,
-    )
+    ).to_context()
 
 
 # ---------------------------------------------------------------------------

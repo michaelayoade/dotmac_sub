@@ -17,6 +17,7 @@ from app.schemas.workqueue import (
 )
 from app.services import workqueue
 from app.services.auth_dependencies import require_permission, require_user_auth
+from app.services.db_session_adapter import db_session_adapter
 from app.services.realtime_platform import (
     iter_topic_events,
     ready_event,
@@ -128,7 +129,7 @@ def workqueue_events(
 
     # Streaming responses keep dependencies alive until disconnect. Release
     # this lookup session before returning; the event stream needs no database.
-    db.rollback()
+    db_session_adapter.release_read_transaction(db)
     db.close()
 
     async def event_generator():

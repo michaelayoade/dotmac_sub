@@ -489,11 +489,18 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     )
     assert sot_relationships.dependencies_for("financial.payment_webhooks") == (
         "integration.inbox",
+        "financial.account_credit_deposits",
         "financial.payment_provider_events",
+        "financial.topup_intents",
     )
     assert sot_relationships.dependencies_for("financial.payment_provider_events") == (
+        "events.dispatcher",
+        "financial.consolidated_payments",
+        "financial.invoices",
         "financial.payments",
+        "financial.payment_routing",
         "financial.provider_payment_settlements",
+        "observability.audit_log",
     )
     assert sot_relationships.dependencies_for(
         "financial.provider_payment_settlements"
@@ -503,10 +510,15 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "financial.prepaid_service_renewals",
     )
     assert sot_relationships.dependencies_for("financial.account_credit_deposits") == (
-        "financial.payments",
+        "customer.accounts",
+        "events.dispatcher",
         "financial.account_credit_applications",
         "financial.prepaid_service_renewals",
         "financial.access_resolution",
+        "financial.invoices",
+        "financial.payments",
+        "financial.topup_intents",
+        "observability.audit_log",
     )
     assert sot_relationships.dependencies_for("financial.prepaid_service_renewals") == (
         "financial.account_adjustments",
@@ -515,9 +527,12 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "events.dispatcher",
     )
     assert sot_relationships.dependencies_for("financial.payment_reconciliation") == (
-        "financial.ledger",
+        "control.settings_spec",
+        "integration.runtime",
+        "financial.account_credit_deposits",
+        "financial.payments",
         "financial.payment_provider_events",
-        "financial.provider_payment_settlements",
+        "financial.topup_intents",
     )
     assert sot_relationships.dependencies_for("customer.service_status") == (
         "financial.access_resolution",

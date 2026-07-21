@@ -11,6 +11,7 @@ from app.services.owner_commands import (
     OwnerCommandDefinition,
     OwnerCommandError,
     execute_owner_command,
+    execute_owner_savepoint,
 )
 
 _DEFINITION = OwnerCommandDefinition(
@@ -201,6 +202,46 @@ def test_helper_savepoint_rollback_cannot_hide_partial_failure(db_session) -> No
     )
     assert not db_session.in_transaction()
     assert _count(db_session) == 0
+
+
+def test_authorized_owner_savepoint_can_commit_an_optional_step(db_session) -> None:
+    def operation() -> None:
+        execute_owner_savepoint(
+            db_session,
+            lambda: db_session.add(_projection("isolated-success")),
+        )
+
+    execute_owner_command(
+        db_session,
+        definition=_DEFINITION,
+        context=_context(),
+        operation=operation,
+    )
+
+    assert _count(db_session) == 1
+
+
+def test_authorized_owner_savepoint_can_stage_failure_evidence(db_session) -> None:
+    def fail_optional_step() -> None:
+        db_session.add(_projection("discarded-optional-write"))
+        db_session.flush()
+        raise ValueError("optional step rejected")
+
+    def operation() -> None:
+        try:
+            execute_owner_savepoint(db_session, fail_optional_step)
+        except ValueError:
+            db_session.add(_projection("durable-failure-evidence"))
+
+    execute_owner_command(
+        db_session,
+        definition=_DEFINITION,
+        context=_context(),
+        operation=operation,
+    )
+
+    source_ids = set(db_session.scalars(select(DeviceProjection.source_id)).all())
+    assert source_ids == {"durable-failure-evidence"}
 
 
 def test_uncontracted_owner_cannot_use_runtime_boundary(db_session) -> None:

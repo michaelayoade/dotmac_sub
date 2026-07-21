@@ -3,8 +3,6 @@ from __future__ import annotations
 import uuid
 from decimal import Decimal
 
-from fastapi import HTTPException
-
 from app.models.payment_proof import PaymentProof, PaymentProofStatus
 from app.services import payment_proofs
 from app.services import web_billing_payment_proofs as web_payment_proofs
@@ -115,9 +113,8 @@ def test_unauthorized_or_terminal_review_actions_are_omitted() -> None:
 
 def test_failed_submission_binds_typed_field_error_and_values() -> None:
     error = payment_proofs.PaymentProofReviewError(
-        status_code=400,
-        detail="Invalid verified amount",
-        code="invalid_verified_amount",
+        code="financial.payment_proofs.invalid_verified_amount",
+        message="Invalid verified amount",
         field="amount",
     )
     submission = web_payment_proofs.review_error_submission(
@@ -140,11 +137,14 @@ def test_failed_submission_binds_typed_field_error_and_values() -> None:
     assert verify.field("review_notes").value == "bank mismatch"
 
 
-def test_untyped_command_error_becomes_general_error() -> None:
+def test_unfielded_domain_error_becomes_general_error() -> None:
     submission = web_payment_proofs.review_error_submission(
         action_key=web_payment_proofs.VERIFY_ACTION_KEY,
         values={"amount": "5000.00", "auto_allocate": "yes"},
-        error=HTTPException(status_code=409, detail="Reference already verified"),
+        error=payment_proofs.PaymentProofReviewError(
+            code="financial.payment_proofs.duplicate_transfer_reference",
+            message="Reference already verified",
+        ),
     )
 
     verify = web_payment_proofs._review_actions(

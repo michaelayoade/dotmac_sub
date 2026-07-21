@@ -178,14 +178,13 @@ def _confirm_allocation(
         amount=amount,
     )
     preview = PaymentAllocations.preview(db, request)
-    result = PaymentAllocations.confirm(
+    result = PaymentAllocations.stage_confirm(
         db,
         PaymentAllocationConfirm(
             **request.model_dump(),
             preview_fingerprint=preview.fingerprint,
             idempotency_key=_allocation_key(payment, invoice),
         ),
-        commit=False,
     )
     if result.allocation.ledger_entry_id is None:
         raise RuntimeError("Allocation owner returned no invoice ledger evidence")

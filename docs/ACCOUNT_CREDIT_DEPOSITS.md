@@ -6,7 +6,16 @@ runtime dependency.
 ## Contract and owners
 
 `financial.account_credit_deposits` owns eligibility, preview, typed intent,
-provider correlation and atomic settlement. Every new deposit intent persists:
+provider correlation and atomic settlement. Customer gateway verification and
+gateway reconciliation enter the owner-managed
+`SettleAccountCreditDepositCommand` on a transaction-free session. Payment
+webhook ingestion and payment-proof review already own wider evidence
+transactions, so they compose the same typed `stage_verified_settlement`
+participant, which flushes but never commits or rolls back. Callers cannot
+select transaction behavior or pass a transport-shaped gateway object into the
+domain owner.
+
+Every new deposit intent persists:
 
 - `purpose=account_credit_deposit`
 - `allocation_policy=credit_only`
@@ -46,7 +55,17 @@ access.
 If an invoice appears after intent creation, confirmed cash is accepted and the
 new credit is immediately applied to eligible invoices. Duplicate callbacks and
 dead-letter replay return the existing payment. Provider amount, currency,
-provider and account must match the server-owned intent.
+provider, exact intent correlation and account must match the server-owned
+intent. Settlement sources use the closed owner vocabulary
+`customer_gateway_verify`, `provider_webhook`, `gateway_reconciliation`, and
+`payment_proof`; each command carries correlated command and idempotency
+evidence into audit and the versioned deposit event.
+
+Provider fee is typed settlement evidence, not a webhook-owned payment edit.
+It must be between zero and the confirmed gross amount and is persisted by the
+payment owner. Deposit credit remains the exact customer-authorized gross
+amount; changing that policy requires a new owner contract and preview, not an
+adapter-side net calculation.
 
 Eligible invoices are active `issued`, `partially_paid` or `overdue` invoices
 with a positive balance. Draft, void, written-off and incompatible-currency

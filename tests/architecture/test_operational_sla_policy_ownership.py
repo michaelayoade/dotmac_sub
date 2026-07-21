@@ -5,8 +5,28 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from app.services.sot_manifest import TransactionMode, contract_validation_errors
+from app.services.sot_relationships import all_services, service_relationship
+
 ROOT = Path(__file__).resolve().parents[2]
 OWNER = ROOT / "app/services/operational_escalation.py"
+
+
+def test_operational_sla_services_have_complete_typed_contracts() -> None:
+    service_names = {item.name for item in all_services()}
+    participant = service_relationship("operations.sla_escalation")
+    coordinator = service_relationship("operations.sla_escalation_commands")
+    ticket_clock = service_relationship("support.ticket_sla_clock")
+
+    assert participant.contract is not None
+    assert coordinator.contract is not None
+    assert ticket_clock.contract is not None
+    assert not contract_validation_errors(participant, service_names=service_names)
+    assert not contract_validation_errors(coordinator, service_names=service_names)
+    assert not contract_validation_errors(ticket_clock, service_names=service_names)
+    assert participant.contract.transaction.mode is TransactionMode.PARTICIPANT
+    assert coordinator.contract.transaction.mode is TransactionMode.COORDINATOR_MANAGED
+    assert ticket_clock.contract.transaction.mode is TransactionMode.PARTICIPANT
 
 
 def test_only_operational_sla_owner_constructs_policy_rows() -> None:
@@ -35,8 +55,12 @@ def test_sla_ui_is_a_thin_adapter_over_the_owner() -> None:
 
     assert "operational_escalation.create_policy" in source
     assert "operational_escalation.update_policy" in source
-    assert "operational_escalation.deactivate_policy_committed" in source
+    assert "operational_escalation.deactivate_policy" in source
+    assert "execute_owner_command" in source
     assert "db.commit(" not in source
+    assert "db.rollback(" not in source
+    assert "db.commit(" not in OWNER.read_text(encoding="utf-8")
+    assert "db.rollback(" not in OWNER.read_text(encoding="utf-8")
     assert '"/sla-policies"' in routes
     for field in ("entity_type", "trigger", "level", "delay_minutes", "channels"):
         assert f'name="{field}"' in form

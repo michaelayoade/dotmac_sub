@@ -13,10 +13,25 @@ from app.models.operational_escalation import (
 from app.models.system_user import SystemUser
 from app.services import operational_escalation
 from app.services import web_notifications_sla_policies as web_sla_policies
+from app.services.db_session_adapter import db_session_adapter
+from app.services.owner_commands import CommandContext
+
+
+def _create_policy(db_session, **values):
+    db_session_adapter.release_read_transaction(db_session)
+    return web_sla_policies.create_policy(
+        db_session,
+        context=CommandContext.system(
+            actor="test:operational-sla-policy",
+            scope="operational-sla-policy",
+            reason="test policy command",
+        ),
+        **values,
+    )
 
 
 def test_ui_can_configure_a_non_billing_operational_event(db_session) -> None:
-    policy = web_sla_policies.create_policy(
+    policy = _create_policy(
         db_session,
         name="Unowned work order escalation",
         entity_type="work_order",
@@ -51,10 +66,10 @@ def test_ui_rejects_duplicate_active_level_for_the_same_event(db_session) -> Non
         "notes": None,
         "is_active": True,
     }
-    web_sla_policies.create_policy(db_session, **values)
+    _create_policy(db_session, **values)
 
     with pytest.raises(ValueError, match="already owns"):
-        web_sla_policies.create_policy(
+        _create_policy(
             db_session,
             **{**values, "name": "Duplicate ticket response L1"},
         )
@@ -63,7 +78,7 @@ def test_ui_rejects_duplicate_active_level_for_the_same_event(db_session) -> Non
 def test_database_rejects_duplicate_active_level_for_the_same_event(
     db_session,
 ) -> None:
-    web_sla_policies.create_policy(
+    _create_policy(
         db_session,
         name="Ticket response L1",
         entity_type="ticket",
@@ -99,7 +114,7 @@ def test_ui_accepts_custom_events_for_every_supported_operational_entity(
     for index, entity_type in enumerate(
         operational_escalation.OPERATIONAL_ENTITY_TYPES
     ):
-        policy = web_sla_policies.create_policy(
+        policy = _create_policy(
             db_session,
             name=f"{entity_type} policy {uuid4()}",
             entity_type=entity_type,
@@ -131,14 +146,14 @@ def test_ui_rejects_unknown_entity_and_non_dotted_event_keys(db_session) -> None
         "is_active": True,
     }
     with pytest.raises(ValueError, match="Unsupported operational entity"):
-        web_sla_policies.create_policy(
+        _create_policy(
             db_session,
             entity_type="unknown",
             trigger="unknown.created",
             **base,
         )
     with pytest.raises(ValueError, match="dotted lower-case"):
-        web_sla_policies.create_policy(
+        _create_policy(
             db_session,
             entity_type="ticket",
             trigger="FIVE_MINUTE_SLA",
@@ -147,7 +162,7 @@ def test_ui_rejects_unknown_entity_and_non_dotted_event_keys(db_session) -> None
 
 
 def test_policy_matching_is_event_scoped_and_not_billing_specific(db_session) -> None:
-    ticket_policy = web_sla_policies.create_policy(
+    ticket_policy = _create_policy(
         db_session,
         name="Ticket stale owner",
         entity_type="ticket",
@@ -160,7 +175,7 @@ def test_policy_matching_is_event_scoped_and_not_billing_specific(db_session) ->
         notes=None,
         is_active=True,
     )
-    web_sla_policies.create_policy(
+    _create_policy(
         db_session,
         name="Project stale owner",
         entity_type="project",
@@ -184,7 +199,7 @@ def test_policy_matching_is_event_scoped_and_not_billing_specific(db_session) ->
 def test_non_billing_owner_can_emit_a_fact_through_the_generic_sla_owner(
     db_session,
 ) -> None:
-    policy = web_sla_policies.create_policy(
+    policy = _create_policy(
         db_session,
         name="Work order unowned",
         entity_type="work_order",

@@ -234,11 +234,21 @@ async def test_workqueue_sse_releases_db_and_signals_no_replay(monkeypatch) -> N
     )
 
     class _Session:
-        rolled_back = False
+        committed = False
         closed = False
+        new: tuple[()] = ()
+        dirty: tuple[()] = ()
+        deleted: tuple[()] = ()
 
-        def rollback(self):
-            self.rolled_back = True
+        def __init__(self) -> None:
+            self._in_transaction = True
+
+        def in_transaction(self):
+            return self._in_transaction
+
+        def commit(self):
+            self.committed = True
+            self._in_transaction = False
 
         def close(self):
             self.closed = True
@@ -269,7 +279,7 @@ async def test_workqueue_sse_releases_db_and_signals_no_replay(monkeypatch) -> N
     ready = await anext(stream)
     reset = await anext(stream)
 
-    assert db.rolled_back is True
+    assert db.committed is True
     assert db.closed is True
     assert ready["event"] == "realtime.ready"
     assert reset["event"] == "realtime.reset"
