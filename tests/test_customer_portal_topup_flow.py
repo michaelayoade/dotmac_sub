@@ -21,6 +21,8 @@ from app.models.billing import (
     TopupIntent,
 )
 from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.idempotency import IdempotencyKey
+from app.models.payment_proof import PaymentProof, PaymentProofStatus
 from app.models.subscriber import Subscriber
 from app.models.subscription_engine import SettingValueType
 from app.schemas.billing import InvoiceCreate, PaymentMethodCreate
@@ -31,6 +33,7 @@ from app.services.customer_portal_flow_payments import (
     create_invoice_payment_intent,
     create_topup_intent,
     get_topup_page,
+    submit_direct_transfer_topup,
     verify_and_record_payment,
     verify_and_record_topup,
 )
@@ -117,11 +120,52 @@ def _patch_topup_settings(
             return max_amount
         if key == "topup_preset_amounts":
             return preset_amounts
+        if key == "gateway_topup_intent_ttl_minutes":
+            return 30
         return None
 
     monkeypatch.setattr(
         "app.services.customer_portal_flow_payments.resolve_value",
         _fake_resolve_value,
+    )
+    monkeypatch.setattr(
+        "app.services.gateway_topup_intents.resolve_value",
+        _fake_resolve_value,
+    )
+
+
+def _patch_direct_transfer_creation_policy(monkeypatch) -> None:
+    from app.services import direct_transfer_intents, topup_intents
+
+    monkeypatch.setattr(
+        topup_intents,
+        "direct_transfer_configuration",
+        lambda _db: topup_intents.DirectTransferConfiguration(
+            control_enabled=True,
+            accounts=(
+                topup_intents.DirectTransferConfiguredAccount(
+                    id="bank-primary",
+                    enabled=True,
+                    bank_name="Dotmac Test Bank",
+                    account_name="Dotmac Payments",
+                    account_number="0123456789",
+                ),
+            ),
+            bank_name="Dotmac Test Bank",
+            account_name="Dotmac Payments",
+            account_number="0123456789",
+            sort_code="",
+            instructions="Use the supplied reference.",
+        ),
+    )
+    monkeypatch.setattr(
+        direct_transfer_intents,
+        "resolve_value",
+        lambda _db, _domain, key: {
+            "topup_min_amount": 1000,
+            "topup_max_amount": 500000,
+            "direct_bank_transfer_intent_ttl_days": 7,
+        }[key],
     )
 
 
@@ -855,18 +899,68 @@ def test_create_invoice_payment_intent_saved_card_idempotent_replay(
     assert second["replayed"] is True
 
 
-def test_create_invoice_payment_intent_bank_transfer_hands_off(
+def test_create_invoice_payment_intent_saved_card_failure_is_atomic(
     monkeypatch, db_session, subscriber
 ):
     _patch_topup_settings(monkeypatch)
     invoice = _make_invoice(
-        db_session, subscriber.id, amount="2500.00", invoice_number="INV-PAY-4"
+        db_session, subscriber.id, amount="3000.00", invoice_number="INV-PAY-DECLINE"
+    )
+    card = billing_service.payment_methods.create(
+        db_session,
+        PaymentMethodCreate(
+            account_id=subscriber.id,
+            label="Visa •••• 0002",
+            token="AUTH_DECLINED",
+            last4="0002",
+            brand="visa",
+            is_default=True,
+        ),
     )
     monkeypatch.setattr(
-        "app.services.customer_portal_flow_payments.direct_bank_transfer_enabled",
-        lambda _db: True,
+        "app.services.customer_portal_flow_payments.payment_gateway_adapter.build_context",
+        lambda *_a, **_k: SimpleNamespace(
+            provider_type="paystack",
+            public_key="pk",
+            reference="pay-ref-declined",
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.integrations.payment_capability.charge_authorization",
+        lambda *_a, **_k: (_ for _ in ()).throw(ValueError("card declined")),
     )
 
+    with pytest.raises(ValueError, match="card declined"):
+        create_invoice_payment_intent(
+            db_session,
+            _invoice_customer(subscriber),
+            str(invoice.id),
+            provider="paystack",
+            payment_method_id=str(card.id),
+            idempotency_key="declined-invoice-charge",
+        )
+
+    intent = db_session.scalar(
+        select(TopupIntent).where(TopupIntent.reference == "pay-ref-declined")
+    )
+    reservation = db_session.scalar(
+        select(IdempotencyKey).where(
+            IdempotencyKey.scope == "invoice_saved_card_charge",
+            IdempotencyKey.key == "declined-invoice-charge",
+        )
+    )
+    assert intent is not None and intent.status == "failed"
+    assert reservation is None
+
+
+def test_create_invoice_payment_intent_bank_transfer_hands_off(
+    monkeypatch, db_session, subscriber
+):
+    _patch_topup_settings(monkeypatch)
+    _patch_direct_transfer_creation_policy(monkeypatch)
+    invoice = _make_invoice(
+        db_session, subscriber.id, amount="2500.00", invoice_number="INV-PAY-4"
+    )
     payload = create_invoice_payment_intent(
         db_session,
         _invoice_customer(subscriber),
@@ -892,14 +986,10 @@ def test_create_invoice_payment_intent_bank_transfer_allows_below_topup_min(
     # A real invoice can be below the top-up minimum (e.g. a small fee); paying
     # it by transfer must not be blocked by the top-up limit.
     _patch_topup_settings(monkeypatch, min_amount=1000)
+    _patch_direct_transfer_creation_policy(monkeypatch)
     invoice = _make_invoice(
         db_session, subscriber.id, amount="500.00", invoice_number="INV-PAY-SMALL"
     )
-    monkeypatch.setattr(
-        "app.services.customer_portal_flow_payments.direct_bank_transfer_enabled",
-        lambda _db: True,
-    )
-
     payload = create_invoice_payment_intent(
         db_session,
         _invoice_customer(subscriber),
@@ -909,6 +999,67 @@ def test_create_invoice_payment_intent_bank_transfer_allows_below_topup_min(
 
     assert payload["requested_amount"] == Decimal("500.00")
     assert payload["redirect_url"] == "/portal/billing/topup/transfer"
+
+
+@pytest.mark.asyncio
+async def test_direct_transfer_portal_delegates_atomic_proof_intent_submission(
+    monkeypatch, db_session, subscriber
+):
+    from app.services import payment_proofs
+    from app.services.topup_intents import (
+        DIRECT_TRANSFER_PROVIDER,
+        TopupIntentStatus,
+    )
+
+    intent = TopupIntent(
+        account_id=subscriber.id,
+        reference="TRF-PORTAL-ATOMIC",
+        provider_type=DIRECT_TRANSFER_PROVIDER,
+        currency="NGN",
+        requested_amount=Decimal("2500.00"),
+        status=TopupIntentStatus.pending.value,
+        metadata_={"payment_flow": "invoice_payment"},
+    )
+    db_session.add(intent)
+    db_session.commit()
+    db_session.refresh(intent)
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.direct_bank_transfer_enabled",
+        lambda _db: True,
+    )
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.enabled_direct_bank_transfer_accounts",
+        lambda _db: [
+            {
+                "id": "bank-primary",
+                "enabled": "true",
+                "bank_name": "Dotmac Test Bank",
+                "account_name": "Dotmac Payments",
+                "account_number": "0123456789",
+                "sort_code": "",
+            }
+        ],
+    )
+
+    async def fake_save_proof_file(_file) -> str:
+        return "uploads/payment_proofs/portal-atomic.png"
+
+    monkeypatch.setattr(payment_proofs, "save_proof_file", fake_save_proof_file)
+
+    result = await submit_direct_transfer_topup(
+        db_session,
+        _invoice_customer(subscriber),
+        made_payment=True,
+        file=SimpleNamespace(filename="portal-atomic.png"),
+    )
+
+    proof = db_session.get(PaymentProof, result["id"])
+    persisted_intent = db_session.get(TopupIntent, intent.id)
+    assert proof is not None
+    assert proof.status is PaymentProofStatus.submitted
+    assert persisted_intent is not None
+    assert persisted_intent.status == TopupIntentStatus.submitted.value
+    assert persisted_intent.metadata_["payment_proof_id"] == str(proof.id)
 
 
 def test_create_invoice_payment_intent_rejects_gateway_when_customer_email_blank(
@@ -967,6 +1118,7 @@ def test_create_invoice_payment_intent_records_and_completes_gateway_trace(
         amount=Decimal("2500.00"),
         currency="NGN",
         status=PaymentStatus.succeeded,
+        provider_id=intent.provider_id,
     )
     db_session.add(payment)
     db_session.commit()

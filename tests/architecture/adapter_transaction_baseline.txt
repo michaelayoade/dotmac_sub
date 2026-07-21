@@ -64,7 +64,6 @@ helper:task_session 2 app/tasks/crm_ticket_pull.py
 helper:task_session 1 app/tasks/support_tickets.py
 rollback 2 app/api/bandwidth.py
 rollback 1 app/api/crm.py
-rollback 1 app/api/workqueue.py
 rollback 2 app/tasks/_postgres_lock.py
 rollback 1 app/tasks/cross_app_drift.py
 rollback 3 app/tasks/customer_impact_metrics.py
@@ -104,14 +103,14 @@ rollback 2 app/web/admin/billing_accounts.py
 rollback 2 app/web/admin/billing_consolidated.py
 rollback 2 app/web/admin/billing_credits.py
 rollback 3 app/web/admin/billing_payments.py
-rollback 3 app/web/admin/billing_reporting.py
+rollback 2 app/web/admin/billing_reporting.py
 rollback 17 app/web/admin/customers.py
 rollback 1 app/web/admin/dashboard.py
 rollback 2 app/web/admin/nas.py
 rollback 8 app/web/admin/network_device_groups.py
 rollback 6 app/web/admin/network_olts_profiles.py
 rollback 1 app/web/admin/network_onts_actions.py
-rollback 8 app/web/admin/notifications.py
+rollback 6 app/web/admin/notifications.py
 rollback 9 app/web/admin/projects.py
 rollback 5 app/web/admin/resellers.py
 rollback 6 app/web/admin/sales.py

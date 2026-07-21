@@ -53,10 +53,11 @@ from app.services.billing.payments import (
     Payments,
     Refunds,
 )
-from app.services.billing.providers import PaymentProviderEvents, PaymentProviders
+from app.services.billing.providers import PaymentProviders
 from app.services.billing.reporting import BillingReporting, billing_reporting
 from app.services.billing.runs import BillingRuns
 from app.services.billing.tax import TaxRates
+from app.services.payment_provider_events import PaymentProviderEvents
 
 # Singleton instances for service access
 invoices = Invoices()

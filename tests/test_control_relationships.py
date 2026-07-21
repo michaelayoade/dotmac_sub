@@ -174,8 +174,6 @@ def test_payment_chain_renews_before_access_recheck():
 
     assert by_name["PrepaidRenewalHandler"].dependencies == ()
     assert by_name["EnforcementHandler"].dependencies == ("PrepaidRenewalHandler",)
-    # External outputs stay independent: a renewal or enforcement failure must
-    # not suppress webhook delivery (money events do not chain their outputs).
     assert by_name["WebhookHandler"].dependencies == ()
 
 

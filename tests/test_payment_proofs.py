@@ -2,9 +2,9 @@
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
 
 from app.models.billing import (
     Invoice,
@@ -15,10 +15,59 @@ from app.models.billing import (
     PaymentStatus,
     TopupIntent,
 )
+from app.models.event_store import EventStore
 from app.models.notification import Notification
+from app.models.payment_proof import PaymentProof, PaymentProofStatus
 from app.models.subscriber import SubscriberStatus
 from app.services import payment_proofs as svc
 from app.services.account_credit_deposits import AccountCreditDeposits
+from app.services.db_session_adapter import db_session_adapter
+from app.services.owner_commands import CommandContext
+from app.services.topup_intents import (
+    DIRECT_TRANSFER_PROVIDER,
+    DirectTransferBankAccountEvidence,
+    TopupIntentChannel,
+    TopupIntentError,
+    TopupIntentStatus,
+)
+
+
+def _context(action: str) -> CommandContext:
+    return CommandContext.system(
+        actor="test:payment-proof-reviewer",
+        scope=(svc.SUBMISSION_SCOPE if action == "submit" else svc.REVIEW_SCOPE),
+        reason=f"Payment-proof {action} behavior test",
+    )
+
+
+def _submit_command(db_session, *args, **kwargs) -> dict[str, object | None]:
+    db_session_adapter.release_read_transaction(db_session)
+    return svc.submit_proof(
+        db_session,
+        *args,
+        context=_context("submit"),
+        **kwargs,
+    ).to_dict()
+
+
+def _verify(db_session, proof_id, **kwargs) -> dict[str, object | None]:
+    db_session_adapter.release_read_transaction(db_session)
+    return svc.verify_proof(
+        db_session,
+        proof_id,
+        context=_context("verify"),
+        **kwargs,
+    ).to_dict()
+
+
+def _reject(db_session, proof_id, **kwargs) -> dict[str, object | None]:
+    db_session_adapter.release_read_transaction(db_session)
+    return svc.reject_proof(
+        db_session,
+        proof_id,
+        context=_context("reject"),
+        **kwargs,
+    ).to_dict()
 
 
 def _account(db_session):
@@ -50,7 +99,7 @@ def _open_invoice(db_session, sub, amount="3000.00"):
 
 
 def _submit(db_session, sub, amount="5000", reference=None, file_path="x.png"):
-    return svc.submit_proof(
+    return _submit_command(
         db_session,
         str(sub.id),
         submitted_by=str(sub.id),
@@ -60,22 +109,183 @@ def _submit(db_session, sub, amount="5000", reference=None, file_path="x.png"):
     )
 
 
+def _direct_transfer_intent(db_session, sub, *, status="pending") -> TopupIntent:
+    intent = TopupIntent(
+        account_id=sub.id,
+        reference=f"TRF-{uuid4().hex[:12].upper()}",
+        provider_type=DIRECT_TRANSFER_PROVIDER,
+        currency="NGN",
+        requested_amount=Decimal("5000.00"),
+        status=status,
+        metadata_={"payment_method": "bank_transfer"},
+    )
+    db_session.add(intent)
+    db_session.commit()
+    db_session.refresh(intent)
+    return intent
+
+
+def _submit_direct_transfer(db_session, sub, intent) -> svc.PaymentProofResult:
+    command = svc.DirectTransferProofSubmissionCommand(
+        intent_id=intent.id,
+        account_id=sub.id,
+        submitted_by=sub.id,
+        selected_bank_account=DirectTransferBankAccountEvidence(
+            id="bank-primary",
+            bank_name="Dotmac Test Bank",
+            account_name="Dotmac Payments",
+            account_number="0123456789",
+        ),
+        paid_at=datetime(2026, 7, 20, tzinfo=UTC),
+        file_path="uploads/payment_proofs/direct-transfer.png",
+    )
+    db_session_adapter.release_read_transaction(db_session)
+    return svc.submit_direct_transfer_proof(
+        db_session,
+        command,
+        context=_context("submit"),
+    )
+
+
+def test_direct_transfer_submission_commits_proof_intent_link_and_events_atomically(
+    db_session,
+):
+    sub = _account(db_session)
+    intent = _direct_transfer_intent(db_session, sub)
+
+    result = _submit_direct_transfer(db_session, sub, intent)
+
+    proof = db_session.get(PaymentProof, result.id)
+    persisted_intent = db_session.get(TopupIntent, intent.id)
+    assert proof is not None
+    assert proof.status is PaymentProofStatus.submitted
+    assert proof.reference == intent.reference
+    assert proof.amount == Decimal("5000.00")
+    assert persisted_intent is not None
+    assert persisted_intent.status == TopupIntentStatus.submitted.value
+    assert persisted_intent.metadata_["payment_proof_id"] == str(proof.id)
+    assert persisted_intent.metadata_["selected_bank_account"] == {
+        "id": "bank-primary",
+        "bank_name": "Dotmac Test Bank",
+        "account_name": "Dotmac Payments",
+        "account_number": "0123456789",
+        "sort_code": "",
+    }
+    event_types = {
+        row.event_type
+        for row in db_session.query(EventStore)
+        .filter(
+            EventStore.event_type.in_(
+                {
+                    "payment_proof.submitted",
+                    "topup_intent.direct_transfer_submitted",
+                }
+            )
+        )
+        .all()
+    }
+    assert event_types == {
+        "payment_proof.submitted",
+        "topup_intent.direct_transfer_submitted",
+    }
+
+
+def test_direct_transfer_submission_rolls_back_proof_when_intent_staging_fails(
+    db_session, monkeypatch
+):
+    from app.services import topup_intents
+
+    sub = _account(db_session)
+    intent = _direct_transfer_intent(db_session, sub)
+
+    def fail_intent_stage(*_args, **_kwargs):
+        raise RuntimeError("intent evidence unavailable")
+
+    monkeypatch.setattr(
+        topup_intents,
+        "stage_direct_transfer_proof_submission",
+        fail_intent_stage,
+    )
+
+    with pytest.raises(RuntimeError, match="intent evidence unavailable"):
+        _submit_direct_transfer(db_session, sub, intent)
+
+    db_session.expire_all()
+    persisted_intent = db_session.get(TopupIntent, intent.id)
+    assert persisted_intent is not None
+    assert persisted_intent.status == TopupIntentStatus.pending.value
+    assert "payment_proof_id" not in (persisted_intent.metadata_ or {})
+    assert db_session.query(PaymentProof).count() == 0
+    assert (
+        db_session.query(EventStore)
+        .filter(
+            EventStore.event_type.in_(
+                {
+                    "payment_proof.submitted",
+                    "topup_intent.direct_transfer_submitted",
+                }
+            )
+        )
+        .count()
+        == 0
+    )
+
+
+def test_direct_transfer_submission_rejects_stale_intent_before_proof_creation(
+    db_session,
+):
+    sub = _account(db_session)
+    intent = _direct_transfer_intent(
+        db_session,
+        sub,
+        status=TopupIntentStatus.canceled.value,
+    )
+
+    with pytest.raises(TopupIntentError) as exc:
+        _submit_direct_transfer(db_session, sub, intent)
+
+    assert exc.value.code == "financial.topup_intents.invalid_transition"
+    assert db_session.query(PaymentProof).count() == 0
+
+
 def test_submit_validates_amount(db_session):
     sub = _account(db_session)
-    with pytest.raises(HTTPException) as exc:
-        svc.submit_proof(
+    with pytest.raises(svc.PaymentProofError) as exc:
+        _submit_command(
             db_session,
             str(sub.id),
             submitted_by=str(sub.id),
             amount="0",
             file_path="uploads/payment_proofs/x.png",
         )
-    assert exc.value.status_code == 400
+    assert exc.value.code == "financial.payment_proofs.amount_non_positive"
+
+
+def test_submit_rolls_back_when_reviewer_work_item_cannot_be_staged(
+    db_session, monkeypatch
+):
+    from app.services import staff_notifications
+
+    sub = _account(db_session)
+
+    def fail_queue(*_args, **_kwargs):
+        raise RuntimeError("review work item unavailable")
+
+    monkeypatch.setattr(
+        staff_notifications,
+        "queue_permission_review_request",
+        fail_queue,
+    )
+
+    with pytest.raises(RuntimeError, match="review work item unavailable"):
+        _submit(db_session, sub, reference="TRF-ATOMIC-SUBMIT")
+
+    assert db_session.query(PaymentProof).count() == 0
 
 
 def test_verify_creates_succeeded_payment_and_notifies(db_session):
     sub = _account(db_session)
-    proof = svc.submit_proof(
+    proof = _submit_command(
         db_session,
         str(sub.id),
         submitted_by=str(sub.id),
@@ -87,9 +297,7 @@ def test_verify_creates_succeeded_payment_and_notifies(db_session):
     )
     assert proof["status"] == "submitted"
 
-    out = svc.verify_proof(
-        db_session, proof["id"], verified_by="admin-1", auto_allocate=True
-    )
+    out = _verify(db_session, proof["id"], verified_by="admin-1", auto_allocate=True)
     assert out["status"] == "verified"
     assert out["payment_id"] is not None
 
@@ -107,9 +315,36 @@ def test_verify_creates_succeeded_payment_and_notifies(db_session):
     assert len(notes) == 2  # push + email
 
     # Double review is rejected.
-    with pytest.raises(HTTPException) as exc:
-        svc.verify_proof(db_session, proof["id"], verified_by="admin-1")
-    assert exc.value.status_code == 400
+    with pytest.raises(svc.PaymentProofError) as exc:
+        _verify(db_session, proof["id"], verified_by="admin-1")
+    assert exc.value.code == "financial.payment_proofs.already_reviewed"
+
+
+def test_verify_rolls_back_money_and_review_state_when_delivery_staging_fails(
+    db_session, monkeypatch
+):
+    from app.services.notification import notifications as notification_service
+
+    sub = _account(db_session)
+    proof = _submit(db_session, sub, reference="TRF-ATOMIC-VERIFY")
+
+    def fail_delivery(*_args, **_kwargs):
+        raise RuntimeError("customer delivery unavailable")
+
+    monkeypatch.setattr(
+        notification_service,
+        "queue_customer_notification",
+        fail_delivery,
+    )
+
+    with pytest.raises(RuntimeError, match="customer delivery unavailable"):
+        _verify(db_session, proof["id"], verified_by="admin-1")
+
+    persisted = db_session.get(PaymentProof, proof["id"])
+    assert persisted is not None
+    assert persisted.status is PaymentProofStatus.submitted
+    assert persisted.payment_id is None
+    assert db_session.query(Payment).count() == 0
 
 
 def test_verify_resolves_delinquent_status_after_paid_invoice(db_session):
@@ -165,7 +400,7 @@ def test_verify_resolves_delinquent_status_after_paid_invoice(db_session):
     db_session.commit()
 
     proof = _submit(db_session, sub, amount="3000", reference="TRF-RESTORE")
-    svc.verify_proof(db_session, proof["id"], verified_by="admin-1")
+    _verify(db_session, proof["id"], verified_by="admin-1")
 
     db_session.refresh(sub)
     db_session.refresh(invoice)
@@ -183,7 +418,7 @@ def test_verify_resolves_delinquent_status_after_paid_invoice(db_session):
 
 def test_reject_requires_reason_and_notifies(db_session):
     sub = _account(db_session)
-    proof = svc.submit_proof(
+    proof = _submit_command(
         db_session,
         str(sub.id),
         submitted_by=str(sub.id),
@@ -191,12 +426,10 @@ def test_reject_requires_reason_and_notifies(db_session):
         file_path="uploads/payment_proofs/y.png",
     )
     with pytest.raises(svc.PaymentProofReviewError) as exc:
-        svc.reject_proof(
-            db_session, proof["id"], verified_by="admin-1", review_notes="  "
-        )
-    assert exc.value.code == "rejection_reason_required"
+        _reject(db_session, proof["id"], verified_by="admin-1", review_notes="  ")
+    assert exc.value.code == "financial.payment_proofs.rejection_reason_required"
     assert exc.value.field == "review_notes"
-    out = svc.reject_proof(
+    out = _reject(
         db_session,
         proof["id"],
         verified_by="admin-1",
@@ -218,9 +451,7 @@ def test_verify_with_admin_amount_override(db_session):
     sub = _account(db_session)
     proof = _submit(db_session, sub, amount="5000", reference="TRF-OVR")
 
-    out = svc.verify_proof(
-        db_session, proof["id"], verified_by="admin-1", amount="4500"
-    )
+    out = _verify(db_session, proof["id"], verified_by="admin-1", amount="4500")
     assert Decimal(str(out["amount"])) == Decimal("5000.00")  # claimed, unchanged
     assert Decimal(str(out["verified_amount"])) == Decimal("4500.00")
 
@@ -231,18 +462,14 @@ def test_verify_with_admin_amount_override(db_session):
 def test_verify_rejects_invalid_or_nonpositive_amount(db_session):
     sub = _account(db_session)
     proof = _submit(db_session, sub)
-    with pytest.raises(HTTPException) as exc:
-        svc.verify_proof(db_session, proof["id"], verified_by="admin-1", amount="0")
-    assert exc.value.status_code == 400
+    with pytest.raises(svc.PaymentProofError) as exc:
+        _verify(db_session, proof["id"], verified_by="admin-1", amount="0")
     assert isinstance(exc.value, svc.PaymentProofReviewError)
-    assert exc.value.code == "verified_amount_non_positive"
+    assert exc.value.code == "financial.payment_proofs.verified_amount_non_positive"
     assert exc.value.field == "amount"
     with pytest.raises(svc.PaymentProofReviewError) as exc:
-        svc.verify_proof(
-            db_session, proof["id"], verified_by="admin-1", amount="not-a-number"
-        )
-    assert exc.value.status_code == 400
-    assert exc.value.code == "invalid_verified_amount"
+        _verify(db_session, proof["id"], verified_by="admin-1", amount="not-a-number")
+    assert exc.value.code == "financial.payment_proofs.invalid_verified_amount"
     assert exc.value.field == "amount"
 
 
@@ -255,9 +482,7 @@ def test_verify_without_auto_allocate_keeps_money_as_credit(db_session):
     invoice = _open_invoice(db_session, sub, amount="3000.00")
     proof = _submit(db_session, sub, amount="5000", reference="TRF-CRED")
 
-    out = svc.verify_proof(
-        db_session, proof["id"], verified_by="admin-1", auto_allocate=False
-    )
+    out = _verify(db_session, proof["id"], verified_by="admin-1", auto_allocate=False)
     payment = db_session.get(Payment, out["payment_id"])
     allocations = (
         db_session.query(PaymentAllocation)
@@ -273,7 +498,7 @@ def test_verify_without_auto_allocate_keeps_money_as_credit(db_session):
 
 def test_deposit_proof_review_uses_typed_account_credit_owner(db_session):
     sub = _account(db_session)
-    intent, _preview, _replayed = AccountCreditDeposits.create_intent(
+    intent, _preview, _replayed = AccountCreditDeposits.stage_intent(
         db_session,
         account_id=sub.id,
         amount="5000.00",
@@ -285,9 +510,10 @@ def test_deposit_proof_review_uses_typed_account_credit_owner(db_session):
         provider_id=None,
         expires_at=datetime.now(UTC) + timedelta(days=7),
         idempotency_key="typed-deposit-proof-intent",
-        channel="customer_selfcare",
+        channel=TopupIntentChannel.customer_selfcare,
         created_by=str(sub.id),
     )
+    db_session.commit()
     invoice = _open_invoice(db_session, sub, amount="3000.00")
     proof = _submit(
         db_session,
@@ -297,7 +523,7 @@ def test_deposit_proof_review_uses_typed_account_credit_owner(db_session):
         file_path="typed-deposit.png",
     )
 
-    result = svc.verify_proof(
+    result = _verify(
         db_session,
         proof["id"],
         verified_by="admin-1",
@@ -318,9 +544,7 @@ def test_verify_with_auto_allocate_pays_open_invoice(db_session):
     invoice = _open_invoice(db_session, sub, amount="3000.00")
     proof = _submit(db_session, sub, amount="5000", reference="TRF-ALLOC")
 
-    out = svc.verify_proof(
-        db_session, proof["id"], verified_by="admin-1", auto_allocate=True
-    )
+    out = _verify(db_session, proof["id"], verified_by="admin-1", auto_allocate=True)
     db_session.refresh(invoice)
     assert invoice.status == InvoiceStatus.paid
     payment = db_session.get(Payment, out["payment_id"])
@@ -350,13 +574,12 @@ def test_verify_blocked_when_reference_already_verified(db_session):
     first = _submit(db_session, sub, reference="TRF-TWICE", file_path="a.png")
     second = _submit(db_session, sub, reference="TRF-TWICE", file_path="b.png")
 
-    svc.verify_proof(db_session, first["id"], verified_by="admin-1")
-    with pytest.raises(HTTPException) as exc:
-        svc.verify_proof(db_session, second["id"], verified_by="admin-1")
-    assert exc.value.status_code == 409
-    assert "TRF-TWICE" in exc.value.detail
+    _verify(db_session, first["id"], verified_by="admin-1")
+    with pytest.raises(svc.PaymentProofError) as exc:
+        _verify(db_session, second["id"], verified_by="admin-1")
+    assert "TRF-TWICE" in exc.value.message
     assert isinstance(exc.value, svc.PaymentProofReviewError)
-    assert exc.value.code == "duplicate_transfer_reference"
+    assert exc.value.code == "financial.payment_proofs.duplicate_transfer_reference"
 
     # Only one payment was created for that reference.
     payments = (
@@ -364,7 +587,7 @@ def test_verify_blocked_when_reference_already_verified(db_session):
     )
     assert len(payments) == 1
     # The duplicate can still be rejected.
-    out = svc.reject_proof(
+    out = _reject(
         db_session, second["id"], verified_by="admin-1", review_notes="Duplicate"
     )
     assert out["status"] == "rejected"
@@ -375,11 +598,9 @@ def test_verify_and_reject_emit_audit_events(db_session):
 
     sub = _account(db_session)
     proof = _submit(db_session, sub, reference="TRF-AUD", file_path="a.png")
-    svc.verify_proof(db_session, proof["id"], verified_by="admin-1", amount="4999.50")
+    _verify(db_session, proof["id"], verified_by="admin-1", amount="4999.50")
     other = _submit(db_session, sub, reference="TRF-AUD-2", file_path="b.png")
-    svc.reject_proof(
-        db_session, other["id"], verified_by="admin-2", review_notes="No match"
-    )
+    _reject(db_session, other["id"], verified_by="admin-2", review_notes="No match")
 
     events = (
         db_session.query(AuditEvent)

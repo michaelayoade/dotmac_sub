@@ -50,7 +50,6 @@ customer.work_order_selfcare
 events.dispatcher
 events.store
 financial.account_credit_applications
-financial.account_credit_deposits
 financial.addon_purchases
 financial.billing_accounts
 financial.billing_health
@@ -65,18 +64,13 @@ financial.import_payment_batch_reversals
 financial.invoices
 financial.ledger
 financial.payment_arrangements
-financial.payment_proofs
-financial.payment_provider_events
-financial.payment_reconciliation
 financial.payment_routing
-financial.payment_webhooks
 financial.payments
 financial.prepaid_enforcement_readiness
 financial.prepaid_funding_reconstruction
 financial.prepaid_plan_change
 financial.prepaid_service_renewals
 financial.provider_payment_settlements
-financial.tax_accounting
 financial.tax_configuration
 gis.geocoding
 gis.spatial_sync
@@ -145,7 +139,6 @@ operations.field_completion
 operations.project_lifecycle
 operations.provisioning_context
 operations.provisioning_workflow
-operations.sla_escalation
 operations.work_order_commands
 operations.work_order_status
 operations.work_orders
@@ -159,7 +152,6 @@ party.registry
 runtime.db_sessions
 runtime.infrastructure_health
 runtime.infrastructure_polling
-runtime.realtime_projection
 runtime.task_heartbeat
 runtime.task_idempotency
 sales.lead_lifecycle
@@ -193,7 +185,6 @@ subscriber.growth_reports
 support.ticket_bulk_commands
 support.ticket_configuration
 support.ticket_lifecycle
-support.ticket_sla_clock
 support.ticket_work_order_handoff
 ui.action_form_contracts
 ui.audit_events_list_projection

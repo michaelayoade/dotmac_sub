@@ -10,7 +10,11 @@ from sqlalchemy.orm import Session
 from app.api.webhook_observation import webhook_observation
 from app.db import finish_read_response, get_db
 from app.models.audit import AuditActorType
-from app.models.billing import PaymentSettlementOrigin, PaymentStatus
+from app.models.billing import (
+    PaymentProviderEventStatus,
+    PaymentSettlementOrigin,
+    PaymentStatus,
+)
 from app.schemas.billing import (
     AccountAdjustmentConfirm,
     AccountAdjustmentPreviewRead,
@@ -151,6 +155,15 @@ from app.services.customer_context import require_customer_account_id
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.owner_commands import CommandContext
+from app.services.payment_provider_events import (
+    ADMINISTRATIVE_INGEST_SCOPE,
+    PaymentProviderEventCommand,
+    PaymentProviderEventError,
+    PaymentProviderEventQuery,
+    ProviderEventOrderBy,
+    ProviderEventOrderDirection,
+)
+from app.services.response import list_response as build_list_response
 from app.services.sync_feeds import SYNC_FEED_MAX_PAGE_SIZE
 
 router = APIRouter()
@@ -1314,16 +1327,81 @@ def delete_payment_provider(provider_id: str, db: Session = Depends(get_db)):
 # --- Payment Events ---
 
 
+def _payment_provider_event_error(exc: DomainError) -> Never:
+    suffix = exc.code.removeprefix("financial.payment_provider_events.")
+    status_code = {
+        "provider_not_found": status.HTTP_404_NOT_FOUND,
+        "event_not_found": status.HTTP_404_NOT_FOUND,
+        "invoice_not_found": status.HTTP_404_NOT_FOUND,
+        "payment_not_found": status.HTTP_404_NOT_FOUND,
+        "replay_conflict": status.HTTP_409_CONFLICT,
+        "identity_collision": status.HTTP_409_CONFLICT,
+        "untrusted_financial_effect": status.HTTP_409_CONFLICT,
+        "untrusted_financial_observation": status.HTTP_409_CONFLICT,
+        "active_caller_transaction": status.HTTP_409_CONFLICT,
+        "nested_owner_command": status.HTTP_409_CONFLICT,
+        "nested_transaction_completion": status.HTTP_409_CONFLICT,
+        "command_contract_violation": status.HTTP_500_INTERNAL_SERVER_ERROR,
+        "invalid_command_context": status.HTTP_500_INTERNAL_SERVER_ERROR,
+    }.get(suffix, status.HTTP_422_UNPROCESSABLE_ENTITY)
+    detail = (
+        exc.message
+        if exc.code.startswith("financial.payment_provider_events.")
+        else "Payment provider event command failed."
+    )
+    raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
 @router.post(
     "/payment-events/ingest",
     response_model=PaymentProviderEventRead,
     tags=["payment-events"],
-    dependencies=[Depends(require_permission("billing:provider:write"))],
 )
 def ingest_payment_event(
-    payload: PaymentProviderEventIngest, db: Session = Depends(get_db)
+    payload: PaymentProviderEventIngest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_permission("billing:provider:write")),
 ):
-    return billing_service.payment_provider_events.ingest(db, payload)
+    actor_type, actor_id = _financial_actor(principal)
+    if actor_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Financial principal identity is incomplete.",
+        )
+    command = PaymentProviderEventCommand(
+        provider_id=payload.provider_id,
+        payment_id=payload.payment_id,
+        invoice_id=payload.invoice_id,
+        account_id=payload.account_id,
+        billing_account_id=payload.billing_account_id,
+        event_type=payload.event_type,
+        external_id=payload.external_id,
+        idempotency_key=payload.idempotency_key,
+        amount=payload.amount,
+        provider_fee=payload.provider_fee,
+        net_amount=payload.net_amount,
+        provider_reference=payload.provider_reference,
+        topup_intent_id=payload.topup_intent_id,
+        currency=payload.currency,
+        financial_effect=payload.financial_effect,
+        payload=payload.payload,
+        observed_payment_status=payload.status_hint,
+    )
+    context = CommandContext.system(
+        actor=f"{actor_type.value}:{actor_id}",
+        scope=ADMINISTRATIVE_INGEST_SCOPE,
+        reason="Record an administrative payment-provider observation",
+        idempotency_key=payload.idempotency_key or payload.external_id,
+    )
+    try:
+        db_session_adapter.release_read_transaction(db)
+        return billing_service.payment_provider_events.ingest(
+            db,
+            command,
+            context=context,
+        )
+    except DomainError as exc:
+        _payment_provider_event_error(exc)
 
 
 @router.get(
@@ -1332,8 +1410,11 @@ def ingest_payment_event(
     tags=["payment-events"],
     dependencies=[Depends(require_permission("billing:provider:read"))],
 )
-def get_payment_event(event_id: str, db: Session = Depends(get_db)):
-    return billing_service.payment_provider_events.get(db, event_id)
+def get_payment_event(event_id: UUID, db: Session = Depends(get_db)):
+    try:
+        return billing_service.payment_provider_events.get(db, event_id)
+    except PaymentProviderEventError as exc:
+        _payment_provider_event_error(exc)
 
 
 @router.get(
@@ -1343,27 +1424,37 @@ def get_payment_event(event_id: str, db: Session = Depends(get_db)):
     dependencies=[Depends(require_permission("billing:provider:read"))],
 )
 def list_payment_events(
-    provider_id: str | None = None,
-    payment_id: str | None = None,
-    invoice_id: str | None = None,
-    status: str | None = None,
-    order_by: str = Query(default="received_at"),
-    order_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
+    provider_id: UUID | None = None,
+    payment_id: UUID | None = None,
+    invoice_id: UUID | None = None,
+    event_status: PaymentProviderEventStatus | None = Query(
+        default=None, alias="status"
+    ),
+    order_by: ProviderEventOrderBy = Query(default=ProviderEventOrderBy.received_at),
+    order_dir: ProviderEventOrderDirection = Query(
+        default=ProviderEventOrderDirection.descending
+    ),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    return billing_service.payment_provider_events.list_response(
-        db,
-        provider_id,
-        payment_id,
-        invoice_id,
-        status,
-        order_by,
-        order_dir,
-        limit,
-        offset,
-    )
+    try:
+        items = billing_service.payment_provider_events.list(
+            db,
+            PaymentProviderEventQuery(
+                provider_id=provider_id,
+                payment_id=payment_id,
+                invoice_id=invoice_id,
+                status=event_status,
+                order_by=order_by,
+                order_direction=order_dir,
+                limit=limit,
+                offset=offset,
+            ),
+        )
+    except PaymentProviderEventError as exc:
+        _payment_provider_event_error(exc)
+    return build_list_response(list(items), limit, offset)
 
 
 @webhook_router.post(

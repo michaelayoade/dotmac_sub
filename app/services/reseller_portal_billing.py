@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import func, or_, select
@@ -30,18 +30,24 @@ from app.schemas.billing import (
 )
 from app.services import billing as billing_service
 from app.services import customer_portal_flow_payment_methods as customer_cards
+from app.services import gateway_topup_intents
 from app.services.billing.consolidated_payments import consolidated_settlement_key
 from app.services.common import coerce_uuid, round_money, to_decimal
 from app.services.customer_portal_flow_payments import (
     _provider_uuid,
 )
+from app.services.db_session_adapter import db_session_adapter
+from app.services.owner_commands import CommandContext
 from app.services.payment_gateway_adapter import payment_gateway_adapter
 from app.services.payment_routing import provider_for_intent, select_checkout_provider
-from app.services.topup_intents import set_topup_intent_status
+from app.services.topup_intents import (
+    COMPLETION_SCOPE,
+    CompleteTopupIntentCommand,
+    TopupIntentCompletionSource,
+    stage_topup_intent_completion,
+)
 
 logger = logging.getLogger(__name__)
-
-_INTENT_TTL = timedelta(minutes=30)
 
 
 def get_billing_account_summary(
@@ -168,39 +174,42 @@ def start_consolidated_payment(
         db, provider_type=provider_type
     )
 
-    intent_metadata = {
-        "payment_flow": "reseller_consolidated",
-        "provider_id": route.provider_id,
-    }
-    if save_card:
-        intent_metadata["save_card"] = "1"
-        if login_subscriber_id:
-            intent_metadata["login_subscriber_id"] = str(login_subscriber_id)
-        else:
-            # reseller_user: capture the card to the reseller org store.
-            intent_metadata["reseller_card_id"] = str(reseller_id)
-    if selected_payment_method_id:
-        intent_metadata["payment_method_id"] = selected_payment_method_id
-
-    intent = TopupIntent(
-        billing_account_id=ba.id,
-        reference=gateway_context.reference,
-        provider_type=gateway_context.provider_type,
-        currency=ba.currency,
-        requested_amount=requested_amount,
-        status="pending",
-        expires_at=datetime.now(UTC) + _INTENT_TTL,
-        metadata_=intent_metadata,
+    billing_account_id = ba.id
+    reseller_uuid = coerce_uuid(reseller_id)
+    if reseller_uuid is None:
+        raise ValueError("Reseller identity is invalid")
+    db_session_adapter.release_read_transaction(db)
+    intent_result = gateway_topup_intents.create_reseller_gateway_topup_intent(
+        db,
+        gateway_topup_intents.CreateResellerGatewayTopupIntentCommand(
+            billing_account_id=billing_account_id,
+            reseller_id=reseller_uuid,
+            reference=gateway_context.reference,
+            provider_type=gateway_context.provider_type,
+            provider_id=coerce_uuid(route.provider_id),
+            requested_amount=requested_amount,
+            payment_method_id=(
+                coerce_uuid(selected_payment_method_id)
+                if selected_payment_method_id
+                else None
+            ),
+            save_card=save_card,
+            login_subscriber_id=(
+                coerce_uuid(login_subscriber_id) if login_subscriber_id else None
+            ),
+        ),
+        context=CommandContext.system(
+            actor=f"reseller:{reseller_uuid}",
+            scope=gateway_topup_intents.CREATE_RESELLER_SCOPE,
+            reason="Reseller consolidated gateway checkout intent",
+        ),
     )
-    db.add(intent)
-    db.commit()
-    db.refresh(intent)
 
     checkout_metadata = {
         "payment_flow": "reseller_consolidated",
-        "topup_intent_id": str(intent.id),
-        "billing_account_id": str(ba.id),
-        "reseller_id": str(reseller_id),
+        "topup_intent_id": str(intent_result.intent_id),
+        "billing_account_id": str(intent_result.billing_account_id),
+        "reseller_id": str(reseller_uuid),
         **(
             {"payment_method_id": selected_payment_method_id}
             if selected_payment_method_id
@@ -212,27 +221,45 @@ def start_consolidated_payment(
     if selected_payment_token is not None:
         from app.services.integrations import payment_capability
 
-        payment_capability.charge_authorization(
-            db,
-            authorization_code=selected_payment_token,
-            email=(
-                _login_subscriber_email(db, login_subscriber_id)
-                if login_subscriber_id
-                else _reseller_charge_email(db, reseller_id)
-            ),
-            amount_kobo=payment_capability.amount_to_kobo(requested_amount),
-            reference=gateway_context.reference,
-            metadata=checkout_metadata,
-        )
+        try:
+            payment_capability.charge_authorization(
+                db,
+                authorization_code=selected_payment_token,
+                email=(
+                    _login_subscriber_email(db, login_subscriber_id)
+                    if login_subscriber_id
+                    else _reseller_charge_email(db, reseller_id)
+                ),
+                amount_kobo=payment_capability.amount_to_kobo(
+                    intent_result.requested_amount
+                ),
+                reference=intent_result.reference,
+                metadata=checkout_metadata,
+            )
+        except Exception:
+            db_session_adapter.release_read_transaction(db)
+            gateway_topup_intents.fail_saved_card_charge(
+                db,
+                gateway_topup_intents.FailSavedCardChargeCommand(
+                    intent_id=intent_result.intent_id,
+                    reservation_id=None,
+                ),
+                context=CommandContext.system(
+                    actor=f"reseller:{reseller_uuid}",
+                    scope=gateway_topup_intents.FAIL_SAVED_CARD_SCOPE,
+                    reason="Record failed reseller saved-card charge",
+                ),
+            )
+            raise
         charged = True
 
     return {
-        "intent_id": str(intent.id),
-        "provider_type": gateway_context.provider_type,
+        "intent_id": str(intent_result.intent_id),
+        "provider_type": intent_result.provider_type,
         "provider_public_key": gateway_context.public_key,
-        "reference": gateway_context.reference,
-        "requested_amount": requested_amount,
-        "currency": intent.currency,
+        "reference": intent_result.reference,
+        "requested_amount": intent_result.requested_amount,
+        "currency": intent_result.currency,
         "checkout_metadata": checkout_metadata,
         "charged": charged,
     }
@@ -257,6 +284,21 @@ def verify_and_record_consolidated_payment(
 
     if intent.completed_payment_id:
         payment = db.get(Payment, intent.completed_payment_id)
+        if payment is not None:
+            stage_topup_intent_completion(
+                db,
+                CompleteTopupIntentCommand(
+                    intent_id=intent.id,
+                    payment_id=payment.id,
+                    source=TopupIntentCompletionSource.reseller_verify,
+                ),
+                context=CommandContext.system(
+                    actor=f"reseller:{reseller_id}",
+                    scope=COMPLETION_SCOPE,
+                    reason="Repair reseller payment intent completion",
+                ),
+            )
+            db.commit()
         return {
             "payment_id": str(payment.id) if payment else None,
             "amount": str(payment.amount) if payment else None,
@@ -288,11 +330,19 @@ def verify_and_record_consolidated_payment(
         .order_by((Payment.provider_id == provider_id).desc())
     ).first()
     if existing is not None:
-        intent.completed_payment_id = existing.id
-        intent.completed_at = datetime.now(UTC)
-        set_topup_intent_status(intent, "completed", source="reseller_existing_payment")
-        intent.actual_amount = amount
-        intent.external_id = external_id
+        stage_topup_intent_completion(
+            db,
+            CompleteTopupIntentCommand(
+                intent_id=intent.id,
+                payment_id=existing.id,
+                source=TopupIntentCompletionSource.reseller_verify,
+            ),
+            context=CommandContext.system(
+                actor=f"reseller:{reseller_id}",
+                scope=COMPLETION_SCOPE,
+                reason="Link existing reseller payment to top-up intent",
+            ),
+        )
         db.commit()
         return {
             "payment_id": str(existing.id),
@@ -311,20 +361,27 @@ def verify_and_record_consolidated_payment(
         allocations=None,
         auto_allocate=False,
     )
-    payment = billing_service.consolidated_payment_settlements.settle_verified(
+    payment = billing_service.consolidated_payment_settlements.stage_settle_verified(
         db,
         str(ba.id),
         payment_request,
         idempotency_key=consolidated_settlement_key("topup-intent", str(intent.id)),
         origin=PaymentSettlementOrigin.provider_event,
-        commit=False,
     ).payment
 
-    intent.completed_payment_id = payment.id
-    intent.completed_at = datetime.now(UTC)
-    set_topup_intent_status(intent, "completed", source="reseller_new_payment")
-    intent.actual_amount = amount
-    intent.external_id = external_id
+    stage_topup_intent_completion(
+        db,
+        CompleteTopupIntentCommand(
+            intent_id=intent.id,
+            payment_id=payment.id,
+            source=TopupIntentCompletionSource.reseller_verify,
+        ),
+        context=CommandContext.system(
+            actor=f"reseller:{reseller_id}",
+            scope=COMPLETION_SCOPE,
+            reason="Complete reseller payment intent",
+        ),
+    )
     db.commit()
 
     _maybe_capture_card(db, intent, reference, provider_type)

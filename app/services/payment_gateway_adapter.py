@@ -32,6 +32,24 @@ class PaymentGatewayTransaction:
     raw: dict[str, object] = field(default_factory=dict)
 
 
+class PaymentGatewayVerificationOutcome(str, Enum):
+    """Closed transport observation returned to reconciliation policy."""
+
+    succeeded = "succeeded"
+    not_found = "not_found"
+    not_successful = "not_successful"
+    unavailable = "unavailable"
+
+
+@dataclass(frozen=True)
+class PaymentGatewayVerificationObservation:
+    """Provider verification fact without billing consequences."""
+
+    outcome: PaymentGatewayVerificationOutcome
+    transaction: PaymentGatewayTransaction | None = None
+    error_code: str | None = None
+
+
 class PaymentGatewayRefundState(str, Enum):
     pending = "pending"
     succeeded = "succeeded"
@@ -113,6 +131,46 @@ class PaymentGatewayAdapter:
             metadata=dict(tx.get("metadata") or {}),
             memo_prefix="Paystack",
             raw=dict(tx),
+        )
+
+    def observe_verification(
+        self,
+        db: Session,
+        *,
+        provider_type: str,
+        reference: str,
+    ) -> PaymentGatewayVerificationObservation:
+        """Observe one gateway reference and normalize transport failures."""
+
+        try:
+            transaction = self.verify(
+                db,
+                provider_type=provider_type,
+                reference=reference,
+            )
+        except payment_capability.PaymentCapabilityError as exc:
+            outcome = (
+                PaymentGatewayVerificationOutcome.not_found
+                if payment_capability.is_verification_not_found(exc)
+                else PaymentGatewayVerificationOutcome.unavailable
+            )
+            return PaymentGatewayVerificationObservation(
+                outcome=outcome,
+                error_code=exc.error_code,
+            )
+        except ValueError as exc:
+            return PaymentGatewayVerificationObservation(
+                outcome=PaymentGatewayVerificationOutcome.not_successful,
+                error_code=type(exc).__name__,
+            )
+        except RuntimeError as exc:
+            return PaymentGatewayVerificationObservation(
+                outcome=PaymentGatewayVerificationOutcome.unavailable,
+                error_code=type(exc).__name__,
+            )
+        return PaymentGatewayVerificationObservation(
+            outcome=PaymentGatewayVerificationOutcome.succeeded,
+            transaction=transaction,
         )
 
     def refund(

@@ -1,5 +1,7 @@
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
 
@@ -33,13 +35,18 @@ from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.subscriber import SubscriberStatus
 from app.schemas.billing import InvoiceCreate, PaymentSyncRead
 from app.services.account_credit_deposits import (
+    SETTLEMENT_SCOPE,
     AccountCreditDeposits,
+    AccountCreditDepositSettlementSource,
     DepositEligibilityError,
+    SettleAccountCreditDepositCommand,
 )
 from app.services.billing._common import get_account_credit_balance
 from app.services.billing.account_credit import AccountCreditApplications
 from app.services.billing.invoices import Invoices
-from app.services.payment_gateway_adapter import PaymentGatewayTransaction
+from app.services.db_session_adapter import db_session_adapter
+from app.services.owner_commands import CommandContext
+from app.services.topup_intents import TopupIntentChannel
 
 
 def _provider(db_session) -> PaymentProvider:
@@ -55,7 +62,7 @@ def _provider(db_session) -> PaymentProvider:
 
 
 def _intent(db_session, subscriber, provider, *, amount="10000.00") -> TopupIntent:
-    intent, preview, replayed = AccountCreditDeposits.create_intent(
+    intent, preview, replayed = AccountCreditDeposits.stage_intent(
         db_session,
         account_id=subscriber.id,
         amount=amount,
@@ -67,10 +74,12 @@ def _intent(db_session, subscriber, provider, *, amount="10000.00") -> TopupInte
         provider_id=provider.id,
         expires_at=datetime.now(UTC) + timedelta(minutes=30),
         idempotency_key=f"account-credit-test-{subscriber.id}-{amount}",
-        channel="test",
+        channel=TopupIntentChannel.customer_selfcare,
         created_by="pytest",
         metadata={},
     )
+    db_session.commit()
+    db_session.refresh(intent)
     assert not replayed
     assert preview.eligible_invoice_count == 0
     return intent
@@ -84,15 +93,49 @@ def _transaction(
     external_id="gateway-deposit-1",
     metadata=None,
 ):
-    return PaymentGatewayTransaction(
+    correlation = (
+        intent.id
+        if metadata is None
+        else _provider_intent_id(metadata.get("topup_intent_id"))
+    )
+    return SettleAccountCreditDepositCommand(
+        intent_id=intent.id,
         provider_type="paystack",
-        external_id=external_id,
+        external_transaction_id=external_id,
         amount=Decimal(amount or str(intent.requested_amount)),
         currency=currency or intent.currency,
-        metadata=(
-            {"topup_intent_id": str(intent.id)} if metadata is None else metadata
+        provider_intent_id=correlation,
+        source=AccountCreditDepositSettlementSource.customer_gateway_verify,
+    )
+
+
+def _provider_intent_id(value) -> UUID:
+    try:
+        return UUID(str(value))
+    except (TypeError, ValueError):
+        return UUID(int=0)
+
+
+def _settle(db_session, *, intent_id, transaction):
+    assert transaction.intent_id == intent_id
+    db_session_adapter.release_read_transaction(db_session)
+    result = AccountCreditDeposits.settle_verified(
+        db_session,
+        transaction,
+        context=CommandContext.system(
+            actor="pytest:account-credit-deposit",
+            scope=SETTLEMENT_SCOPE,
+            reason="Account-credit deposit behavior test",
+            idempotency_key=f"account-credit-deposit-{intent_id}",
         ),
-        memo_prefix="Paystack",
+    )
+    payment = db_session.get(Payment, result.payment_id)
+    assert payment is not None
+    return SimpleNamespace(
+        payment=payment,
+        application=SimpleNamespace(applied=result.applied_amount),
+        already_recorded=result.already_recorded,
+        result=result,
     )
 
 
@@ -106,7 +149,7 @@ def test_intent_persists_typed_server_owned_contract(db_session, subscriber):
     assert intent.policy_version == 1
     assert intent.preview_fingerprint and len(intent.preview_fingerprint) == 64
     assert intent.provider_id == provider.id
-    assert intent.channel == "test"
+    assert intent.channel == TopupIntentChannel.customer_selfcare.value
 
 
 def test_deposit_is_rejected_while_payable_invoice_exists(db_session, subscriber):
@@ -132,7 +175,7 @@ def test_confirmed_deposit_is_credit_only_and_grants_no_service(db_session, subs
     provider = _provider(db_session)
     intent = _intent(db_session, subscriber, provider)
 
-    result = AccountCreditDeposits.settle_verified(
+    result = _settle(
         db_session,
         intent_id=intent.id,
         transaction=_transaction(intent),
@@ -188,7 +231,7 @@ def test_confirmed_deposit_skips_eligible_prepaid_renewal(db_session, subscriber
 
     provider = _provider(db_session)
     intent = _intent(db_session, subscriber, provider, amount="1000.00")
-    result = AccountCreditDeposits.settle_verified(
+    result = _settle(
         db_session,
         intent_id=intent.id,
         transaction=_transaction(intent, external_id="gateway-prepaid-deposit"),
@@ -269,7 +312,7 @@ def test_confirmed_deposit_renews_due_suspended_service_before_restoration(
 
     provider = _provider(db_session)
     intent = _intent(db_session, subscriber, provider, amount="1000.00")
-    result = AccountCreditDeposits.settle_verified(
+    result = _settle(
         db_session,
         intent_id=intent.id,
         transaction=_transaction(intent, external_id="gateway-due-prepaid-deposit"),
@@ -302,7 +345,7 @@ def test_invoice_created_during_checkout_consumes_confirmed_credit(
     db_session.add(invoice)
     db_session.commit()
 
-    result = AccountCreditDeposits.settle_verified(
+    result = _settle(
         db_session,
         intent_id=intent.id,
         transaction=_transaction(intent, external_id="gateway-deposit-race"),
@@ -343,7 +386,7 @@ def test_two_invoices_consume_one_credit_source_in_oldest_debt_order(
     db_session.add_all([older, newer])
     db_session.commit()
 
-    AccountCreditDeposits.settle_verified(
+    _settle(
         db_session,
         intent_id=intent.id,
         transaction=_transaction(intent, external_id="gateway-two-invoices"),
@@ -359,7 +402,7 @@ def test_two_invoices_consume_one_credit_source_in_oldest_debt_order(
 def test_invoice_issued_after_deposit_uses_same_applicator(db_session, subscriber):
     provider = _provider(db_session)
     intent = _intent(db_session, subscriber, provider, amount="40000.00")
-    settlement = AccountCreditDeposits.settle_verified(
+    settlement = _settle(
         db_session,
         intent_id=intent.id,
         transaction=_transaction(intent, external_id="gateway-before-invoice"),
@@ -393,7 +436,7 @@ def test_invoice_issued_after_deposit_uses_same_applicator(db_session, subscribe
 def test_voiding_invoice_releases_applied_account_credit(db_session, subscriber):
     provider = _provider(db_session)
     intent = _intent(db_session, subscriber, provider, amount="10000.00")
-    settlement = AccountCreditDeposits.settle_verified(
+    settlement = _settle(
         db_session,
         intent_id=intent.id,
         transaction=_transaction(intent, external_id="gateway-before-void"),
@@ -448,7 +491,7 @@ def test_draft_invoice_does_not_consume_credit_until_issued(db_session, subscrib
     db_session.add(draft)
     db_session.commit()
     intent = _intent(db_session, subscriber, provider, amount="5000.00")
-    AccountCreditDeposits.settle_verified(
+    _settle(
         db_session,
         intent_id=intent.id,
         transaction=_transaction(intent, external_id="gateway-draft"),
@@ -474,12 +517,8 @@ def test_duplicate_confirmation_returns_same_payment(db_session, subscriber):
     intent = _intent(db_session, subscriber, provider)
     transaction = _transaction(intent, external_id="gateway-idempotent")
 
-    first = AccountCreditDeposits.settle_verified(
-        db_session, intent_id=intent.id, transaction=transaction
-    )
-    second = AccountCreditDeposits.settle_verified(
-        db_session, intent_id=intent.id, transaction=transaction
-    )
+    first = _settle(db_session, intent_id=intent.id, transaction=transaction)
+    second = _settle(db_session, intent_id=intent.id, transaction=transaction)
 
     assert second.already_recorded
     assert second.payment.id == first.payment.id
@@ -494,7 +533,7 @@ def test_provider_amount_mismatch_posts_no_money(db_session, subscriber):
     intent = _intent(db_session, subscriber, provider)
 
     with pytest.raises(DepositEligibilityError) as exc_info:
-        AccountCreditDeposits.settle_verified(
+        _settle(
             db_session,
             intent_id=intent.id,
             transaction=_transaction(intent, amount="9999.00"),
@@ -509,7 +548,7 @@ def test_provider_currency_mismatch_posts_no_money(db_session, subscriber):
     intent = _intent(db_session, subscriber, provider)
 
     with pytest.raises(DepositEligibilityError) as exc_info:
-        AccountCreditDeposits.settle_verified(
+        _settle(
             db_session,
             intent_id=intent.id,
             transaction=_transaction(intent, currency="USD"),
@@ -524,13 +563,41 @@ def test_provider_correlation_mismatch_posts_no_money(db_session, subscriber):
     intent = _intent(db_session, subscriber, provider)
 
     with pytest.raises(DepositEligibilityError) as exc_info:
-        AccountCreditDeposits.settle_verified(
+        _settle(
             db_session,
             intent_id=intent.id,
             transaction=_transaction(intent, metadata={}),
         )
 
     assert exc_info.value.code == "deposit_provider_correlation_mismatch"
+    assert db_session.query(Payment).count() == 0
+
+
+def test_settlement_rolls_back_all_evidence_when_event_staging_fails(
+    db_session, subscriber, monkeypatch
+):
+    provider = _provider(db_session)
+    intent = _intent(db_session, subscriber, provider)
+    intent_id = intent.id
+
+    def fail_event(*args, **kwargs):
+        raise RuntimeError("event staging failed")
+
+    monkeypatch.setattr(
+        "app.services.account_credit_deposits.emit_event",
+        fail_event,
+    )
+
+    with pytest.raises(RuntimeError, match="event staging failed"):
+        _settle(
+            db_session,
+            intent_id=intent_id,
+            transaction=_transaction(intent, external_id="gateway-event-failure"),
+        )
+
+    persisted_intent = db_session.get(TopupIntent, intent_id)
+    assert persisted_intent is not None
+    assert persisted_intent.completed_payment_id is None
     assert db_session.query(Payment).count() == 0
 
 
@@ -550,7 +617,7 @@ def test_erp_payment_projection_carries_deposit_policy_and_settlement(
 ):
     provider = _provider(db_session)
     intent = _intent(db_session, subscriber, provider)
-    result = AccountCreditDeposits.settle_verified(
+    result = _settle(
         db_session,
         intent_id=intent.id,
         transaction=_transaction(intent, external_id="gateway-erp"),
@@ -568,7 +635,7 @@ def test_erp_payment_projection_carries_deposit_policy_and_settlement(
 def test_invariant_monitor_ignores_incompatible_currency_credit(db_session, subscriber):
     provider = _provider(db_session)
     intent = _intent(db_session, subscriber, provider)
-    AccountCreditDeposits.settle_verified(
+    _settle(
         db_session,
         intent_id=intent.id,
         transaction=_transaction(intent, external_id="gateway-monitor"),
@@ -594,7 +661,7 @@ def test_invariant_monitor_reports_payable_invoice_with_unused_credit(
 ):
     provider = _provider(db_session)
     intent = _intent(db_session, subscriber, provider)
-    AccountCreditDeposits.settle_verified(
+    _settle(
         db_session,
         intent_id=intent.id,
         transaction=_transaction(intent, external_id="gateway-monitor-positive"),

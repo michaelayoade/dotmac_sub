@@ -1,6 +1,7 @@
 from pathlib import Path
 
-from app.services.sot_relationships import owning_service_for
+from app.services.sot_manifest import TransactionMode
+from app.services.sot_relationships import owning_service_for, service_relationship
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -95,12 +96,49 @@ def test_wht_lifecycle_has_one_owner_and_advances_payment_feed() -> None:
     tax_source = _read("app/services/tax_accounting.py")
     route_source = _read("app/web/admin/billing_reporting.py")
 
-    assert "initialize_withholding_tax_lifecycle(" in payment_proof_source
+    assert "tax_accounting.stage_withholding_tax_receivable(" in payment_proof_source
+    assert "def stage_withholding_tax_receivable(" in tax_source
+    assert "_initialize_withholding_tax_lifecycle(" not in payment_proof_source
+    assert "WithholdingTaxRecord(" not in payment_proof_source
     assert "payment.updated_at = now" in tax_source
     assert "web_billing_tax_accounting_service.transition_wht(" in route_source
     assert "WithholdingTaxTransition(" not in route_source
     assert "/tax-accounting/mappings" not in route_source
     assert "/tax-accounting/shadow-control" not in route_source
+
+
+def test_wht_transition_uses_the_contracted_owner_command_boundary() -> None:
+    service = service_relationship("financial.tax_accounting")
+    assert service.contract is not None
+    assert service.contract.transaction.mode is TransactionMode.OWNER_MANAGED
+
+    owner_source = _read("app/services/tax_accounting.py")
+    transition_start = owner_source.index("def transition_withholding_tax(")
+    transition_end = owner_source.index(
+        "\n\ndef _stage_withholding_tax_transition(", transition_start
+    )
+    public_transition = owner_source[transition_start:transition_end]
+    route_source = _read("app/web/admin/billing_reporting.py")
+    route_start = route_source.index("def billing_wht_transition(")
+    route_end = route_source.index("\n\n@router.get", route_start)
+    route_transition = route_source[route_start:route_end]
+
+    assert "execute_owner_command(" in public_transition
+    assert "commit" not in public_transition
+    assert "rollback" not in public_transition
+    assert "db.rollback" not in route_transition
+    assert "log_audit_event" not in route_transition
+    assert "except DomainError" in route_transition
+
+
+def test_tax_owner_stages_wht_audit_and_events_once() -> None:
+    owner_source = _read("app/services/tax_accounting.py")
+    payment_proof_source = _read("app/services/payment_proofs.py")
+
+    assert "stage_audit_event(" in owner_source
+    assert "EventType.withholding_tax_receivable_recorded" in owner_source
+    assert "EventType.withholding_tax_status_changed" in owner_source
+    assert "EventType.withholding_tax_receivable_recorded" not in payment_proof_source
 
 
 def test_credit_note_owner_persists_tax_point_for_issuance_adapters() -> None:

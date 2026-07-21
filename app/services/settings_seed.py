@@ -30,6 +30,7 @@ from app.services.domain_settings import (
     usage_settings,
 )
 from app.services.secrets import is_openbao_ref
+from app.services.settings_spec import get_spec
 from app.timezone import APP_TIMEZONE_NAME
 
 logger = logging.getLogger(__name__)
@@ -1794,17 +1795,40 @@ def seed_billing_settings(db: Session) -> None:
             "BILLING_TOPUP_PRESET_AMOUNTS", "1000,2000,5000,10000,20000,50000"
         ),
     )
-    billing_settings.ensure_by_key(
-        db,
-        key="topup_reconciliation_stale_minutes",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("BILLING_TOPUP_RECONCILIATION_STALE_MINUTES", "15"),
+    for reconciliation_key in (
+        "topup_reconciliation_stale_minutes",
+        "topup_reconciliation_max_age_days",
+        "topup_reconciliation_expiry_grace_hours",
+        "topup_reconciliation_batch_size",
+    ):
+        reconciliation_spec = get_spec(SettingDomain.billing, reconciliation_key)
+        if reconciliation_spec is None or reconciliation_spec.env_var is None:
+            raise RuntimeError(
+                f"Top-up reconciliation spec is missing: {reconciliation_key}"
+            )
+        billing_settings.ensure_by_key(
+            db,
+            key=reconciliation_spec.key,
+            value_type=reconciliation_spec.value_type,
+            value_text=os.getenv(
+                reconciliation_spec.env_var,
+                str(reconciliation_spec.default),
+            ),
+        )
+    gateway_intent_ttl_spec = get_spec(
+        SettingDomain.billing,
+        "gateway_topup_intent_ttl_minutes",
     )
+    if gateway_intent_ttl_spec is None or gateway_intent_ttl_spec.env_var is None:
+        raise RuntimeError("Gateway top-up intent TTL spec is missing")
     billing_settings.ensure_by_key(
         db,
-        key="topup_reconciliation_max_age_days",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("BILLING_TOPUP_RECONCILIATION_MAX_AGE_DAYS", "7"),
+        key=gateway_intent_ttl_spec.key,
+        value_type=gateway_intent_ttl_spec.value_type,
+        value_text=os.getenv(
+            gateway_intent_ttl_spec.env_var,
+            str(gateway_intent_ttl_spec.default),
+        ),
     )
     billing_settings.ensure_by_key(
         db,

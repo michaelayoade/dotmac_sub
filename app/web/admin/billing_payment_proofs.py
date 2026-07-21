@@ -1,20 +1,46 @@
 """Admin billing bank-transfer payment-proof routes."""
 
 from urllib.parse import quote
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
+from app.api.payment_proof_errors import payment_proof_http_status
 from app.db import get_db
 from app.services import web_billing_payment_proofs as web_payment_proofs_service
 from app.services.action_forms import ActionFormSubmission
 from app.services.auth_dependencies import has_permission, require_permission
+from app.services.db_session_adapter import db_session_adapter
+from app.services.domain_errors import DomainError
+from app.services.owner_commands import CommandContext
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/billing", tags=["web-admin-billing"])
+
+
+def _command_context(
+    auth: dict,
+    *,
+    scope: str,
+    reason: str,
+    idempotency_key: str,
+) -> CommandContext:
+    principal_id = str(auth.get("principal_id") or "").strip()
+    if not principal_id:
+        raise HTTPException(status_code=403, detail="Authorized actor is missing")
+    actor_type = "api_key" if auth.get("principal_type") == "api_key" else "user"
+    command_id = uuid4()
+    return CommandContext(
+        command_id=command_id,
+        correlation_id=command_id,
+        actor=f"{actor_type}:{principal_id}",
+        scope=scope,
+        reason=reason,
+        idempotency_key=idempotency_key,
+    )
 
 
 @router.get(
@@ -122,7 +148,15 @@ def payment_proofs_file(
     proof_id: UUID,
     db: Session = Depends(get_db),
 ):
-    resolved = web_payment_proofs_service.file_response_args(db, proof_id=str(proof_id))
+    try:
+        resolved = web_payment_proofs_service.file_response_args(
+            db, proof_id=str(proof_id)
+        )
+    except DomainError as exc:
+        raise HTTPException(
+            status_code=payment_proof_http_status(exc),
+            detail=exc.message,
+        ) from exc
     if resolved is None:
         raise HTTPException(status_code=404, detail="Payment proof not found")
     path, media_type = resolved
@@ -143,16 +177,24 @@ def payment_proofs_verify(
     auth: dict = Depends(require_permission("billing:proof:verify")),
 ):
     try:
+        from app.services import payment_proofs
+
+        db_session_adapter.release_read_transaction(db)
         web_payment_proofs_service.verify_proof(
             db,
-            request,
+            context=_command_context(
+                auth,
+                scope=payment_proofs.REVIEW_SCOPE,
+                reason="Staff verified bank-transfer evidence",
+                idempotency_key=f"payment-proof:verify:{proof_id}",
+            ),
             proof_id=str(proof_id),
             verified_by=str(auth.get("principal_id")),
             amount=amount,
             auto_allocate=auto_allocate == "yes",
             review_notes=review_notes,
         )
-    except HTTPException as exc:
+    except DomainError as exc:
         submission = web_payment_proofs_service.review_error_submission(
             action_key=web_payment_proofs_service.VERIFY_ACTION_KEY,
             values={
@@ -168,7 +210,7 @@ def payment_proofs_verify(
             db=db,
             auth=auth,
             submission=submission,
-            status_code=exc.status_code,
+            status_code=payment_proof_http_status(exc),
         )
     return _redirect(proof_id, message="Proof verified and payment recorded")
 
@@ -185,14 +227,22 @@ def payment_proofs_reject(
     auth: dict = Depends(require_permission("billing:proof:verify")),
 ):
     try:
+        from app.services import payment_proofs
+
+        db_session_adapter.release_read_transaction(db)
         web_payment_proofs_service.reject_proof(
             db,
-            request,
+            context=_command_context(
+                auth,
+                scope=payment_proofs.REVIEW_SCOPE,
+                reason="Staff rejected bank-transfer evidence",
+                idempotency_key=f"payment-proof:reject:{proof_id}",
+            ),
             proof_id=str(proof_id),
             verified_by=str(auth.get("principal_id")),
             review_notes=review_notes,
         )
-    except HTTPException as exc:
+    except DomainError as exc:
         submission = web_payment_proofs_service.review_error_submission(
             action_key=web_payment_proofs_service.REJECT_ACTION_KEY,
             values={"review_notes": review_notes},
@@ -204,7 +254,7 @@ def payment_proofs_reject(
             db=db,
             auth=auth,
             submission=submission,
-            status_code=exc.status_code,
+            status_code=payment_proof_http_status(exc),
         )
     return _redirect(proof_id, message="Proof rejected")
 

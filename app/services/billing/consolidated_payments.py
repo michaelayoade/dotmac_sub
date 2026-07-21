@@ -1016,6 +1016,35 @@ class ConsolidatedPaymentSettlements:
         )
 
     @classmethod
+    def stage_settle_verified(
+        cls,
+        db: Session,
+        billing_account_id: str,
+        request: BillingAccountPaymentPreviewRequest,
+        *,
+        idempotency_key: str,
+        origin: PaymentSettlementOrigin,
+        actor_id: str | None = None,
+        existing_payment_id: str | None = None,
+    ) -> ConsolidatedPaymentSettlementResult:
+        """Stage a verified consolidated settlement in the caller's transaction."""
+
+        preview = cls.preview(db, billing_account_id, request)
+        command = BillingAccountPaymentConfirm(
+            **request.model_dump(),
+            preview_fingerprint=preview.fingerprint,
+            idempotency_key=idempotency_key,
+        )
+        return cls.stage_confirm(
+            db,
+            billing_account_id,
+            command,
+            origin=origin,
+            actor_id=actor_id,
+            existing_payment_id=existing_payment_id,
+        )
+
+    @classmethod
     def settle_verified(
         cls,
         db: Session,
@@ -1051,6 +1080,29 @@ class ConsolidatedPaymentSettlements:
         )
 
     @classmethod
+    def stage_confirm(
+        cls,
+        db: Session,
+        billing_account_id: str,
+        command: BillingAccountPaymentConfirm,
+        *,
+        origin: PaymentSettlementOrigin = PaymentSettlementOrigin.manual,
+        actor_id: str | None = None,
+        existing_payment_id: str | None = None,
+    ) -> ConsolidatedPaymentSettlementResult:
+        """Stage one fingerprint-bound settlement without ending the transaction."""
+
+        return cls._confirm(
+            db,
+            billing_account_id,
+            command,
+            origin=origin,
+            actor_id=actor_id,
+            complete_transaction=False,
+            existing_payment_id=existing_payment_id,
+        )
+
+    @classmethod
     def confirm(
         cls,
         db: Session,
@@ -1061,6 +1113,30 @@ class ConsolidatedPaymentSettlements:
         actor_id: str | None = None,
         commit: bool = True,
         existing_payment_id: str | None = None,
+    ) -> ConsolidatedPaymentSettlementResult:
+        """Legacy root wrapper; coordinators use :meth:`stage_confirm`."""
+
+        return cls._confirm(
+            db,
+            billing_account_id,
+            command,
+            origin=origin,
+            actor_id=actor_id,
+            complete_transaction=commit,
+            existing_payment_id=existing_payment_id,
+        )
+
+    @classmethod
+    def _confirm(
+        cls,
+        db: Session,
+        billing_account_id: str,
+        command: BillingAccountPaymentConfirm,
+        *,
+        origin: PaymentSettlementOrigin,
+        actor_id: str | None,
+        complete_transaction: bool,
+        existing_payment_id: str | None,
     ) -> ConsolidatedPaymentSettlementResult:
         key = _normalize_key(command.idempotency_key)
         replay = cls._replay(db, key=key, fingerprint=command.preview_fingerprint)
@@ -1138,6 +1214,8 @@ class ConsolidatedPaymentSettlements:
                     )
                 if (
                     round_money(to_decimal(payment.amount)) != preview.amount
+                    or round_money(to_decimal(payment.provider_fee))
+                    != round_money(to_decimal(command.provider_fee))
                     or payment.currency != preview.currency
                     or payment.provider_id != command.provider_id
                     or payment.external_id != command.external_id
@@ -1147,6 +1225,7 @@ class ConsolidatedPaymentSettlements:
                         detail="Confirmed payment no longer matches its observation",
                     )
                 payment.status = PaymentStatus.succeeded
+                payment.provider_fee = command.provider_fee
                 payment.paid_at = command.paid_at or datetime.now(UTC)
                 payment.payment_method_id = command.payment_method_id
                 payment.payment_channel_id = resolved_channel_id
@@ -1162,6 +1241,7 @@ class ConsolidatedPaymentSettlements:
                     collection_account_id=resolved_collection_account_id,
                     provider_id=command.provider_id,
                     amount=preview.amount,
+                    provider_fee=command.provider_fee,
                     currency=preview.currency,
                     status=PaymentStatus.succeeded,
                     paid_at=command.paid_at or datetime.now(UTC),
@@ -1267,7 +1347,7 @@ class ConsolidatedPaymentSettlements:
             reservation.ref_id = str(payment.id)
             _emit_consolidated_payment_events(db, payment, allocations)
             db.flush()
-            if commit:
+            if complete_transaction:
                 db.commit()
                 db.refresh(payment)
                 db.refresh(settlement)
@@ -1277,6 +1357,8 @@ class ConsolidatedPaymentSettlements:
                 preview=preview,
             )
         except IntegrityError as exc:
+            if not complete_transaction:
+                raise
             db.rollback()
             replay = cls._replay(db, key=key, fingerprint=command.preview_fingerprint)
             if replay is not None:
@@ -1285,7 +1367,8 @@ class ConsolidatedPaymentSettlements:
                 status_code=409, detail="Consolidated payment is already recorded"
             ) from exc
         except Exception:
-            db.rollback()
+            if complete_transaction:
+                db.rollback()
             raise
 
     @staticmethod
@@ -4233,6 +4316,8 @@ class ConsolidatedPaymentRefunds:
                 preview=preview,
             )
         except IntegrityError as exc:
+            if not commit:
+                raise
             db.rollback()
             replay = cls._replay(
                 db,
@@ -4246,8 +4331,26 @@ class ConsolidatedPaymentRefunds:
                 status_code=409, detail="Refund is already being processed"
             ) from exc
         except Exception:
-            db.rollback()
+            if commit:
+                db.rollback()
             raise
+
+    @classmethod
+    def stage_provider_event(
+        cls,
+        db: Session,
+        *,
+        payment_id: str,
+        provider_event_id: UUID,
+    ) -> ConsolidatedPaymentRefundResult:
+        """Stage a signature-verified consolidated refund without committing."""
+
+        return cls._process_provider_event(
+            db,
+            payment_id=payment_id,
+            provider_event_id=provider_event_id,
+            complete_transaction=False,
+        )
 
     @classmethod
     def process_provider_event(
@@ -4257,6 +4360,24 @@ class ConsolidatedPaymentRefunds:
         payment_id: str,
         provider_event_id: UUID,
         commit: bool = False,
+    ) -> ConsolidatedPaymentRefundResult:
+        """Legacy wrapper; coordinators use :meth:`stage_provider_event`."""
+
+        return cls._process_provider_event(
+            db,
+            payment_id=payment_id,
+            provider_event_id=provider_event_id,
+            complete_transaction=commit,
+        )
+
+    @classmethod
+    def _process_provider_event(
+        cls,
+        db: Session,
+        *,
+        payment_id: str,
+        provider_event_id: UUID,
+        complete_transaction: bool,
     ) -> ConsolidatedPaymentRefundResult:
         payment = get_by_id(db, Payment, payment_id)
         if payment is None:
@@ -4289,7 +4410,7 @@ class ConsolidatedPaymentRefunds:
             ),
             origin=PaymentRefundOrigin.provider_event,
             provider_event_id=provider_event_id,
-            commit=commit,
+            commit=complete_transaction,
         )
 
 
@@ -4506,6 +4627,8 @@ class ConsolidatedPaymentReversals:
                 preview=preview,
             )
         except IntegrityError as exc:
+            if not commit:
+                raise
             db.rollback()
             replay = cls._replay(
                 db,
@@ -4519,8 +4642,26 @@ class ConsolidatedPaymentReversals:
                 status_code=409, detail="Payment reversal is already being processed"
             ) from exc
         except Exception:
-            db.rollback()
+            if commit:
+                db.rollback()
             raise
+
+    @classmethod
+    def stage_provider_event(
+        cls,
+        db: Session,
+        *,
+        payment_id: str,
+        provider_event_id: UUID,
+    ) -> ConsolidatedPaymentReversalResult:
+        """Stage a signature-verified consolidated reversal without committing."""
+
+        return cls._process_provider_event(
+            db,
+            payment_id=payment_id,
+            provider_event_id=provider_event_id,
+            complete_transaction=False,
+        )
 
     @classmethod
     def process_provider_event(
@@ -4530,6 +4671,24 @@ class ConsolidatedPaymentReversals:
         payment_id: str,
         provider_event_id: UUID,
         commit: bool = False,
+    ) -> ConsolidatedPaymentReversalResult:
+        """Legacy wrapper; coordinators use :meth:`stage_provider_event`."""
+
+        return cls._process_provider_event(
+            db,
+            payment_id=payment_id,
+            provider_event_id=provider_event_id,
+            complete_transaction=commit,
+        )
+
+    @classmethod
+    def _process_provider_event(
+        cls,
+        db: Session,
+        *,
+        payment_id: str,
+        provider_event_id: UUID,
+        complete_transaction: bool,
     ) -> ConsolidatedPaymentReversalResult:
         payment = get_by_id(db, Payment, payment_id)
         if payment is None:
@@ -4561,7 +4720,7 @@ class ConsolidatedPaymentReversals:
             ),
             origin=PaymentReversalOrigin.provider_event,
             provider_event_id=provider_event_id,
-            commit=commit,
+            commit=complete_transaction,
         )
 
 

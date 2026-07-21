@@ -16,7 +16,6 @@ from app.schemas.billing import (
     InvoiceLineCreate,
     PaymentAllocationApply,
     PaymentCreate,
-    PaymentProviderEventIngest,
 )
 from app.services import display_format
 from app.services.adapters import adapter_registry
@@ -55,7 +54,7 @@ class PaymentIntent:
 
 
 class BillingAdapter:
-    """Adapter around invoices, payments, and payment gateway events."""
+    """Adapter around invoices and payments."""
 
     name = "billing"
     depends_on: tuple[str, ...] = ("db.session.sqlalchemy",)
@@ -132,11 +131,6 @@ class BillingAdapter:
             allocations=list(intent.allocations),
         )
         return billing_service.payments.create(db, payload)
-
-    def ingest_gateway_event(self, db: Session, payload: PaymentProviderEventIngest):
-        billing_service = self._service()
-
-        return billing_service.payment_provider_events.ingest(db, payload)
 
 
 billing_adapter = BillingAdapter()

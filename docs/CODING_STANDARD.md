@@ -115,15 +115,21 @@ Session lifecycle and business transaction ownership are separate:
    transaction before returning its outcome.
 3. Nested domain helpers use the provided session, call `flush()` when needed,
    and never call `commit()` or `rollback()` independently.
-4. Routes, API handlers, tasks, event handlers, and CLI commands never call ORM
+4. A coordinator may isolate an explicitly optional participant consequence
+   only through `app.services.owner_commands.execute_owner_savepoint`. The
+   callback stays flush-only; the coordinator handles its domain failure and
+   records the resulting reconciliation or failure evidence. Direct participant
+   savepoints and nested savepoints are forbidden.
+5. Routes, API handlers, tasks, event handlers, and CLI commands never call ORM
    mutation or transaction methods for business state.
-5. A cross-domain coordinator may own one transaction only when its SOT
+6. A cross-domain coordinator may own one transaction only when its SOT
    contract explicitly names the coordinated invariant.
 
 The standard executor rejects an active caller transaction, nested public
-command, helper commit or rollback, unclosed savepoint, uncontracted owner, or
-manifest role/mode mismatch. It commits before returning success and rolls back
-before propagating failure. Use
+command, helper commit or rollback, direct or unclosed savepoint, uncontracted
+owner, or manifest role/mode mismatch. Its savepoint API is the sole nested
+transaction-completion authority inside an active owner command. It commits
+before returning success and rolls back before propagating failure. Use
 `db_session_adapter.owner_command_session()` in task adapters that need only
 session lifecycle. The auto-committing session context and `UnitOfWork` are
 legacy migration paths; do not introduce them in a new or migrated command.
@@ -248,6 +254,26 @@ External identifiers include provider, account/tenant scope, provenance, and
 lifecycle. They cannot be the only copy of a local identity or decision.
 Outbound delivery uses an idempotent outbox or intent record and preserves the
 local decision identifier.
+
+Inbound observations cross one named admission boundary. That boundary must:
+
+- label the durable trust source, such as administrative input, verified
+  webhook, or provider reconciliation;
+- persist normalized decision inputs and an exact decision-evidence fingerprint
+  before requesting consequences;
+- reject identity reuse when the admission trust class or normalized decision
+  evidence changes. Two independently verified transports may converge on one
+  canonical result only when their normalized decision evidence is identical;
+- require the command scope associated with that trust source;
+- keep administrative or otherwise unverified input from invoking a verified
+  participant or changing financial state; and
+- fail closed when a required amount, fee, net value, currency, provider
+  reference, or status was not observed. It must not insert a business default
+  merely to make an external payload complete.
+
+Raw provider payloads are diagnostic evidence, not a parallel decision API or
+part of a financial consequence fingerprint. Consequences consume the
+persisted normalized fields owned by the admission service.
 
 Bearer capabilities, reset links, one-time codes, and other delivery secrets
 are ephemeral transport material. Durable events, intents, notifications, and

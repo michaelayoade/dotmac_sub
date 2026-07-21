@@ -4,6 +4,7 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import select
 
+from app.models.audit import AuditEvent
 from app.models.billing import (
     CreditNote,
     CreditNoteStatus,
@@ -12,6 +13,7 @@ from app.models.billing import (
     LedgerEntry,
     Payment,
 )
+from app.models.event_store import EventStore
 from app.models.payment_proof import (
     WithholdingTaxRecord,
     WithholdingTaxStatus,
@@ -21,6 +23,8 @@ from app.models.payment_proof import (
 from app.models.subscriber import Reseller
 from app.services import billing as billing_service
 from app.services import tax_accounting
+from app.services.db_session_adapter import db_session_adapter
+from app.services.owner_commands import CommandContext
 
 
 def _invoice(
@@ -77,6 +81,32 @@ def _wht_record(db_session, *, payment=None, status=WithholdingTaxStatus.pending
     return record
 
 
+def _transition(
+    db_session,
+    record_id,
+    *,
+    target_status: WithholdingTaxStatus,
+    actor_id: str,
+    certificate_reference: str | None = None,
+    notes: str | None = None,
+):
+    db_session_adapter.release_read_transaction(db_session)
+    return tax_accounting.transition_withholding_tax(
+        db_session,
+        tax_accounting.TransitionWithholdingTaxCommand(
+            record_id=record_id,
+            target_status=target_status,
+            certificate_reference=certificate_reference,
+            notes=notes,
+        ),
+        context=CommandContext.system(
+            actor=actor_id,
+            scope=f"withholding_tax:{record_id}",
+            reason=f"Test transition to {target_status.value}",
+        ),
+    )
+
+
 def test_tax_report_filters_tax_points_and_separates_currencies(db_session, subscriber):
     inside = datetime(2026, 1, 15, 12, tzinfo=UTC)
     db_session.add_all(
@@ -121,26 +151,26 @@ def test_tax_report_filters_tax_points_and_separates_currencies(db_session, subs
         db_session, date_from="2026-01-01", date_to="2026-01-31"
     )
 
-    assert {row["invoice_number"] for row in data["invoice_rows"]} == {
+    assert {row.invoice_number for row in data.invoice_rows} == {
         "NG-1",
         "USD-1",
     }
-    assert data["output_tax_totals"] == [
-        {
-            "currency": "NGN",
-            "invoice_count": 1,
-            "tax_amount": Decimal("7.50"),
-            "gross_amount": Decimal("107.50"),
-        },
-        {
-            "currency": "USD",
-            "invoice_count": 1,
-            "tax_amount": Decimal("10.00"),
-            "gross_amount": Decimal("110.00"),
-        },
-    ]
-    assert data["output_tax_invoice_count"] == 2
-    assert "total_tax" not in data
+    assert data.output_tax_totals == (
+        tax_accounting.OutputTaxTotal(
+            currency="NGN",
+            invoice_count=1,
+            tax_amount=Decimal("7.50"),
+            gross_amount=Decimal("107.50"),
+        ),
+        tax_accounting.OutputTaxTotal(
+            currency="USD",
+            invoice_count=1,
+            tax_amount=Decimal("10.00"),
+            gross_amount=Decimal("110.00"),
+        ),
+    )
+    assert data.output_tax_invoice_count == 2
+    assert "total_tax" not in data.to_context()
 
 
 def test_tax_report_subtracts_credit_note_at_persisted_issuance_point(
@@ -178,9 +208,9 @@ def test_tax_report_subtracts_credit_note_at_persisted_issuance_point(
         db_session, date_from="2026-02-01", date_to="2026-02-28"
     )
 
-    assert january["credit_note_count"] == 0
-    assert february["credit_note_count"] == 1
-    assert february["net_output_tax_totals"][0]["net_output_tax_liability"] == (
+    assert january.credit_note_count == 0
+    assert february.credit_note_count == 1
+    assert february.net_output_tax_totals[0].net_output_tax_liability == (
         Decimal("60.00")
     )
 
@@ -192,24 +222,30 @@ def test_tax_report_keeps_wht_receivable_separate_from_net_cash(db_session):
         db_session, date_from="2026-02-01", date_to="2026-02-28"
     )
 
-    assert {row["record_id"] for row in data["wht_rows"]} == {
-        str(pending.id),
-        str(reclaimed.id),
+    assert {row.record_id for row in data.wht_rows} == {
+        pending.id,
+        reclaimed.id,
     }
-    assert data["wht_totals"] == [
-        {
-            "currency": "NGN",
-            "record_count": 2,
-            "gross_amount": Decimal("200000.00"),
-            "net_cash_amount": Decimal("190000.00"),
-            "wht_amount": Decimal("10000.00"),
-            "outstanding_wht_amount": Decimal("5000.00"),
-            "by_status": {
-                "pending": Decimal("5000.00"),
-                "reclaimed": Decimal("5000.00"),
-            },
-        }
-    ]
+    assert data.wht_totals == (
+        tax_accounting.WithholdingTaxTotal(
+            currency="NGN",
+            record_count=2,
+            gross_amount=Decimal("200000.00"),
+            net_cash_amount=Decimal("190000.00"),
+            wht_amount=Decimal("10000.00"),
+            outstanding_wht_amount=Decimal("5000.00"),
+            by_status=(
+                tax_accounting.WithholdingTaxStatusTotal(
+                    status=WithholdingTaxStatus.pending,
+                    amount=Decimal("5000.00"),
+                ),
+                tax_accounting.WithholdingTaxStatusTotal(
+                    status=WithholdingTaxStatus.reclaimed,
+                    amount=Decimal("5000.00"),
+                ),
+            ),
+        ),
+    )
 
 
 def test_tax_report_projection_is_read_only(db_session, subscriber):
@@ -267,18 +303,18 @@ def test_wht_operator_queue_filters_searches_and_paginates(db_session):
         wht_search="WHT-PAGE-025",
     )
 
-    assert first["accounting_owner"] == "dotmac_erp"
-    assert len(first["wht_records"]) == 25
-    assert first["wht_pagination"] == {
-        "page": 1,
-        "page_size": 25,
-        "total": 26,
-        "page_count": 2,
-        "has_previous": False,
-        "has_next": True,
-    }
-    assert len(second["wht_records"]) == 1
-    assert filtered["wht_records"][0].certificate_reference == "WHT-PAGE-025"
+    assert first.accounting_owner == "dotmac_erp"
+    assert len(first.wht_records) == 25
+    assert first.wht_pagination == tax_accounting.TaxOperationsPagination(
+        page=1,
+        page_size=25,
+        total=26,
+        page_count=2,
+        has_previous=False,
+        has_next=True,
+    )
+    assert len(second.wht_records) == 1
+    assert filtered.wht_records[0].certificate_reference == "WHT-PAGE-025"
 
 
 def test_wht_lifecycle_requires_evidence_records_timeline_and_advances_payment(
@@ -295,21 +331,21 @@ def test_wht_lifecycle_requires_evidence_records_timeline_and_advances_payment(
     record = _wht_record(db_session, payment=payment)
 
     with pytest.raises(tax_accounting.TaxAccountingError, match="certificate"):
-        tax_accounting.transition_withholding_tax(
+        _transition(
             db_session,
             record.id,
             target_status=WithholdingTaxStatus.certified,
             actor_id="finance-1",
         )
 
-    certified = tax_accounting.transition_withholding_tax(
+    certified = _transition(
         db_session,
         record.id,
         target_status=WithholdingTaxStatus.certified,
         actor_id="finance-1",
         certificate_reference="WHT-CERT-2026-001",
     )
-    reclaimed = tax_accounting.transition_withholding_tax(
+    reclaimed = _transition(
         db_session,
         record.id,
         target_status=WithholdingTaxStatus.reclaimed,
@@ -318,8 +354,12 @@ def test_wht_lifecycle_requires_evidence_records_timeline_and_advances_payment(
     )
 
     db_session.refresh(payment)
-    assert certified.certified_at is not None
-    assert reclaimed.resolved_at is not None
+    assert certified.status is WithholdingTaxStatus.certified
+    assert reclaimed.status is WithholdingTaxStatus.reclaimed
+    persisted_record = db_session.get(WithholdingTaxRecord, record.id)
+    assert persisted_record is not None
+    assert persisted_record.certified_at is not None
+    assert persisted_record.resolved_at is not None
     payment_updated_at = payment.updated_at
     if payment_updated_at.tzinfo is None:
         payment_updated_at = payment_updated_at.replace(tzinfo=UTC)
@@ -336,6 +376,48 @@ def test_wht_lifecycle_requires_evidence_records_timeline_and_advances_payment(
         (WithholdingTaxStatus.pending, WithholdingTaxStatus.certified),
         (WithholdingTaxStatus.certified, WithholdingTaxStatus.reclaimed),
     ]
+    audits = (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.entity_type == "withholding_tax_record")
+        .filter(AuditEvent.entity_id == str(record.id))
+        .order_by(AuditEvent.occurred_at)
+        .all()
+    )
+    assert [audit.metadata_["to_status"] for audit in audits] == [
+        WithholdingTaxStatus.certified.value,
+        WithholdingTaxStatus.reclaimed.value,
+    ]
+    events = (
+        db_session.query(EventStore)
+        .filter(EventStore.event_type == "withholding_tax.status_changed")
+        .order_by(EventStore.created_at)
+        .all()
+    )
+    assert [event.payload["to_status"] for event in events] == [
+        WithholdingTaxStatus.certified.value,
+        WithholdingTaxStatus.reclaimed.value,
+    ]
+
+    replay = _transition(
+        db_session,
+        record.id,
+        target_status=WithholdingTaxStatus.reclaimed,
+        actor_id="finance-2",
+        notes="Reclaimed in June filing",
+    )
+    assert replay.replayed is True
+    assert (
+        db_session.query(WithholdingTaxTransition)
+        .filter(WithholdingTaxTransition.record_id == record.id)
+        .count()
+        == 3
+    )
+    assert (
+        db_session.query(EventStore)
+        .filter(EventStore.event_type == "withholding_tax.status_changed")
+        .count()
+        == 2
+    )
     transitions[0].notes = "rewrite history"
     with pytest.raises(WithholdingTaxTransitionImmutableError):
         db_session.commit()
@@ -347,16 +429,60 @@ def test_wht_lifecycle_rejects_illegal_or_unexplained_terminal_transitions(
 ):
     record = _wht_record(db_session)
     with pytest.raises(tax_accounting.TaxAccountingError, match="write-off reason"):
-        tax_accounting.transition_withholding_tax(
+        _transition(
             db_session,
             record.id,
             target_status=WithholdingTaxStatus.written_off,
             actor_id="finance-1",
         )
     with pytest.raises(tax_accounting.TaxAccountingError, match="Illegal WHT"):
-        tax_accounting.transition_withholding_tax(
+        _transition(
             db_session,
             record.id,
             target_status=WithholdingTaxStatus.reclaimed,
             actor_id="finance-1",
         )
+
+
+def test_wht_transition_rolls_back_state_timeline_audit_and_event(
+    db_session,
+    monkeypatch,
+):
+    record = _wht_record(db_session)
+
+    def fail_event(*_args, **_kwargs):
+        raise RuntimeError("event store unavailable")
+
+    monkeypatch.setattr(tax_accounting, "emit_event", fail_event)
+
+    with pytest.raises(RuntimeError, match="event store unavailable"):
+        _transition(
+            db_session,
+            record.id,
+            target_status=WithholdingTaxStatus.certified,
+            actor_id="finance-rollback",
+            certificate_reference="WHT-ROLLBACK-CERT",
+        )
+
+    persisted = db_session.get(WithholdingTaxRecord, record.id)
+    assert persisted is not None
+    assert persisted.status is WithholdingTaxStatus.pending
+    assert persisted.certificate_reference is None
+    assert (
+        db_session.query(WithholdingTaxTransition)
+        .filter(WithholdingTaxTransition.record_id == record.id)
+        .count()
+        == 0
+    )
+    assert (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.entity_id == str(record.id))
+        .count()
+        == 0
+    )
+    assert (
+        db_session.query(EventStore)
+        .filter(EventStore.event_type == "withholding_tax.status_changed")
+        .count()
+        == 0
+    )

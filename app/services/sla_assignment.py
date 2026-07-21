@@ -21,6 +21,7 @@ from app.models.ticket_workflow import (
 )
 from app.services import support_ticket_settings as support_ticket_settings_service
 from app.services.common import coerce_uuid
+from app.services.domain_errors import DomainError
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,22 @@ SLA_APPLICABLE_STATUSES = frozenset(
         TicketStatus.site_under_construction.value,
     }
 )
+
+
+class TicketSlaClockError(DomainError, ValueError):
+    """Stable rejection from the support ticket SLA clock owner."""
+
+
+def _error(
+    suffix: str,
+    message: str,
+    **details: object,
+) -> TicketSlaClockError:
+    return TicketSlaClockError(
+        code=f"support.ticket_sla_clock.{suffix}",
+        message=message,
+        details=details,
+    )
 
 
 def _as_aware_utc(value: datetime | None) -> datetime | None:
@@ -284,7 +301,14 @@ def update_sla_clocks_for_status_change(
 def check_sla_breaches(db: Session, ticket_id) -> list[SlaClock]:
     """Check for SLA breaches on a ticket's running clocks."""
     now = datetime.now(UTC)
-    ticket = db.get(Ticket, coerce_uuid(str(ticket_id)))
+    normalized_ticket_id = coerce_uuid(str(ticket_id))
+    if normalized_ticket_id is None:
+        raise _error(
+            "invalid_ticket_id",
+            "A valid ticket identifier is required for SLA breach evaluation.",
+            ticket_id=str(ticket_id),
+        )
+    ticket = db.get(Ticket, normalized_ticket_id)
     if not ticket or str(ticket.status or "") not in SLA_APPLICABLE_STATUSES:
         return []
     clocks = (

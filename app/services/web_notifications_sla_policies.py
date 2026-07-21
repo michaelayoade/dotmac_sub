@@ -12,6 +12,12 @@ from app.models.operational_escalation import (
     OperationalNotificationChannel,
 )
 from app.services import operational_escalation
+from app.services.domain_errors import DomainError
+from app.services.owner_commands import (
+    CommandContext,
+    OwnerCommandDefinition,
+    execute_owner_command,
+)
 
 CHANNELS = (
     OperationalNotificationChannel.email,
@@ -23,6 +29,39 @@ CHANNELS = (
     OperationalNotificationChannel.webhook,
 )
 SEVERITIES = ("info", "low", "warning", "high", "critical")
+
+_POLICY_COMMAND_CONCERN = "operational SLA policy command confirmation"
+_CREATE_COMMAND = OwnerCommandDefinition(
+    owner="operations.sla_escalation_commands",
+    concern=_POLICY_COMMAND_CONCERN,
+    name="create_operational_sla_policy",
+)
+_UPDATE_COMMAND = OwnerCommandDefinition(
+    owner="operations.sla_escalation_commands",
+    concern=_POLICY_COMMAND_CONCERN,
+    name="update_operational_sla_policy",
+)
+_DEACTIVATE_COMMAND = OwnerCommandDefinition(
+    owner="operations.sla_escalation_commands",
+    concern=_POLICY_COMMAND_CONCERN,
+    name="deactivate_operational_sla_policy",
+)
+
+
+class SlaPolicyCommandError(DomainError, ValueError):
+    """Stable rejection from the operational SLA policy coordinator."""
+
+
+def _error(
+    suffix: str,
+    message: str,
+    **details: object,
+) -> SlaPolicyCommandError:
+    return SlaPolicyCommandError(
+        code=f"operations.sla_escalation_commands.{suffix}",
+        message=message,
+        details=details,
+    )
 
 
 def list_data(
@@ -94,6 +133,7 @@ def form_data(
 def create_policy(
     db: Session,
     *,
+    context: CommandContext,
     name: str,
     entity_type: str,
     trigger: str,
@@ -105,31 +145,41 @@ def create_policy(
     notes: str | None,
     is_active: bool,
 ) -> OperationalEscalationPolicy:
-    values = _validated_values(
+    def operation() -> OperationalEscalationPolicy:
+        values = _validated_values(
+            db,
+            name=name,
+            entity_type=entity_type,
+            trigger=trigger,
+            level=level,
+            delay_minutes=delay_minutes,
+            channels=channels,
+            min_severity=min_severity,
+            min_affected_customers=min_affected_customers,
+            exclude_policy_id=None,
+            is_active=is_active,
+        )
+        policy = operational_escalation.create_policy(
+            db,
+            **values,
+            cooldown_seconds=0,
+            metadata={"notes": notes.strip()} if notes and notes.strip() else {},
+        )
+        policy.is_active = is_active
+        return policy
+
+    return execute_owner_command(
         db,
-        name=name,
-        entity_type=entity_type,
-        trigger=trigger,
-        level=level,
-        delay_minutes=delay_minutes,
-        channels=channels,
-        min_severity=min_severity,
-        min_affected_customers=min_affected_customers,
-        exclude_policy_id=None,
-        is_active=is_active,
+        definition=_CREATE_COMMAND,
+        context=context,
+        operation=operation,
     )
-    policy = operational_escalation.create_policy(
-        db,
-        **values,
-        cooldown_seconds=0,
-        metadata={"notes": notes.strip()} if notes and notes.strip() else {},
-    )
-    return operational_escalation.commit_policy(db, policy, is_active=is_active)
 
 
 def update_policy(
     db: Session,
     *,
+    context: CommandContext,
     policy_id: UUID,
     name: str,
     entity_type: str,
@@ -142,37 +192,57 @@ def update_policy(
     notes: str | None,
     is_active: bool,
 ) -> OperationalEscalationPolicy:
-    policy = db.get(OperationalEscalationPolicy, policy_id)
-    if policy is None:
-        raise ValueError("SLA policy not found")
-    values = _validated_values(
+    def operation() -> OperationalEscalationPolicy:
+        policy = db.get(OperationalEscalationPolicy, policy_id)
+        if policy is None:
+            raise _error("not_found", "SLA policy not found", policy_id=str(policy_id))
+        values = _validated_values(
+            db,
+            name=name,
+            entity_type=entity_type,
+            trigger=trigger,
+            level=level,
+            delay_minutes=delay_minutes,
+            channels=channels,
+            min_severity=min_severity,
+            min_affected_customers=min_affected_customers,
+            exclude_policy_id=policy_id,
+            is_active=is_active,
+        )
+        return operational_escalation.update_policy(
+            db,
+            policy,
+            **values,
+            metadata={"notes": notes.strip()} if notes and notes.strip() else {},
+            is_active=is_active,
+        )
+
+    return execute_owner_command(
         db,
-        name=name,
-        entity_type=entity_type,
-        trigger=trigger,
-        level=level,
-        delay_minutes=delay_minutes,
-        channels=channels,
-        min_severity=min_severity,
-        min_affected_customers=min_affected_customers,
-        exclude_policy_id=policy_id,
-        is_active=is_active,
+        definition=_UPDATE_COMMAND,
+        context=context,
+        operation=operation,
     )
-    operational_escalation.update_policy(
-        db,
-        policy,
-        **values,
-        metadata={"notes": notes.strip()} if notes and notes.strip() else {},
-        is_active=is_active,
-    )
-    return operational_escalation.commit_policy(db, policy)
 
 
-def deactivate_policy(db: Session, *, policy_id: UUID) -> None:
-    policy = db.get(OperationalEscalationPolicy, policy_id)
-    if policy is None:
-        raise ValueError("SLA policy not found")
-    operational_escalation.deactivate_policy_committed(db, policy)
+def deactivate_policy(
+    db: Session,
+    *,
+    context: CommandContext,
+    policy_id: UUID,
+) -> None:
+    def operation() -> None:
+        policy = db.get(OperationalEscalationPolicy, policy_id)
+        if policy is None:
+            raise _error("not_found", "SLA policy not found", policy_id=str(policy_id))
+        operational_escalation.deactivate_policy(db, policy)
+
+    execute_owner_command(
+        db,
+        definition=_DEACTIVATE_COMMAND,
+        context=context,
+        operation=operation,
+    )
 
 
 def _validated_values(
@@ -191,30 +261,42 @@ def _validated_values(
 ) -> dict[str, Any]:
     clean_name = name.strip()
     if not clean_name:
-        raise ValueError("Policy name is required")
-    normalized_entity_type, normalized_trigger = (
-        operational_escalation.validate_sla_event(
+        raise _error("invalid_policy", "Policy name is required")
+    try:
+        normalized_entity_type, normalized_trigger = (
+            operational_escalation.validate_sla_event(
+                entity_type=entity_type,
+                trigger=trigger,
+            )
+        )
+    except operational_escalation.OperationalEscalationError as exc:
+        raise _error(
+            "invalid_policy",
+            exc.message,
             entity_type=entity_type,
             trigger=trigger,
-        )
-    )
+        ) from exc
     if level < 1:
-        raise ValueError("Escalation level must be at least 1")
+        raise _error("invalid_policy", "Escalation level must be at least 1")
     if delay_minutes < 0 or delay_minutes > 525_600:
-        raise ValueError("Escalation delay must be between 0 and 525600 minutes")
+        raise _error(
+            "invalid_policy",
+            "Escalation delay must be between 0 and 525600 minutes",
+        )
     selected_channels = list(dict.fromkeys(channels))
     invalid_channels = set(selected_channels) - set(CHANNELS)
     if invalid_channels:
-        raise ValueError(
-            f"Unsupported notification channels: {sorted(invalid_channels)}"
+        raise _error(
+            "invalid_policy",
+            f"Unsupported notification channels: {sorted(invalid_channels)}",
         )
     if not selected_channels:
-        raise ValueError("Select at least one notification channel")
+        raise _error("invalid_policy", "Select at least one notification channel")
     if min_affected_customers is not None and min_affected_customers < 0:
-        raise ValueError("Minimum affected customers cannot be negative")
+        raise _error("invalid_policy", "Minimum affected customers cannot be negative")
     normalized_min_severity = min_severity.strip().lower() if min_severity else None
     if normalized_min_severity and normalized_min_severity not in SEVERITIES:
-        raise ValueError("Select a supported minimum severity")
+        raise _error("invalid_policy", "Select a supported minimum severity")
     if is_active:
         duplicate = (
             db.query(OperationalEscalationPolicy)
@@ -228,8 +310,12 @@ def _validated_values(
                 OperationalEscalationPolicy.id != exclude_policy_id
             )
         if duplicate.first() is not None:
-            raise ValueError(
-                "An active policy already owns this event and escalation level"
+            raise _error(
+                "duplicate_active_policy",
+                "An active policy already owns this event and escalation level",
+                entity_type=normalized_entity_type,
+                trigger=normalized_trigger,
+                level=level,
             )
     return {
         "name": clean_name,

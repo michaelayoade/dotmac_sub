@@ -31,6 +31,7 @@ ResultT = TypeVar("ResultT")
 _ACTIVE_COMMAND_KEY = "_dotmac_active_owner_command"
 _BOUNDARY_COMMIT_KEY = "_dotmac_owner_boundary_commit"
 _HELPER_ROLLBACK_KEY = "_dotmac_owner_helper_rollback"
+_AUTHORIZED_SAVEPOINT_KEY = "_dotmac_authorized_owner_savepoint"
 _OWNER_ROLES = {
     OwnerRole.AUTHORITATIVE_RECORD,
     OwnerRole.OBSERVATION_COLLECTOR,
@@ -242,6 +243,12 @@ def _reject_helper_commit(session: Session) -> None:
     definition = session.info.get(_ACTIVE_COMMAND_KEY)
     if definition is None or session.info.get(_BOUNDARY_COMMIT_KEY):
         return
+    authorized_savepoint = session.info.get(_AUTHORIZED_SAVEPOINT_KEY)
+    if (
+        authorized_savepoint is not None
+        and session.get_nested_transaction() is authorized_savepoint
+    ):
+        return
     raise _error(
         definition,
         "nested_transaction_completion",
@@ -250,9 +257,53 @@ def _reject_helper_commit(session: Session) -> None:
 
 
 @event.listens_for(Session, "after_soft_rollback")
-def _record_helper_rollback(session: Session, _previous_transaction: object) -> None:
+def _record_helper_rollback(session: Session, previous_transaction: object) -> None:
+    if session.info.get(_AUTHORIZED_SAVEPOINT_KEY) is previous_transaction:
+        return
     if session.info.get(_ACTIVE_COMMAND_KEY) is not None:
         session.info[_HELPER_ROLLBACK_KEY] = True
+
+
+def execute_owner_savepoint(
+    db: Session,
+    operation: Callable[[], ResultT],
+) -> ResultT:
+    """Isolate one explicitly optional step inside an active owner command.
+
+    The helper alone completes its savepoint. The participant callback remains
+    transaction-neutral, and direct helper commit/rollback calls still fail
+    closed under the surrounding owner command.
+    """
+
+    definition = db.info.get(_ACTIVE_COMMAND_KEY)
+    if definition is None:
+        raise RuntimeError("Owner savepoints require an active owner command")
+    if db.in_nested_transaction():
+        raise _error(
+            definition,
+            "nested_transaction_completion",
+            "Owner savepoints cannot be nested.",
+        )
+
+    savepoint = db.begin_nested()
+    try:
+        result = operation()
+        if db.get_nested_transaction() is not savepoint or not savepoint.is_active:
+            raise _error(
+                definition,
+                "nested_transaction_completion",
+                "A command helper completed the authorized owner savepoint.",
+            )
+        db.info[_AUTHORIZED_SAVEPOINT_KEY] = savepoint
+        savepoint.commit()
+        return result
+    except BaseException:
+        if savepoint.is_active:
+            db.info[_AUTHORIZED_SAVEPOINT_KEY] = savepoint
+            savepoint.rollback()
+        raise
+    finally:
+        db.info.pop(_AUTHORIZED_SAVEPOINT_KEY, None)
 
 
 def execute_owner_command(
@@ -338,4 +389,5 @@ def execute_owner_command(
     finally:
         db.info.pop(_BOUNDARY_COMMIT_KEY, None)
         db.info.pop(_HELPER_ROLLBACK_KEY, None)
+        db.info.pop(_AUTHORIZED_SAVEPOINT_KEY, None)
         db.info.pop(_ACTIVE_COMMAND_KEY, None)

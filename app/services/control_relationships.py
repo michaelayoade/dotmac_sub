@@ -387,35 +387,25 @@ def event_execution_plan(
                 for prior in applicable
                 if HANDLER_CONTROLS[prior.__class__.__name__].stage < control.stage
             )
-            dependencies.extend(
-                dependency
-                for dependency in EVENT_HANDLER_DEPENDENCIES.get(event_type, {}).get(
-                    name, ()
-                )
-                if any(
-                    candidate.__class__.__name__ == dependency
-                    for candidate in applicable
-                )
-            )
-        elif all_declared and control is not None:
-            # Targeted ordering without chaining the whole event: an explicit
-            # dependency gates only its own step, so independent customer and
-            # external outputs cannot be suppressed by a money-handler failure.
-            dependencies.extend(
-                dependency
-                for dependency in EVENT_HANDLER_DEPENDENCIES.get(event_type, {}).get(
-                    name, ()
-                )
-                if any(
-                    candidate.__class__.__name__ == dependency
-                    for candidate in applicable
-                )
-            )
         elif chained:
             # Preserve deterministic behavior for extensions/tests that have not
             # entered the production control registry yet.
             dependencies.extend(
                 prior.__class__.__name__ for prior in applicable[:index]
+            )
+        if all_declared and control is not None:
+            # Explicit owner-to-owner ordering is narrower than a chained event:
+            # it must not make independent communication or external delivery
+            # depend on an unrelated state consequence.
+            dependencies.extend(
+                dependency
+                for dependency in EVENT_HANDLER_DEPENDENCIES.get(event_type, {}).get(
+                    name, ()
+                )
+                if any(
+                    candidate.__class__.__name__ == dependency
+                    for candidate in applicable
+                )
             )
         steps.append(
             EventHandlerStep(
@@ -448,39 +438,17 @@ def validate_event_execution_policy(handlers: Iterable[Any]) -> None:
                 f"Event handler {name} declares unknown event types: {', '.join(unknown)}"
             )
 
-    unknown_dependency_events = sorted(
-        set(EVENT_HANDLER_DEPENDENCIES) - valid_event_types
-    )
+    dependency_event_types = set(EVENT_HANDLER_DEPENDENCIES)
+    unknown_dependency_events = sorted(dependency_event_types - valid_event_types)
     if unknown_dependency_events:
         raise ControlRelationshipError(
-            "Event dependencies declared for unknown event types: "
-            + ", ".join(unknown_dependency_events)
+            "Unknown dependency event types: " + ", ".join(unknown_dependency_events)
         )
 
-    for event_type in sorted(set(EVENT_HANDLER_DEPENDENCIES) - CHAINED_EVENT_TYPES):
-        # A non-chained event may declare targeted gates (a step waits on a
-        # named prerequisite) without chaining independent outputs behind it.
-        plan = event_execution_plan(event_type, resolved)
-        plan_names = {step.handler_name for step in plan}
-        for handler_name, dependencies in EVENT_HANDLER_DEPENDENCIES[
-            event_type
-        ].items():
-            if handler_name not in plan_names:
-                raise ControlRelationshipError(
-                    f"Targeted dependency for {event_type} names handler "
-                    f"{handler_name} that is not subscribed to the event"
-                )
-            missing = sorted(set(dependencies) - plan_names)
-            if missing:
-                raise ControlRelationshipError(
-                    f"Targeted dependency for {event_type}/{handler_name} names "
-                    "unsubscribed prerequisites: " + ", ".join(missing)
-                )
-
-    for event_type in CHAINED_EVENT_TYPES:
+    for event_type in CHAINED_EVENT_TYPES | dependency_event_types:
         dependencies_by_handler = EVENT_HANDLER_DEPENDENCIES.get(event_type, {})
         plan = event_execution_plan(event_type, resolved)
-        if len(plan) < 2:
+        if event_type in CHAINED_EVENT_TYPES and len(plan) < 2:
             raise ControlRelationshipError(
                 f"Chained event {event_type} has fewer than two subscribed handlers"
             )

@@ -6,8 +6,6 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from fastapi import HTTPException
-
 from app.models.payment_proof import PaymentProof, PaymentProofStatus
 from app.services import payment_proofs as payment_proofs_service
 from app.services.action_forms import (
@@ -19,6 +17,8 @@ from app.services.action_forms import (
     ActionOption,
     ActionTone,
 )
+from app.services.domain_errors import DomainError
+from app.services.owner_commands import CommandContext
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -174,11 +174,11 @@ def review_error_submission(
     *,
     action_key: str,
     values: dict[str, object | None],
-    error: HTTPException,
+    error: DomainError,
 ) -> ActionFormSubmission:
     """Preserve one failed command submission using the owner's typed error."""
 
-    detail = str(error.detail)
+    detail = error.message
     field = getattr(error, "field", None)
     return ActionFormSubmission.from_mapping(
         action_key,
@@ -245,7 +245,7 @@ def detail_data(
     try:
         payment_proofs_service.resolve_proof_file(proof)
         file_available = True
-    except Exception:
+    except payment_proofs_service.PaymentProofError:
         file_available = False
 
     review_actions = _review_actions(
@@ -278,37 +278,37 @@ def file_response_args(db: Session, *, proof_id: str) -> tuple[Path, str] | None
 
 def verify_proof(
     db: Session,
-    request,
     *,
+    context: CommandContext,
     proof_id: str,
     verified_by: str,
     amount: str | None,
     auto_allocate: bool,
     review_notes: str | None,
-) -> dict:
+) -> dict[str, object | None]:
     return payment_proofs_service.verify_proof(
         db,
         proof_id,
+        context=context,
         verified_by=verified_by,
         amount=(amount or "").strip() or None,
         auto_allocate=auto_allocate,
         review_notes=review_notes,
-        request=request,
-    )
+    ).to_dict()
 
 
 def reject_proof(
     db: Session,
-    request,
     *,
+    context: CommandContext,
     proof_id: str,
     verified_by: str,
     review_notes: str,
-) -> dict:
+) -> dict[str, object | None]:
     return payment_proofs_service.reject_proof(
         db,
         proof_id,
+        context=context,
         verified_by=verified_by,
         review_notes=review_notes,
-        request=request,
-    )
+    ).to_dict()

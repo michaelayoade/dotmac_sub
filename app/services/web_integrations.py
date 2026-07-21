@@ -37,6 +37,11 @@ from app.services.integrations.runtime_execution import (
     build_execution_context,
     validate_connection,
 )
+from app.services.payment_provider_events import (
+    PaymentProviderEventQuery,
+    ProviderEventOrderBy,
+    ProviderEventOrderDirection,
+)
 from app.validators.forms import parse_uuid
 
 logger = logging.getLogger(__name__)
@@ -1000,14 +1005,12 @@ def build_providers_list_data(db) -> dict[str, object]:
 def build_provider_detail_data(db, *, provider_id: str) -> dict[str, object]:
     provider = billing_service.payment_providers.get(db, provider_id)
     events = billing_service.payment_provider_events.list(
-        db=db,
-        provider_id=str(provider.id),
-        payment_id=None,
-        invoice_id=None,
-        status=None,
-        order_by="received_at",
-        order_dir="desc",
-        limit=50,
-        offset=0,
+        db,
+        PaymentProviderEventQuery(
+            provider_id=provider.id,
+            order_by=ProviderEventOrderBy.received_at,
+            order_direction=ProviderEventOrderDirection.descending,
+            limit=50,
+        ),
     )
     return {"provider": provider, "events": events}

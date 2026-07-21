@@ -606,22 +606,42 @@ def get_some(db: Session, query: GetSome) -> SomeView:
     return SomeView.from_record(obj)
 
 
-def update_some(db: Session, command: UpdateSome) -> SomeUpdated:
-    with db.begin():
-        obj = db.get(Some, command.some_id, with_for_update=True)
-        if obj is None:
-            raise SomeNotFoundError(command.some_id)
-        obj.display_name = command.display_name
-        db.flush()
-        # Stage audit evidence and a versioned event in this transaction.
-        outcome = SomeUpdated(some_id=obj.id)
-    return outcome
+_UPDATE_SOME = OwnerCommandDefinition(
+    owner="example.some_records",
+    concern="some record updates",
+    name="update_some",
+)
+
+
+def update_some(
+    db: Session,
+    command: UpdateSome,
+    *,
+    context: CommandContext,
+) -> SomeUpdated:
+    return execute_owner_command(
+        db,
+        definition=_UPDATE_SOME,
+        context=context,
+        operation=lambda: _update_some(db, command),
+    )
+
+
+def _update_some(db: Session, command: UpdateSome) -> SomeUpdated:
+    obj = db.get(Some, command.some_id, with_for_update=True)
+    if obj is None:
+        raise SomeNotFoundError(command.some_id)
+    obj.display_name = command.display_name
+    db.flush()
+    # Stage audit evidence and a versioned event in this transaction.
+    return SomeUpdated(some_id=obj.id)
 ```
 
 **Key Features**:
 - typed commands, queries, outcomes, and domain errors;
 - explicit field assignment instead of free-form mass assignment;
-- transaction, lock, idempotency, audit, and event ownership in the command;
+- one manifest-verified `execute_owner_command` boundary for transaction, lock,
+  idempotency, audit, and event ownership;
 - authoritative settings resolution through the registered control-plane owner;
 - adapter-only mapping for HTTP, form, task retry, CLI, and provider semantics.
 

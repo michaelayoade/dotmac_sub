@@ -21,6 +21,7 @@ from app.models.billing import (
     PaymentChannelType,
     PaymentMethodType,
     PaymentProviderEventFinancialEffect,
+    PaymentProviderEventSource,
     PaymentProviderEventStatus,
     PaymentProviderType,
     PaymentRefundOrigin,
@@ -481,6 +482,7 @@ class PaymentBase(BaseModel):
     payment_channel_id: UUID | None = None
     collection_account_id: UUID | None = None
     provider_id: UUID | None = None
+    provider_fee: Decimal = Field(default=Decimal("0.00"), ge=0)
     # Bound is create-only (see InvoiceBase); base stays unbounded for *Read.
     amount: Decimal
     currency: str = Field(default="NGN", min_length=3, max_length=3)
@@ -1247,6 +1249,13 @@ class PaymentProviderEventRead(PaymentProviderEventBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
+    source: PaymentProviderEventSource
+    observation_digest: str | None = Field(default=None, min_length=64, max_length=64)
+    observed_payment_status: PaymentStatus | None = None
+    provider_fee: Decimal = Decimal("0.00")
+    net_amount: Decimal | None = None
+    provider_reference: str | None = None
+    error_code: str | None = None
 
 
 class PaymentProviderEventIngest(BaseModel):
@@ -1810,6 +1819,7 @@ class BillingAccountRead(BillingAccountBase):
 
 class BillingAccountConsolidatedPaymentCreate(BaseModel):
     amount: Decimal = Field(gt=0)
+    provider_fee: Decimal = Field(default=Decimal("0.00"), ge=0)
     currency: str = Field(default="NGN", min_length=3, max_length=3)
     paid_at: datetime | None = None
     memo: str | None = None

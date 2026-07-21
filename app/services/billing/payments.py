@@ -215,6 +215,18 @@ class PaymentCreationResult:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class PaymentProviderFeeObservationCommand:
+    """Exact provider fee evidence for an already-recorded payment."""
+
+    payment_id: UUID
+    provider_id: UUID
+    external_id: str
+    gross_amount: Decimal
+    provider_fee: Decimal
+    currency: str
+
+
 @dataclass(frozen=True)
 class PaymentApplicationSummary:
     """Customer-facing application of one confirmed payment.
@@ -1776,7 +1788,64 @@ class Payments(ListResponseMixin):
         return payment_application_summary(db, payment)
 
     @staticmethod
-    def record_verified_provider_settlement(
+    def stage_provider_fee_observation(
+        db: Session,
+        command: PaymentProviderFeeObservationCommand,
+    ) -> Payment:
+        """Stage verified fee evidence without editing payment state in an adapter."""
+
+        payment = lock_for_update(db, Payment, command.payment_id)
+        if payment is None:
+            raise HTTPException(status_code=404, detail="Payment not found")
+        gross = round_money(to_decimal(command.gross_amount))
+        fee = round_money(to_decimal(command.provider_fee))
+        currency = command.currency.strip().upper()
+        external_id = command.external_id.strip()
+        if gross <= Decimal("0.00") or fee < Decimal("0.00") or fee > gross:
+            raise HTTPException(
+                status_code=409,
+                detail="Provider fee evidence does not match a valid gross settlement",
+            )
+        if (
+            payment.external_id != external_id
+            or payment.provider_id not in {None, command.provider_id}
+            or round_money(to_decimal(payment.amount)) != gross
+            or payment.currency != currency
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Provider fee evidence does not match the recorded payment",
+            )
+        recorded_fee = round_money(to_decimal(payment.provider_fee))
+        if fee == Decimal("0.00") or recorded_fee == fee:
+            return payment
+        if recorded_fee != Decimal("0.00"):
+            raise HTTPException(
+                status_code=409,
+                detail="Payment already carries different provider fee evidence",
+            )
+        payment.provider_fee = fee
+        AuditEvents.stage(
+            db,
+            AuditEventCreate(
+                actor_type=AuditActorType.system,
+                action="record_provider_fee_observation",
+                entity_type="payment",
+                entity_id=str(payment.id),
+                metadata_={
+                    "provider_id": str(command.provider_id),
+                    "external_id": external_id,
+                    "gross_amount": str(gross),
+                    "provider_fee": str(fee),
+                    "currency": currency,
+                },
+            ),
+        )
+        db.flush()
+        return payment
+
+    @staticmethod
+    def stage_verified_provider_settlement(
         db: Session,
         *,
         account_id: UUID,
@@ -1789,7 +1858,7 @@ class Payments(ListResponseMixin):
         memo: str,
         paid_at: datetime | None = None,
     ) -> PaymentCreationResult:
-        """Durably record verified provider money before any invoice allocation.
+        """Stage verified provider money before any invoice allocation.
 
         The customer-facing charge remains ``Payment.amount`` (gross). The
         provider fee is preserved separately, while only the net settlement is
@@ -1891,76 +1960,116 @@ class Payments(ListResponseMixin):
             memo=memo,
         )
         db.add(payment)
-        try:
-            db.flush()
-            unallocated_entry = _record_unallocated_payment_credit(db, payment, net)
-            if unallocated_entry is None:
-                raise HTTPException(
-                    status_code=409,
-                    detail="Verified settlement did not create account-credit evidence",
-                )
-            db.flush()
-            settlement = PaymentSettlement(
-                payment_id=payment.id,
-                unallocated_ledger_entry_id=unallocated_entry.id,
-                amount=net,
-                unallocated_amount=net,
-                prepaid_amount=Decimal("0.00"),
-                currency=code,
-                origin=PaymentSettlementOrigin.provider_event,
-                preview_fingerprint=settlement_fingerprint,
-                idempotency_key=settlement_key,
+        db.flush()
+        unallocated_entry = _record_unallocated_payment_credit(db, payment, net)
+        if unallocated_entry is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Verified settlement did not create account-credit evidence",
             )
-            db.add(settlement)
-            db.flush()
-            AuditEvents.stage(
-                db,
-                AuditEventCreate(
-                    actor_type=AuditActorType.system,
-                    action="record_verified_provider_settlement",
-                    entity_type="payment",
-                    entity_id=str(payment.id),
-                    metadata_={
-                        "settlement_id": str(settlement.id),
-                        "provider_id": str(provider_id),
-                        "external_id": external,
-                        "gross_amount": str(gross),
-                        "provider_fee": str(fee),
-                        "net_account_credit": str(net),
-                        "currency": code,
-                        "allocation_state": "unallocated",
-                    },
-                ),
-            )
-            emit_event(
-                db,
-                EventType.payment_received,
-                {
-                    "payment_id": str(payment.id),
+        db.flush()
+        settlement = PaymentSettlement(
+            payment_id=payment.id,
+            unallocated_ledger_entry_id=unallocated_entry.id,
+            amount=net,
+            unallocated_amount=net,
+            prepaid_amount=Decimal("0.00"),
+            currency=code,
+            origin=PaymentSettlementOrigin.provider_event,
+            preview_fingerprint=settlement_fingerprint,
+            idempotency_key=settlement_key,
+        )
+        db.add(settlement)
+        db.flush()
+        AuditEvents.stage(
+            db,
+            AuditEventCreate(
+                actor_type=AuditActorType.system,
+                action="record_verified_provider_settlement",
+                entity_type="payment",
+                entity_id=str(payment.id),
+                metadata_={
                     "settlement_id": str(settlement.id),
-                    "amount": str(gross),
+                    "provider_id": str(provider_id),
+                    "external_id": external,
+                    "gross_amount": str(gross),
                     "provider_fee": str(fee),
-                    "net_amount": str(net),
+                    "net_account_credit": str(net),
                     "currency": code,
-                    "invoice_id": None,
-                    "status": PaymentStatus.succeeded.value,
+                    "allocation_state": "unallocated",
                 },
+            ),
+        )
+        emit_event(
+            db,
+            EventType.payment_received,
+            {
+                "payment_id": str(payment.id),
+                "settlement_id": str(settlement.id),
+                "amount": str(gross),
+                "provider_fee": str(fee),
+                "net_amount": str(net),
+                "currency": code,
+                "invoice_id": None,
+                "status": PaymentStatus.succeeded.value,
+            },
+            account_id=account_id,
+        )
+        db.flush()
+        return PaymentCreationResult(
+            payment=payment,
+            settlement=settlement,
+            preview=None,
+        )
+
+    @staticmethod
+    def record_verified_provider_settlement(
+        db: Session,
+        *,
+        account_id: UUID,
+        provider_id: UUID,
+        external_id: str,
+        gross_amount: Decimal,
+        provider_fee: Decimal,
+        net_amount: Decimal,
+        currency: str,
+        memo: str,
+        paid_at: datetime | None = None,
+    ) -> PaymentCreationResult:
+        """Legacy root wrapper around the flush-only settlement participant."""
+
+        try:
+            result = Payments.stage_verified_provider_settlement(
+                db,
                 account_id=account_id,
-            )
-            db.commit()
-            db.refresh(payment)
-            db.refresh(settlement)
-            return PaymentCreationResult(
-                payment=payment,
-                settlement=settlement,
-                preview=None,
+                provider_id=provider_id,
+                external_id=external_id,
+                gross_amount=gross_amount,
+                provider_fee=provider_fee,
+                net_amount=net_amount,
+                currency=currency,
+                memo=memo,
+                paid_at=paid_at,
             )
         except IntegrityError:
             db.rollback()
-            existing = replay()
-            if existing is not None:
-                return existing
-            raise
+            result = Payments.stage_verified_provider_settlement(
+                db,
+                account_id=account_id,
+                provider_id=provider_id,
+                external_id=external_id,
+                gross_amount=gross_amount,
+                provider_fee=provider_fee,
+                net_amount=net_amount,
+                currency=currency,
+                memo=memo,
+                paid_at=paid_at,
+            )
+        db.commit()
+        db.refresh(result.payment)
+        if result.settlement is not None:
+            db.refresh(result.settlement)
+        return result
 
     @staticmethod
     def preview_creation(
@@ -2691,6 +2800,24 @@ class Payments(ListResponseMixin):
         return created
 
     @staticmethod
+    def stage_create(
+        db: Session,
+        payload: PaymentCreate,
+        *,
+        auto_allocate: bool = True,
+        origin: PaymentSettlementOrigin = PaymentSettlementOrigin.system,
+    ) -> Payment:
+        """Stage a payment observation or settlement without ending the transaction."""
+
+        return Payments._create(
+            db,
+            payload,
+            auto_allocate=auto_allocate,
+            complete_transaction=False,
+            origin=origin,
+        )
+
+    @staticmethod
     def create(
         db: Session,
         payload: PaymentCreate,
@@ -2698,7 +2825,26 @@ class Payments(ListResponseMixin):
         auto_allocate: bool = True,
         commit: bool = True,
         origin: PaymentSettlementOrigin = PaymentSettlementOrigin.system,
-    ):
+    ) -> Payment:
+        """Legacy root wrapper; coordinators use :meth:`stage_create`."""
+
+        return Payments._create(
+            db,
+            payload,
+            auto_allocate=auto_allocate,
+            complete_transaction=commit,
+            origin=origin,
+        )
+
+    @staticmethod
+    def _create(
+        db: Session,
+        payload: PaymentCreate,
+        *,
+        auto_allocate: bool,
+        complete_transaction: bool,
+        origin: PaymentSettlementOrigin,
+    ) -> Payment:
         """Create a payment.
 
         When ``auto_allocate`` is False and no explicit allocations are given,
@@ -2706,11 +2852,8 @@ class Payments(ListResponseMixin):
         recorded as unallocated account credit instead. Default behavior
         (auto-allocate to oldest unpaid invoices) is unchanged.
 
-        ``commit=False`` posts the payment on the caller's transaction and
-        flushes instead of committing, so a caller that is already inside a
-        SAVEPOINT (the bulk import wizard, which isolates each row so one bad
-        row cannot roll back the batch) can still route through this owner
-        rather than hand-rolling a Payment row. The caller owns the commit.
+        Transaction ownership is selected by the named public root or
+        participant before this shared implementation is entered.
         """
         if payload.amount is not None and payload.amount <= 0:
             raise HTTPException(
@@ -2851,7 +2994,7 @@ class Payments(ListResponseMixin):
                     auto_allocate=auto_allocate,
                     origin=origin,
                     idempotency_key=None,
-                    commit=commit,
+                    commit=complete_transaction,
                 ).payment
             if normalized_payload.allocations:
                 raise HTTPException(
@@ -2877,7 +3020,7 @@ class Payments(ListResponseMixin):
                     },
                 ),
             )
-            if commit:
+            if complete_transaction:
                 db.commit()
                 db.refresh(payment)
             else:
@@ -2918,7 +3061,7 @@ class Payments(ListResponseMixin):
                 },
             ),
         )
-        if commit:
+        if complete_transaction:
             db.commit()
             db.refresh(payment)
         else:
@@ -3367,7 +3510,7 @@ class Payments(ListResponseMixin):
         db.commit()
 
     @staticmethod
-    def mark_status(
+    def stage_status_transition(
         db: Session,
         payment_id: str,
         status: PaymentStatus | str,
@@ -3418,6 +3561,7 @@ class Payments(ListResponseMixin):
                 db,
                 payment_id,
                 origin=origin,
+                commit=False,
             ).payment
 
         payment.status = normalized
@@ -3426,9 +3570,6 @@ class Payments(ListResponseMixin):
             if invoice:
                 db.flush()
                 _finalize_invoice_payment_effects(db, invoice)
-        db.commit()
-        db.refresh(payment)
-
         # Emit payment event based on status transition
         if previous_status != normalized:
             allocation_invoice_id = _primary_allocation_invoice_id(payment)
@@ -3456,10 +3597,27 @@ class Payments(ListResponseMixin):
                     account_id=payment.account_id,
                     invoice_id=allocation_invoice_id,
                 )
-            # Persist the inline payment_received handlers' resolve/restore work
-            # (run with commit=False); the payment is already committed above.
-            db.commit()
+        db.flush()
+        return payment
 
+    @staticmethod
+    def mark_status(
+        db: Session,
+        payment_id: str,
+        status: PaymentStatus | str,
+        *,
+        origin: PaymentSettlementOrigin = PaymentSettlementOrigin.system,
+    ) -> Payment:
+        """Legacy root wrapper around the flush-only status participant."""
+
+        payment = Payments.stage_status_transition(
+            db,
+            payment_id,
+            status,
+            origin=origin,
+        )
+        db.commit()
+        db.refresh(payment)
         return payment
 
 
@@ -3630,7 +3788,7 @@ class PaymentAllocationReconciliationExceptions:
         )
 
     @staticmethod
-    def record(
+    def stage_record(
         db: Session,
         *,
         payment_id: UUID,
@@ -3696,12 +3854,37 @@ class PaymentAllocationReconciliationExceptions:
                 },
             ),
         )
-        db.commit()
-        db.refresh(existing)
+        db.flush()
         return existing
 
     @staticmethod
-    def resolve(
+    def record(
+        db: Session,
+        *,
+        payment_id: UUID,
+        invoice_id: UUID,
+        provider_reference: str,
+        external_id: str,
+        error: Exception,
+        topup_intent_id: UUID | None = None,
+    ) -> PaymentAllocationReconciliationException:
+        """Legacy root wrapper around staged allocation-exception evidence."""
+
+        result = PaymentAllocationReconciliationExceptions.stage_record(
+            db,
+            payment_id=payment_id,
+            invoice_id=invoice_id,
+            provider_reference=provider_reference,
+            external_id=external_id,
+            error=error,
+            topup_intent_id=topup_intent_id,
+        )
+        db.commit()
+        db.refresh(result)
+        return result
+
+    @staticmethod
+    def stage_resolve(
         db: Session,
         *,
         payment_id: UUID,
@@ -3723,9 +3906,29 @@ class PaymentAllocationReconciliationExceptions:
         existing.status = "resolved"
         existing.resolved_at = datetime.now(UTC)
         db.add(existing)
-        db.commit()
-        db.refresh(existing)
+        db.flush()
         return existing
+
+    @staticmethod
+    def resolve(
+        db: Session,
+        *,
+        payment_id: UUID,
+        invoice_id: UUID,
+        provider_reference: str,
+    ) -> PaymentAllocationReconciliationException | None:
+        """Legacy root wrapper around staged exception resolution."""
+
+        result = PaymentAllocationReconciliationExceptions.stage_resolve(
+            db,
+            payment_id=payment_id,
+            invoice_id=invoice_id,
+            provider_reference=provider_reference,
+        )
+        db.commit()
+        if result is not None:
+            db.refresh(result)
+        return result
 
 
 def _build_payment_allocation_preview(
@@ -3924,11 +4127,39 @@ class PaymentAllocations(ListResponseMixin):
         )
 
     @staticmethod
+    def stage_confirm(
+        db: Session,
+        payload: PaymentAllocationConfirm,
+    ) -> PaymentAllocationResult:
+        """Stage one fingerprint-bound allocation without ending the transaction."""
+
+        return PaymentAllocations._confirm(
+            db,
+            payload,
+            complete_transaction=False,
+        )
+
+    @staticmethod
     def confirm(
         db: Session,
         payload: PaymentAllocationConfirm,
         *,
         commit: bool = True,
+    ) -> PaymentAllocationResult:
+        """Legacy root wrapper; coordinators use :meth:`stage_confirm`."""
+
+        return PaymentAllocations._confirm(
+            db,
+            payload,
+            complete_transaction=commit,
+        )
+
+    @staticmethod
+    def _confirm(
+        db: Session,
+        payload: PaymentAllocationConfirm,
+        *,
+        complete_transaction: bool,
     ) -> PaymentAllocationResult:
         key = _normalize_payment_allocation_key(payload.idempotency_key)
         replay = PaymentAllocations._replay(
@@ -4041,7 +4272,7 @@ class PaymentAllocations(ListResponseMixin):
                 ),
             )
             db.flush()
-            if commit:
+            if complete_transaction:
                 db.commit()
                 db.refresh(allocation)
             return PaymentAllocationResult(
@@ -4049,6 +4280,8 @@ class PaymentAllocations(ListResponseMixin):
                 preview=preview,
             )
         except IntegrityError as exc:
+            if not complete_transaction:
+                raise
             db.rollback()
             replay = PaymentAllocations._replay(
                 db, key=key, fingerprint=payload.preview_fingerprint
@@ -4059,8 +4292,22 @@ class PaymentAllocations(ListResponseMixin):
                 status_code=409, detail="Allocation is already being recorded"
             ) from exc
         except Exception:
-            db.rollback()
+            if complete_transaction:
+                db.rollback()
             raise
+
+    @staticmethod
+    def stage_record_intent(
+        db: Session,
+        payload: PaymentAllocationCreate,
+    ) -> PaymentAllocation:
+        """Stage a pending-payment allocation observation without committing."""
+
+        return PaymentAllocations._record_intent(
+            db,
+            payload,
+            complete_transaction=False,
+        )
 
     @staticmethod
     def record_intent(
@@ -4068,6 +4315,21 @@ class PaymentAllocations(ListResponseMixin):
         payload: PaymentAllocationCreate,
         *,
         commit: bool = True,
+    ) -> PaymentAllocation:
+        """Legacy root wrapper; coordinators use :meth:`stage_record_intent`."""
+
+        return PaymentAllocations._record_intent(
+            db,
+            payload,
+            complete_transaction=commit,
+        )
+
+    @staticmethod
+    def _record_intent(
+        db: Session,
+        payload: PaymentAllocationCreate,
+        *,
+        complete_transaction: bool,
     ) -> PaymentAllocation:
         """Record invoice intent for pending payment facts without posting money."""
         payment = (
@@ -4128,7 +4390,7 @@ class PaymentAllocations(ListResponseMixin):
             memo=payload.memo,
         )
         db.add(allocation)
-        if commit:
+        if complete_transaction:
             db.commit()
             db.refresh(allocation)
         else:
@@ -5001,6 +5263,8 @@ class Refunds:
                 if consumption_entry:
                     db.refresh(consumption_entry)
         except IntegrityError as exc:
+            if not commit:
+                raise
             db.rollback()
             replay = Refunds._idempotent_result(
                 db,
@@ -5014,7 +5278,8 @@ class Refunds:
                 status_code=409, detail="Refund is already being processed"
             ) from exc
         except Exception:
-            db.rollback()
+            if commit:
+                db.rollback()
             raise
         return PaymentRefundResult(
             refund=refund,
@@ -5025,12 +5290,45 @@ class Refunds:
         )
 
     @staticmethod
+    def stage_provider_event_refund(
+        db: Session,
+        *,
+        payment_id: str,
+        provider_event_id: UUID,
+    ) -> PaymentRefundResult:
+        """Stage a signature-verified provider refund without committing."""
+
+        return Refunds._process_provider_event_refund(
+            db,
+            payment_id=payment_id,
+            provider_event_id=provider_event_id,
+            complete_transaction=False,
+        )
+
+    @staticmethod
     def process_provider_event_refund(
         db: Session,
         *,
         payment_id: str,
         provider_event_id: UUID,
         commit: bool = False,
+    ) -> PaymentRefundResult:
+        """Legacy wrapper; coordinators use :meth:`stage_provider_event_refund`."""
+
+        return Refunds._process_provider_event_refund(
+            db,
+            payment_id=payment_id,
+            provider_event_id=provider_event_id,
+            complete_transaction=commit,
+        )
+
+    @staticmethod
+    def _process_provider_event_refund(
+        db: Session,
+        *,
+        payment_id: str,
+        provider_event_id: UUID,
+        complete_transaction: bool,
     ) -> PaymentRefundResult:
         payment = get_by_id(db, Payment, payment_id)
         if not payment:
@@ -5063,7 +5361,7 @@ class Refunds:
             ),
             origin=PaymentRefundOrigin.provider_event,
             provider_event_id=provider_event_id,
-            commit=commit,
+            commit=complete_transaction,
         )
 
     @staticmethod
@@ -5837,6 +6135,8 @@ class PaymentReversals:
                 if consumption_entry:
                     db.refresh(consumption_entry)
         except IntegrityError as exc:
+            if not commit:
+                raise
             db.rollback()
             replay = PaymentReversals._idempotent_result(
                 db,
@@ -5850,7 +6150,8 @@ class PaymentReversals:
                 status_code=409, detail="Payment reversal is already being processed"
             ) from exc
         except Exception:
-            db.rollback()
+            if commit:
+                db.rollback()
             raise
         return PaymentReversalResult(
             reversal=reversal,
@@ -5861,12 +6162,45 @@ class PaymentReversals:
         )
 
     @staticmethod
+    def stage_provider_event_reversal(
+        db: Session,
+        *,
+        payment_id: str,
+        provider_event_id: UUID,
+    ) -> PaymentReversalResult:
+        """Stage a signature-verified provider reversal without committing."""
+
+        return PaymentReversals._process_provider_event_reversal(
+            db,
+            payment_id=payment_id,
+            provider_event_id=provider_event_id,
+            complete_transaction=False,
+        )
+
+    @staticmethod
     def process_provider_event_reversal(
         db: Session,
         *,
         payment_id: str,
         provider_event_id: UUID,
         commit: bool = False,
+    ) -> PaymentReversalResult:
+        """Legacy wrapper; coordinators use :meth:`stage_provider_event_reversal`."""
+
+        return PaymentReversals._process_provider_event_reversal(
+            db,
+            payment_id=payment_id,
+            provider_event_id=provider_event_id,
+            complete_transaction=commit,
+        )
+
+    @staticmethod
+    def _process_provider_event_reversal(
+        db: Session,
+        *,
+        payment_id: str,
+        provider_event_id: UUID,
+        complete_transaction: bool,
     ) -> PaymentReversalResult:
         payment = get_by_id(db, Payment, payment_id)
         if not payment:
@@ -5898,7 +6232,7 @@ class PaymentReversals:
             ),
             origin=PaymentReversalOrigin.provider_event,
             provider_event_id=provider_event_id,
-            commit=commit,
+            commit=complete_transaction,
         )
 
     @staticmethod

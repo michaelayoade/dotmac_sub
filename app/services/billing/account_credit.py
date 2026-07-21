@@ -304,14 +304,13 @@ class AccountCreditApplications:
                     amount=amount,
                 )
                 preview = PaymentAllocations.preview(db, request)
-                confirmation = PaymentAllocations.confirm(
+                confirmation = PaymentAllocations.stage_confirm(
                     db,
                     PaymentAllocationConfirm(
                         **request.model_dump(),
                         preview_fingerprint=preview.fingerprint,
                         idempotency_key=_allocation_key(payment, invoice),
                     ),
-                    commit=False,
                 )
                 applied = round_money(to_decimal(confirmation.allocation.amount))
                 result.applied = round_money(result.applied + applied)

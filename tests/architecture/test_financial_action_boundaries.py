@@ -128,7 +128,7 @@ def test_payment_refund_adapters_require_owner_preview_and_exact_evidence() -> N
     detail = _source("templates/admin/billing/payment_detail.html")
     edit = _source("templates/admin/billing/payment_form.html")
     confirmation = _source("templates/admin/billing/payment_refund_confirm.html")
-    provider = _source("app/services/billing/providers.py")
+    provider = _source("app/services/payment_provider_events.py")
     owner = _source("app/services/billing/consolidated_payments.py")
     web_service = _source("app/services/web_billing_payments.py")
     generic_api = _source("app/api/billing.py")
@@ -146,8 +146,8 @@ def test_payment_refund_adapters_require_owner_preview_and_exact_evidence() -> N
     assert 'name="idempotency_key"' in confirmation
     assert "Exact evidence and access consequence" in confirmation
     assert "does not promise a particular service-access state" in confirmation
-    assert "Refunds.process_provider_event_refund" in provider
-    assert "ConsolidatedPaymentRefunds.process_provider_event" in provider
+    assert "Refunds.stage_provider_event_refund" in provider
+    assert "ConsolidatedPaymentRefunds.stage_provider_event" in provider
     assert "consolidated_payment_refunds.preview" in web_service
     assert "consolidated_payment_refunds.confirm" in web_service
     assert "consolidated_payment_refunds.preview" in generic_api
@@ -157,7 +157,7 @@ def test_payment_refund_adapters_require_owner_preview_and_exact_evidence() -> N
     assert "ConsolidatedPaymentReturnAllocationEvidence(" in owner
     assert "Consolidated credit" in confirmation
     assert "subscriber allocation-reversal ledger row(s)" in confirmation
-    assert "Payments.mark_status(" in provider
+    assert "Payments.stage_status_transition(" in provider
     assert "origin=PaymentSettlementOrigin.provider_event" in provider
 
 
@@ -166,8 +166,8 @@ def test_payment_reversal_adapters_require_owner_preview_and_exact_evidence() ->
     detail = _source("templates/admin/billing/payment_detail.html")
     edit = _source("templates/admin/billing/payment_form.html")
     confirmation = _source("templates/admin/billing/payment_reversal_confirm.html")
-    provider = _source("app/services/billing/providers.py")
-    verified_webhook = _source("app/services/api_billing_webhooks.py")
+    provider = _source("app/services/payment_provider_events.py")
+    verified_webhook = _source("app/services/payment_webhook_commands.py")
     generic_api = _source("app/api/billing.py")
     owner = _source("app/services/billing/consolidated_payments.py")
     web_service = _source("app/services/web_billing_payments.py")
@@ -184,8 +184,8 @@ def test_payment_reversal_adapters_require_owner_preview_and_exact_evidence() ->
     assert 'name="idempotency_key"' in confirmation
     assert "Exact evidence and access consequence" in confirmation
     assert "does not contact a bank or provider" in confirmation
-    assert "PaymentReversals.process_provider_event_reversal" in provider
-    assert "ConsolidatedPaymentReversals.process_provider_event" in provider
+    assert "PaymentReversals.stage_provider_event_reversal" in provider
+    assert "ConsolidatedPaymentReversals.stage_provider_event" in provider
     assert "consolidated_payment_reversals.preview" in web_service
     assert "consolidated_payment_reversals.confirm" in web_service
     assert "consolidated_payment_reversals.preview" in generic_api
@@ -194,7 +194,9 @@ def test_payment_reversal_adapters_require_owner_preview_and_exact_evidence() ->
     assert 'action="reverse_consolidated_payment"' in owner
     assert "Consolidated credit" in confirmation
     assert "subscriber allocation-reversal ledger row(s)" in confirmation
-    assert "trusted_financial_effects=True" in verified_webhook
+    assert "stage_verified_webhook_event" in verified_webhook
+    assert "PaymentWebhookProvider" in verified_webhook
+    assert "trusted_financial_effects" not in verified_webhook
     assert "trusted_financial_effects=True" not in generic_api
 
 
@@ -382,7 +384,7 @@ def test_native_credit_reconciliation_composes_the_payment_allocation_owner() ->
     reconciliation = _source("app/services/billing/reconcile_unposted.py")
 
     assert "PaymentAllocations.preview(" in reconciliation
-    assert "PaymentAllocations.confirm(" in reconciliation
+    assert "PaymentAllocations.stage_confirm(" in reconciliation
     assert "PaymentAllocationConfirm(" in reconciliation
     assert "preview_fingerprint=preview.fingerprint" in reconciliation
     assert "reconcile-unposted-" in reconciliation
@@ -394,7 +396,8 @@ def test_deposit_adapters_compose_named_credit_owners() -> None:
     deposit_owner = _source("app/services/account_credit_deposits.py")
     application_owner = _source("app/services/billing/account_credit.py")
     portal = _source("app/services/customer_portal_flow_payments.py")
-    webhook = _source("app/services/api_billing_webhooks.py")
+    gateway_intent_owner = _source("app/services/gateway_topup_intents.py")
+    webhook = _source("app/services/payment_webhook_commands.py")
     proofs = _source("app/services/payment_proofs.py")
     invoice_owner = _source("app/services/billing/invoices.py")
 
@@ -403,13 +406,15 @@ def test_deposit_adapters_compose_named_credit_owners() -> None:
     assert "PaymentAllocation(" not in deposit_owner
     assert "LedgerEntry(" not in deposit_owner
     assert "PaymentAllocations.preview(" in application_owner
-    assert "PaymentAllocations.confirm(" in application_owner
+    assert "PaymentAllocations.stage_confirm(" in application_owner
     assert "PaymentAllocation(" not in application_owner
     assert "LedgerEntry(" not in application_owner
-    assert "AccountCreditDeposits.create_intent(" in portal
+    assert "create_customer_gateway_topup_intent(" in portal
+    assert "AccountCreditDeposits.stage_intent(" in gateway_intent_owner
+    assert "AccountCreditDeposits.create_intent(" not in portal
     assert "AccountCreditDeposits.settle_verified(" in portal
-    assert "AccountCreditDeposits.settle_verified(" in webhook
-    assert "AccountCreditDeposits.settle_verified(" in proofs
+    assert "AccountCreditDeposits.stage_verified_settlement(" in webhook
+    assert "AccountCreditDeposits.stage_verified_settlement(" in proofs
     assert "AccountCreditApplications.apply(" in invoice_owner
     assert "AccountCreditApplications.release_for_invoice_void(" in invoice_owner
     assert "def release_for_invoice_void(" in application_owner

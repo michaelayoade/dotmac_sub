@@ -1826,6 +1826,16 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.billing,
+        key="gateway_topup_intent_ttl_minutes",
+        env_var="BILLING_GATEWAY_TOPUP_INTENT_TTL_MINUTES",
+        value_type=SettingValueType.integer,
+        default=30,
+        min_value=5,
+        max_value=1440,
+        label="Gateway Top-Up Intent Lifetime (minutes)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
         key="topup_preset_amounts",
         env_var="BILLING_TOPUP_PRESET_AMOUNTS",
         value_type=SettingValueType.string,
@@ -1973,6 +1983,26 @@ SETTINGS_SPECS: list[SettingSpec] = [
         min_value=1,
         max_value=30,
         label="Top-up Reconciliation Max Age Days",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="topup_reconciliation_expiry_grace_hours",
+        env_var="BILLING_TOPUP_RECONCILIATION_EXPIRY_GRACE_HOURS",
+        value_type=SettingValueType.integer,
+        default=24,
+        min_value=0,
+        max_value=168,
+        label="Top-up Reconciliation Expiry Grace Hours",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="topup_reconciliation_batch_size",
+        env_var="BILLING_TOPUP_RECONCILIATION_BATCH_SIZE",
+        value_type=SettingValueType.integer,
+        default=50,
+        min_value=1,
+        max_value=500,
+        label="Top-up Reconciliation Batch Size",
     ),
     SettingSpec(
         domain=SettingDomain.billing,
@@ -2124,8 +2154,8 @@ SETTINGS_SPECS: list[SettingSpec] = [
         label="Postpaid Default Minimum Balance",
     ),
     # --- Direct bank transfer (customer-visible payment instructions) ---
-    # Consumed by app.services.customer_portal_flow_payments.direct_bank_transfer_*
-    # (plus the reseller/me variants), which read value_text directly. The
+    # Consumed through app.services.topup_intents.direct_transfer_configuration;
+    # customer, reseller, and API adapters only serialize that owner projection. The
     # ``_accounts`` value holds a JSON *string* in value_text (not value_json),
     # so it is typed ``string`` deliberately — a ``json`` type would move it to
     # value_json and the readers would see an empty transfer config.
@@ -2152,6 +2182,16 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.string,
         default="",
         label="Direct Bank Transfer Accounts (JSON)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="direct_bank_transfer_intent_ttl_days",
+        env_var="BILLING_DIRECT_BANK_TRANSFER_INTENT_TTL_DAYS",
+        value_type=SettingValueType.integer,
+        default=7,
+        min_value=1,
+        max_value=30,
+        label="Direct Bank Transfer Intent Lifetime (days)",
     ),
     SettingSpec(
         domain=SettingDomain.billing,

@@ -140,6 +140,15 @@ class PaymentProviderEventStatus(enum.Enum):
     failed = "failed"
 
 
+class PaymentProviderEventSource(enum.Enum):
+    """Persisted trust boundary for normalized provider observations."""
+
+    legacy_unknown = "legacy_unknown"
+    administrative_ingest = "administrative_ingest"
+    verified_webhook = "verified_webhook"
+    gateway_reconciliation = "gateway_reconciliation"
+
+
 class LedgerEntryType(enum.Enum):
     debit = "debit"
     credit = "credit"
@@ -2353,9 +2362,23 @@ class PaymentProviderEvent(Base):
     event_type: Mapped[str] = mapped_column(String(120), nullable=False)
     external_id: Mapped[str | None] = mapped_column(String(160))
     idempotency_key: Mapped[str | None] = mapped_column(String(160))
+    source: Mapped[PaymentProviderEventSource] = mapped_column(
+        Enum(PaymentProviderEventSource),
+        default=PaymentProviderEventSource.legacy_unknown,
+        nullable=False,
+    )
+    observation_digest: Mapped[str | None] = mapped_column(String(64))
+    observed_payment_status: Mapped[PaymentStatus | None] = mapped_column(
+        Enum(PaymentStatus)
+    )
     # Normalized monetary observation supplied by the verified provider adapter.
     # Refund execution uses this value instead of interpreting raw provider JSON.
     amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    provider_fee: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), default=Decimal("0.00"), nullable=False
+    )
+    net_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    provider_reference: Mapped[str | None] = mapped_column(String(120))
     currency: Mapped[str | None] = mapped_column(String(3))
     financial_effect: Mapped[PaymentProviderEventFinancialEffect] = mapped_column(
         Enum(PaymentProviderEventFinancialEffect),
@@ -2365,6 +2388,7 @@ class PaymentProviderEvent(Base):
         Enum(PaymentProviderEventStatus), default=PaymentProviderEventStatus.pending
     )
     payload: Mapped[dict | None] = mapped_column(JSON)
+    error_code: Mapped[str | None] = mapped_column(String(120))
     error: Mapped[str | None] = mapped_column(Text)
     received_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)

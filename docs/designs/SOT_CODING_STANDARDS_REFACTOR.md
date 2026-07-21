@@ -1,33 +1,34 @@
 # SOT coding standards refactor
 
-Status: implemented
+Status: active, not merge-ready
 
 Change classification: major
 
 Owning system: Dotmac Sub
 
-Working branch: `feat/sot-coding-standards-refactor`
+Working branch: `feat/sot-coding-standards-refactor-main-sync`
 
-Base: `origin/main` at `ec6ee30a725f0f1c7619e3fa7b738d05d71b26ae`
+Base: `origin/main` at `b3899a0492ae0d61c3ed5571cd834570ffe0f965`
 
 ## Baseline at branch creation
 
-- 270 undeclared persistence-writing service modules.
-- 351 direct decision-input bypass occurrences: 142 environment reads and 209
+- 253 undeclared persistence-writing service modules.
+- 334 direct decision-input bypass occurrences: 133 environment reads and 201
   raw setting reads.
-- 16 web/API files and 36 task files with direct transaction commits.
-- 225 service files containing FastAPI `HTTPException` references; the AST
-  inventory confirms 224 files currently use an imported symbol.
+- 86 adapter files containing 379 transaction operations or legacy
+  transaction-helper calls.
+- 212 service files containing FastAPI `HTTPException` references.
 - 66 architecture-test modules.
 
-The foundation scanner additionally records 402 transaction operations or
-legacy transaction-helper calls across 89 API, web, task, and event-handler
-adapter files. The executable registry contains 28 domains and 254 service
+The foundation scanner additionally records 379 transaction operations or
+legacy transaction-helper calls across 86 API, web, task, and event-handler
+adapter files. The executable registry contains 28 domains and 261 service
 entries. Its one exact duplicate concern claim has been split into distinct
 observation-evidence and customer-resolution concerns.
 
-Typed manifest migration now has 43 fully contracted services and 211 indexed
-legacy services in a shrink-only baseline. New registry services cannot
+Typed manifest migration now has 64 fully contracted services and 212 indexed
+legacy services on the reconciled v5.1.0 registry in a shrink-only baseline.
+New registry services cannot
 be added without role-qualified concerns, authoritative inputs, transaction and
 error semantics, migration state, stewardship, checked-in evidence, and any
 applicable event or projection/repair contract.
@@ -247,6 +248,199 @@ current baseline from 261 to 255. Their four new integration authorities and two
 new staff-review confirmation coordinators are fully contracted rather than
 being added to the legacy-service baseline; removal of the retired hook and
 webhook-delivery owners reduces that baseline from 213 to 211.
+
+The current-main reconciliation through PRs #1501 and #1502 contracts the new
+real-time projection, operational SLA escalation, operational SLA policy-command,
+and ticket SLA-clock owners without adding them to the legacy baseline. The
+real-time owner is explicitly policy/transport with no database transaction or
+durable-state authority. Operational SLA record writes are flush-only
+participants; the typed admin policy coordinator owns the root transaction, and
+ticket breach evaluation participates in the support lifecycle transaction. The
+SSE adapter now releases its read transaction through the canonical database
+session boundary instead of owning rollback.
+
+The completed payment-proof slice is `financial.payment_proofs`. Customer,
+reseller, API, and admin-web adapters now enter typed submit, verify, and reject
+commands on transaction-free sessions and serialize an immutable
+`PaymentProofResult`. Review commands lock the exact proof before the credited
+subscriber or billing account; proof state, canonical payment or consolidated
+settlement, tax-owned WHT source and timeline evidence, reviewer work items, audit rows,
+customer communication intents, and versioned outbox events commit or roll back
+together. One HTTP adapter owns domain-code mapping for every transport. Direct
+service commits, framework exceptions, request-shaped audit calls, nested
+savepoints, swallowed consequence failures, and primitive command dictionaries
+are retired. The slice moves the manifest baseline from 211 to 210 legacy
+services and removes both payment-proof service-layer HTTP exception modules,
+reducing that baseline from 214 to 212.
+
+The completed direct-transfer proof-link slice adds
+`financial.topup_intents` as the flush-only participant for the exact pending
+intent's submitted transition and PaymentProof/configured-bank evidence link.
+The payment-proof owner locks the intent before creating the proof and commits
+the proof, reviewer work item, proof event, intent transition, evidence link,
+and intent event in one root transaction. The customer portal now supplies a
+typed intent/bank-evidence command and owns neither status/metadata keys nor a
+follow-up commit. Gateway completion, reconciliation, replacement, expiry, and
+reseller transitions still use the shared validated status policy. The later
+completed slices below close those remaining top-up lifecycle boundaries.
+
+The completed direct-transfer creation slice adds
+`financial.direct_transfer_intent_commands` as the typed root coordinator for
+customer invoice-payment and account-credit deposit requests. It resolves the
+feature gate, configured destinations, amount limits, and intent lifetime from
+their named control owners; locks the account and payable invoice before
+deriving the invoice balance; and composes flush-only participants for the
+canonical intent write. `financial.topup_intents` now owns the direct-transfer
+configuration projection plus invoice-intent creation and explicit replacement,
+while `financial.account_credit_deposits` stages deposit-intent eligibility and
+evidence without completing the caller transaction. Intent creation,
+replacement cancellation, and versioned event evidence commit or roll back
+together. The portal is a typed adapter, caller amounts cannot override a
+locked invoice balance, idempotent replay cannot create a second intent or
+event, and the previous random configured-account identifier and local
+seven-day lifetime constant are retired. Completion, expiry, gateway creation,
+and reseller creation are completed in the following lifecycle slices.
+
+The completed top-up completion/expiry projection slice extends
+`financial.topup_intents` as the sole writer of `completed_payment_id`,
+`external_id`, `actual_amount`, `completed_at`, and gateway-expired status.
+Typed completion commands identify only the intent, canonical succeeded
+Payment, and named source; the participant locks subscriber or billing-account
+scope, the exact intent, and the Payment, then derives every projected money,
+provider-transaction, currency, and time value from payment evidence. Deposit,
+webhook, customer verify, reconciliation, and reseller callers no longer assign
+those fields. Same-payment replay is a no-op, conflicting evidence fails closed,
+and versioned completion/expiry events share the caller transaction. Confirmed
+cash remains authoritative and cash-first payment owners may commit it before
+this repairable projection, so a projection failure cannot erase received
+money. Reconciliation routes typed deposits through
+`financial.account_credit_deposits`, while its stale window, max age, and expiry
+grace all resolve from `control.settings_spec`; the former local expiry constant
+is retired. The broader webhook/reconciliation coordinators remain legacy until
+their transaction and transport concerns are migrated.
+
+The completed gateway creation/failure slice adds
+`financial.gateway_topup_intent_commands` as the typed root coordinator for
+customer invoice checkout, customer account-credit deposit, reseller
+consolidated checkout, and saved-card failure consequences. Invoice amount and
+currency are re-derived from the locked invoice; reseller currency and owner
+are re-derived from the locked billing account; deposit limits remain owned by
+`financial.account_credit_deposits`; and the bounded
+`gateway_topup_intent_ttl_minutes` setting is the single gateway-intent lifetime
+policy. `financial.topup_intents` is now the sole generic invoice/reseller
+gateway record writer and the sole failed-status writer. Customer and reseller
+portals retain only provider selection, card-token transport, and response
+serialization. A charge decline re-enters a separate owner command that marks
+the intent failed and releases an unused saved-card idempotency reservation in
+one transaction, so a retry cannot be stranded between two commits. The former
+portal constructors, duplicated 30-minute constants, raw intent-metadata
+assembly, and split failure/retry-release writes are retired. Creation and
+failure events carry versioned scope and command-correlation evidence without
+exposing gateway error details.
+
+The completed account-credit deposit settlement slice contracts
+`financial.account_credit_deposits` as the single settlement owner. Customer
+gateway verification and gateway reconciliation enter one typed root command
+on transaction-free sessions; payment-webhook ingestion and payment-proof
+review compose the same typed flush-only participant inside their wider owner
+transactions. Provider identity, exact intent correlation, amount, currency,
+settlement origin, payment memo, audit metadata, and the schema-v1 deposit event
+are derived from closed command/source contracts and locked canonical intent
+evidence. The legacy intent transaction wrapper, transport-shaped
+`PaymentGatewayTransaction` input, caller-selected settlement origin, commit
+flag, and caller settlement commits are retired. A forced event-staging failure
+proves that payment, credit application, intent projection, audit, and event
+evidence roll back together. This slice moves the typed manifest baseline from
+51 contracted and 210 legacy services to 52 contracted and 209 legacy services.
+
+The payment-webhook prerequisite slice now gives every settlement collaborator
+a named transaction-neutral entry point. Provider-event ingestion composes
+flush-only generic payment, consolidated settlement, allocation intent and
+confirmation, refund/reversal evidence, payment-status, provider cash, and
+allocation-exception participants. Legacy roots retain their commit/replay
+wrappers, while participant error paths never roll back a wider transaction.
+Verified invoice allocation is isolated through the central owner-command
+savepoint API: deterministic failure removes partial allocation writes and
+stages one reconciliation exception with the confirmed provider cash, while
+direct participant transaction completion remains forbidden. Provider fees
+enter the payment/deposit owners as typed evidence and are no longer a webhook-
+side mutation. Architecture tests pin these boundaries before
+`financial.payment_webhooks` is promoted to its typed coordinator contract; the
+manifest baseline therefore remains 52 contracted and 209 legacy services in
+this prerequisite slice.
+
+The completed payment-webhook slice contracts `financial.payment_webhooks` as
+the typed coordinator for consequences of a claimed signature-verified receipt.
+Paystack and Flutterwave adapters now own only signature verification, JSON/HTTP
+mapping, durable inbox admission, and submission of the typed receipt identity.
+The coordinator locks and normalizes the stored receipt, then composes named
+flush-only account-credit, provider-event, payment/allocation, and top-up
+participants. Money, allocation, intent, audit/event, and processed-receipt
+evidence commit or roll back in one owner transaction. A failed consequence is
+followed by a separate `integration.inbox` owner command that records retry or
+dead-letter evidence. Direct adapter ORM writes, commits, rollbacks, savepoints,
+provider mappings, fee mutation, and synchronous service-restoration/prepaid-
+draft fallbacks are retired. Forced processed-receipt failure proves payment,
+invoice allocation, provider event, and receipt projection atomicity. This
+slice moves the manifest to 53 contracted and 208 legacy services and reduces
+the service-layer HTTP-exception baseline from 212 to 211 without growing the
+writer, decision-input, or adapter-transaction baselines.
+
+The completed payment-reconciliation slice contracts
+`financial.payment_reconciliation` as the application coordinator for stranded
+gateway top-ups. The sweep resolves typed stale-window, maximum-age, expiry-
+grace, and batch-size policy; selects immutable candidates; and releases its
+read transaction before provider verification. Each definitive provider
+observation enters an independent manifest-verified consequence transaction
+that composes the canonical deposit, provider-event, payment/allocation, and
+top-up completion or expiry participants. Provider plus reference reuses the
+same event identity as webhook ingestion, so either path resumes rather than
+duplicates settlement. The legacy scheduled session wrapper, helper commits and
+rollbacks, private provider lookup, guessed invoice allocation, direct payment
+decision path, prepaid-draft fallback, and synchronous access restoration are
+retired. The provider remains the observation source and
+`financial.topup_intents` remains the expiry decision owner, avoiding a
+participant-to-coordinator dependency cycle. This slice moves the manifest to
+54 contracted and 207 legacy services without growing the debt baselines.
+
+The completed tax-accounting slice contracts `financial.tax_accounting` as the
+source-document tax semantics, WHT source-record, lifecycle, timeline, and
+read-projection owner. Tax reports and the operator queue now return typed
+immutable read models; invalid dates, currencies, filters, and pagination fail
+with stable domain errors instead of silently defaulting. Proof-backed WHT
+creation is a typed, exact-replay, flush-only participant of the payment-proof
+transaction and stages its versioned receivable event once. Staff WHT
+transitions enter one manifest-verified owner command, lock the WHT record then
+its linked payment, and commit lifecycle state, append-only timeline, ERP-sync
+freshness, audit, and a versioned transition event atomically. The admin route
+owns only form parsing and safe domain-error presentation; its rollback,
+separate audit, public lifecycle initializer, commit flag, primitive report
+bags, and duplicate event path are retired. Rollback, replay, evidence,
+projection, admin-rendering, PostgreSQL row-lock concurrency, and architecture
+tests protect the boundary. On the reconciled v5.1.0 base this moves the
+executable manifest from 62 contracted/214 legacy services to 63 contracted/213
+legacy services and reduces adapter transaction debt from 373 to 372 operations
+across 83 files.
+
+The completed payment-provider-event slice contracts
+`financial.payment_provider_events` as the canonical admission and processing
+owner for provider observations. Provider configuration remains isolated in
+`billing.providers`; the caller-selected trust boolean, helper commit,
+source-free event record, transport-shaped mutable input, and return-on-
+identity-without-proof paths are retired. The owner persists the explicit
+administrative, verified-webhook, or gateway-reconciliation source together
+with normalized status, gross, fee, net, currency, provider reference,
+processing result, and an exact evidence digest. Administrative commands are
+informational only, while verified flush-only participants enforce their named
+command scopes. Provider locking serializes concurrent first inserts; exact
+replays return once and changed evidence fails closed. Required webhook
+currency and invoice-settlement net evidence are never invented, and the
+unresolved provider gross/net/fee policy remains explicitly owned by
+`financial.payments` and Finance. Atomic audit/event rollback, existing
+settlement/refund/reversal behavior, architecture boundaries, and PostgreSQL
+concurrency tests protect the cutover. This moves the executable manifest from
+63 contracted/213 legacy services to 64 contracted/212 legacy services without
+growing the adapter-transaction or service HTTP-coupling debt baselines.
 
 These are burn-down measures, not approved exceptions. Reproducible inventory
 and shrink-only enforcement are part of the foundation workstream.

@@ -35,6 +35,11 @@ from app.schemas.billing import (
 from app.services import billing as billing_service
 from app.services.billing._common import get_account_credit_balance
 from app.services.customer_financial_ledger import calculate_customer_balance
+from app.services.payment_provider_events import PaymentProviderEventError
+from tests.payment_provider_event_helpers import (
+    ingest_administrative_event,
+    stage_verified_provider_event,
+)
 
 
 def _invoice(db, subscriber, amount: str = "100.00") -> Invoice:
@@ -223,11 +228,13 @@ def test_provider_reversal_requires_normalized_exact_event(db_session, subscribe
         currency="NGN",
         idempotency_key=f"provider-reversal-untrusted-{uuid4().hex}",
     )
-    with pytest.raises(HTTPException) as untrusted:
-        billing_service.payment_provider_events.ingest(db_session, untrusted_payload)
-    assert untrusted.value.status_code == 409
+    with pytest.raises(PaymentProviderEventError) as untrusted:
+        ingest_administrative_event(db_session, untrusted_payload)
+    assert untrusted.value.code == (
+        "financial.payment_provider_events.untrusted_financial_effect"
+    )
 
-    event = billing_service.payment_provider_events.ingest(
+    event = stage_verified_provider_event(
         db_session,
         PaymentProviderEventIngest(
             provider_id=provider.id,
@@ -237,7 +244,6 @@ def test_provider_reversal_requires_normalized_exact_event(db_session, subscribe
             currency="NGN",
             idempotency_key=f"provider-reversal-{uuid4().hex}",
         ),
-        trusted_financial_effects=True,
     )
     reversal = db_session.query(PaymentReversal).one()
     db_session.refresh(payment)
@@ -265,8 +271,8 @@ def test_provider_reversal_fails_closed_on_inexact_money(
     db_session.commit()
     payment = _payment(db_session, subscriber, provider=provider)
 
-    with pytest.raises(HTTPException) as mismatch:
-        billing_service.payment_provider_events.ingest(
+    with pytest.raises(PaymentProviderEventError) as mismatch:
+        stage_verified_provider_event(
             db_session,
             PaymentProviderEventIngest(
                 provider_id=provider.id,
@@ -276,9 +282,10 @@ def test_provider_reversal_fails_closed_on_inexact_money(
                 currency=currency,
                 idempotency_key=f"provider-reversal-bad-{uuid4().hex}",
             ),
-            trusted_financial_effects=True,
         )
-    assert mismatch.value.status_code == 409
+    assert mismatch.value.code == (
+        "financial.payment_provider_events.financial_consequence_rejected"
+    )
     db_session.rollback()
     assert db_session.query(PaymentReversal).count() == 0
 
@@ -293,8 +300,8 @@ def test_provider_status_hint_without_normalized_reversal_effect_fails_closed(
     db_session.commit()
     payment = _payment(db_session, subscriber, provider=provider)
 
-    with pytest.raises(HTTPException) as missing_effect:
-        billing_service.payment_provider_events.ingest(
+    with pytest.raises(PaymentProviderEventError) as missing_effect:
+        stage_verified_provider_event(
             db_session,
             PaymentProviderEventIngest(
                 provider_id=provider.id,
@@ -305,9 +312,10 @@ def test_provider_status_hint_without_normalized_reversal_effect_fails_closed(
                 currency="NGN",
                 idempotency_key=f"provider-reversal-unknown-{uuid4().hex}",
             ),
-            trusted_financial_effects=True,
         )
-    assert missing_effect.value.status_code == 409
+    assert missing_effect.value.code == (
+        "financial.payment_provider_events.financial_effect_required"
+    )
     db_session.rollback()
 
 

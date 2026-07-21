@@ -11,6 +11,36 @@ from starlette.requests import Request
 from app.db import get_db
 from app.services import payment_proofs as svc
 from app.services.auth_dependencies import require_user_auth
+from app.services.db_session_adapter import db_session_adapter
+from app.services.owner_commands import CommandContext
+
+
+def _context(action: str) -> CommandContext:
+    return CommandContext.system(
+        actor="test:payment-proof-admin",
+        scope=(svc.SUBMISSION_SCOPE if action == "submit" else svc.REVIEW_SCOPE),
+        reason=f"Payment-proof admin {action} behavior test",
+    )
+
+
+def _submit(db_session, *args, **kwargs) -> dict[str, object | None]:
+    db_session_adapter.release_read_transaction(db_session)
+    return svc.submit_proof(
+        db_session,
+        *args,
+        context=_context("submit"),
+        **kwargs,
+    ).to_dict()
+
+
+def _verify(db_session, proof_id, **kwargs) -> dict[str, object | None]:
+    db_session_adapter.release_read_transaction(db_session)
+    return svc.verify_proof(
+        db_session,
+        proof_id,
+        context=_context("verify"),
+        **kwargs,
+    ).to_dict()
 
 
 def _routes(router) -> set[tuple[str, str]]:
@@ -19,6 +49,12 @@ def _routes(router) -> set[tuple[str, str]]:
         for route in router.routes
         for method in getattr(route, "methods", set())
     }
+
+
+def _clean_session_mock() -> MagicMock:
+    db = MagicMock()
+    db.in_transaction.return_value = False
+    return db
 
 
 class TestAdminWebRouteRegistration:
@@ -70,7 +106,7 @@ class TestAdminWebVerifyRejectHandlers:
                 amount="4500.00",
                 auto_allocate="no",
                 review_notes="checked",
-                db=MagicMock(),
+                db=_clean_session_mock(),
                 auth={"principal_id": "admin-1"},
             )
         kwargs = service.verify_proof.call_args.kwargs
@@ -97,8 +133,9 @@ class TestAdminWebVerifyRejectHandlers:
                 return_value=rendered,
             ) as detail_response,
         ):
-            service.verify_proof.side_effect = HTTPException(
-                status_code=409, detail="Reference already verified"
+            service.verify_proof.side_effect = svc.PaymentProofReviewError(
+                code="financial.payment_proofs.duplicate_transfer_reference",
+                message="Reference already verified",
             )
             response = payment_proofs_verify(
                 request=MagicMock(),
@@ -106,7 +143,7 @@ class TestAdminWebVerifyRejectHandlers:
                 amount="",
                 auto_allocate="yes",
                 review_notes="",
-                db=MagicMock(),
+                db=_clean_session_mock(),
                 auth={"principal_id": "admin-1"},
             )
         assert response.status_code == 409
@@ -125,7 +162,7 @@ class TestAdminWebVerifyRejectHandlers:
                 request=MagicMock(),
                 proof_id=proof_id,
                 review_notes="No matching transfer",
-                db=MagicMock(),
+                db=_clean_session_mock(),
                 auth={"principal_id": "admin-2"},
             )
         kwargs = service.reject_proof.call_args.kwargs
@@ -156,7 +193,7 @@ def proof_env(db_session, tmp_path, monkeypatch):
     other = _subscriber(db_session, "proof.other@example.com")
     receipt = tmp_path / "receipt.png"
     receipt.write_bytes(b"\x89PNG-not-really-but-fine")
-    proof = svc.submit_proof(
+    proof = _submit(
         db_session,
         str(owner.id),
         submitted_by=str(owner.id),
@@ -285,7 +322,7 @@ class TestProofFileEndpointAuth:
     ) -> None:
         """A file_path pointing outside uploads/payment_proofs must never be
         served, even to an admin."""
-        evil = svc.submit_proof(
+        evil = _submit(
             db_session,
             str(proof_env["owner"].id),
             submitted_by=str(proof_env["owner"].id),
@@ -361,7 +398,7 @@ class TestAdminPagesRender:
     def test_detail_page_shows_duplicate_warning_and_error(
         self, db_session, proof_env
     ) -> None:
-        svc.submit_proof(
+        _submit(
             db_session,
             str(proof_env["owner"].id),
             submitted_by=str(proof_env["owner"].id),
@@ -392,7 +429,7 @@ class TestAdminPagesRender:
     def test_detail_disables_verify_after_duplicate_reference_was_paid(
         self, db_session, proof_env
     ) -> None:
-        duplicate = svc.submit_proof(
+        duplicate = _submit(
             db_session,
             str(proof_env["owner"].id),
             submitted_by=str(proof_env["owner"].id),
@@ -400,7 +437,7 @@ class TestAdminPagesRender:
             reference="TRF-FILE",
             file_path=str(proof_env["receipt"]),
         )
-        svc.verify_proof(db_session, duplicate["id"], verified_by="admin")
+        _verify(db_session, duplicate["id"], verified_by="admin")
         from app.web.admin.billing_payment_proofs import payment_proofs_detail
 
         with (
