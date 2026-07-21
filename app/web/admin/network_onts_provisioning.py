@@ -19,6 +19,9 @@ from app.services import web_admin as web_admin_service
 from app.services import (
     web_network_onts_provisioning as web_onts_provisioning_service,
 )
+from app.services import (
+    web_network_provisioning_ledger as web_network_provisioning_ledger_service,
+)
 from app.services.auth_dependencies import require_permission
 from app.services.network import ont_provision_steps as steps
 from app.services.network.action_logging import actor_label, log_network_action_result
@@ -569,4 +572,23 @@ def abandon_ont_compensation_failure(
         f"/admin/network/onts/{ont_id}?tab=history",
         message=message,
         toast_type="success" if success else "error",
+    )
+
+
+@router.get(
+    "/provisioning",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("provisioning:read"))],
+)
+def provisioning_ledger(
+    request: Request,
+    facet: str = Query(default="orders"),
+    db: Session = Depends(get_db),
+):
+    context = _base_context(request, db, active_page="provisioning")
+    context.update(
+        web_network_provisioning_ledger_service.provisioning_ledger_data(db, facet)
+    )
+    return templates.TemplateResponse(
+        "admin/network/provisioning/index.html", context
     )

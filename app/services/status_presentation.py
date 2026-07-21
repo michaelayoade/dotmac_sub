@@ -16,7 +16,12 @@ from app.models.fup_state import FupActionStatus
 from app.models.network import Ipv6PrefixState
 from app.models.payment_proof import WithholdingTaxStatus
 from app.models.project import ProjectStatus, ProjectTaskStatus
-from app.models.provisioning import AppointmentStatus, ServiceOrderStatus, TaskStatus
+from app.models.provisioning import (
+    AppointmentStatus,
+    ProvisioningRunStatus,
+    ServiceOrderStatus,
+    TaskStatus,
+)
 from app.models.sales import QuoteStatus, SalesOrderStatus
 from app.models.subscriber import SubscriberStatus
 from app.models.support import TicketStatus
@@ -941,3 +946,18 @@ def ipv6_prefix_state_presentation(
 ) -> StatusPresentation:
     """Project the IPv6 delegated-prefix lifecycle state (server-owned tone)."""
     return _presentation(_status_value(status), _IPV6_PREFIX_STATE_PRESENTATIONS)
+
+
+_PROVISIONING_RUN_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    ProvisioningRunStatus.pending.value: ("Pending", StatusTone.info, StatusIcon.info),
+    ProvisioningRunStatus.running.value: ("Running", StatusTone.info, StatusIcon.clock),
+    ProvisioningRunStatus.success.value: ("Success", StatusTone.positive, StatusIcon.check),
+    ProvisioningRunStatus.failed.value: ("Failed", StatusTone.negative, StatusIcon.x),
+}
+
+
+def provisioning_run_status_presentation(
+    status: ProvisioningRunStatus | str | None,
+) -> StatusPresentation:
+    """Project the provisioning-run lifecycle state (server-owned tone)."""
+    return _presentation(_status_value(status), _PROVISIONING_RUN_PRESENTATIONS)
