@@ -961,3 +961,22 @@ def provisioning_run_status_presentation(
 ) -> StatusPresentation:
     """Project the provisioning-run lifecycle state (server-owned tone)."""
     return _presentation(_status_value(status), _PROVISIONING_RUN_PRESENTATIONS)
+
+
+# ControlPlanePhase (owner: control_plane_intent) values, keyed as strings to
+# avoid importing a service-layer enum into the presentation owner.
+_CONTROL_PLANE_PHASE_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    "desired": ("Desired", StatusTone.neutral, StatusIcon.archive),
+    "planned": ("Planned", StatusTone.info, StatusIcon.info),
+    "queued": ("Queued", StatusTone.info, StatusIcon.clock),
+    "applying": ("Applying", StatusTone.info, StatusIcon.clock),
+    "readback_pending": ("Readback pending", StatusTone.warning, StatusIcon.clock),
+    "verified": ("Verified", StatusTone.positive, StatusIcon.check),
+    "drifted": ("Drifted", StatusTone.warning, StatusIcon.alert),
+    "failed": ("Failed", StatusTone.negative, StatusIcon.x),
+}
+
+
+def control_plane_phase_presentation(status: object) -> StatusPresentation:
+    """Project the control-plane convergence phase (server-owned tone)."""
+    return _presentation(_status_value(status), _CONTROL_PLANE_PHASE_PRESENTATIONS)

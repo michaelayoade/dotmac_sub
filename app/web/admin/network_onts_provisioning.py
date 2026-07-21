@@ -22,6 +22,9 @@ from app.services import (
 from app.services import (
     web_network_provisioning_ledger as web_network_provisioning_ledger_service,
 )
+from app.services import (
+    web_network_provisioning_triage as web_network_provisioning_triage_service,
+)
 from app.services.auth_dependencies import require_permission
 from app.services.network import ont_provision_steps as steps
 from app.services.network.action_logging import actor_label, log_network_action_result
@@ -591,4 +594,19 @@ def provisioning_ledger(
     )
     return templates.TemplateResponse(
         "admin/network/provisioning/index.html", context
+    )
+
+
+@router.get(
+    "/provisioning/triage",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("provisioning:read"))],
+)
+def provisioning_triage(request: Request, db: Session = Depends(get_db)):
+    context = _base_context(request, db, active_page="provisioning")
+    context.update(
+        web_network_provisioning_triage_service.provisioning_triage_data(db)
+    )
+    return templates.TemplateResponse(
+        "admin/network/provisioning/triage.html", context
     )
