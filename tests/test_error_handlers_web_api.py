@@ -202,3 +202,33 @@ def test_web_404_portal_path_renders_without_500() -> None:
     )
     assert resp.status_code == 404
     assert "text/html" in resp.headers.get("content-type", "")
+
+
+def test_html_3xx_http_exception_preserves_location_redirect():
+    """An auth guard that raises 303 + Location must reach the browser as a
+    redirect. The shared handler previously dropped ``exc.headers`` and
+    answered with a JSON body carrying no destination, so reseller-portal
+    auth redirects silently broke behind the registered handlers.
+    """
+    from fastapi import status
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    register_error_handlers(app)
+
+    @app.get("/reseller/dashboard")
+    def _guarded():
+        raise HTTPException(
+            status_code=status.HTTP_303_SEE_OTHER,
+            headers={"Location": "/reseller/auth/login"},
+        )
+
+    client = TestClient(app)
+    response = client.get(
+        "/reseller/dashboard",
+        headers={"accept": "text/html"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/reseller/auth/login"
