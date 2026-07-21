@@ -574,6 +574,9 @@ detailed security and delivery boundary is
    for an already-contracted prepaid service.
    The daily adapter is control-gated and refuses anchors more than two days
    stale; historical cycles require a reviewed hash-bound reconciliation plan.
+   Reconstruction-quarantined subscriptions and unexpected account-level
+   missing baselines are reported and left untouched without aborting unrelated
+   verified renewals. Missing global authority still blocks the complete pass.
 10. `financial.billing_reporting` (`app/services/billing/reporting.py`) owns
    every money figure the admin reports and overview render: overview and
    payments/collections summaries, AR aging and outstanding receivables,
