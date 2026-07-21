@@ -15,8 +15,7 @@ def test_terminal_service_order_states_have_one_writer() -> None:
             if not isinstance(node, ast.Assign):
                 continue
             if not any(
-                isinstance(target, ast.Attribute)
-                and target.attr == "status"
+                isinstance(target, ast.Attribute) and target.attr == "status"
                 for target in node.targets
             ):
                 continue

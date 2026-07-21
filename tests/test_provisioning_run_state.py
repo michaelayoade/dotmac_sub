@@ -58,8 +58,10 @@ def test_terminal_run_event_delegates_to_lifecycle_owner(
     )
     monkeypatch.setattr(
         "app.services.events.handlers.provisioning.evaluate_readiness",
-        lambda db, command: captured.append((db, command))
-        or SimpleNamespace(status=SimpleNamespace(value="blocked")),
+        lambda db, command: (
+            captured.append((db, command))
+            or SimpleNamespace(status=SimpleNamespace(value="blocked"))
+        ),
     )
     event = Event(
         event_type=event_type,

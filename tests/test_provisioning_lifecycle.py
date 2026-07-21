@@ -110,7 +110,9 @@ def test_incomplete_activation_task_blocks_without_activating(
         subscription,
         task_status=ProjectTaskStatus.in_progress.value,
     )
-    monkeypatch.setattr("app.services.provisioning_lifecycle.emit_event", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "app.services.provisioning_lifecycle.emit_event", lambda *a, **k: None
+    )
 
     outcome = evaluate_readiness(
         db_session,
@@ -123,7 +125,9 @@ def test_incomplete_activation_task_blocks_without_activating(
 
     assert outcome.status == ProvisioningReadinessDecisionStatus.blocked
     assert outcome.reason_code == "activation_task_incomplete"
-    assert db_session.get(ServiceOrder, order.id).status == ServiceOrderStatus.provisioning
+    assert (
+        db_session.get(ServiceOrder, order.id).status == ServiceOrderStatus.provisioning
+    )
     assert subscription.status == SubscriptionStatus.pending
 
 
@@ -157,7 +161,9 @@ def test_ready_order_requests_activation_then_requires_projection_confirmation(
 
     assert requested.status == ProvisioningReadinessDecisionStatus.activation_requested
     assert subscription.status == SubscriptionStatus.pending
-    assert db_session.get(ServiceOrder, order.id).status == ServiceOrderStatus.provisioning
+    assert (
+        db_session.get(ServiceOrder, order.id).status == ServiceOrderStatus.provisioning
+    )
     assert emitted[0][1]["service_order_id"] == order.id
 
     # Release the read transaction before entering the next public owner command.
@@ -190,7 +196,9 @@ def test_readiness_command_id_is_an_idempotent_replay(
         subscription,
         task_status=ProjectTaskStatus.in_progress.value,
     )
-    monkeypatch.setattr("app.services.provisioning_lifecycle.emit_event", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "app.services.provisioning_lifecycle.emit_event", lambda *a, **k: None
+    )
     context = _context("retryable terminal run event")
     command = EvaluateReadinessCommand(
         context=context,
@@ -222,7 +230,9 @@ def test_readiness_command_id_reuse_for_another_run_fails_closed(
     )
     db_session.add(second_run)
     db_session.commit()
-    monkeypatch.setattr("app.services.provisioning_lifecycle.emit_event", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "app.services.provisioning_lifecycle.emit_event", lambda *a, **k: None
+    )
     context = _context("collision-safe terminal run event")
 
     evaluate_readiness(
@@ -257,7 +267,9 @@ def test_confirmation_rejects_activation_without_readiness_request(
     )
     subscription.status = SubscriptionStatus.active
     db_session.commit()
-    monkeypatch.setattr("app.services.provisioning_lifecycle.emit_event", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "app.services.provisioning_lifecycle.emit_event", lambda *a, **k: None
+    )
 
     with pytest.raises(ProvisioningLifecycleError) as exc:
         confirm_activation(
@@ -269,7 +281,9 @@ def test_confirmation_rejects_activation_without_readiness_request(
             ),
         )
 
-    assert exc.value.code == "operations.provisioning_lifecycle.activation_not_requested"
+    assert (
+        exc.value.code == "operations.provisioning_lifecycle.activation_not_requested"
+    )
 
 
 def test_failed_run_records_decision_through_service_order_owner(
@@ -283,8 +297,12 @@ def test_failed_run_records_decision_through_service_order_owner(
     )
     run.status = ProvisioningRunStatus.failed
     db_session.commit()
-    monkeypatch.setattr("app.services.provisioning_lifecycle.emit_event", lambda *a, **k: None)
-    monkeypatch.setattr("app.services.service_order_lifecycle.emit_event", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "app.services.provisioning_lifecycle.emit_event", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        "app.services.service_order_lifecycle.emit_event", lambda *a, **k: None
+    )
 
     outcome = evaluate_readiness(
         db_session,
@@ -308,7 +326,9 @@ def test_readiness_evidence_is_append_only(
         subscription,
         task_status=ProjectTaskStatus.in_progress.value,
     )
-    monkeypatch.setattr("app.services.provisioning_lifecycle.emit_event", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "app.services.provisioning_lifecycle.emit_event", lambda *a, **k: None
+    )
     outcome = evaluate_readiness(
         db_session,
         EvaluateReadinessCommand(

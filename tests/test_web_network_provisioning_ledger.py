@@ -19,7 +19,9 @@ def test_provisioning_ledger_data_shape_per_facet(db_session, facet):
 
 
 def test_provisioning_ledger_data_defaults_unknown_facet_to_orders(db_session):
-    assert prov_ledger.provisioning_ledger_data(db_session, "bogus")["facet"] == "orders"
+    assert (
+        prov_ledger.provisioning_ledger_data(db_session, "bogus")["facet"] == "orders"
+    )
 
 
 def test_provisioning_ledger_data_default_facet_is_orders(db_session):

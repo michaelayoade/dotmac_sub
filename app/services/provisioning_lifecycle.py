@@ -153,17 +153,13 @@ def _validate_replay_scope(
         )
 
 
-def latest_readiness(
-    db: Session, service_order_id: UUID
-) -> ReadinessOutcome | None:
+def latest_readiness(db: Session, service_order_id: UUID) -> ReadinessOutcome | None:
     """Return the latest persisted decision; never derive a second policy path."""
 
     decision = db.scalar(
         select(ProvisioningReadinessDecision)
         .options(selectinload(ProvisioningReadinessDecision.checks))
-        .where(
-            ProvisioningReadinessDecision.service_order_id == service_order_id
-        )
+        .where(ProvisioningReadinessDecision.service_order_id == service_order_id)
         .order_by(
             ProvisioningReadinessDecision.decided_at.desc(),
             ProvisioningReadinessDecision.created_at.desc(),
@@ -205,9 +201,7 @@ def _evaluate_facts(
     requires_project = order.order_type == ServiceOrderType.new_install
     project = db.get(Project, order.project_id) if order.project_id else None
     project_valid = bool(
-        project
-        and project.is_active
-        and project.subscriber_id == order.subscriber_id
+        project and project.is_active and project.subscriber_id == order.subscriber_id
     )
     checks.append(
         _check(

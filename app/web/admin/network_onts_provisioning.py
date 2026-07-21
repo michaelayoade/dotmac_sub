@@ -592,9 +592,7 @@ def provisioning_ledger(
     context.update(
         web_network_provisioning_ledger_service.provisioning_ledger_data(db, facet)
     )
-    return templates.TemplateResponse(
-        "admin/network/provisioning/index.html", context
-    )
+    return templates.TemplateResponse("admin/network/provisioning/index.html", context)
 
 
 @router.get(
@@ -604,9 +602,5 @@ def provisioning_ledger(
 )
 def provisioning_triage(request: Request, db: Session = Depends(get_db)):
     context = _base_context(request, db, active_page="provisioning")
-    context.update(
-        web_network_provisioning_triage_service.provisioning_triage_data(db)
-    )
-    return templates.TemplateResponse(
-        "admin/network/provisioning/triage.html", context
-    )
+    context.update(web_network_provisioning_triage_service.provisioning_triage_data(db))
+    return templates.TemplateResponse("admin/network/provisioning/triage.html", context)

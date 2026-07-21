@@ -345,11 +345,15 @@ class ServiceOrders(CRUDManager[ServiceOrder]):
                         "decision"
                     ),
                 )
-            if previous_status in {
-                ServiceOrderStatus.canceled,
-                ServiceOrderStatus.active,
-                ServiceOrderStatus.failed,
-            } and normalized_target != previous_status:
+            if (
+                previous_status
+                in {
+                    ServiceOrderStatus.canceled,
+                    ServiceOrderStatus.active,
+                    ServiceOrderStatus.failed,
+                }
+                and normalized_target != previous_status
+            ):
                 raise HTTPException(
                     status_code=409,
                     detail=(

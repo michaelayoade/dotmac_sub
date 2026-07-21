@@ -617,10 +617,7 @@ def _ensure_provisioning_order_for_sales_line(
             existing.project_id = scope.project.id
         if existing.installation_project_id is None:
             existing.installation_project_id = scope.installation_project.id
-        if (
-            existing.activation_project_task_id is None
-            and activation_task is not None
-        ):
+        if existing.activation_project_task_id is None and activation_task is not None:
             existing.activation_project_task_id = activation_task.id
         db.flush()
         return

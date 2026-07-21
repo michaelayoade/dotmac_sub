@@ -14,5 +14,10 @@ def test_map_context_includes_support_structures_stat(db_session):
 
 def test_map_context_stats_has_all_fiber_layers(db_session):
     stats = build_network_map_context(db_session)["stats"]
-    for key in ("fdh_cabinets", "splice_closures", "access_points", "support_structures"):
+    for key in (
+        "fdh_cabinets",
+        "splice_closures",
+        "access_points",
+        "support_structures",
+    ):
         assert key in stats

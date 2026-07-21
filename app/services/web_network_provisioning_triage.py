@@ -67,7 +67,9 @@ def provisioning_triage_data(db: Session) -> dict:
 
     # 1. Provisioning runs — the convergence unit, labelled with the control-plane phase
     for status in _RUN_ATTENTION:
-        for r in provisioning_runs.list(db, None, status, "created_at", "desc", _LIMIT, 0):
+        for r in provisioning_runs.list(
+            db, None, status, "created_at", "desc", _LIMIT, 0
+        ):
             presentation = control_plane_phase_presentation(
                 phase_for_provisioning_run(r.status)
             )
@@ -109,7 +111,9 @@ def provisioning_triage_data(db: Session) -> dict:
 
     # 3. Open tasks
     for status in _TASK_ATTENTION:
-        for t in provisioning_tasks.list(db, None, status, "created_at", "desc", _LIMIT, 0):
+        for t in provisioning_tasks.list(
+            db, None, status, "created_at", "desc", _LIMIT, 0
+        ):
             presentation = provisioning_task_status_presentation(t.status)
             when_label, when_epoch = _when(t.created_at)
             items.append(

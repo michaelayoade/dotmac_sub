@@ -93,9 +93,7 @@ class ProvisioningHandler:
         service_order_id = event.service_order_id or event.payload.get(
             "service_order_id"
         )
-        subscription_id = event.subscription_id or event.payload.get(
-            "subscription_id"
-        )
+        subscription_id = event.subscription_id or event.payload.get("subscription_id")
         if not service_order_id or not subscription_id:
             return
         try:
@@ -204,6 +202,7 @@ class ProvisioningHandler:
             subscription_id,
             result,
         )
+
     def _push_nas_provisioning(self, db: Session, subscription_id: str) -> None:
         """Push NAS provisioning commands on subscription activation."""
         from app.models.catalog import NasDevice, ProvisioningAction, Subscription
