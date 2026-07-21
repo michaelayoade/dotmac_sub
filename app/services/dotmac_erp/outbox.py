@@ -38,7 +38,10 @@ from app.services.dotmac_erp.client import (
     DotMacERPClient,
     DotMacERPError,
     DotMacERPTransientError,
-    build_erp_client,
+)
+from app.services.integrations.erp_capability import (
+    ErpCapabilityClient,
+    capability_client,
 )
 
 logger = logging.getLogger(__name__)
@@ -99,6 +102,14 @@ class DeliveryResult:
         }
 
 
+def run_deliver_pending() -> dict[str, object]:
+    """Own the background session used by the ERP outbox delivery sweep."""
+    from app.db import task_session
+
+    with task_session() as db:
+        return deliver_pending(db).as_dict()
+
+
 def enqueue(
     db: Session,
     *,
@@ -157,7 +168,7 @@ def enqueue(
 def deliver_pending(
     db: Session,
     *,
-    client: DotMacERPClient | None = None,
+    client: DotMacERPClient | ErpCapabilityClient | None = None,
     limit: int = 100,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
 ) -> DeliveryResult:
@@ -224,7 +235,7 @@ def deliver_pending(
                     continue
 
             if owned_client is None:
-                owned_client = build_erp_client(db)
+                owned_client = capability_client(db)
                 created_client = True
 
             result.processed += 1

@@ -89,17 +89,17 @@ def test_phase3_table_registered(table_name):
     assert table_name in Base.metadata.tables
 
 
-def test_mirror_tables_untouched():
-    """native tables coexist with the mirrors until the contract PR."""
+def test_only_unmigrated_vertical_mirrors_remain():
     for mirror in (
-        "project_mirror",
-        "project_sync_state",
         "quote_mirror",
         "quote_sync_state",
         "referral_mirror",
         "referral_program_cache",
     ):
         assert mirror in Base.metadata.tables
+    assert "project_mirror" not in Base.metadata.tables
+    assert "project_sync_state" not in Base.metadata.tables
+    assert "work_order_sync_state" not in Base.metadata.tables
 
 
 # ---------------------------------------------------------------------------
@@ -250,7 +250,6 @@ NO_FK_COLUMNS = [
     ("projects", "assistant_manager_person_id"),
     ("project_tasks", "assigned_to_person_id"),
     ("project_tasks", "created_by_person_id"),
-    ("project_tasks", "work_order_id"),  # flip adds the FK
     ("project_task_assignees", "person_id"),  # composite-PK half, still no FK
     ("project_task_comments", "author_person_id"),
     ("project_comments", "author_person_id"),
@@ -544,7 +543,6 @@ def test_full_vertical_chain_persists(db_session):
         project_id=project.id,
         title="Survey",
         assigned_to_person_id=uuid4(),
-        work_order_id=uuid4(),  # CRM WO UUID, carried as a plain value
         metadata_={"fiber_stage_key": "survey"},
     )
     db_session.add(task)

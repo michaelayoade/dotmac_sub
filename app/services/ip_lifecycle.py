@@ -3,7 +3,7 @@
 Key invariant: **active service owns service IPs; terminal service does not.**
 
 ``release_service_ips_for_subscription`` is the forward fix: when a subscription
-enters a terminal state (canceled / expired / disabled), the subscriber's
+enters a terminal state (canceled / expired), the subscriber's
 *service* IP assignments are deactivated — idempotently, and never touching a
 management/ONT address or an IP still owned by another active subscription of
 the same subscriber.
@@ -36,7 +36,6 @@ _TERMINAL = frozenset(
     {
         SubscriptionStatus.canceled,
         SubscriptionStatus.expired,
-        SubscriptionStatus.disabled,
     }
 )
 # Statuses that still entitle a subscriber to hold service IPs.
@@ -49,6 +48,7 @@ _NON_TERMINAL = frozenset(
         SubscriptionStatus.pending,
         SubscriptionStatus.hidden,
         SubscriptionStatus.archived,
+        SubscriptionStatus.disabled,
     }
 )
 

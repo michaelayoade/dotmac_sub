@@ -112,9 +112,13 @@ def finish_read_response(db: Session, value: T) -> T:
 
 @contextmanager
 def form_write(db: Session) -> Generator[None, None, None]:
-    """Guard a form handler's DB write so a failure can't poison the error path.
+    """Legacy form-owned rollback guard; do not use for new or migrated code.
 
-    Admin form handlers follow the shape::
+    Existing callers are tracked by the adapter-transaction shrink-only
+    baseline. Migrate them to registered public command owners that finish the
+    transaction before the form adapter maps an error.
+
+    The legacy callers follow the shape::
 
         try:
             with form_write(db):
@@ -131,11 +135,9 @@ def form_write(db: Session) -> Generator[None, None, None]:
     ``build_*_context`` …) would itself fail on the poisoned session, turning a
     recoverable 4xx into a 500.
 
-    Wrapping the write in ``with form_write(db):`` rolls the session back before
-    the exception reaches the handler's ``except``, so the re-render always runs
-    on a clean session. Prefer this over a bare ``db.rollback()`` in each
-    ``except`` — it can't be forgotten and documents intent. See findings
-    #19/#24/#26/#27.
+    The wrapper rolls the session back before the exception reaches the
+    handler's ``except``. Do not copy this route-owned transaction pattern;
+    migrate the caller and its write service as one ownership slice.
     """
     try:
         yield
@@ -146,14 +148,13 @@ def form_write(db: Session) -> Generator[None, None, None]:
 
 @contextmanager
 def task_session() -> Generator[Session, None, None]:
-    """Context manager for database sessions in Celery tasks.
+    """Legacy task-owned transaction helper; do not add new callers.
 
-    Creates a new session and ensures proper cleanup. Commits on success,
-    rolls back on exception.
+    Existing callers are migration debt. New and migrated tasks create and
+    close a session while the registered command owner controls commit and
+    rollback.
 
-    Example:
-        with task_session() as db:
-            db.query(Model).all()
+    The helper remains only until the tracked callers have migrated.
     """
     db = SessionLocal()
     try:
@@ -167,29 +168,14 @@ def task_session() -> Generator[Session, None, None]:
 
 
 def get_uow() -> Generator["UnitOfWork", None, None]:
-    """FastAPI dependency for unit-of-work pattern with auto-commit.
+    """Legacy route-owned unit-of-work dependency; do not add new callers.
 
-    Provides a UnitOfWork that automatically commits on successful request
-    completion and rolls back on exception. Use this for routes that need
-    explicit transaction control.
+    The target contract separates adapter session lifecycle from transaction
+    ownership. A registered public command owner controls the business
+    transaction; routes only map transport inputs, outcomes, and errors.
 
-    Unlike get_db(), this dependency:
-    - Auto-commits on success (no need to call db.commit() in services)
-    - Services should use flush() instead of commit()
-    - Provides clear transaction boundary semantics
-
-    Example:
-        from app.db import get_uow
-        from app.services.unit_of_work import UnitOfWork
-
-        @router.post("/items")
-        def create_item(
-            data: ItemCreate,
-            uow: UnitOfWork = Depends(get_uow),
-        ):
-            with uow:
-                item = item_service.create(uow.session, data)
-                return item
+    The dependency remains only for compatibility while its tracked callers
+    migrate. It is not an example for new code.
     """
     from app.services.unit_of_work import UnitOfWork
 

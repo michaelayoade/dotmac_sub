@@ -7,6 +7,7 @@ from fastapi import HTTPException
 
 from app.models.audit import AuditActorType, AuditEvent
 from app.models.dispatch import TechnicianProfile, WorkOrderAssignmentQueue
+from app.models.project import Project, ProjectTask
 from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
 from app.schemas.dispatch import (
@@ -15,6 +16,7 @@ from app.schemas.dispatch import (
     WorkOrderHeaderUpdate,
 )
 from app.services.work_order_commands import work_order_commands
+from app.services.work_order_errors import WorkOrderCommandError
 
 
 def _subscriber(db_session) -> Subscriber:
@@ -72,6 +74,115 @@ def test_native_create_replays_same_public_id_and_audits_once(db_session):
     )
     assert len(events) == 1
     assert events[0].metadata_["owner"] == "operations.work_order_commands"
+
+
+def test_project_binding_and_evidence_policy_are_owned_by_work_order_command(
+    db_session,
+):
+    subscriber = _subscriber(db_session)
+    project = Project(
+        name="Evidence-controlled installation",
+        subscriber_id=subscriber.id,
+    )
+    db_session.add(project)
+    db_session.flush()
+
+    work_order = work_order_commands.create(
+        db_session,
+        WorkOrderHeaderCreate(
+            public_id="sub-evidence-policy",
+            subscriber_id=subscriber.id,
+            project_id=project.id,
+            title="Install customer fibre",
+        ),
+    )
+
+    assert work_order.project_id == project.id
+    assert work_order.requires_as_built_evidence is True
+
+    updated = work_order_commands.update_header(
+        db_session,
+        work_order.public_id,
+        WorkOrderHeaderUpdate(requires_as_built_evidence=False),
+    )
+    assert updated.requires_as_built_evidence is False
+
+
+def test_work_order_rejects_cross_subscriber_project_binding(db_session):
+    subscriber = _subscriber(db_session)
+    other = _subscriber(db_session)
+    project = Project(name="Other customer project", subscriber_id=other.id)
+    db_session.add(project)
+    db_session.flush()
+
+    with pytest.raises(WorkOrderCommandError) as exc:
+        work_order_commands.create(
+            db_session,
+            WorkOrderHeaderCreate(
+                subscriber_id=subscriber.id,
+                project_id=project.id,
+                title="Wrong project",
+            ),
+        )
+
+    assert exc.value.code == "project_subscriber_mismatch"
+    assert exc.value.kind == "invalid"
+
+
+def test_project_task_binding_infers_project_and_is_immutable(db_session):
+    subscriber = _subscriber(db_session)
+    project = Project(name="Native install", subscriber_id=subscriber.id)
+    other_project = Project(name="Other install", subscriber_id=subscriber.id)
+    db_session.add_all([project, other_project])
+    db_session.flush()
+    task = ProjectTask(project_id=project.id, title="Splice drop", status="todo")
+    other_task = ProjectTask(
+        project_id=other_project.id, title="Activate service", status="todo"
+    )
+    db_session.add_all([task, other_task])
+    db_session.flush()
+
+    row = work_order_commands.create(
+        db_session,
+        WorkOrderHeaderCreate(
+            subscriber_id=subscriber.id,
+            project_task_id=task.id,
+            title="First field visit",
+        ),
+    )
+
+    assert row.project_id == project.id
+    assert row.project_task_id == task.id
+    with pytest.raises(WorkOrderCommandError) as changed:
+        work_order_commands.update_header(
+            db_session,
+            row.public_id,
+            WorkOrderHeaderUpdate(project_task_id=other_task.id),
+        )
+    assert changed.value.code == "project_task_binding_immutable"
+
+
+def test_project_task_binding_rejects_explicit_project_mismatch(db_session):
+    subscriber = _subscriber(db_session)
+    project = Project(name="Native install", subscriber_id=subscriber.id)
+    other_project = Project(name="Other install", subscriber_id=subscriber.id)
+    db_session.add_all([project, other_project])
+    db_session.flush()
+    task = ProjectTask(project_id=project.id, title="Splice drop", status="todo")
+    db_session.add(task)
+    db_session.flush()
+
+    with pytest.raises(WorkOrderCommandError) as mismatch:
+        work_order_commands.create(
+            db_session,
+            WorkOrderHeaderCreate(
+                subscriber_id=subscriber.id,
+                project_id=other_project.id,
+                project_task_id=task.id,
+                title="Mismatched visit",
+            ),
+        )
+    assert mismatch.value.code == "project_task_project_mismatch"
 
 
 def test_assignment_preview_is_read_only_and_assignment_is_atomic_replay(

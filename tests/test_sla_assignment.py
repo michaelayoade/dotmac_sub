@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.subscription_engine import SettingValueType
 from app.models.support import Ticket, TicketStatus
 from app.models.ticket_workflow import (
     SlaBreach,
@@ -33,10 +35,35 @@ def _policy(db_session) -> SlaPolicy:
     return policy
 
 
-def test_ticket_type_sla_targets_match_crm_windows():
-    assert ticket_type_sla_target_minutes("Customer Link Disconnection") == 24 * 60
-    assert ticket_type_sla_target_minutes("Core Link Disconnection") == 48 * 60
-    assert ticket_type_sla_target_minutes("Billing Request") is None
+def _ticket_type_policy(db_session) -> None:
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.workflow,
+            key="support_ticket_type_sla_policy",
+            value_type=SettingValueType.json,
+            value_json={
+                "customer link disconnection": 24,
+                "cabinet disconnection": 24,
+                "core link disconnection": 48,
+            },
+            is_secret=False,
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+
+def test_ticket_type_sla_targets_come_from_ui_policy(db_session):
+    _ticket_type_policy(db_session)
+
+    assert (
+        ticket_type_sla_target_minutes(db_session, "Customer Link Disconnection")
+        == 24 * 60
+    )
+    assert (
+        ticket_type_sla_target_minutes(db_session, "Core Link Disconnection") == 48 * 60
+    )
+    assert ticket_type_sla_target_minutes(db_session, "Billing Request") is None
 
 
 def test_priority_sla_target_uses_sub_support_policy(db_session):
@@ -46,6 +73,7 @@ def test_priority_sla_target_uses_sub_support_policy(db_session):
 
 
 def test_ticket_type_sla_target_wins_over_priority_policy(db_session):
+    _ticket_type_policy(db_session)
     assert (
         resolve_ticket_sla_target_minutes(
             db_session,
@@ -58,6 +86,7 @@ def test_ticket_type_sla_target_wins_over_priority_policy(db_session):
 
 def test_create_sla_clock_for_known_ticket_type(db_session):
     _policy(db_session)
+    _ticket_type_policy(db_session)
     created_at = datetime(2026, 7, 8, 8, 0, tzinfo=UTC)
     ticket = Ticket(
         title="Cabinet down",
@@ -105,6 +134,7 @@ def test_create_sla_clock_for_priority_policy_ticket(db_session):
 
 def test_status_change_completes_open_sla_clock(db_session):
     _policy(db_session)
+    _ticket_type_policy(db_session)
     ticket = Ticket(
         title="Core down",
         status=TicketStatus.open.value,
@@ -154,6 +184,7 @@ def test_status_change_completes_resolution_confirmation_clock(db_session):
 
 def test_check_sla_breaches_records_open_breach(db_session):
     _policy(db_session)
+    _ticket_type_policy(db_session)
     ticket = Ticket(
         title="Expired cabinet SLA",
         status=TicketStatus.open.value,

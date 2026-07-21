@@ -40,19 +40,25 @@ This document catalogs feature improvements for DotMac Sub based on a comprehens
 
 **DotMac Sub Improvements:**
 
-- [x] Build a custom integration registration form at `/admin/integrations/register` allowing admins to register custom webhook-based integrations with: name, display title, type (simple/webhook/oauth), root navigation section, icon selection (from Heroicons library)
-- [x] After registration, redirect to a configuration page where admins define custom fields, webhook endpoints, authentication method, and data mapping rules
-- [x] Support a "Simple" integration type that embeds an external URL in an iframe within the admin panel, and a "Webhook" type that sends/receives HTTP callbacks
+- [x] Replace arbitrary runtime module registration with the deployed manifest
+  catalogue and version-pinned integration installations. The admin surface
+  cannot upload or activate executable connector code.
+- [x] Render installation configuration from bounded manifest metadata and keep
+  credentials as secret references; HTTP event delivery uses
+  `events.deliver.v1` rather than generic action or mapping rules.
 
 ### Screenshot: Modules List (Installed)
 **legacy BSS Feature:** A "Modules list" table showing 20 installed modules with columns: Name (e.g., huawei_supported_boards, legacy_bss_huawei_module, legacy_bss_admin_agents, legacy_bss_admin_mailjet, legacy_bss_cashdesk, legacy_bss_customer_cpe_reset, legacy_bss_olt_autodiscover, legacy_bss_portal_social_registration, legacy_bss_trust_agents, legacy_bss_network_weathermap, legacy_bss_paystack_addon, legacy_bss_moneris_addon, legacy_bss_referral_system, legacy_bss_speedtest, legacy_bss_ssh_terminal), Title, Root location, Type (Simple/Add-on), a "Relay portal status for portal" indicator, and Actions (edit/delete with color-coded enable/disable buttons in green and red).
 
 **DotMac Sub Improvements:**
 
-- [x] Create an "Installed Integrations" management table at `/admin/integrations/installed` with columns: Name, Title, Root (navigation location), Type (Simple/Add-on/Webhook), Relay to Portal (yes/no toggle), Status (Enabled/Disabled badge), and Actions (edit config, disable, uninstall)
-- [x] Add bulk actions for enable/disable all selected integrations
-- [x] Show integration health status with a traffic-light indicator (green = healthy, amber = degraded/warnings, red = errors/unreachable)
-- [x] Implement an integration activity log showing last 50 API calls per connector with status codes and response times
+- [x] Back `/admin/integrations/installed` with version-pinned installation and
+  capability state, including connector type, lifecycle status, and canonical
+  manage/retire actions.
+- [x] Add validation-gated bulk enable and canonical disable actions.
+- [x] Derive health from completed capability runs and integration deliveries.
+- [x] Show the last 50 capability runs and event deliveries with status,
+  provider response code, and measured duration where available.
 
 ---
 
@@ -103,7 +109,7 @@ This document catalogs feature improvements for DotMac Sub based on a comprehens
 **DotMac Sub Improvements:**
 
 - [x] Build a WhatsApp Business API integration connector in `app/services/integrations/connectors/whatsapp.py` supporting: template message sending, notification delivery (invoice reminders, payment confirmations, service alerts), and two-way messaging
-- [x] Create a WhatsApp configuration page at `/admin/integrations/whatsapp/config` with fields: API provider (Meta Cloud API, Twilio, MessageBird), API credentials (encrypted via credential_crypto), phone number, webhook URL, and message templates
+- [x] Create a WhatsApp configuration page at `/admin/integrations/whatsapp/config` for the direct Meta Cloud API installation, with secret references, phone number, WABA ID, webhook URL, and message templates; no Twilio/MessageBird fallback
 - [x] Add WhatsApp as a notification delivery channel in the existing notification system alongside email and SMS
 - [x] Implement WhatsApp template message management allowing admins to create, preview, and test message templates with variable substitution (subscriber name, invoice amount, due date, etc.)
 

@@ -33,7 +33,6 @@ from app.tasks.catalog import (
 )
 from app.tasks.channel_health import observe_channel_health
 from app.tasks.collections import prepaid_balance_sweep
-from app.tasks.crm_native_sync import pull_crm_phase3_native_delta
 from app.tasks.crm_ticket_pull import (
     pull_crm_tickets,
     sync_crm_ticket,
@@ -45,6 +44,7 @@ from app.tasks.dotmac_erp_outbox import (
     deliver_erp_sync_events,
     refresh_expense_claim_statuses,
     refresh_material_request_statuses,
+    refresh_purchase_invoice_statuses,
     repair_purchase_invoice_sync,
     sync_erp_operational_domains,
 )
@@ -66,6 +66,7 @@ from app.tasks.infrastructure_availability import (
     snapshot_infrastructure_availability,
 )
 from app.tasks.infrastructure_polling import run_infrastructure_poll
+from app.tasks.integration_delivery import deliver_integration_event
 from app.tasks.integrations import run_integration_job
 from app.tasks.invoice_pdf import generate_invoice_pdf_export
 from app.tasks.ip_utilization import (
@@ -129,7 +130,6 @@ from app.tasks.payment_reconciliation import reconcile_topups
 from app.tasks.profile_sync import (
     execute_due_profile_sync_tasks,
 )
-from app.tasks.projects import reconcile_project_mirror
 from app.tasks.provisioning import (
     reap_stale_provisioning_runs,
     retry_pending_compensation_failures,
@@ -204,10 +204,6 @@ from app.tasks.usage import (
 )
 from app.tasks.vacation_holds import resume_expired_holds
 from app.tasks.vpn import run_vpn_control_job, run_vpn_health_scan
-from app.tasks.webhooks import (
-    deliver_webhook,
-    retry_failed_deliveries,
-)
 from app.tasks.wireguard import (
     cleanup_connection_logs as cleanup_wireguard_logs,
 )
@@ -217,7 +213,6 @@ from app.tasks.wireguard import (
 from app.tasks.wireguard import (
     generate_connection_log_report as wireguard_connection_report,
 )
-from app.tasks.work_orders import reconcile_work_order_mirror
 from app.tasks.workflow import detect_sla_breaches as retired_detect_sla_breaches
 
 __all__ = [
@@ -228,6 +223,7 @@ __all__ = [
     "run_batch_geocode_job",
     "run_import_job",
     "run_integration_job",
+    "deliver_integration_event",
     "process_due_campaigns",
     "process_due_campaign_steps",
     "send_campaign_batch",
@@ -250,7 +246,6 @@ __all__ = [
     "check_billing_switch_task",
     "pull_crm_tickets",
     "sync_crm_ticket",
-    "pull_crm_phase3_native_delta",
     "auto_confirm_resolved_tickets",
     "retry_failed_inbox_outbound_messages",
     "promote_inbox_message_media_assets",
@@ -266,6 +261,7 @@ __all__ = [
     "deliver_erp_sync_events",
     "refresh_expense_claim_statuses",
     "refresh_material_request_statuses",
+    "refresh_purchase_invoice_statuses",
     "repair_purchase_invoice_sync",
     "sync_erp_operational_domains",
     "run_usage_rating",
@@ -298,8 +294,6 @@ __all__ = [
     "sync_device_login",
     "run_vpn_control_job",
     "run_vpn_health_scan",
-    "deliver_webhook",
-    "retry_failed_deliveries",
     "deliver_notification_queue",
     "observe_channel_health",
     "snapshot_mrr",
@@ -361,9 +355,7 @@ __all__ = [
     "sync_all_interfaces",
     "sync_all_system_info",
     "run_scheduled_credential_rotation",
-    "reconcile_project_mirror",
     "reconcile_quote_mirror",
     "reconcile_referral_mirror",
     "send_scheduled_ncc_report",
-    "reconcile_work_order_mirror",
 ]

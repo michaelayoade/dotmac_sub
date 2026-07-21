@@ -35,7 +35,7 @@ def test_notification_template_test_uses_whatsapp_and_substitution(
         return {"ok": True, "response": "ok"}
 
     monkeypatch.setattr(
-        "app.services.integrations.connectors.whatsapp.send_template_message",
+        "app.services.integrations.whatsapp_capability.send_template_message",
         _fake_send_template_message,
     )
 

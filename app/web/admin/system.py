@@ -48,16 +48,15 @@ from app.services import file_upload as file_upload_service
 from app.services import import_runs as import_runs_service
 from app.services import module_manager as module_manager_service
 from app.services import radius_reject as radius_reject_service
-from app.services import (
-    rbac as rbac_service,
-)
+from app.services import rbac_catalog, settings_spec
 from app.services import (
     scheduler as scheduler_service,
 )
 from app.services import session_manager as session_manager_service
-from app.services import settings_spec
+from app.services import staff_provisioning as staff_provisioning_service
 from app.services import support as support_service
 from app.services import support_ticket_settings as support_ticket_settings_service
+from app.services import system_user_assignments as assignment_service
 from app.services import web_control_plane as web_control_plane_service
 from app.services import web_system_about as web_system_about_service
 from app.services import web_system_api_key_forms as web_system_api_key_forms_service
@@ -92,8 +91,6 @@ from app.services import web_system_settings_views as web_system_settings_views_
 from app.services import web_system_user_edit as web_system_user_edit_service
 from app.services import web_system_user_mutations as web_system_user_mutations_service
 from app.services import web_system_users as web_system_users_service
-from app.services import web_system_webhook_forms as web_system_webhook_forms_service
-from app.services import web_system_webhooks as web_system_webhooks_service
 from app.services.audit_helpers import (
     build_audit_activities,
     build_audit_activities_for_types,
@@ -106,9 +103,11 @@ from app.services.brand_theme import (
     is_accessible_semantic_color,
 )
 from app.services.common import coerce_uuid
+from app.services.domain_errors import DomainError
 from app.services.financial_import_batch_reversals import (
     PaymentImportBatchReversals,
 )
+from app.services.owner_commands import CommandContext
 from app.tasks.exports import run_export_job
 from app.tasks.gis import run_batch_geocode_job
 from app.tasks.imports import (
@@ -173,6 +172,29 @@ def _system_actor_id(request: Request) -> str | None:
     auth = getattr(request.state, "auth", None) or {}
     principal_id = auth.get("principal_id")
     return str(principal_id) if principal_id else None
+
+
+def _system_command_context(
+    request: Request,
+    *,
+    reason: str,
+    idempotency_key: str,
+    scope: str = assignment_service.ASSIGNMENT_SCOPE,
+) -> CommandContext:
+    actor_id = _system_actor_id(request)
+    if not actor_id:
+        raise HTTPException(status_code=403, detail="Authorized actor is missing")
+    auth = getattr(request.state, "auth", None) or {}
+    actor_type = "api_key" if auth.get("principal_type") == "api_key" else "user"
+    command_id = uuid4()
+    return CommandContext(
+        command_id=command_id,
+        correlation_id=command_id,
+        actor=f"{actor_type}:{actor_id}",
+        scope=scope,
+        reason=reason,
+        idempotency_key=idempotency_key,
+    )
 
 
 def _system_user_audit_snapshot(db: Session, user) -> dict[str, object]:
@@ -1972,6 +1994,7 @@ def user_edit(request: Request, user_id: str, db: Session = Depends(get_db)):
         "user": edit_data["user"],
         "roles": edit_data["roles"],
         "current_role_ids": edit_data["current_role_ids"],
+        "managed_role_ids": edit_data["managed_role_ids"],
         "all_permissions": edit_data["all_permissions"],
         "direct_permission_ids": edit_data["direct_permission_ids"],
         "audit_items": _system_user_audit_items(db, user_id),
@@ -2012,9 +2035,6 @@ def user_edit_submit(
     display_name = cast(str | None, parsed["display_name"])
     phone = cast(str | None, parsed["phone"])
     user_type = cast(str | None, parsed["user_type"])
-    is_active = cast(str | None, parsed["is_active"])
-    role_ids = cast(list[str], parsed["role_ids"])
-    direct_permission_ids = cast(list[str], parsed["direct_permission_ids"])
     new_password = cast(str | None, parsed["new_password"])
     confirm_password = cast(str | None, parsed["confirm_password"])
     require_password_change = cast(str | None, parsed["require_password_change"])
@@ -2030,16 +2050,12 @@ def user_edit_submit(
             email=str(parsed["email"]),
             phone=phone,
             user_type=user_type,
-            is_active=web_system_common_service.form_bool(is_active),
-            role_ids=role_ids,
-            direct_permission_ids=direct_permission_ids,
             new_password=new_password,
             confirm_password=confirm_password,
             require_password_change=web_system_common_service.form_bool(
                 require_password_change
             ),
             is_admin=web_system_common_service.is_admin_request(request),
-            actor_id=getattr(request.state, "actor_id", None),
         )
         after_snapshot = _system_user_audit_snapshot(db, system_user)
         changes = _diff_audit_snapshots(before_snapshot, after_snapshot)
@@ -2069,6 +2085,7 @@ def user_edit_submit(
                 "user": edit_data["user"],
                 "roles": edit_data["roles"],
                 "current_role_ids": edit_data["current_role_ids"],
+                "managed_role_ids": edit_data["managed_role_ids"],
                 "all_permissions": edit_data["all_permissions"],
                 "direct_permission_ids": edit_data["direct_permission_ids"],
                 "audit_items": _system_user_audit_items(db, user_id),
@@ -2088,21 +2105,93 @@ def user_edit_submit(
 
 
 @router.post(
+    "/users/{user_id}/assignments",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:assign"))],
+)
+def user_assignments_submit(
+    request: Request,
+    user_id: str,
+    form_data=Depends(parse_form_data),
+    db: Session = Depends(get_db),
+):
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    try:
+        resolved_user_id = UUID(user_id)
+        role_ids = tuple(UUID(value) for value in form_data.getlist("role_ids"))
+        permission_ids = tuple(
+            UUID(value) for value in form_data.getlist("direct_permission_ids")
+        )
+        assignment_service.replace_system_user_assignments(
+            db,
+            assignment_service.ReplaceSystemUserAssignmentsCommand(
+                context=_system_command_context(
+                    request,
+                    reason="Administrative system-user access replacement",
+                    idempotency_key=(
+                        f"system-user-assignments:{user_id}:"
+                        f"{','.join(sorted(map(str, role_ids)))}:"
+                        f"{','.join(sorted(map(str, permission_ids)))}"
+                    ),
+                ),
+                user_id=resolved_user_id,
+                role_ids=role_ids,
+                direct_permission_ids=permission_ids,
+            ),
+        )
+    except (DomainError, ValueError) as exc:
+        edit_data = web_system_profiles_service.get_user_edit_data(db, user_id)
+        if not edit_data:
+            return templates.TemplateResponse(
+                "admin/errors/404.html",
+                {"request": request, "message": "User not found"},
+                status_code=404,
+            )
+        message = exc.message if isinstance(exc, DomainError) else str(exc)
+        return templates.TemplateResponse(
+            "admin/system/users/edit.html",
+            {
+                "request": request,
+                **edit_data,
+                "audit_items": _system_user_audit_items(db, user_id),
+                "user_type_options": web_system_users_service.USER_TYPE_OPTIONS,
+                "can_update_password": web_system_common_service.is_admin_request(
+                    request
+                ),
+                "active_page": "users",
+                "active_menu": "system",
+                "current_user": get_current_user(request),
+                "sidebar_stats": get_sidebar_stats(db),
+                "error": message,
+            },
+            status_code=400,
+        )
+    return RedirectResponse(url=f"/admin/system/users/{user_id}", status_code=303)
+
+
+@router.post(
     "/users/{user_id}/activate",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("rbac:assign"))],
 )
 def user_activate(request: Request, user_id: str, db: Session = Depends(get_db)):
-    web_system_user_mutations_service.set_user_active(
-        db, user_id=user_id, is_active=True
-    )
-    _log_system_user_event(
-        db,
-        request,
-        action="activate",
-        user_id=user_id,
-        metadata={"changes": {"is_active": {"from": False, "to": True}}},
-    )
+    try:
+        staff_provisioning_service.set_staff_account_active(
+            db,
+            staff_provisioning_service.SetStaffAccountActiveCommand(
+                context=_system_command_context(
+                    request,
+                    reason="Administrative staff account activation",
+                    idempotency_key=f"staff-account-active:{user_id}:true",
+                ),
+                user_id=UUID(user_id),
+                is_active=True,
+            ),
+        )
+    except (DomainError, ValueError) as exc:
+        message = exc.message if isinstance(exc, DomainError) else str(exc)
+        return web_system_common_service.error_banner(message)
     if request.headers.get("HX-Request"):
         return Response(status_code=200, headers={"HX-Refresh": "true"})
     return RedirectResponse(url=f"/admin/system/users/{user_id}", status_code=303)
@@ -2114,16 +2203,22 @@ def user_activate(request: Request, user_id: str, db: Session = Depends(get_db))
     dependencies=[Depends(require_permission("rbac:assign"))],
 )
 def user_deactivate(request: Request, user_id: str, db: Session = Depends(get_db)):
-    web_system_user_mutations_service.set_user_active(
-        db, user_id=user_id, is_active=False
-    )
-    _log_system_user_event(
-        db,
-        request,
-        action="deactivate",
-        user_id=user_id,
-        metadata={"changes": {"is_active": {"from": True, "to": False}}},
-    )
+    try:
+        staff_provisioning_service.set_staff_account_active(
+            db,
+            staff_provisioning_service.SetStaffAccountActiveCommand(
+                context=_system_command_context(
+                    request,
+                    reason="Administrative staff account deactivation",
+                    idempotency_key=f"staff-account-active:{user_id}:false",
+                ),
+                user_id=UUID(user_id),
+                is_active=False,
+            ),
+        )
+    except (DomainError, ValueError) as exc:
+        message = exc.message if isinstance(exc, DomainError) else str(exc)
+        return web_system_common_service.error_banner(message)
     if request.headers.get("HX-Request"):
         return Response(status_code=200, headers={"HX-Refresh": "true"})
     return RedirectResponse(url=f"/admin/system/users/{user_id}", status_code=303)
@@ -2152,7 +2247,7 @@ def user_reset_password(request: Request, user_id: str, db: Session = Depends(ge
             db,
             user_id=user_id,
         )
-        if "sent" in note.lower():
+        if "queued" in note.lower():
             _log_system_user_event(
                 db,
                 request,
@@ -2162,7 +2257,7 @@ def user_reset_password(request: Request, user_id: str, db: Session = Depends(ge
             )
     except Exception as exc:
         note = str(exc)
-    success = "success" if "sent" in note.lower() else "error"
+    success = "success" if "queued" in note.lower() else "error"
     trigger = {
         "showToast": {
             "type": success,
@@ -2365,49 +2460,29 @@ def user_create(
     send_invite: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
-    system_user = None
     try:
-        system_user, _ = (
-            web_system_user_mutations_service.create_user_with_role_and_password(
-                db,
+        outcome = staff_provisioning_service.create_local_staff_account(
+            db,
+            staff_provisioning_service.CreateLocalStaffAccountCommand(
+                context=_system_command_context(
+                    request,
+                    reason="Administrative local staff account creation",
+                    idempotency_key=f"local-staff-account:{email.strip().lower()}",
+                ),
+                email=email,
                 first_name=first_name,
                 last_name=last_name,
-                email=email,
-                role_id=role_id,
-                user_type="system_user",
-            )
+                role_id=UUID(role_id),
+                send_invite=bool(send_invite),
+            ),
         )
-        _log_system_user_event(
-            db,
-            request,
-            action="create",
-            user_id=str(system_user.id),
-            metadata={
-                "email": system_user.email,
-                "display_name": system_user.display_name,
-                "role_id": role_id,
-            },
-        )
-    except IntegrityError as exc:
-        db.rollback()
-        return web_system_common_service.error_banner(
-            web_system_common_service.humanize_integrity_error(exc)
-        )
+    except (DomainError, ValueError) as exc:
+        message = exc.message if isinstance(exc, DomainError) else str(exc)
+        return web_system_common_service.error_banner(message)
 
     note = "User created. Ask the user to reset their password."
-    if send_invite and system_user is not None:
-        note = web_system_user_mutations_service.send_user_invite_for_user(
-            db,
-            user_id=str(system_user.id),
-        )
-        if "sent" in note.lower():
-            _log_system_user_event(
-                db,
-                request,
-                action="invite_sent",
-                user_id=str(system_user.id),
-                metadata={"delivery": note},
-            )
+    if outcome.invite_requested:
+        note = "User created. Invitation delivery has been queued."
     return HTMLResponse(
         '<div class="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">'
         f"{note}"
@@ -2530,9 +2605,15 @@ def role_create(
             db,
             payload=payload,
             permission_ids=permission_ids,
+            context=_system_command_context(
+                request,
+                scope=rbac_catalog.ROLE_WRITE_SCOPE,
+                reason="Admin role catalog creation",
+                idempotency_key=f"rbac-role-create:{payload.name.lower()}",
+            ),
         )
-    except Exception as exc:
-        db.rollback()
+    except (DomainError, ValueError) as exc:
+        error_message = exc.message if isinstance(exc, DomainError) else str(exc)
         error_state = web_system_role_forms_service.build_role_error_state(
             db,
             role=payload.model_dump(),
@@ -2548,7 +2629,7 @@ def role_create(
                 "action_url": "/admin/system/roles",
                 "form_title": "New Role",
                 "submit_label": "Create Role",
-                "error": str(exc),
+                "error": error_message,
                 "active_page": "roles",
                 "active_menu": "system",
                 "current_user": get_current_user(request),
@@ -2618,9 +2699,15 @@ def role_update(
             role_id=role_id,
             payload=payload,
             permission_ids=permission_ids,
+            context=_system_command_context(
+                request,
+                scope=rbac_catalog.ROLE_WRITE_SCOPE,
+                reason="Admin role catalog update",
+                idempotency_key=f"rbac-role-update:{role_id}",
+            ),
         )
-    except Exception as exc:
-        db.rollback()
+    except (DomainError, ValueError) as exc:
+        error_message = exc.message if isinstance(exc, DomainError) else str(exc)
         error_state = web_system_role_forms_service.build_role_error_state(
             db=db,
             role={"id": role_id, **payload.model_dump()},
@@ -2636,7 +2723,7 @@ def role_update(
                 "action_url": f"/admin/system/roles/{role_id}",
                 "form_title": "Edit Role",
                 "submit_label": "Save Changes",
-                "error": str(exc),
+                "error": error_message,
                 "active_page": "roles",
                 "active_menu": "system",
                 "current_user": get_current_user(request),
@@ -2653,7 +2740,22 @@ def role_update(
     dependencies=[Depends(require_permission("rbac:roles:delete"))],
 )
 def role_delete(request: Request, role_id: str, db: Session = Depends(get_db)):
-    rbac_service.roles.delete(db, role_id)
+    try:
+        rbac_catalog.deactivate_role(
+            db,
+            rbac_catalog.DeactivateRoleCommand(
+                context=_system_command_context(
+                    request,
+                    scope=rbac_catalog.ROLE_DELETE_SCOPE,
+                    reason="Admin role catalog deactivation",
+                    idempotency_key=f"rbac-role-deactivate:{role_id}",
+                ),
+                role_id=UUID(role_id),
+            ),
+        )
+    except (DomainError, ValueError) as exc:
+        detail = exc.message if isinstance(exc, DomainError) else "Invalid role ID"
+        raise HTTPException(status_code=409, detail=detail) from exc
     return RedirectResponse(url="/admin/system/roles", status_code=303)
 
 
@@ -2729,9 +2831,22 @@ def permission_create(
         is_active=web_system_common_service.form_bool(is_active),
     )
     try:
-        rbac_service.permissions.create(db, payload)
-    except Exception as exc:
-        db.rollback()
+        rbac_catalog.create_permission(
+            db,
+            rbac_catalog.CreatePermissionCommand(
+                context=_system_command_context(
+                    request,
+                    scope=rbac_catalog.PERMISSION_WRITE_SCOPE,
+                    reason="Admin permission catalog creation",
+                    idempotency_key=(f"rbac-permission-create:{payload.key.lower()}"),
+                ),
+                key=payload.key,
+                description=payload.description,
+                is_active=payload.is_active,
+                is_ui_assignable=payload.is_ui_assignable,
+            ),
+        )
+    except DomainError as exc:
         error_state = web_system_permission_forms_service.build_permission_error_state(
             permission=payload.model_dump(),
             action_url="/admin/system/permissions",
@@ -2745,7 +2860,7 @@ def permission_create(
             {
                 "request": request,
                 **error_state,
-                "error": str(exc),
+                "error": exc.message,
                 "active_page": "roles",
                 "active_menu": "system",
                 "current_user": get_current_user(request),
@@ -2808,9 +2923,25 @@ def permission_update(
         is_active=web_system_common_service.form_bool(is_active),
     )
     try:
-        rbac_service.permissions.update(db, permission_id, payload)
-    except Exception as exc:
-        db.rollback()
+        rbac_catalog.update_permission(
+            db,
+            rbac_catalog.UpdatePermissionCommand(
+                context=_system_command_context(
+                    request,
+                    scope=rbac_catalog.PERMISSION_WRITE_SCOPE,
+                    reason="Admin permission catalog update",
+                    idempotency_key=f"rbac-permission-update:{permission_id}",
+                ),
+                permission_id=UUID(permission_id),
+                key=payload.key,
+                description=payload.description,
+                update_description="description" in payload.model_fields_set,
+                is_active=payload.is_active,
+                is_ui_assignable=payload.is_ui_assignable,
+            ),
+        )
+    except (DomainError, ValueError) as exc:
+        error_message = exc.message if isinstance(exc, DomainError) else str(exc)
         error_state = web_system_permission_forms_service.build_permission_error_state(
             permission={"id": permission_id, **payload.model_dump()},
             action_url=f"/admin/system/permissions/{permission_id}",
@@ -2824,7 +2955,7 @@ def permission_update(
             {
                 "request": request,
                 **error_state,
-                "error": str(exc),
+                "error": error_message,
                 "active_page": "roles",
                 "active_menu": "system",
                 "current_user": get_current_user(request),
@@ -2843,7 +2974,24 @@ def permission_update(
 def permission_delete(
     request: Request, permission_id: str, db: Session = Depends(get_db)
 ):
-    rbac_service.permissions.delete(db, permission_id)
+    try:
+        rbac_catalog.deactivate_permission(
+            db,
+            rbac_catalog.DeactivatePermissionCommand(
+                context=_system_command_context(
+                    request,
+                    scope=rbac_catalog.PERMISSION_DELETE_SCOPE,
+                    reason="Admin permission catalog deactivation",
+                    idempotency_key=f"rbac-permission-deactivate:{permission_id}",
+                ),
+                permission_id=UUID(permission_id),
+            ),
+        )
+    except (DomainError, ValueError) as exc:
+        detail = (
+            exc.message if isinstance(exc, DomainError) else "Invalid permission ID"
+        )
+        raise HTTPException(status_code=409, detail=detail) from exc
     return RedirectResponse(url="/admin/system/permissions", status_code=303)
 
 
@@ -3009,177 +3157,6 @@ def api_key_rotate(request: Request, key_id: str, db: Session = Depends(get_db))
             "now": datetime.now(UTC),
         },
     )
-
-
-@router.get(
-    "/webhooks",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:settings:read"))],
-)
-def webhooks_list(request: Request, db: Session = Depends(get_db)):
-    from app.web.admin import get_current_user, get_sidebar_stats
-
-    page_data = web_system_webhooks_service.get_webhooks_list_data(db)
-
-    context = {
-        "request": request,
-        "active_page": "webhooks",
-        "active_menu": "system",
-        "current_user": get_current_user(request),
-        "sidebar_stats": get_sidebar_stats(db),
-        **page_data,
-    }
-    return templates.TemplateResponse("admin/system/webhooks.html", context)
-
-
-@router.get(
-    "/webhooks/new",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:settings:write"))],
-)
-def webhook_new(request: Request, db: Session = Depends(get_db)):
-    from app.web.admin import get_current_user, get_sidebar_stats
-
-    form_context = web_system_webhook_forms_service.get_webhook_new_form_context()
-    context = {
-        "request": request,
-        "active_page": "webhooks",
-        "active_menu": "system",
-        "current_user": get_current_user(request),
-        "sidebar_stats": get_sidebar_stats(db),
-        **form_context,
-    }
-    return templates.TemplateResponse("admin/system/webhook_form.html", context)
-
-
-@router.post(
-    "/webhooks",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:settings:write"))],
-)
-def webhook_create(
-    request: Request,
-    name: str = Form(...),
-    url: str = Form(...),
-    secret: str = Form(None),
-    is_active: str = Form(None),
-    events: list[str] = Form([]),
-    db: Session = Depends(get_db),
-):
-    from app.web.admin import get_current_user, get_sidebar_stats
-
-    try:
-        web_system_webhook_forms_service.create_webhook_endpoint(
-            db,
-            name=name,
-            url=url,
-            secret=secret,
-            is_active=is_active == "true",
-            events=events,
-        )
-        return RedirectResponse(url="/admin/system/webhooks", status_code=303)
-    except Exception as e:
-        db.rollback()
-        context: dict[str, object] = {
-            "request": request,
-            "active_page": "webhooks",
-            "active_menu": "system",
-            "current_user": get_current_user(request),
-            "sidebar_stats": get_sidebar_stats(db),
-            "endpoint": None,
-            "subscribed_events": events,
-            "event_types": web_system_webhook_forms_service.get_webhook_new_form_context()[
-                "event_types"
-            ],
-            "action_url": "/admin/system/webhooks",
-            "error": str(e),
-        }
-        return templates.TemplateResponse("admin/system/webhook_form.html", context)
-
-
-@router.get(
-    "/webhooks/{endpoint_id}/edit",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:settings:write"))],
-)
-def webhook_edit(request: Request, endpoint_id: str, db: Session = Depends(get_db)):
-    from app.web.admin import get_current_user, get_sidebar_stats
-
-    form_data = web_system_webhook_forms_service.get_webhook_form_data(db, endpoint_id)
-    if not form_data:
-        return RedirectResponse(url="/admin/system/webhooks", status_code=303)
-
-    context = {
-        "request": request,
-        "active_page": "webhooks",
-        "active_menu": "system",
-        "current_user": get_current_user(request),
-        "sidebar_stats": get_sidebar_stats(db),
-        "endpoint": form_data["endpoint"],
-        "subscribed_events": form_data["subscribed_events"],
-        "event_types": form_data["event_types"],
-        "action_url": f"/admin/system/webhooks/{endpoint_id}",
-        "error": None,
-    }
-    return templates.TemplateResponse("admin/system/webhook_form.html", context)
-
-
-@router.post(
-    "/webhooks/{endpoint_id}",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:settings:write"))],
-)
-def webhook_update(
-    request: Request,
-    endpoint_id: str,
-    name: str = Form(...),
-    url: str = Form(...),
-    secret: str = Form(None),
-    is_active: str = Form(None),
-    events: list[str] = Form([]),
-    db: Session = Depends(get_db),
-):
-    from app.web.admin import get_current_user, get_sidebar_stats
-
-    try:
-        endpoint = web_system_webhook_forms_service.update_webhook_endpoint(
-            db,
-            endpoint_id=endpoint_id,
-            name=name,
-            url=url,
-            secret=secret,
-            is_active=is_active == "true",
-            events=events,
-        )
-        if endpoint is None:
-            return RedirectResponse(url="/admin/system/webhooks", status_code=303)
-        return RedirectResponse(url="/admin/system/webhooks", status_code=303)
-    except Exception as e:
-        db.rollback()
-        form_data = web_system_webhook_forms_service.get_webhook_form_data(
-            db, endpoint_id
-        )
-        context = {
-            "request": request,
-            "active_page": "webhooks",
-            "active_menu": "system",
-            "current_user": get_current_user(request),
-            "sidebar_stats": get_sidebar_stats(db),
-            "endpoint": form_data["endpoint"] if form_data else None,
-            "subscribed_events": events
-            if events
-            else form_data["subscribed_events"]
-            if form_data
-            else [],
-            "event_types": form_data["event_types"]
-            if form_data
-            else web_system_webhook_forms_service.get_webhook_new_form_context()[
-                "event_types"
-            ],
-            "action_url": f"/admin/system/webhooks/{endpoint_id}",
-            "error": str(e),
-        }
-        return templates.TemplateResponse("admin/system/webhook_form.html", context)
 
 
 @router.get(
@@ -4542,6 +4519,9 @@ def ticket_settings_page(request: Request, db: Session = Depends(get_db)):
             db
         ),
         "sla_policy": support_ticket_settings_service.sla_policy(db),
+        "ticket_type_sla_policy": support_ticket_settings_service.ticket_type_sla_policy(
+            db
+        ),
         "staff_options": staff_options,
         "assignment_rules": support_ticket_settings_service.list_assignment_rules(db),
         "assignment_strategies": ["round_robin", "least_loaded"],
@@ -4593,6 +4573,8 @@ def ticket_settings_update(
     sla_response_hours = form.getlist("sla_response_hours")
     sla_resolution_hours = form.getlist("sla_resolution_hours")
     sla_aging_hours = form.getlist("sla_aging_hours")
+    sla_ticket_types = form.getlist("sla_ticket_types")
+    sla_ticket_type_resolution_hours = form.getlist("sla_ticket_type_resolution_hours")
     errors: list[str] = []
     try:
         support_ticket_settings_service.update_options(
@@ -4617,6 +4599,8 @@ def ticket_settings_update(
             sla_response_hours=sla_response_hours,
             sla_resolution_hours=sla_resolution_hours,
             sla_aging_hours=sla_aging_hours,
+            sla_ticket_types=sla_ticket_types,
+            sla_ticket_type_resolution_hours=sla_ticket_type_resolution_hours,
         )
         return RedirectResponse(
             url="/admin/system/ticket-settings?saved=1", status_code=303
@@ -4659,6 +4643,9 @@ def ticket_settings_update(
                     db
                 ),
                 "sla_policy": support_ticket_settings_service.sla_policy(db),
+                "ticket_type_sla_policy": support_ticket_settings_service.ticket_type_sla_policy(
+                    db
+                ),
                 "staff_options": support_service.list_assignment_people(db),
                 "assignment_rules": support_ticket_settings_service.list_assignment_rules(
                     db
@@ -5009,15 +4996,13 @@ def config_direct_bank_transfer_save(request: Request, db: Session = Depends(get
     before_context = web_system_config_service.get_direct_bank_transfer_context(db)
     before = {
         **dict(before_context["direct_bank_transfer"]),
-        "direct_bank_transfer_accounts": before_context[
-            "direct_bank_transfer_accounts"
-        ],
+        "collection_accounts": before_context["collection_accounts"],
     }
     web_system_config_service.save_direct_bank_transfer_config(db, form)
     after_context = web_system_config_service.get_direct_bank_transfer_context(db)
     after = {
         **dict(after_context["direct_bank_transfer"]),
-        "direct_bank_transfer_accounts": after_context["direct_bank_transfer_accounts"],
+        "collection_accounts": after_context["collection_accounts"],
     }
     changes = _diff_audit_snapshots(before, after)
     if changes:

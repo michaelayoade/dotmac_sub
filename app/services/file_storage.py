@@ -330,6 +330,68 @@ class UnifiedFileUploadService:
         )
         return record
 
+    def stage_upload(
+        self,
+        *,
+        db: Session,
+        domain: str,
+        entity_type: str,
+        entity_id: str,
+        original_filename: str,
+        content_type: str | None,
+        data: bytes,
+        uploaded_by: str | None,
+        owner_subscriber_id: uuid.UUID | None = None,
+    ) -> StoredFile:
+        """Stage file metadata in the caller's transaction.
+
+        Object keys are content-addressed, so retrying the complete owner command
+        is safe. The caller owns commit/rollback; orphan-object cleanup remains a
+        storage reconciler concern and this participant never completes the
+        database transaction.
+        """
+        config = self.get_domain_config(domain)
+        safe_name, final_content_type = self.validate(
+            config=config,
+            filename=original_filename,
+            content_type=content_type,
+            data=data,
+        )
+        ext = Path(safe_name).suffix.lower()
+        storage_key = self.generate_storage_key(
+            prefix=config.prefix,
+            owner_subscriber_id=owner_subscriber_id,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            file_bytes=data,
+            extension=ext,
+        )
+        self._storage_client().upload(storage_key, data, final_content_type)
+        checksum = hashlib.sha256(data).hexdigest() if config.compute_checksum else None
+        record = StoredFile(
+            owner_subscriber_id=owner_subscriber_id,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            original_filename=safe_name,
+            storage_key_or_relative_path=storage_key,
+            file_size=len(data),
+            content_type=final_content_type,
+            checksum=checksum,
+            storage_provider="s3",
+            uploaded_by=uploaded_by,
+            uploaded_at=datetime.now(UTC),
+        )
+        db.add(record)
+        db.flush()
+        logger.info(
+            "file_upload_staged entity=%s entity_id=%s file_id=%s key=%s",
+            entity_type,
+            entity_id,
+            record.id,
+            storage_key,
+        )
+        return record
+
     def get_active_entity_file(
         self, db: Session, entity_type: str, entity_id: str
     ) -> StoredFile | None:
@@ -395,6 +457,20 @@ class UnifiedFileUploadService:
         logger.info(
             "file_deleted file_id=%s hard_object_delete=%s", file.id, hard_delete_object
         )
+        return file
+
+    def stage_soft_delete(self, *, db: Session, file: StoredFile) -> StoredFile:
+        """Deactivate file metadata without completing the caller's transaction.
+
+        Physical deletion is deliberately excluded: deleting an object before a
+        database commit would make rollback unable to restore the authoritative
+        attachment. Retention cleanup can safely remove unreferenced objects later.
+        """
+        file.is_deleted = True
+        file.deleted_at = datetime.now(UTC)
+        db.add(file)
+        db.flush()
+        logger.info("file_delete_staged file_id=%s", file.id)
         return file
 
 

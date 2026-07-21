@@ -9,7 +9,6 @@ from typing import Any
 from fastapi import HTTPException
 from sqlalchemy.orm import Session, selectinload
 
-from app.models.field_erp_sync import FieldErpSyncFlow, flow_owned_by_sub
 from app.models.field_material import (
     FIELD_MATERIAL_REQUEST_PRIORITIES,
     FIELD_MATERIAL_REQUEST_STATUSES,
@@ -46,8 +45,9 @@ def serialize_material_request(request: FieldMaterialRequest) -> dict:
         "priority": request.priority,
         "notes": request.notes,
         "source_warehouse_code": request.source_warehouse_code,
-        "erp_material_request_id": request.erp_material_request_id,
-        "erp_material_status": request.erp_material_status,
+        "support_system": request.support_system,
+        "support_reference": request.support_reference,
+        "support_status": request.support_status,
         "client_ref": request.client_ref,
         "submitted_at": request.submitted_at,
         "approved_at": request.approved_at,
@@ -217,11 +217,11 @@ class FieldMaterialRequests:
 
     @staticmethod
     def approve(db: Session, material_request_id: str) -> dict:
-        """Approve a submitted request and atomically enqueue ERP support work.
+        """Approve a submitted request and stage configured back-office support.
 
-        Once the material flow is owned by Sub, the source transition and its
-        outbox intent are one transaction.  A request must never be approved in
-        Sub without leaving durable work for ERP to fulfil.
+        The Sub decision remains valid if the replaceable back-office provider
+        is unavailable. When an adapter is available, its outbox intent is
+        committed atomically with this source transition.
         """
         request = _get_request(db, material_request_id)
         if request.status != "submitted":
@@ -232,7 +232,7 @@ class FieldMaterialRequests:
         request.approved_at = datetime.now(UTC)
         _note_request_event(request, "approved")
         _mark_sub_authoritative(request.work_order_mirror)
-        _maybe_enqueue_erp_sync(db, request)
+        _maybe_enqueue_backoffice_support(db, request)
         db.commit()
         db.refresh(request)
         return serialize_material_request(request)
@@ -291,32 +291,44 @@ class FieldMaterialRequests:
         db: Session,
         request: FieldMaterialRequest,
         *,
-        erp_request_id: str | None,
-        erp_status: str | None,
+        support_system: str,
+        support_reference: str | None,
+        support_status: str | None,
     ) -> bool:
-        """Project one ERP-owned material outcome into the service workflow.
+        """Project one back-office material outcome into the service workflow.
 
-        ERP decides stock availability, serial allocation, issue, and
-        cancellation.  This resolver is Sub's only writer for the resulting
-        material dependency state.  It is idempotent so both immediate delivery
-        responses and later reconciliation can safely call it.
+        The configured provider decides stock availability, serial allocation,
+        issue, and cancellation. This resolver is Sub's only writer for the
+        resulting material-dependency state.
         """
         changed = False
-        normalized_status = _normalize_backoffice_status(erp_status)
+        normalized_status = _normalize_backoffice_status(support_status)
+        normalized_system = str(support_system or "").strip().lower()[:40]
+        if not normalized_system:
+            raise ValueError("Back-office support outcome requires a source system")
 
-        if erp_request_id:
-            normalized_id = str(erp_request_id)[:120]
-            if request.erp_material_request_id not in {None, normalized_id}:
+        if request.support_system not in {None, normalized_system}:
+            raise ValueError(
+                "Back-office support system changed for "
+                f"{request.id}: {request.support_system} -> {normalized_system}"
+            )
+        if request.support_system != normalized_system:
+            request.support_system = normalized_system
+            changed = True
+
+        if support_reference:
+            normalized_id = str(support_reference)[:120]
+            if request.support_reference not in {None, normalized_id}:
                 raise ValueError(
-                    "ERP material request identity changed for "
-                    f"{request.id}: {request.erp_material_request_id} -> {normalized_id}"
+                    "Back-office material request identity changed for "
+                    f"{request.id}: {request.support_reference} -> {normalized_id}"
                 )
-            if request.erp_material_request_id != normalized_id:
-                request.erp_material_request_id = normalized_id
+            if request.support_reference != normalized_id:
+                request.support_reference = normalized_id
                 changed = True
 
-        if normalized_status and request.erp_material_status != normalized_status:
-            request.erp_material_status = normalized_status
+        if normalized_status and request.support_status != normalized_status:
+            request.support_status = normalized_status
             changed = True
 
         if normalized_status in _BACKOFFICE_ISSUED_STATUSES:
@@ -332,7 +344,7 @@ class FieldMaterialRequests:
                 _note_request_event(
                     request,
                     "backoffice_material_refused",
-                    reason=f"ERP outcome: {normalized_status}",
+                    reason=f"Back-office outcome: {normalized_status}",
                 )
                 changed = True
 
@@ -510,12 +522,14 @@ def _normalize_backoffice_status(value: str | None) -> str | None:
 
 def _require_legacy_material_fulfilment(db: Session) -> None:
     """Keep the old local transition available only before explicit cutover."""
-    if flow_owned_by_sub(db, FieldErpSyncFlow.material_request):
+    from app.services.backoffice import external_material_fulfilment_active
+
+    if external_material_fulfilment_active(db):
         raise HTTPException(
             status_code=409,
             detail=(
-                "ERP owns material issue and fulfilment after cutover; "
-                "reconcile the ERP material outcome instead"
+                "The configured back-office system owns material issue and "
+                "fulfilment after cutover; reconcile its outcome instead"
             ),
         )
 
@@ -524,53 +538,24 @@ def _mark_sub_authoritative(row: WorkOrder) -> None:
     _mark_source_authoritative(row, "material_requests")
 
 
-def _erp_sync_enabled(db: Session) -> bool:
-    """Master ERP-sync kill-switch (integration domain, default OFF).
+def _maybe_enqueue_backoffice_support(
+    db: Session, request: FieldMaterialRequest
+) -> None:
+    """Best-effort adapter handoff without transferring Sub decision authority."""
+    from app.services.backoffice import enqueue_material_support
 
-    The switch that keeps the material-request flow INERT until cutover: when off,
-    approve does not enqueue an ERP outbox row at all, so nothing can accumulate
-    (or, at cutover, double-post against CRM's separate id-space). Ownership of
-    the ``material_request`` flow (``sync_flow_ownership``, seeded ``crm``) is the
-    second, per-flow gate enforced inside outbox delivery.
-    """
-    from app.models.domain_settings import SettingDomain
-    from app.services import settings_spec
-
-    return bool(
-        settings_spec.resolve_value(
-            db, SettingDomain.integration, "dotmac_erp_sync_enabled"
+    try:
+        with db.begin_nested():
+            result = enqueue_material_support(db, request)
+        if result.requires_attention:
+            _note_request_event(request, "backoffice_delivery_pending")
+    except Exception:
+        _note_request_event(request, "backoffice_delivery_pending")
+        logger.warning(
+            "field material %s: back-office enqueue failed; approval retained",
+            request.id,
+            exc_info=True,
         )
-    )
-
-
-def _maybe_enqueue_erp_sync(db: Session, request: FieldMaterialRequest) -> None:
-    """Add the ERP intent to the caller's approval transaction after cutover.
-
-    Both gates must be active.  This prevents pre-cutover backlog from being
-    delivered unexpectedly when ownership later changes, and makes the approval
-    plus outbox row atomic once Sub owns the integration write path.
-    """
-    if not flow_owned_by_sub(db, FieldErpSyncFlow.material_request):
-        return
-    if not _erp_sync_enabled(db):
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "ERP material support is the active owner but ERP sync is disabled; "
-                "approval cannot be recorded without its outbox intent"
-            ),
-        )
-
-    from app.services.dotmac_erp.material_sync import (
-        enqueue_material_request,
-        material_request_eligibility_error,
-    )
-
-    reason = material_request_eligibility_error(request)
-    if reason:
-        raise HTTPException(status_code=409, detail=reason)
-    if enqueue_material_request(db, request) is None:  # defensive contract guard
-        raise RuntimeError(f"Failed to enqueue ERP material request {request.id}")
 
 
 field_material_requests = FieldMaterialRequests()

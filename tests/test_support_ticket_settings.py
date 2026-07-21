@@ -59,7 +59,7 @@ def test_ticket_settings_persist_routing_and_sla(db_session):
         db_session,
         statuses=["open", "pending"],
         priorities=["normal"],
-        ticket_types=["incident"],
+        ticket_types=["incident", "core link disconnection"],
         regions=["north"],
         service_team_ids=[team_id],
         service_team_labels=["Core Network"],
@@ -72,6 +72,8 @@ def test_ticket_settings_persist_routing_and_sla(db_session):
         sla_response_hours=["2"],
         sla_resolution_hours=["12"],
         sla_aging_hours=["6"],
+        sla_ticket_types=["incident", "core link disconnection"],
+        sla_ticket_type_resolution_hours=["0", "48"],
     )
 
     assert support_ticket_settings_service.auto_assign_enabled(db_session) is True
@@ -89,6 +91,10 @@ def test_ticket_settings_persist_routing_and_sla(db_session):
         "response_hours": 2,
         "resolution_hours": 12,
         "aging_hours": 6,
+    }
+    assert support_ticket_settings_service.ticket_type_sla_policy(db_session) == {
+        "incident": 0,
+        "core link disconnection": 48,
     }
     support_ticket_settings_service.update_options(
         db_session,

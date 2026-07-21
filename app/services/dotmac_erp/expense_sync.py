@@ -3,7 +3,7 @@
 This is the first real money flow to move onto sub's ``field_erp_sync_events``
 outbox. It ports ``dotmac_crm/app/services/dotmac_erp/expense_request_sync.py``
 onto sub's native ``FieldExpenseRequest`` (which already carries the ERP mirror
-fields ``erp_expense_claim_id`` / ``erp_claim_number`` / ``erp_claim_status``).
+fields ``expense_claim_reference`` / ``expense_claim_number`` / ``expense_claim_status``).
 
 Three responsibilities live here:
 
@@ -34,11 +34,16 @@ from sqlalchemy.orm import Session, selectinload
 from app.models.field_erp_sync import FieldErpSyncEvent, FieldErpSyncFlow
 from app.models.field_expense import FieldExpenseRequest
 from app.services.dotmac_erp import outbox
-from app.services.dotmac_erp.client import DotMacERPClient, build_erp_client
+from app.services.dotmac_erp.client import DotMacERPClient
+from app.services.integrations.erp_capability import (
+    ErpCapabilityClient,
+    capability_client,
+)
 
 logger = logging.getLogger(__name__)
 
 ENTITY_TYPE = "field_expense_request"
+PROVIDER = "dotmac_erp"
 
 # The sub-side statuses a claim can still change while ERP owns approval/payment;
 # only these get polled for a status refresh.
@@ -219,14 +224,19 @@ def apply_claim_response(request: FieldExpenseRequest, response: dict | None) ->
     claim_number = response.get("claim_number")
     claim_status = _extract_claim_status(response)
 
-    if erp_id and not request.erp_expense_claim_id:
-        request.erp_expense_claim_id = str(erp_id)[:120]
+    if request.expense_system not in {None, PROVIDER}:
+        raise ValueError(
+            f"Expense source changed: {request.expense_system} -> {PROVIDER}"
+        )
+    request.expense_system = PROVIDER
+    if erp_id and not request.expense_claim_reference:
+        request.expense_claim_reference = str(erp_id)[:120]
     if claim_number:
-        request.erp_claim_number = str(claim_number)[:60]
+        request.expense_claim_number = str(claim_number)[:60]
     if not claim_status:
         return
 
-    request.erp_claim_status = claim_status
+    request.expense_claim_status = claim_status
     mapped = _ERP_TERMINAL_STATUS_MAP.get(claim_status)
     now = datetime.now(UTC)
     if mapped and request.status == "submitted":
@@ -272,11 +282,14 @@ def apply_erp_response(db: Session, event: FieldErpSyncEvent) -> None:
 
 
 def refresh_expense_claim_statuses(
-    db: Session, *, client: DotMacERPClient | None = None, limit: int = 100
+    db: Session,
+    *,
+    client: DotMacERPClient | ErpCapabilityClient | None = None,
+    limit: int = 100,
 ) -> dict:
     """Poll ERP for in-flight expense claims and refresh their mirror fields.
 
-    Selects synced (``erp_expense_claim_id`` set) requests still awaiting an ERP
+    Selects synced (``expense_claim_reference`` set) requests still awaiting an ERP
     decision (``submitted`` / ``approved``), polls
     ``get_expense_claim_status(request.id)`` for each, and applies the response
     via ``apply_claim_response``. Ports CRM's
@@ -288,7 +301,8 @@ def refresh_expense_claim_statuses(
         db.query(FieldExpenseRequest)
         .options(selectinload(FieldExpenseRequest.items))
         .filter(FieldExpenseRequest.is_active.is_(True))
-        .filter(FieldExpenseRequest.erp_expense_claim_id.isnot(None))
+        .filter(FieldExpenseRequest.expense_system == PROVIDER)
+        .filter(FieldExpenseRequest.expense_claim_reference.isnot(None))
         .filter(FieldExpenseRequest.status.in_(_IN_FLIGHT_STATUSES))
         .order_by(FieldExpenseRequest.updated_at.asc())
         .limit(limit)
@@ -303,7 +317,7 @@ def refresh_expense_claim_statuses(
     owned_client = client
     created_client = False
     if owned_client is None:
-        owned_client = build_erp_client(db)
+        owned_client = capability_client(db)
         created_client = True
 
     processed = 0
@@ -322,9 +336,9 @@ def refresh_expense_claim_statuses(
                 continue
             if not response:
                 continue
-            before = request.erp_claim_status
+            before = request.expense_claim_status
             apply_claim_response(request, response)
-            if request.erp_claim_status != before:
+            if request.expense_claim_status != before:
                 updated += 1
             db.commit()
     finally:
@@ -334,3 +348,11 @@ def refresh_expense_claim_statuses(
     result["processed"] = processed
     result["updated"] = updated
     return result
+
+
+def run_refresh_expense_claim_statuses() -> dict[str, object]:
+    """Own the background session for expense-claim reconciliation."""
+    from app.db import task_session
+
+    with task_session() as db:
+        return refresh_expense_claim_statuses(db)

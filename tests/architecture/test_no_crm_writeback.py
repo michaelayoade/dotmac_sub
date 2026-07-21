@@ -105,14 +105,11 @@ def test_customer_referral_surfaces_do_not_call_crm_mirror() -> None:
     assert "referrals_mirror" not in sources
 
 
-def test_retired_referral_compatibility_has_no_crm_or_native_write_path() -> None:
+def test_referral_domain_has_no_crm_integration_path() -> None:
     mirror_source = (ROOT / "app/services/referrals_mirror.py").read_text(
         encoding="utf-8"
     )
     webhook_source = (ROOT / "app/api/crm_webhooks.py").read_text(encoding="utf-8")
-    delta_source = (ROOT / "app/services/crm_native_sync.py").read_text(
-        encoding="utf-8"
-    )
 
     for forbidden in (
         "get_crm_client",
@@ -122,5 +119,5 @@ def test_retired_referral_compatibility_has_no_crm_or_native_write_path() -> Non
         "enqueue_task",
     ):
         assert forbidden not in mirror_source
-    assert "crm_referral_path_retired" in webhook_source
-    assert '"referral": _apply_referral' not in delta_source
+    assert "referral" not in webhook_source.lower()
+    assert not (ROOT / "app/services/crm_native_sync.py").exists()

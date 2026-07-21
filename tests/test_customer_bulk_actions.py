@@ -11,14 +11,12 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
-from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.notification import (
     Notification,
     NotificationChannel,
     NotificationTemplate,
 )
 from app.models.subscriber import Subscriber, UserType
-from app.models.subscription_engine import SettingValueType
 from app.models.support import Ticket
 from app.services import web_customer_actions
 from app.services.whatsapp_notification_templates import (
@@ -446,22 +444,19 @@ def test_queue_bulk_message_preview_does_not_create_rows(db_session):
     assert db_session.query(Notification).count() == 0
 
 
-def test_whatsapp_registry_templates_sync_into_notification_templates(db_session):
-    db_session.add(
-        DomainSetting(
-            domain=SettingDomain.comms,
-            key="whatsapp_message_templates",
-            value_type=SettingValueType.json,
-            value_text=None,
-            value_json=[
+def test_whatsapp_registry_templates_sync_into_notification_templates(
+    db_session, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.services.whatsapp_notification_templates.whatsapp_capability.active_config",
+        lambda _db: {
+            "templates": [
                 {"name": "service_restoration", "language": "en_US"},
                 {"name": "closed", "language": "en_US"},
                 {"name": "closed", "language": "en"},
-            ],
-            is_active=True,
-        )
+            ]
+        },
     )
-    db_session.commit()
 
     templates = sync_whatsapp_registry_templates(db_session)
     provider_rows = {

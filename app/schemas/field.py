@@ -40,7 +40,7 @@ class FieldMeResponse(BaseModel):
 
 
 class FieldJobSummary(BaseModel):
-    """Technician job-list item from the imported work-order view."""
+    """Technician job-list item from the native work-order view."""
 
     id: str
     work_order_mirror_id: UUID
@@ -395,6 +395,9 @@ class FieldMaterialRequestRead(BaseModel):
     priority: str
     notes: str | None = None
     source_warehouse_code: str | None = None
+    support_system: str | None = None
+    support_reference: str | None = None
+    support_status: str | None = None
     submitted_at: datetime | None = None
     approved_at: datetime | None = None
     rejected_at: datetime | None = None
@@ -475,9 +478,10 @@ class FieldExpenseRequestRead(BaseModel):
     currency: str
     notes: str | None = None
     rejection_reason: str | None = None
-    erp_expense_claim_id: str | None = None
-    erp_claim_number: str | None = None
-    erp_claim_status: str | None = None
+    expense_system: str | None = None
+    expense_claim_reference: str | None = None
+    expense_claim_number: str | None = None
+    expense_claim_status: str | None = None
     client_ref: UUID | None = None
     total_amount: Decimal
     submitted_at: datetime | None = None
@@ -501,13 +505,43 @@ class FieldJobHistoryItem(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class FieldProjectContext(BaseModel):
+    id: UUID
+    number: str | None = None
+    name: str
+    status: str
+    status_presentation: StatusPresentation
+
+
+class FieldProjectTaskContext(BaseModel):
+    id: UUID
+    number: str | None = None
+    title: str
+    status: str
+    status_presentation: StatusPresentation
+
+
+class FieldTicketContext(BaseModel):
+    id: UUID
+    number: str | None = None
+    title: str
+    status: str
+    status_presentation: StatusPresentation
+
+
+class FieldCustomerExperienceContext(BaseModel):
+    project: FieldProjectContext | None = None
+    project_task: FieldProjectTaskContext | None = None
+    origin_ticket: FieldTicketContext | None = None
+    project_task_ticket: FieldTicketContext | None = None
+
+
 class FieldJobDetail(BaseModel):
     job: FieldJobSummary
     completion_requirements: FieldCompletionRequirements
     customer: FieldCustomer | None = None
     location: FieldJobLocation
-    ticket_ref: str | None = None
-    project_id: str | None = None
+    customer_experience: FieldCustomerExperienceContext
     access_notes: str | None = None
     additional_contacts: list[FieldSiteContact] = Field(default_factory=list)
     recent_visits: list[FieldVisitHistoryItem] = Field(default_factory=list)

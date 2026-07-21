@@ -403,22 +403,30 @@ def reset_dispatcher() -> None:
 def _initialize_handlers(dispatcher: EventDispatcher) -> None:
     """Initialize and register all event handlers."""
     from app.services.events.handlers.arrangements import ArrangementHandler
+    from app.services.events.handlers.credential_session_projection import (
+        CredentialSessionProjectionHandler,
+    )
     from app.services.events.handlers.enforcement import EnforcementHandler
-    from app.services.events.handlers.integration_hook import IntegrationHookHandler
     from app.services.events.handlers.lifecycle import LifecycleHandler
     from app.services.events.handlers.notification import NotificationHandler
+    from app.services.events.handlers.password_recovery import PasswordRecoveryHandler
     from app.services.events.handlers.provisioning import ProvisioningHandler
     from app.services.events.handlers.referral import ReferralHandler
+    from app.services.events.handlers.reseller_invite import ResellerInviteHandler
+    from app.services.events.handlers.staff_invite import StaffInviteHandler
     from app.services.events.handlers.webhook import WebhookHandler
 
     dispatcher.register_handler(WebhookHandler())
-    dispatcher.register_handler(IntegrationHookHandler())
     dispatcher.register_handler(LifecycleHandler())
     dispatcher.register_handler(NotificationHandler())
     dispatcher.register_handler(ProvisioningHandler())
     dispatcher.register_handler(EnforcementHandler())
+    dispatcher.register_handler(CredentialSessionProjectionHandler())
     dispatcher.register_handler(ArrangementHandler())
     dispatcher.register_handler(ReferralHandler())
+    dispatcher.register_handler(StaffInviteHandler())
+    dispatcher.register_handler(ResellerInviteHandler())
+    dispatcher.register_handler(PasswordRecoveryHandler())
 
     from app.services.control_relationships import (
         validate_and_order_handlers,
@@ -429,7 +437,9 @@ def _initialize_handlers(dispatcher: EventDispatcher) -> None:
     validate_event_execution_policy(dispatcher._handlers)
 
     logger.info(
-        "Event handlers initialized: webhook, integration_hooks, lifecycle, notification, provisioning, enforcement, arrangements, referral",
+        "Event handlers initialized: integration_delivery, lifecycle, "
+        "notification, provisioning, enforcement, credential_session_projection, "
+        "arrangements, referral, staff_invite, reseller_invite, password_recovery",
         extra={
             "event": "event_handlers_initialized",
             "handler_count": len(dispatcher._handlers),

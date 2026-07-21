@@ -12,6 +12,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.models.project import ProjectTask
 from app.models.subscriber import Subscriber
 from app.models.support import (
     Ticket,
@@ -408,9 +409,6 @@ def build_ticket_form_context(
         ]
     )
     staff = support_service.list_assignment_people(db, include_ids=assignment_ids)
-    crm_write_locked = (
-        support_service.crm_ticket_user_writes_locked(ticket) if ticket else False
-    )
     prefill = {
         "title": ticket.title if ticket else str(params.get("title", "") or ""),
         "description": ticket.description
@@ -503,17 +501,6 @@ def build_ticket_form_context(
         ),
         "selected_person": selected_person,
         "prefill": prefill,
-        "crm_origin": (
-            support_service.is_crm_origin_ticket(ticket) if ticket else False
-        ),
-        "crm_write_locked": crm_write_locked,
-        "crm_write_lock_message": (
-            "This ticket is currently owned by CRM. It is visible in sub for "
-            "cutover validation, but edits stay disabled until ticket writes move "
-            "to sub."
-            if crm_write_locked
-            else ""
-        ),
     }
 
 
@@ -1304,13 +1291,28 @@ def render_tickets_csv(
     return buffer.getvalue()
 
 
-def build_ticket_detail_context(db: Session, *, ticket_lookup: str) -> dict:
+def build_ticket_detail_context(
+    db: Session,
+    *,
+    ticket_lookup: str,
+    actor_id: str | None = None,
+) -> dict:
+    from uuid import uuid4
+
+    from app.services import ticket_work_order_handoff
     from app.services.audit_helpers import build_audit_activities
 
     status_options = support_ticket_settings_service.list_status_options(db)
     priority_options = support_ticket_settings_service.list_priority_options(db)
     ticket = support_service.tickets.get_by_lookup(db, ticket_lookup)
-    crm_write_locked = support_service.crm_ticket_user_writes_locked(ticket)
+    linked_work_orders = ticket_work_order_handoff.list_for_ticket(db, ticket.id)
+    linked_project_tasks = (
+        db.query(ProjectTask)
+        .filter(ProjectTask.ticket_id == ticket.id)
+        .filter(ProjectTask.is_active.is_(True))
+        .order_by(ProjectTask.created_at.asc(), ProjectTask.id.asc())
+        .all()
+    )
     comments = support_service.ticket_comments.list(
         db, str(ticket.id), limit=500, offset=0
     )
@@ -1384,13 +1386,10 @@ def build_ticket_detail_context(db: Session, *, ticket_lookup: str) -> dict:
             or support_ticket_settings_service.status_is_merged(ticket.status)
         ),
         "identity_resolution": _identity_resolution_summary(ticket),
-        "crm_origin": support_service.is_crm_origin_ticket(ticket),
-        "crm_write_locked": crm_write_locked,
-        "crm_write_lock_message": (
-            "This ticket is currently owned by CRM. It is visible in sub for "
-            "cutover validation, but edits stay disabled until ticket writes move "
-            "to sub."
-            if crm_write_locked
-            else ""
+        "linked_work_orders": linked_work_orders,
+        "linked_project_tasks": linked_project_tasks,
+        "issue_work_order_action": ticket_work_order_handoff.issue_action(
+            db, ticket, actor_id=actor_id
         ),
+        "work_order_idempotency_key": uuid4().hex,
     }

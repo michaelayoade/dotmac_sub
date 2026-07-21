@@ -113,18 +113,11 @@ CONTROL_RELATIONSHIPS: tuple[ControlRelationship, ...] = (
     ControlRelationship(
         name="whatsapp_provider_selection",
         mode=RelationshipMode.exclusive,
-        members=("meta_cloud_api", "twilio", "messagebird"),
-        rule="The whatsapp_provider setting selects exactly one transport provider.",
-    ),
-    ControlRelationship(
-        name="phase3_quote_migration",
-        mode=RelationshipMode.chain,
-        members=(
-            "crm.phase3_native_sync",
-            "quotes.native_read",
-            "quotes.native_write",
+        members=("meta_cloud_api",),
+        rule=(
+            "An enabled whatsapp installation configured for meta_cloud_api is "
+            "the only transport provider."
         ),
-        rule="Sync precedes native reads; native reads precede the write flip.",
     ),
     ControlRelationship(
         name="prepaid_enforcement_cutover",
@@ -191,6 +184,12 @@ HANDLER_CONTROLS: dict[str, HandlerControl] = {
     "EnforcementHandler": HandlerControl(
         "EnforcementHandler", HandlerStage.state, 50, ("service_enforcement",)
     ),
+    "CredentialSessionProjectionHandler": HandlerControl(
+        "CredentialSessionProjectionHandler",
+        HandlerStage.state,
+        60,
+        ("credential_session_projection_invalidation",),
+    ),
     "ArrangementHandler": HandlerControl(
         "ArrangementHandler", HandlerStage.state, 20, ("payment_arrangements",)
     ),
@@ -203,14 +202,26 @@ HANDLER_CONTROLS: dict[str, HandlerControl] = {
         10,
         ("customer_notifications",),
     ),
+    "StaffInviteHandler": HandlerControl(
+        "StaffInviteHandler",
+        HandlerStage.communication,
+        20,
+        ("staff_invitation_intents",),
+    ),
+    "ResellerInviteHandler": HandlerControl(
+        "ResellerInviteHandler",
+        HandlerStage.communication,
+        30,
+        ("reseller_invitation_intents",),
+    ),
+    "PasswordRecoveryHandler": HandlerControl(
+        "PasswordRecoveryHandler",
+        HandlerStage.communication,
+        40,
+        ("password_recovery_intents",),
+    ),
     "WebhookHandler": HandlerControl(
         "WebhookHandler", HandlerStage.external, 10, ("external_webhooks",)
-    ),
-    "IntegrationHookHandler": HandlerControl(
-        "IntegrationHookHandler",
-        HandlerStage.external,
-        20,
-        ("internal_integration_hooks",),
     ),
 }
 
@@ -254,20 +265,36 @@ def event_relationship_mode(event_type: str) -> RelationshipMode:
 
 def handler_event_types(handler_name: str) -> frozenset[str] | None:
     """Return the handler's executable event scope; ``None`` means wildcard."""
-    if handler_name == "IntegrationHookHandler":
-        return None
     if handler_name == "LifecycleHandler":
         from app.services.events.types import SUBSCRIPTION_LIFECYCLE_MAP
 
         return frozenset(item.value for item in SUBSCRIPTION_LIFECYCLE_MAP)
+    if handler_name == "CredentialSessionProjectionHandler":
+        from app.services.events.handlers.credential_session_projection import (
+            HANDLED_EVENT_TYPES,
+        )
+
+        return frozenset(item.value for item in HANDLED_EVENT_TYPES)
     if handler_name == "NotificationHandler":
         from app.services.events.handlers.notification import EVENT_NOTIFICATION_SPECS
 
         return frozenset(item.value for item in EVENT_NOTIFICATION_SPECS)
-    if handler_name == "WebhookHandler":
-        from app.services.events.handlers.webhook import EVENT_TYPE_TO_WEBHOOK
+    if handler_name == "StaffInviteHandler":
+        from app.services.events.handlers.staff_invite import HANDLED_EVENT_TYPES
 
-        return frozenset(item.value for item in EVENT_TYPE_TO_WEBHOOK)
+        return frozenset(item.value for item in HANDLED_EVENT_TYPES)
+    if handler_name == "ResellerInviteHandler":
+        from app.services.events.handlers.reseller_invite import HANDLED_EVENT_TYPES
+
+        return frozenset(item.value for item in HANDLED_EVENT_TYPES)
+    if handler_name == "PasswordRecoveryHandler":
+        from app.services.events.handlers.password_recovery import HANDLED_EVENT_TYPES
+
+        return frozenset(item.value for item in HANDLED_EVENT_TYPES)
+    if handler_name == "WebhookHandler":
+        # Event subscriptions are data-driven; the delivery adapter is a
+        # wildcard and filters by enabled typed subscriptions at runtime.
+        return None
     if handler_name == "ArrangementHandler":
         from app.services.events.handlers.arrangements import HANDLED_EVENT_TYPES
 
@@ -602,7 +629,6 @@ def audit_feature_control_relationships(
         return controls[key].on_missing
 
     findings: list[ControlFinding] = []
-    sync_enabled = enabled("crm.phase3_native_sync")
     read_enabled = enabled("quotes.native_read")
     write_enabled = enabled("quotes.native_write")
     if write_enabled and not read_enabled:
@@ -612,19 +638,6 @@ def audit_feature_control_relationships(
                 severity="error",
                 message="Native quote writes require the native read path.",
                 members=("quotes.native_write", "quotes.native_read"),
-            )
-        )
-    if read_enabled and not (sync_enabled or write_enabled):
-        findings.append(
-            ControlFinding(
-                code="quote_read_without_freshness_source",
-                severity="warning",
-                message="Native quote reads have neither CRM delta sync nor native writes.",
-                members=(
-                    "crm.phase3_native_sync",
-                    "quotes.native_read",
-                    "quotes.native_write",
-                ),
             )
         )
     if enabled("collections.prepaid_balance_enforcement"):

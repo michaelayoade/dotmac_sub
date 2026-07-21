@@ -35,6 +35,7 @@ from app.services.customer_portal_flow_payments import (
     verify_and_record_topup,
 )
 from app.services.settings_cache import SettingsCache
+from tests.integration_platform_helpers import enable_payment_provider
 
 
 def _upsert_billing_setting(db_session, key: str, value: str) -> None:
@@ -56,7 +57,12 @@ def _upsert_billing_setting(db_session, key: str, value: str) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _configure_paystack_route(db_session):
+def _configure_paystack_route(db_session, monkeypatch):
+    monkeypatch.setenv("PAYSTACK_TEST_SECRET", "sk_test_portal")
+    monkeypatch.setenv("PAYSTACK_TEST_PUBLIC", "pk_test_portal")
+    monkeypatch.setenv("FLUTTERWAVE_TEST_SECRET", "flw_test_portal")
+    monkeypatch.setenv("FLUTTERWAVE_TEST_PUBLIC", "flw_public_portal")
+    monkeypatch.setenv("FLUTTERWAVE_TEST_WEBHOOK", "flw_webhook_portal")
     db_session.add(
         PaymentProvider(
             name="Paystack Test Route",
@@ -65,8 +71,7 @@ def _configure_paystack_route(db_session):
         )
     )
     db_session.commit()
-    _upsert_billing_setting(db_session, "paystack_secret_key", "sk_test_portal")
-    _upsert_billing_setting(db_session, "paystack_public_key", "pk_test_portal")
+    enable_payment_provider(db_session, "paystack")
 
 
 def _enable_flutterwave_route(db_session) -> None:
@@ -78,9 +83,7 @@ def _enable_flutterwave_route(db_session) -> None:
         )
     )
     db_session.commit()
-    _upsert_billing_setting(db_session, "flutterwave_secret_key", "FLWSECK_TEST-portal")
-    _upsert_billing_setting(db_session, "flutterwave_public_key", "FLWPUBK_TEST-portal")
-    _upsert_billing_setting(db_session, "flutterwave_secret_hash", "portal-hash")
+    enable_payment_provider(db_session, "flutterwave")
 
 
 def _make_invoice(
@@ -581,7 +584,7 @@ def test_create_topup_intent_records_selected_payment_method(
         return {"status": "success", "reference": kwargs["reference"]}
 
     monkeypatch.setattr(
-        "app.services.paystack.charge_authorization",
+        "app.services.integrations.payment_capability.charge_authorization",
         fake_charge_authorization,
     )
 
@@ -624,7 +627,7 @@ def test_create_topup_intent_initializes_flutterwave_checkout(
         return {"link": "https://checkout.flutterwave.test/pay/topup-intent-ref-flw"}
 
     monkeypatch.setattr(
-        "app.services.flutterwave.initialize_transaction",
+        "app.services.integrations.payment_capability.initialize_transaction",
         fake_initialize_transaction,
     )
 
@@ -775,7 +778,10 @@ def test_create_invoice_payment_intent_charges_saved_card(
         captured.update(kwargs)
         return {"status": "success", "reference": kwargs["reference"]}
 
-    monkeypatch.setattr("app.services.paystack.charge_authorization", fake_charge)
+    monkeypatch.setattr(
+        "app.services.integrations.payment_capability.charge_authorization",
+        fake_charge,
+    )
 
     payload = create_invoice_payment_intent(
         db_session,
@@ -820,7 +826,7 @@ def test_create_invoice_payment_intent_saved_card_idempotent_replay(
     )
     charges: list[dict] = []
     monkeypatch.setattr(
-        "app.services.paystack.charge_authorization",
+        "app.services.integrations.payment_capability.charge_authorization",
         lambda _db, **kw: charges.append(kw) or {"status": "success"},
     )
     cust = _invoice_customer(subscriber)
@@ -998,7 +1004,8 @@ def test_create_invoice_payment_intent_initializes_flutterwave(
         return {"link": "https://checkout.flutterwave.test/pay/pay-ref-flw"}
 
     monkeypatch.setattr(
-        "app.services.flutterwave.initialize_transaction", fake_initialize_transaction
+        "app.services.integrations.payment_capability.initialize_transaction",
+        fake_initialize_transaction,
     )
 
     payload = create_invoice_payment_intent(
@@ -1020,57 +1027,6 @@ def test_create_invoice_payment_intent_initializes_flutterwave(
     assert captured["metadata"]["invoice_id"] == str(invoice.id)
     # The invoice's own currency is plumbed through to the gateway init.
     assert captured["currency"] == "NGN"
-
-
-def test_flutterwave_initialize_uses_default_currency_setting(monkeypatch, db_session):
-    # C-4 currency cleanup: Flutterwave init must honor a non-NGN
-    # billing.default_currency setting when no explicit currency is given.
-    from app.models.domain_settings import DomainSetting, SettingDomain
-    from app.models.subscription_engine import SettingValueType
-    from app.services import flutterwave
-
-    db_session.add(
-        DomainSetting(
-            domain=SettingDomain.billing,
-            key="default_currency",
-            value_type=SettingValueType.string,
-            value_text="GHS",
-            is_active=True,
-        )
-    )
-    db_session.commit()
-
-    monkeypatch.setattr(flutterwave, "_get_secret_key", lambda _db=None: "sk_test")
-    captured_payloads = []
-
-    def fake_post(url, *, json, headers, timeout):
-        captured_payloads.append(json)
-        return SimpleNamespace(
-            raise_for_status=lambda: None,
-            json=lambda: {"status": "success", "data": {"link": "https://flw.test"}},
-        )
-
-    monkeypatch.setattr("app.services.flutterwave.httpx.post", fake_post)
-
-    flutterwave.initialize_transaction(
-        db_session,
-        email="customer@example.com",
-        amount=Decimal("100.00"),
-        reference="ref-1",
-        redirect_url="https://selfcare.test/verify",
-    )
-    assert captured_payloads[-1]["currency"] == "GHS"
-
-    # An explicit (e.g. invoice) currency still wins over the setting.
-    flutterwave.initialize_transaction(
-        db_session,
-        email="customer@example.com",
-        amount=Decimal("100.00"),
-        reference="ref-2",
-        redirect_url="https://selfcare.test/verify",
-        currency="usd",
-    )
-    assert captured_payloads[-1]["currency"] == "USD"
 
 
 def test_create_invoice_payment_intent_rejects_saved_card_non_paystack(

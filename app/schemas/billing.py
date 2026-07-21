@@ -27,7 +27,6 @@ from app.models.billing import (
     PaymentReversalOrigin,
     PaymentSettlementOrigin,
     PaymentStatus,
-    PaymentWebhookDeadLetterStatus,
     TaxApplication,
 )
 from app.models.catalog import BillingCycle
@@ -1206,8 +1205,6 @@ class PaymentAllocationRead(PaymentAllocationBase):
 class PaymentProviderBase(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     provider_type: PaymentProviderType = PaymentProviderType.custom
-    connector_config_id: UUID | None = None
-    webhook_secret_ref: str | None = Field(default=None, max_length=255)
     is_active: bool = True
     notes: str | None = None
 
@@ -1219,8 +1216,6 @@ class PaymentProviderCreate(PaymentProviderBase):
 class PaymentProviderUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=160)
     provider_type: PaymentProviderType | None = None
-    connector_config_id: UUID | None = None
-    webhook_secret_ref: str | None = Field(default=None, max_length=255)
     is_active: bool | None = None
     notes: str | None = None
 
@@ -1290,22 +1285,6 @@ class PaymentProviderEventIngest(BaseModel):
     status_hint: PaymentStatus | None = None
 
 
-class PaymentWebhookDeadLetterRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: UUID
-    provider_type: str
-    event_type: str | None = None
-    external_id: str | None = None
-    idempotency_key: str | None = None
-    status: PaymentWebhookDeadLetterStatus
-    payload: dict | None = None
-    error: str | None = None
-    retry_count: int
-    received_at: datetime
-    last_attempt_at: datetime | None = None
-
-
 class LedgerEntryBase(BaseModel):
     account_id: UUID
     invoice_id: UUID | None = None
@@ -1356,7 +1335,7 @@ class AccountAdjustmentPreviewRequest(BaseModel):
     account_id: UUID
     category: LedgerCategory = LedgerCategory.other
     amount: Decimal = Field(gt=0)
-    currency: str = Field(default="NGN", min_length=3, max_length=3)
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
     memo: str = Field(min_length=3, max_length=500)
     reason: str = Field(min_length=3, max_length=1000)
 
@@ -1705,7 +1684,12 @@ class CollectionAccountBase(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     account_type: CollectionAccountType = CollectionAccountType.bank
     bank_name: str | None = Field(default=None, max_length=120)
+    account_name: str | None = Field(default=None, max_length=200)
+    account_number: str | None = Field(default=None, max_length=64)
     account_last4: str | None = Field(default=None, max_length=4)
+    sort_code: str | None = Field(default=None, max_length=32)
+    accounting_code: str | None = Field(default=None, max_length=64)
+    presentment_priority: int = 0
     currency: str = Field(default="NGN", min_length=3, max_length=3)
     is_active: bool = True
     notes: str | None = None
@@ -1719,7 +1703,12 @@ class CollectionAccountUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=160)
     account_type: CollectionAccountType | None = None
     bank_name: str | None = Field(default=None, max_length=120)
+    account_name: str | None = Field(default=None, max_length=200)
+    account_number: str | None = Field(default=None, max_length=64)
     account_last4: str | None = Field(default=None, max_length=4)
+    sort_code: str | None = Field(default=None, max_length=32)
+    accounting_code: str | None = Field(default=None, max_length=64)
+    presentment_priority: int | None = None
     currency: str | None = Field(default=None, min_length=3, max_length=3)
     is_active: bool | None = None
     notes: str | None = None
@@ -1739,6 +1728,7 @@ class PaymentChannelBase(BaseModel):
     provider_id: UUID | None = None
     default_collection_account_id: UUID | None = None
     fee_rules: dict | None = None
+    accounting_code: str | None = Field(default=None, max_length=64)
     is_active: bool = True
     is_default: bool = False
     notes: str | None = None
@@ -1754,6 +1744,7 @@ class PaymentChannelUpdate(BaseModel):
     provider_id: UUID | None = None
     default_collection_account_id: UUID | None = None
     fee_rules: dict | None = None
+    accounting_code: str | None = Field(default=None, max_length=64)
     is_active: bool | None = None
     is_default: bool | None = None
     notes: str | None = None

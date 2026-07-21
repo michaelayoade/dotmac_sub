@@ -67,7 +67,8 @@ def test_account_adjustments_and_addons_require_owner_confirmation_evidence() ->
     assert "Direct ledger posting is disabled" in api
     assert "Direct ledger reversal is disabled" in api
     assert "LedgerEntry(" not in addon_service
-    assert "AccountAdjustments.confirm(" in addon_service
+    assert "ConfirmAccountAdjustmentCommand(" in addon_service
+    assert "stage_account_adjustment(" in addon_service
     assert "sub_add_on.account_adjustment_id" in addon_service
     assert "purchase_preview_fingerprint" in addon_service
     assert "preview_fingerprint: str" in addon_schema

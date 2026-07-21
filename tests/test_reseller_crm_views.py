@@ -1,10 +1,10 @@
-"""Reseller aggregations of the CRM mirrors: scoped to the reseller's customers."""
+"""Reseller work projections are scoped to managed customers."""
 
 from __future__ import annotations
 
 import uuid
 
-from app.models.project_mirror import ProjectMirror
+from app.models.project import Project
 from app.models.quote_mirror import QuoteMirror
 from app.models.subscriber import Reseller, Subscriber
 from app.models.work_order import WorkOrder
@@ -73,17 +73,19 @@ def test_projects_and_work_orders_scoped(db_session):
     other = _customer(db_session, reseller_id=None)
 
     db_session.add(
-        ProjectMirror(
-            crm_project_id="pA",
+        Project(
             subscriber_id=mine.id,
             name="Install",
             status="open",
-            progress_pct=40,
+            project_type="fiber_optics_installation",
         )
     )
     db_session.add(
-        ProjectMirror(
-            crm_project_id="pOther", subscriber_id=other.id, name="X", status="open"
+        Project(
+            subscriber_id=other.id,
+            name="X",
+            status="open",
+            project_type="fiber_optics_installation",
         )
     )
     db_session.add(
@@ -106,13 +108,15 @@ def test_projects_and_work_orders_scoped(db_session):
 
     projects = reseller_crm_views.projects_for_reseller(db_session, str(reseller.id))
     assert projects["total"] == 1
-    assert projects["projects"][0]["id"] == "pA"
-    assert projects["projects"][0]["progress_pct"] == 40
+    assert projects["projects"][0]["id"]
+    assert projects["projects"][0]["progress_pct"] == 0
     assert projects["active"] == 1
 
     wos = reseller_crm_views.work_orders_for_reseller(db_session, str(reseller.id))
     assert wos["total"] == 1
-    assert wos["work_orders"][0]["id"] == "woA"
+    assert wos["work_orders"][0]["public_id"] == "woA"
+    assert wos["work_orders"][0]["status_presentation"]["value"] == "dispatched"
+    assert wos["work_orders"][0]["actions"][0]["key"] == "view_work_order"
     assert wos["work_orders"][0]["account_id"] == str(mine.id)
     assert wos["upcoming"] == 1
 

@@ -8,6 +8,7 @@ from fastapi import HTTPException
 
 from app.models.billing import (
     Invoice,
+    InvoiceLine,
     InvoiceStatus,
     Payment,
     PaymentAllocation,
@@ -136,15 +137,30 @@ def test_verify_resolves_delinquent_status_after_paid_invoice(db_session):
     )
     db_session.add(offer)
     db_session.flush()
+    subscription = Subscription(
+        subscriber_id=sub.id,
+        offer_id=offer.id,
+        status=SubscriptionStatus.active,
+        billing_mode=BillingMode.prepaid,
+        unit_price=Decimal("3000.00"),
+    )
+    db_session.add(subscription)
+    db_session.flush()
+    invoice = _open_invoice(db_session, sub, "3000.00")
+    coverage_now = datetime.now(UTC)
+    invoice.billing_period_start = coverage_now - timedelta(days=1)
+    invoice.billing_period_end = coverage_now + timedelta(days=29)
     db_session.add(
-        Subscription(
-            subscriber_id=sub.id,
-            offer_id=offer.id,
-            status=SubscriptionStatus.active,
-            billing_mode=BillingMode.prepaid,
+        InvoiceLine(
+            invoice_id=invoice.id,
+            subscription_id=subscription.id,
+            description="Prepaid service period",
+            quantity=Decimal("1"),
+            unit_price=Decimal("3000.00"),
+            amount=Decimal("3000.00"),
+            is_active=True,
         )
     )
-    invoice = _open_invoice(db_session, sub, "3000.00")
     db_session.add(DunningCase(account_id=sub.id, status=DunningCaseStatus.open))
     db_session.commit()
 

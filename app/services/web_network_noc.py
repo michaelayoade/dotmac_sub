@@ -36,7 +36,10 @@ _TONE_RANK = {
 }
 
 _MISMATCH_PRESENTATION = StatusPresentation(
-    value="mismatch", label="Needs review", tone=StatusTone.warning, icon=StatusIcon.alert
+    value="mismatch",
+    label="Needs review",
+    tone=StatusTone.warning,
+    icon=StatusIcon.alert,
 )
 
 

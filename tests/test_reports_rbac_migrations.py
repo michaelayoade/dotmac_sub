@@ -39,17 +39,41 @@ def _grant_keys(connection, table, holder_column: str, holder_id: str) -> set[st
 def test_reports_permission_migrations_form_the_single_head_chain():
     granular = _load("reports_granular_chain", "370_reports_granular_permissions.py")
     retire = _load("reports_retire_chain", "371_retire_coarse_reports_permissions.py")
-    dashboard_index = _load(
-        "dashboard_index_chain", "372_dashboard_device_metrics_index.py"
+    vendor_payment = _load(
+        "vendor_payment_projection_chain",
+        "372_vendor_purchase_invoice_payment_projection.py",
+    )
+    vendor_review = _load(
+        "vendor_lifecycle_review_chain",
+        "373_vendor_lifecycle_review_evidence.py",
+    )
+    as_built_review = _load(
+        "as_built_review_chain",
+        "374_as_built_review_evidence.py",
+    )
+    current = _load(
+        "work_order_evidence_policy_chain",
+        "375_work_order_evidence_policy.py",
     )
 
     assert granular.down_revision == "369_vendor_lifecycle_evidence"
     assert retire.down_revision == granular.revision
-    assert dashboard_index.down_revision == retire.revision
+    assert vendor_payment.down_revision == retire.revision
+    assert vendor_review.down_revision == vendor_payment.revision
+    assert as_built_review.down_revision == vendor_review.revision
+    assert current.down_revision == as_built_review.revision
 
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
-    assert ScriptDirectory.from_config(config).get_heads() == [dashboard_index.revision]
+    script = ScriptDirectory.from_config(config)
+    # Single-headed with the reports chain in the head's ancestry; asserting
+    # the exact head breaks on every migration added after it.
+    heads = script.get_heads()
+    assert len(heads) == 1
+    assert retire.revision in {
+        item.revision
+        for item in script.iterate_revisions(heads[0], retire.revision, inclusive=True)
+    }
 
 
 def test_upgrade_and_rollback_preserve_role_and_direct_grants(monkeypatch):

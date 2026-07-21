@@ -70,9 +70,9 @@ explicit opt-in, and network readiness.
 | --- | --- | --- | --- | --- | --- | --- |
 | `pending` / `hidden` / `archived` | none (no row) | inactive (or absent) | none | null | none | n/a |
 | `active` | `active` | **active** | **active**, pinned | = served (IPAM after 2b) | full radcheck+radreply, `dotmac-active` | leave running |
-| `suspended`/`blocked`/`stopped` (default) | `suspended` | **active** (reversible) | **retained active** | **retained** | `Auth-Type := Reject` / `dotmac-suspended` | CoA-disconnect once |
+| `suspended`/`blocked`/`stopped`/`disabled` (default) | `suspended` | **active** (reversible) | **retained active** | **retained** | `Auth-Type := Reject` / `dotmac-suspended` | CoA-disconnect once |
 | eligible residential explicit opt-in + persisted `captive` lock + ready network contract | `captive` | active | retained active | retained | `dotmac-captive` (+ walled-garden attrs) | CoA-disconnect once |
-| `canceled`/`expired`/`disabled` | `terminated` | **inactive** | **released** | **null** | none (user-not-found) | CoA-disconnect once |
+| `canceled`/`expired` | `terminated` | **inactive** | **released** | **null** | none (user-not-found) | CoA-disconnect once |
 
 **Load-bearing invariants encoded here (each is a past incident):**
 

@@ -14,12 +14,10 @@ from fastapi import HTTPException
 from sqlalchemy import or_
 from sqlalchemy.orm import Session, selectinload
 
-from app.config import settings
 from app.models.domain_settings import SettingDomain
 from app.models.notification import NotificationChannel, NotificationStatus
-from app.models.provisioning import ServiceOrder
 from app.models.sales import Lead
-from app.models.subscriber import Subscriber, SubscriberContact
+from app.models.subscriber import Subscriber
 from app.models.support import (
     Ticket,
     TicketAccessToken,
@@ -190,29 +188,6 @@ def _ensure_not_merged_source(ticket: Ticket) -> None:
         raise HTTPException(
             status_code=409, detail="Cannot modify a merged source ticket"
         )
-
-
-def is_crm_origin_ticket(ticket: Ticket) -> bool:
-    metadata = ticket.metadata_ if isinstance(ticket.metadata_, dict) else {}
-    return bool(metadata.get("crm_ticket_id"))
-
-
-def crm_ticket_user_writes_locked(ticket: Ticket) -> bool:
-    return (
-        is_crm_origin_ticket(ticket) and not settings.crm_ticket_native_writes_enabled
-    )
-
-
-def _assert_crm_ticket_user_writes_enabled(ticket: Ticket, action: str) -> None:
-    if not crm_ticket_user_writes_locked(ticket):
-        return
-    raise HTTPException(
-        status_code=409,
-        detail=(
-            "This ticket is still owned by CRM. It is readable in sub, but "
-            f"{action} is disabled until the ticket cutover flips writes to sub."
-        ),
-    )
 
 
 def _merge_attachment_dicts(
@@ -524,6 +499,52 @@ class TicketComments:
         return comment
 
     @staticmethod
+    def stage_system_projection(
+        db: Session,
+        *,
+        ticket: Ticket,
+        body: str,
+        source: str,
+        metadata: dict,
+        actor_id: str | None = None,
+    ) -> TicketComment:
+        """Stage an authoritative external fact on the official ticket timeline.
+
+        Unlike an operator-authored comment, a completion fact remains valid if
+        the ticket was closed or merged while field work was underway. The caller
+        owns the surrounding transaction, so the field event and projection
+        commit or roll back together.
+        """
+
+        comment = TicketComment(
+            ticket_id=ticket.id,
+            author_type=TicketCommentAuthorType.system.value,
+            body=body.strip(),
+            is_internal=True,
+            attachments=[],
+            metadata_={"source": source, **metadata},
+        )
+        db.add(comment)
+        db.flush()
+        from app.models.audit import AuditActorType
+        from app.services.audit_adapter import stage_audit_event
+
+        stage_audit_event(
+            db,
+            action="system_projection_add",
+            entity_type="support_ticket",
+            entity_id=str(ticket.id),
+            actor_type=AuditActorType.user if actor_id else AuditActorType.system,
+            actor_id=actor_id,
+            metadata={
+                "comment_id": str(comment.id),
+                "source": source,
+                **metadata,
+            },
+        )
+        return comment
+
+    @staticmethod
     def update(
         db: Session,
         *,
@@ -535,7 +556,6 @@ class TicketComments:
         ticket = db.get(Ticket, comment.ticket_id)
         if not ticket:
             raise HTTPException(status_code=404, detail="Ticket not found")
-        _assert_crm_ticket_user_writes_enabled(ticket, "editing comments")
         _ensure_not_merged_source(ticket)
 
         data = payload.model_dump(exclude_unset=True)
@@ -570,7 +590,6 @@ class TicketComments:
         ticket = db.get(Ticket, comment.ticket_id)
         if not ticket:
             raise HTTPException(status_code=404, detail="Ticket not found")
-        _assert_crm_ticket_user_writes_enabled(ticket, "deleting comments")
         _ensure_not_merged_source(ticket)
         db.delete(comment)
         log_audit_event(
@@ -609,7 +628,6 @@ class TicketSlaEvents:
         ticket = db.get(Ticket, payload.ticket_id)
         if not ticket:
             raise HTTPException(status_code=404, detail="Ticket not found")
-        _assert_crm_ticket_user_writes_enabled(ticket, "editing SLA events")
         _ensure_not_merged_source(ticket)
         event = TicketSlaEvent(
             ticket_id=payload.ticket_id,
@@ -630,7 +648,6 @@ class TicketSlaEvents:
         ticket = db.get(Ticket, event.ticket_id)
         if not ticket:
             raise HTTPException(status_code=404, detail="Ticket not found")
-        _assert_crm_ticket_user_writes_enabled(ticket, "editing SLA events")
         _ensure_not_merged_source(ticket)
         for key, value in payload.model_dump(exclude_unset=True).items():
             setattr(event, key, value)
@@ -643,7 +660,6 @@ class TicketSlaEvents:
         ticket = db.get(Ticket, event.ticket_id)
         if not ticket:
             raise HTTPException(status_code=404, detail="Ticket not found")
-        _assert_crm_ticket_user_writes_enabled(ticket, "deleting SLA events")
         _ensure_not_merged_source(ticket)
         db.delete(event)
         db.commit()
@@ -897,8 +913,6 @@ class Tickets:
     def _apply_rule_auto_assignment(
         db: Session, ticket: Ticket
     ) -> dict[str, Any] | None:
-        if crm_ticket_user_writes_locked(ticket):
-            return {"matched": False, "reason": "crm_origin_write_locked"}
         from app.services.ticket_assignment import engine as assignment_engine
 
         result = assignment_engine.auto_assign_ticket(
@@ -918,83 +932,6 @@ class Tickets:
         if rule_result is not None:
             return rule_result
         return Tickets._apply_region_auto_assignment(ticket, db)
-
-    @staticmethod
-    def _ensure_field_visit_work_order(db: Session, ticket: Ticket) -> None:
-        """Create the native dispatch work order backing a ``field_visit`` ticket.
-
-        A field-visit ticket creates a real work-order header through
-        ``dispatch_service.work_order_headers.create`` so the job is visible
-        to dispatch, the assignment queue, and field technicians.
-        Historically this created a bare provisioning ``ServiceOrder`` stub
-        that no field surface could see; pre-existing tickets that already
-        carry a ServiceOrder-backed ``metadata.work_order_id`` are honored for
-        dedupe and left as-is.
-        """
-        tags = {
-            str(tag).strip().lower() for tag in (ticket.tags or []) if str(tag).strip()
-        }
-        if "field_visit" not in tags:
-            return
-        if not ticket.subscriber_id:
-            return
-
-        from app.models.work_order import WorkOrder
-
-        metadata = dict(ticket.metadata_ or {})
-        existing_order_id = str(metadata.get("work_order_id") or "").strip()
-        if existing_order_id:
-            existing = (
-                db.query(WorkOrder)
-                .filter(WorkOrder.public_id == existing_order_id)
-                .first()
-            )
-            if existing is not None:
-                return
-            legacy_uuid = _coerce_uuid(existing_order_id)
-            if legacy_uuid is not None and db.get(ServiceOrder, legacy_uuid):
-                # Retained ServiceOrder-stub linkage from the retired workflow;
-                # do not create a duplicate native work order.
-                return
-
-        # Belt-and-braces dedupe on the ticket linkage itself (e.g. the ticket
-        # metadata was edited away but the work order exists).
-        linked = (
-            db.query(WorkOrder)
-            .filter(WorkOrder.crm_ticket_id == str(ticket.id))
-            .first()
-        )
-        if linked is not None:
-            metadata["work_order_id"] = linked.public_id
-            ticket.metadata_ = metadata
-            return
-
-        from app.schemas.dispatch import WorkOrderHeaderCreate
-        from app.services import dispatch as dispatch_service
-
-        ticket_title = (ticket.title or "").strip()
-        title = f"Field visit — {ticket_title}"[:200] if ticket_title else "Field visit"
-        order = dispatch_service.work_order_headers.create(
-            db,
-            WorkOrderHeaderCreate(
-                title=title,
-                subscriber_id=ticket.subscriber_id,
-                description=(
-                    f"Auto-created from support ticket {ticket.number or ticket.id}"
-                ),
-                work_type="repair",
-                priority=(ticket.priority or "normal"),
-                crm_ticket_id=str(ticket.id),
-                tags=["field_visit"],
-                metadata_={
-                    "created_from": "support_ticket",
-                    "ticket_id": str(ticket.id),
-                    "ticket_number": ticket.number,
-                },
-            ),
-        )
-        metadata["work_order_id"] = order.public_id
-        ticket.metadata_ = metadata
 
     @staticmethod
     def _queue_notifications_for_assignments(
@@ -1114,40 +1051,27 @@ class Tickets:
             f"Confirm or dispute it here: {action_url}"
         )
 
-        recipients: set[tuple[NotificationChannel, str]] = set()
-        if subscriber.email:
-            recipients.add((NotificationChannel.email, subscriber.email.strip()))
-        if subscriber.phone:
-            recipients.add((NotificationChannel.sms, subscriber.phone.strip()))
+        from app.services import customer_experience_communications
 
-        contact_rows = (
-            db.query(SubscriberContact)
-            .filter(SubscriberContact.subscriber_id == subscriber.id)
-            .filter(SubscriberContact.receives_notifications.is_(True))
-            .all()
+        customer_experience_communications.request_update(
+            db,
+            subscriber_id=subscriber.id,
+            event_type="support_ticket_resolution_confirmation",
+            subject=subject,
+            body=body,
+            metadata={
+                "type": "ticket",
+                "ticket_id": str(ticket.id),
+                "ticket_number": ticket.number,
+                "confirmation_token_id": str(token_row.id),
+            },
+            dedupe_key=f"ticket-resolution-confirmation:{token_row.id}",
+            default_channels=(
+                NotificationChannel.email,
+                NotificationChannel.whatsapp,
+                NotificationChannel.push,
+            ),
         )
-        for contact in contact_rows:
-            if contact.email:
-                recipients.add((NotificationChannel.email, contact.email.strip()))
-            phone = contact.whatsapp or contact.phone
-            if phone:
-                recipients.add((NotificationChannel.sms, phone.strip()))
-
-        for channel, recipient in sorted(recipients, key=lambda item: item[1]):
-            if not recipient:
-                continue
-            notification_service.notifications.queue_customer_notification(
-                db,
-                NotificationCreate(
-                    subscriber_id=subscriber.id,
-                    channel=channel,
-                    recipient=recipient,
-                    event_type="support_ticket_resolution_confirmation",
-                    category="service",
-                    subject=subject if channel == NotificationChannel.email else None,
-                    body=body,
-                ),
-            )
 
     @staticmethod
     def _emit_ticket_event(
@@ -1232,10 +1156,9 @@ class Tickets:
         Tickets._apply_sla_policy(
             db, ticket, explicit_due_at=payload.due_at is not None
         )
-        if not crm_ticket_user_writes_locked(ticket):
-            from app.services import sla_assignment
+        from app.services import sla_assignment
 
-            sla_assignment.create_sla_clock_for_ticket(db, ticket)
+        sla_assignment.create_sla_clock_for_ticket(db, ticket)
         Tickets._apply_status_timestamp_rules(ticket, data)
         Tickets._apply_ncc_categorisation(ticket, data)
 
@@ -1243,11 +1166,6 @@ class Tickets:
         from app.services import support_automation
 
         support_automation.apply_rules(db, ticket, AutomationTrigger.ticket_created)
-
-        # After automation: an add_tag rule stamping "field_visit" births the
-        # native work order too. There is no separate work-order creation
-        # automation action; the tag is the declared trigger.
-        Tickets._ensure_field_visit_work_order(db, ticket)
 
         Tickets._queue_notifications_for_assignments(db, ticket, actor_id)
 
@@ -1290,7 +1208,6 @@ class Tickets:
                 status_code=409,
                 detail="You can rate support once the ticket is resolved.",
             )
-        _assert_crm_ticket_user_writes_enabled(ticket, "rating")
         meta = dict(ticket.metadata_ or {})
         meta["csat"] = {
             "rating": int(rating),
@@ -1331,9 +1248,6 @@ class Tickets:
         request=None,
     ) -> tuple[Ticket, TicketAccessToken]:
         ticket = Tickets.get(db, ticket_id)
-        _assert_crm_ticket_user_writes_enabled(
-            ticket, "requesting resolution confirmation"
-        )
         _ensure_not_merged_source(ticket)
         if ticket.status in _TICKET_TERMINAL_STATUSES:
             raise HTTPException(
@@ -1405,7 +1319,6 @@ class Tickets:
             raise HTTPException(status_code=404, detail="Ticket not found")
         if ticket.status == TicketStatus.closed.value:
             return ticket
-        _assert_crm_ticket_user_writes_enabled(ticket, "confirming resolution")
         _ensure_not_merged_source(ticket)
         if ticket.status in {TicketStatus.canceled.value, TicketStatus.merged.value}:
             raise HTTPException(
@@ -1459,6 +1372,49 @@ class Tickets:
         return ticket
 
     @staticmethod
+    def respond_to_resolution_for_customer(
+        db: Session,
+        ticket: Ticket,
+        *,
+        confirm: bool,
+        reason: str | None = None,
+    ) -> Ticket:
+        """Authenticated self-care adapter into the resolution owner.
+
+        The public magic link and signed-in clients converge on the same active
+        confirmation capability and therefore the same mutation/audit path.
+        """
+        if ticket.status != TicketStatus.pending_confirmation.value:
+            raise HTTPException(
+                status_code=409,
+                detail="This ticket is not awaiting resolution confirmation.",
+            )
+        token_row = (
+            db.query(TicketAccessToken)
+            .filter(TicketAccessToken.ticket_id == ticket.id)
+            .filter(TicketAccessToken.purpose == "resolution_confirm")
+            .filter(TicketAccessToken.is_active.is_(True))
+            .filter(TicketAccessToken.responded_at.is_(None))
+            .filter(
+                or_(
+                    TicketAccessToken.expires_at.is_(None),
+                    TicketAccessToken.expires_at >= _now(),
+                )
+            )
+            .order_by(TicketAccessToken.created_at.desc())
+            .first()
+        )
+        if token_row is None:
+            raise HTTPException(
+                status_code=409,
+                detail="The resolution confirmation request is no longer active.",
+            )
+        token_row.ticket = ticket
+        if confirm:
+            return Tickets.confirm_resolution(db, token_row)
+        return Tickets.dispute_resolution(db, token_row, reason=reason)
+
+    @staticmethod
     def dispute_resolution(
         db: Session,
         token_row: TicketAccessToken,
@@ -1468,7 +1424,6 @@ class Tickets:
         ticket = token_row.ticket or db.get(Ticket, token_row.ticket_id)
         if not ticket or not ticket.is_active:
             raise HTTPException(status_code=404, detail="Ticket not found")
-        _assert_crm_ticket_user_writes_enabled(ticket, "disputing resolution")
         _ensure_not_merged_source(ticket)
         if ticket.status in _TICKET_TERMINAL_STATUSES:
             raise HTTPException(
@@ -1538,15 +1493,6 @@ class Tickets:
         )
         confirmed = 0
         for ticket in candidates:
-            if crm_ticket_user_writes_locked(ticket):
-                logger.info(
-                    "ticket_auto_confirm_skipped_crm_origin",
-                    extra={
-                        "event": "ticket_auto_confirm_skipped_crm_origin",
-                        "ticket_id": str(ticket.id),
-                    },
-                )
-                continue
             meta = dict(ticket.metadata_ or {})
             confirmation = dict(meta.get("resolution_confirmation") or {})
             grace_hours = int(
@@ -1593,7 +1539,6 @@ class Tickets:
         db: Session, ticket_id: str, attachments: list[dict] | None
     ) -> Ticket:
         ticket = Tickets.get(db, ticket_id)
-        _assert_crm_ticket_user_writes_enabled(ticket, "adding attachments")
         ticket.attachments = _merge_attachment_dicts(ticket.attachments, attachments)
         db.add(ticket)
         db.commit()
@@ -1795,7 +1740,6 @@ class Tickets:
         request=None,
     ) -> Ticket:
         ticket = Tickets.get(db, ticket_id)
-        _assert_crm_ticket_user_writes_enabled(ticket, "editing")
         _ensure_not_merged_source(ticket)
 
         before = {
@@ -1844,15 +1788,13 @@ class Tickets:
             Tickets._apply_auto_assignment(ticket, db)
 
         Tickets._apply_sla_policy(db, ticket, explicit_due_at="due_at" in data)
-        if not crm_ticket_user_writes_locked(ticket):
-            from app.services import sla_assignment
+        from app.services import sla_assignment
 
-            sla_assignment.create_sla_clock_for_ticket(db, ticket)
-            if before["status"] != ticket.status:
-                sla_assignment.update_sla_clocks_for_status_change(
-                    db, ticket, before["status"], ticket.status
-                )
-        Tickets._ensure_field_visit_work_order(db, ticket)
+        sla_assignment.create_sla_clock_for_ticket(db, ticket)
+        if before["status"] != ticket.status:
+            sla_assignment.update_sla_clocks_for_status_change(
+                db, ticket, before["status"], ticket.status
+            )
         Tickets._queue_notifications_for_assignments(db, ticket, actor_id)
 
         after = {
@@ -1944,7 +1886,6 @@ class Tickets:
         db: Session, ticket_id: str, actor_id: str | None = None, request=None
     ) -> None:
         ticket = Tickets.get(db, ticket_id)
-        _assert_crm_ticket_user_writes_enabled(ticket, "deleting")
         _ensure_not_merged_source(ticket)
         ticket.is_active = False
         log_audit_event(
@@ -1968,7 +1909,6 @@ class Tickets:
         prepared: list[tuple[str, TicketUpdate]] = []
         for item in payload.items:
             ticket = Tickets.get(db, str(item.ticket_id))
-            _assert_crm_ticket_user_writes_enabled(ticket, "bulk editing")
             _ensure_not_merged_source(ticket)
             if item.status is not None and item.status not in _VALID_TICKET_STATUSES:
                 raise ValueError(f"Invalid ticket status: {item.status!r}")
@@ -2014,7 +1954,6 @@ class Tickets:
         db: Session, ticket_id: str, actor_id: str | None = None, request=None
     ) -> dict[str, Any]:
         ticket = Tickets.get(db, ticket_id)
-        _assert_crm_ticket_user_writes_enabled(ticket, "auto-assignment")
         _ensure_not_merged_source(ticket)
         result = Tickets._apply_auto_assignment(ticket, db)
         log_audit_event(
@@ -2039,7 +1978,6 @@ class Tickets:
         request=None,
     ) -> TicketComment:
         ticket = Tickets.get(db, ticket_id)
-        _assert_crm_ticket_user_writes_enabled(ticket, "commenting")
         comment = ticket_comments.create(
             db, ticket=ticket, payload=payload, actor_id=actor_id, request=request
         )
@@ -2057,7 +1995,6 @@ class Tickets:
         request=None,
     ) -> list[TicketComment]:
         ticket = Tickets.get(db, ticket_id)
-        _assert_crm_ticket_user_writes_enabled(ticket, "commenting")
         comments: list[TicketComment] = []
         for payload in payloads:
             comment = ticket_comments.create(
@@ -2082,8 +2019,6 @@ class Tickets:
     ) -> TicketLink:
         source = Tickets.get(db, from_ticket_id)
         target = Tickets.get(db, to_ticket_id)
-        _assert_crm_ticket_user_writes_enabled(source, "linking")
-        _assert_crm_ticket_user_writes_enabled(target, "linking")
         _ensure_not_merged_source(source)
         _ensure_not_merged_source(target)
 
@@ -2148,8 +2083,6 @@ class Tickets:
     ) -> Ticket:
         source = Tickets.get(db, source_ticket_id)
         target = Tickets.get(db, str(payload.target_ticket_id))
-        _assert_crm_ticket_user_writes_enabled(source, "merging")
-        _assert_crm_ticket_user_writes_enabled(target, "merging")
         if source.id == target.id:
             raise HTTPException(
                 status_code=400, detail="Cannot merge a ticket into itself"

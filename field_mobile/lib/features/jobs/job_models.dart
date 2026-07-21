@@ -332,14 +332,68 @@ class JobCompletionRequirements {
       );
 }
 
+class JobLifecycleReference {
+  const JobLifecycleReference({
+    required this.id,
+    required this.title,
+    required this.status,
+    this.number,
+  });
+
+  final String id;
+  final String title;
+  final String status;
+  final String? number;
+
+  factory JobLifecycleReference.fromJson(Map<String, dynamic> json) =>
+      JobLifecycleReference(
+        id: json['id'].toString(),
+        title: (json['name'] ?? json['title'] ?? '').toString(),
+        status: (json['status'] ?? '').toString(),
+        number: json['number'] as String?,
+      );
+}
+
+class JobCustomerExperience {
+  const JobCustomerExperience({
+    this.project,
+    this.projectTask,
+    this.originTicket,
+    this.projectTaskTicket,
+  });
+
+  final JobLifecycleReference? project;
+  final JobLifecycleReference? projectTask;
+  final JobLifecycleReference? originTicket;
+  final JobLifecycleReference? projectTaskTicket;
+
+  factory JobCustomerExperience.fromJson(Map<String, dynamic> json) =>
+      JobCustomerExperience(
+        project: _lifecycleReference(json['project']),
+        projectTask: _lifecycleReference(json['project_task']),
+        originTicket: _lifecycleReference(json['origin_ticket']),
+        projectTaskTicket: _lifecycleReference(json['project_task_ticket']),
+      );
+
+  bool get isEmpty =>
+      project == null &&
+      projectTask == null &&
+      originTicket == null &&
+      projectTaskTicket == null;
+}
+
+JobLifecycleReference? _lifecycleReference(dynamic value) {
+  if (value is! Map) return null;
+  return JobLifecycleReference.fromJson(value.cast<String, dynamic>());
+}
+
 class JobDetail {
   const JobDetail({
     required this.job,
     required this.location,
     this.completionRequirements = JobCompletionRequirements.safeFallback,
+    this.customerExperience = const JobCustomerExperience(),
     this.customer,
-    this.ticketRef,
-    this.projectId,
     this.accessNotes,
     this.additionalContacts = const [],
     this.recentVisits = const [],
@@ -355,9 +409,8 @@ class JobDetail {
   final JobSummary job;
   final JobLocation location;
   final JobCompletionRequirements completionRequirements;
+  final JobCustomerExperience customerExperience;
   final JobCustomer? customer;
-  final String? ticketRef;
-  final String? projectId;
   final String? accessNotes;
   final List<JobSiteContact> additionalContacts;
   final List<JobVisitHistoryItem> recentVisits;
@@ -385,13 +438,16 @@ class JobDetail {
             (json['completion_requirements'] as Map).cast<String, dynamic>(),
           )
         : JobCompletionRequirements.safeFallback,
+    customerExperience: json['customer_experience'] is Map
+        ? JobCustomerExperience.fromJson(
+            (json['customer_experience'] as Map).cast<String, dynamic>(),
+          )
+        : const JobCustomerExperience(),
     customer: json['customer'] != null
         ? JobCustomer.fromJson(
             (json['customer'] as Map).cast<String, dynamic>(),
           )
         : null,
-    ticketRef: json['ticket_ref'] as String?,
-    projectId: json['project_id']?.toString(),
     accessNotes: json['access_notes'] as String?,
     additionalContacts: _typedList(
       json['additional_contacts'],

@@ -204,15 +204,6 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.collections.run_bundle_reconcile": _c(
         "collections", STATE, GUARDED, HEALTH
     ),
-    "app.tasks.crm_native_sync.pull_crm_phase3_native_delta": _c(
-        "crm",
-        SWEEP,
-        IDEMP,
-        HEALTH,
-        "CRM compatibility sync window: watermarked importer "
-        "pass, all upserts ON CONFLICT on CRM UUIDs; the next beat run "
-        "re-covers anything a failed run missed.",
-    ),
     "app.tasks.crm_ticket_pull.pull_crm_tickets": _c("crm", SWEEP, IDEMP, HEALTH),
     "app.tasks.crm_ticket_pull.sync_crm_ticket": _c("crm", SWEEP, IDEMP, STATUS),
     "app.tasks.cross_app_drift.run_cross_app_drift_detection": _c(
@@ -246,7 +237,7 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         IDEMP,
         STATUS,
         "Read-only ERP status poll for in-flight expense claims; re-run safe, "
-        "refreshes erp_claim_status on the source row.",
+        "refreshes expense_claim_status on the source row.",
     ),
     "app.tasks.dotmac_erp_outbox.refresh_material_request_statuses": _c(
         "integration",
@@ -254,10 +245,18 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         IDEMP,
         STATUS,
         "Read-only ERP status poll for in-flight material requests; re-run safe, "
-        "refreshes erp_material_status on the source row.",
+        "refreshes support_status on the source row.",
     ),
     "app.tasks.dotmac_erp_outbox.repair_purchase_invoice_sync": _c(
         "integration", SWEEP, IDEMP, STATUS
+    ),
+    "app.tasks.dotmac_erp_outbox.refresh_purchase_invoice_statuses": _c(
+        "integration",
+        SWEEP,
+        IDEMP,
+        STATUS,
+        "ERP-owned AP status poll; validates identity/currency/amounts, retains "
+        "the last good observation, and records per-invoice refresh errors.",
     ),
     "app.tasks.dotmac_erp_outbox.sync_erp_operational_domains": _c(
         "integration",
@@ -312,6 +311,14 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     ),
     "app.tasks.integrations.run_integration_job": _c(
         "integrations", STATE, GUARDED, STATUS
+    ),
+    "app.tasks.integration_delivery.deliver_integration_event": _c(
+        "integrations",
+        STATE,
+        STATEFUL,
+        REDRIVE,
+        "Persisted delivery identity and state gate retries; terminal failures "
+        "are visible and replayable from integration administration.",
     ),
     "app.tasks.invoice_pdf.generate_invoice_pdf_export": _c(
         "billing", MANUAL, IDEMP, STATUS
@@ -455,14 +462,6 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     ),
     "app.tasks.profile_sync.execute_due_profile_sync_tasks": _c(
         "network", STATE, STATEFUL, STATUS
-    ),
-    "app.tasks.projects.reconcile_project_mirror": _c("crm", SWEEP, IDEMP, HEALTH),
-    "app.tasks.projects.refresh_project_mirror_for_subscriber": _c(
-        "crm",
-        NONE,
-        IDEMP,
-        LOG,
-        "Best-effort on-view refresh; periodic reconcile backs it.",
     ),
     "app.tasks.provisioning.reap_stale_provisioning_runs": _c(
         "provisioning", SWEEP, IDEMP, STATUS
@@ -653,22 +652,10 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     ),
     "app.tasks.vpn.run_vpn_control_job": _c("network", STATE, STATEFUL, STATUS),
     "app.tasks.vpn.run_vpn_health_scan": _c("network", SWEEP, IDEMP, HEALTH),
-    "app.tasks.webhooks.deliver_webhook": _c("webhooks", AUTORETRY, GUARDED, STATUS),
-    "app.tasks.webhooks.retry_failed_deliveries": _c("webhooks", DLQ, GUARDED, STATUS),
     "app.tasks.wireguard.cleanup_connection_logs": _c("network", SWEEP, IDEMP, LOG),
     "app.tasks.wireguard.cleanup_expired_tokens": _c("network", SWEEP, IDEMP, LOG),
     "app.tasks.wireguard.generate_connection_log_report": _c(
         "network", MANUAL, IDEMP, STATUS
-    ),
-    "app.tasks.work_orders.reconcile_work_order_mirror": _c(
-        "crm", SWEEP, IDEMP, HEALTH
-    ),
-    "app.tasks.work_orders.refresh_work_order_mirror_for_subscriber": _c(
-        "crm",
-        NONE,
-        IDEMP,
-        LOG,
-        "Best-effort on-view refresh; periodic reconcile backs it.",
     ),
     "app.tasks.workflow.detect_sla_breaches": _c("workflow", SWEEP, IDEMP, STATUS),
     "router_sync.capture_scheduled_snapshots": _c("router", SWEEP, IDEMP, HEALTH),

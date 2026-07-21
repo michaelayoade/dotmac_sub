@@ -21,6 +21,7 @@ from app.models.catalog import (
 )
 from app.models.enforcement_lock import EnforcementLock
 from app.models.idempotency import IdempotencyKey
+from app.models.lifecycle import SubscriptionLifecycleEvent
 from app.models.subscription_change import (
     SubscriptionChangeRequest,
     SubscriptionChangeStatus,
@@ -348,6 +349,66 @@ def test_suspend_and_restore_delegate_to_account_lifecycle(
     assert lock.is_active is False
     assert restored.status == SubscriptionCommandOutcomeStatus.applied
     assert subscription.status == SubscriptionStatus.active
+
+
+def test_disable_and_restore_preserve_service_configuration(
+    db_session, subscriber, catalog_offer
+):
+    subscription = _subscription(db_session, subscriber, catalog_offer)
+    subscription.login = "retained-command-login"
+    subscription.ipv4_address = "10.91.0.10"
+    original_next_billing_at = datetime.now(UTC) + timedelta(days=20)
+    subscription.next_billing_at = original_next_billing_at
+    db_session.flush()
+    reviewed = resolve_subscription_lifecycle(db_session, str(subscription.id))
+
+    disabled = execute_subscription_command(
+        db_session,
+        SubscriptionLifecycleCommand(
+            subscription_id=str(subscription.id),
+            kind=SubscriptionCommandKind.disable,
+            source="admin:test",
+            reason="operator disabled service",
+            expected_head=reviewed.head,
+            idempotency_key="disable-then-restore:disable",
+        ),
+    )
+    disabled_event = (
+        db_session.query(SubscriptionLifecycleEvent)
+        .filter(SubscriptionLifecycleEvent.subscription_id == subscription.id)
+        .filter(SubscriptionLifecycleEvent.to_status == SubscriptionStatus.disabled)
+        .order_by(SubscriptionLifecycleEvent.created_at.desc())
+        .first()
+    )
+    assert disabled_event is not None
+    disabled_event.created_at = datetime.now(UTC) - timedelta(days=5)
+    db_session.flush()
+    disabled_head = resolve_subscription_lifecycle(
+        db_session, str(subscription.id)
+    ).head
+    restored = execute_subscription_command(
+        db_session,
+        SubscriptionLifecycleCommand(
+            subscription_id=str(subscription.id),
+            kind=SubscriptionCommandKind.restore,
+            source="admin:test",
+            reason="operator restored service",
+            expected_head=disabled_head,
+            idempotency_key="disable-then-restore:restore",
+        ),
+    )
+
+    db_session.refresh(subscription)
+    assert disabled.status == SubscriptionCommandOutcomeStatus.applied
+    assert restored.status == SubscriptionCommandOutcomeStatus.applied
+    assert subscription.status == SubscriptionStatus.active
+    assert subscription.login == "retained-command-login"
+    assert subscription.ipv4_address == "10.91.0.10"
+    shifted_next_billing_at = subscription.next_billing_at
+    assert shifted_next_billing_at is not None
+    if shifted_next_billing_at.tzinfo is None:
+        shifted_next_billing_at = shifted_next_billing_at.replace(tzinfo=UTC)
+    assert shifted_next_billing_at >= original_next_billing_at + timedelta(days=4)
 
 
 def test_immediate_plan_change_delegates_to_catalog_owner(

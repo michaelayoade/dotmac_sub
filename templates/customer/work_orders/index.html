@@ -33,6 +33,7 @@
     {% if tracker.work_orders %}
     <div class="space-y-5">
         {% for w in tracker.work_orders %}
+        {% set work_order_action_keys = w.actions | map(attribute='key') | list %}
         <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-premium dark:border-stone-700 dark:bg-stone-800">
             <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                 <div>
@@ -43,6 +44,15 @@
             </div>
 
             <dl class="mt-4 grid gap-4 sm:grid-cols-2">
+                {% if w.project_name %}
+                <div><dt class="text-xs font-semibold uppercase tracking-wide text-stone-400 dark:text-stone-500">Project</dt><dd class="mt-0.5 text-sm text-stone-900 dark:text-white">{{ w.project_name }}</dd></div>
+                {% endif %}
+                {% if w.project_task_title %}
+                <div><dt class="text-xs font-semibold uppercase tracking-wide text-stone-400 dark:text-stone-500">Project task</dt><dd class="mt-0.5 text-sm text-stone-900 dark:text-white">{{ w.project_task_title }}</dd></div>
+                {% endif %}
+                {% if w.origin_ticket %}
+                <div><dt class="text-xs font-semibold uppercase tracking-wide text-stone-400 dark:text-stone-500">Support incident</dt><dd class="mt-0.5 text-sm"><a href="/portal/support/{{ w.origin_ticket.id }}" class="font-semibold text-[var(--color-brand-600)] hover:underline">{{ w.origin_ticket.number or w.origin_ticket.id }}</a> · {{ w.origin_ticket.status | replace('_', ' ') | title }}</dd></div>
+                {% endif %}
                 {% if w.scheduled_start %}
                 <div>
                     <dt class="text-xs font-semibold uppercase tracking-wide text-stone-400 dark:text-stone-500">Scheduled</dt>
@@ -71,16 +81,16 @@
                 {% endif %}
             </dl>
 
-            {% if w.status == 'in_progress' %}
-            <div class="mt-4" data-wo-track="{{ w.id }}">
+            {% if 'track_technician' in work_order_action_keys %}
+            <div class="mt-4" data-wo-track="{{ w.public_id }}">
                 <p class="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-brand-600)]" data-wo-eta></p>
                 <div class="hidden h-56 w-full overflow-hidden rounded-xl border border-stone-200 dark:border-stone-700" data-wo-map></div>
                 <p class="text-sm text-stone-500 dark:text-stone-400" data-wo-msg>Locating your technician…</p>
             </div>
             {% endif %}
 
-            {% if w.status == 'completed' %}
-            <form method="post" action="/portal/work-orders/{{ w.id }}/rate-technician" class="mt-4 border-t border-stone-100 pt-4 dark:border-stone-700" x-data="{ rating: 0 }">
+            {% if 'rate_technician' in work_order_action_keys %}
+            <form method="post" action="/portal/work-orders/{{ w.public_id }}/rate-technician" class="mt-4 border-t border-stone-100 pt-4 dark:border-stone-700" x-data="{ rating: 0 }">
                 {% include "components/forms/csrf_input.html" %}
                 <p class="text-xs font-semibold uppercase tracking-wide text-stone-400 dark:text-stone-500">Rate your technician</p>
                 <div class="mt-1 flex items-center gap-1">

@@ -22,10 +22,8 @@ import httpx
 from dotmac_integration import IntegrationHttpClient
 from sqlalchemy.orm import Session
 
-from app.config import settings
 from app.models.domain_settings import SettingDomain
 from app.observability import get_request_id
-from app.services.secrets import resolve_secret
 from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
@@ -263,7 +261,7 @@ class CRMClient:
         if username or password:
             logger.warning(
                 "CRMClient staff credentials are retired and ignored; "
-                "configure CRM_SERVICE_TOKEN"
+                "configure the integration installation service credential"
             )
         self.service_token = (service_token or "").strip()
         self.timeout = timeout
@@ -344,7 +342,7 @@ class CRMClient:
             raise CRMClientError("CRM is not configured")
         if not self.service_token:
             raise CRMClientError(
-                "CRM service token is not configured (set CRM_SERVICE_TOKEN); "
+                "CRM service credential is not configured on the installation; "
                 "the staff-credential login fallback has been retired"
             )
         return {"X-API-Key": self.service_token}
@@ -669,24 +667,6 @@ class CRMClient:
         )
         return data if isinstance(data, list) else data.get("items", [])
 
-    # ── Work Orders ──────────────────────────────────────────────────────
-
-    def list_work_orders(
-        self, subscriber_id: str | None = None
-    ) -> list[dict[str, Any]]:
-        """List work orders, optionally filtered by CRM subscriber."""
-        params: dict[str, Any] = {"limit": 100}
-        if subscriber_id:
-            params["subscriber_id"] = subscriber_id
-        data = self._cached_get("/api/v1/work-orders", params, self.cache_list_ttl)
-        return data if isinstance(data, list) else data.get("items", [])
-
-    def get_work_order(self, work_order_id: str) -> dict[str, Any]:
-        """Get a single work order by ID."""
-        return self._cached_get(
-            f"/api/v1/work-orders/{work_order_id}", None, self.cache_detail_ttl
-        )
-
     def create_portal_session(
         self,
         *,
@@ -721,13 +701,10 @@ class CRMClient:
             raise CRMClientError("portal token mint returned an empty token")
         return token
 
-    # The read scopes the four mirror reconcilers collectively need. Minting one
-    # token with the union lets a subscriber's referrals/projects/work-orders/
-    # quotes reads share it, instead of four separate single-scope mints.
+    # External referrals and quotes still share one scoped read token. Projects
+    # and work orders are native Sub domains and are intentionally absent.
     _PORTAL_READ_SCOPES: ClassVar[list[str]] = [
         "referrals:read",
-        "projects:read",
-        "work_orders:read",
         "quotes:read",
     ]
 
@@ -791,41 +768,6 @@ class CRMClient:
         data = self._request(
             "GET",
             "/api/v1/portal/referrals",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        return data if isinstance(data, dict) else {}
-
-    def get_portal_projects(self, crm_subscriber_id: str) -> dict[str, Any]:
-        """Read a subscriber's projects (with derived stages/progress) from the
-        CRM Portal API (server-side). Used by the local-mirror reconcile."""
-        token = self._portal_read_token(crm_subscriber_id)
-        data = self._request(
-            "GET",
-            "/api/v1/portal/projects",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        return data if isinstance(data, dict) else {}
-
-    def get_portal_work_orders(self, crm_subscriber_id: str) -> dict[str, Any]:
-        """Read a subscriber's work orders (technician, schedule, ETA, status)
-        from the CRM Portal API (server-side). Used by the local-mirror reconcile."""
-        token = self._portal_read_token(crm_subscriber_id)
-        data = self._request(
-            "GET",
-            "/api/v1/portal/work-orders",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        return data if isinstance(data, dict) else {}
-
-    def get_portal_technician_location(
-        self, crm_subscriber_id: str, work_order_id: str, *, actor: str = "subscriber"
-    ) -> dict[str, Any]:
-        """Live technician position for an in-progress work order (polled). Not
-        cached — it's real-time. Returns the CRM's {available, latitude, ...}."""
-        token = self._portal_token(crm_subscriber_id, ["work_orders:read"], actor=actor)
-        data = self._request(
-            "GET",
-            f"/api/v1/portal/work-orders/{work_order_id}/technician-location",
             headers={"Authorization": f"Bearer {token}"},
         )
         return data if isinstance(data, dict) else {}
@@ -895,33 +837,5 @@ class CRMClient:
         )
         return data if isinstance(data, dict) else {}
 
-    def list_work_order_notes(self, work_order_id: str) -> list[dict[str, Any]]:
-        """List notes for a work order."""
-        data = self._cached_get(
-            "/api/v1/work-order-notes",
-            {"work_order_id": work_order_id, "limit": 500},
-            self.cache_detail_ttl,
-        )
-        return data if isinstance(data, list) else data.get("items", [])
-
 
 # ── Singleton ────────────────────────────────────────────────────────────
-
-_crm_client: CRMClient | None = None
-
-
-def get_crm_client(db: Session | None = None) -> CRMClient:
-    """Get a CRM client, DB-scoped when runtime settings are available."""
-    if db is not None:
-        return CRMClient(
-            base_url=settings.crm_base_url,
-            service_token=resolve_secret(settings.crm_service_token),
-            settings_db=db,
-        )
-    global _crm_client
-    if _crm_client is None:
-        _crm_client = CRMClient(
-            base_url=settings.crm_base_url,
-            service_token=resolve_secret(settings.crm_service_token),
-        )
-    return _crm_client

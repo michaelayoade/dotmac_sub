@@ -131,53 +131,14 @@ class Settings:
         f"https://graph.facebook.com/{os.getenv('META_GRAPH_API_VERSION', 'v19.0')}",
     )
 
-    # CRM integration (DotMac Omni CRM)
-    crm_base_url: str = os.getenv("CRM_BASE_URL", "")
-    # Static service ApiKey for machine-to-machine CRM auth (auth-unification
-    # phase 2b). When set, the CRM client authenticates with X-API-Key and does
-    # NOT perform the staff username/password login below. The staff credentials
-    # remain only as a transitional fallback while this token is unset.
-    crm_service_token: str = os.getenv("CRM_SERVICE_TOKEN", "")
-    # CRM_USERNAME/CRM_PASSWORD retired (auth unification S1): services
-    # authenticate to CRM with CRM_SERVICE_TOKEN only; staff credentials are
-    # for humans. The env vars are intentionally no longer read.
-    # Shared secret for inbound CRM webhook deliveries (HMAC-SHA256).
-    crm_webhook_secret: str = os.getenv("CRM_WEBHOOK_SECRET", "")
-    # Dedicated bearer token for CRM server-to-server pull/write-back API.
-    # This is intentionally separate from CRM_WEBHOOK_SECRET, which protects
-    # inbound HMAC-signed webhook deliveries.
-    selfcare_api_token: str = os.getenv("SELFCARE_API_TOKEN", "")
-    # Migration flag for the crm->sub auth cutover: while true, the legacy
-    # shared bearer (selfcare_api_token) is still accepted alongside scoped
-    # ApiKeys; flip false after CRM sends X-Api-Key to retire the bearer.
-    crm_legacy_bearer_enabled: bool = (
-        os.getenv("CRM_LEGACY_BEARER_ENABLED", "true").lower() != "false"
-    )
-    # During CRM absorption, sub can read/import CRM tickets natively before it
-    # owns writes. Keep user/admin mutations blocked for CRM-origin tickets until
-    # the ticket vertical cutover flips writes to sub.
-    crm_ticket_native_writes_enabled: bool = os.getenv(
-        "CRM_TICKET_NATIVE_WRITES_ENABLED", "false"
-    ).lower() in ("1", "true", "yes", "on")
-
-    # Live chat (bridges to the CRM chat_widget channel). Default OFF: the
-    # broker endpoints return 503 until a deploy flips this on deliberately.
+    # Native Team Inbox live chat. Default OFF: the broker endpoints return 503
+    # until a deploy flips this on deliberately.
     chat_live_enabled: bool = os.getenv("CHAT_LIVE_ENABLED", "false").lower() in (
         "1",
         "true",
         "yes",
         "on",
     )
-    # ChatWidgetConfig id in the CRM that customer + reseller sessions attach to
-    # (general support pool; same config for both surfaces).
-    crm_chat_config_id: str = os.getenv("CRM_CHAT_CONFIG_ID", "")
-    # The inbound chat push webhook shares crm_webhook_secret with the other CRM
-    # webhooks (the CRM signs it with the same selfcare secret), so no separate
-    # chat secret is needed.
-    # Visitor WebSocket URL handed to clients. Derived from crm_base_url
-    # (https→wss) + /ws/widget when left blank.
-    crm_chat_ws_url: str = os.getenv("CRM_CHAT_WS_URL", "")
-
     # Mono lookup API
     mono_secret_key: str = os.getenv("MONO_SECRET_KEY", "")
     mono_base_url: str = os.getenv("MONO_BASE_URL", "https://api.withmono.com")

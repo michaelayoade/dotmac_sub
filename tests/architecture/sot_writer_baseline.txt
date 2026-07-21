@@ -34,10 +34,8 @@ app.services.connector
 app.services.contracts
 app.services.crm_api
 app.services.crm_customers
-app.services.crm_native_sync
 app.services.crm_portal
 app.services.crm_ticket_pull
-app.services.crm_webhook_deliveries
 app.services.cross_app_drift
 app.services.crud
 app.services.customer_identity_resolution
@@ -51,7 +49,6 @@ app.services.dispatch
 app.services.dotmac_erp.domain_sync
 app.services.dotmac_erp.expense_sync
 app.services.dotmac_erp.outbox
-app.services.dotmac_erp.purchase_invoice_sync
 app.services.dotmac_erp.purchase_order_sync
 app.services.email
 app.services.enforcement_scheduled
@@ -151,11 +148,8 @@ app.services.network_vendor_polling
 app.services.nin_verifications
 app.services.numbering
 app.services.olt_observed_state_adapter
-app.services.operational_escalation
 app.services.operational_escalation_delivery
-app.services.payment_routing
 app.services.pppoe_credentials
-app.services.projects_mirror
 app.services.provisioning_helpers
 app.services.provisioning_step_executors
 app.services.push
@@ -172,7 +166,6 @@ app.services.router_management.config
 app.services.router_management.inventory
 app.services.service_entitlements
 app.services.service_extensions
-app.services.sla_assignment
 app.services.sms
 app.services.stale_overdue_lock_reconcile
 app.services.subscription_changes
@@ -218,7 +211,6 @@ app.services.web_customer_auth
 app.services.web_customer_details
 app.services.web_customer_user_access
 app.services.web_integration_syncs
-app.services.web_integrations
 app.services.web_network_core_devices_forms
 app.services.web_network_core_runtime
 app.services.web_network_dns_threats
@@ -254,14 +246,10 @@ app.services.web_system_geocode_tool
 app.services.web_system_import_wizard
 app.services.web_system_profiles
 app.services.web_system_restore_tool
-app.services.web_system_role_forms
 app.services.web_system_user_edit
 app.services.web_system_user_mutations
-app.services.web_system_webhook_forms
 app.services.web_vpn_peers
 app.services.web_vpn_servers
-app.services.webhook
 app.services.whatsapp_notification_templates
 app.services.wireless_mast
-app.services.work_orders_mirror
 app.services.workqueue.snooze

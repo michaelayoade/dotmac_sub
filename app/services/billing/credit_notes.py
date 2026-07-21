@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from fastapi import HTTPException
 from sqlalchemy import or_, select
@@ -193,6 +193,14 @@ class CreditIssueResult:
                 self.preview.access_consequence if self.preview else "none"
             ),
         }
+
+
+class CreditNoteReferralRewardError(ValueError):
+    """Transport-neutral rejection for the referral reward collaborator."""
+
+    def __init__(self, code: str, message: str) -> None:
+        self.code = code
+        super().__init__(message)
 
 
 @dataclass(frozen=True)
@@ -692,7 +700,6 @@ class CreditNotes(ListResponseMixin):
         try:
             db.flush()
         except IntegrityError as exc:
-            db.rollback()
             raise HTTPException(
                 status_code=409, detail="Credit note issue is already being processed"
             ) from exc
@@ -806,7 +813,8 @@ class CreditNotes(ListResponseMixin):
                 db.refresh(credit_note)
                 db.refresh(funding)
         except Exception:
-            db.rollback()
+            if commit:
+                db.rollback()
             raise
         return CreditIssueResult(
             credit_note=credit_note,
@@ -833,6 +841,85 @@ class CreditNotes(ListResponseMixin):
             ),
             commit=commit,
         )
+
+    @staticmethod
+    def issue_referral_reward(
+        db: Session,
+        *,
+        referral_id: UUID,
+        account_id: UUID,
+        amount: Decimal,
+        currency: str,
+    ) -> CreditIssueResult:
+        """Issue or recover one referral reward without completing the transaction.
+
+        The memo marker and UUID5 idempotency key preserve the legacy CRM payout
+        namespace, while all new issuance still uses this owner's preview,
+        account lock, funding-ledger evidence, and audit path.
+        """
+
+        external_ref = f"referral:{referral_id}"
+        marker = f"[ref:{external_ref}]"
+        normalized_currency = str(currency or "").strip().upper()
+        try:
+            lock_account(db, str(account_id))
+            existing = db.scalars(
+                select(CreditNote)
+                .where(CreditNote.account_id == account_id)
+                .where(CreditNote.is_active.is_(True))
+                .where(CreditNote.status == CreditNoteStatus.issued)
+                .where(CreditNote.memo.ilike(f"%{marker}%"))
+                .order_by(CreditNote.created_at.desc())
+                .limit(1)
+            ).one_or_none()
+            if existing is not None:
+                if (
+                    round_money(existing.total) != round_money(amount)
+                    or existing.currency.upper() != normalized_currency
+                ):
+                    raise CreditNoteReferralRewardError(
+                        "financial_conflict",
+                        "The referral reward reference belongs to different credit evidence.",
+                    )
+                if existing.funding_ledger_entry_id is None:
+                    raise CreditNoteReferralRewardError(
+                        "incomplete_reward_evidence",
+                        "The existing referral reward has incomplete funding evidence.",
+                    )
+                funding = db.get(LedgerEntry, existing.funding_ledger_entry_id)
+                if funding is None:
+                    raise CreditNoteReferralRewardError(
+                        "incomplete_reward_evidence",
+                        "The existing referral reward funding entry was not found.",
+                    )
+                return CreditIssueResult(
+                    credit_note=existing,
+                    funding_ledger_entry=funding,
+                    preview=None,
+                    idempotent_replay=True,
+                )
+
+            operation_id = uuid5(NAMESPACE_URL, f"crm-account-credit:{external_ref}")
+            return CreditNotes.issue_system(
+                db,
+                CreditNoteIssuePreviewRequest(
+                    account_id=account_id,
+                    currency=normalized_currency,
+                    subtotal=amount,
+                    total=amount,
+                    memo=f"Referral reward (referral {referral_id}) {marker}",
+                    line_description=f"Referral reward (referral {referral_id})",
+                ),
+                idempotency_key=f"crm-credit-{operation_id}",
+                commit=False,
+            )
+        except CreditNoteReferralRewardError:
+            raise
+        except HTTPException as exc:
+            raise CreditNoteReferralRewardError(
+                "financial_conflict",
+                "The referral reward conflicts with canonical credit-note state.",
+            ) from exc
 
     @staticmethod
     def issue_draft_with_evidence(

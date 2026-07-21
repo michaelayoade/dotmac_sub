@@ -47,21 +47,49 @@ def test_legacy_branch_merge_is_ancestor_of_current_head() -> None:
         "migration_369_vendor_project_lifecycle_evidence",
     )
     assert vendor_evidence.down_revision == migration.revision
-    retired_permissions = _load_migration(
+    reports_retire = _load_migration(
         "371_retire_coarse_reports_permissions.py",
         "migration_371_retire_coarse_reports_permissions",
     )
-    assert retired_permissions.down_revision == "370_reports_granular_permissions"
-    current = _load_migration(
-        "372_dashboard_device_metrics_index.py",
-        "migration_372_dashboard_device_metrics_index",
+    assert reports_retire.down_revision == "370_reports_granular_permissions"
+    vendor_payment = _load_migration(
+        "372_vendor_purchase_invoice_payment_projection.py",
+        "migration_372_vendor_purchase_invoice_payment_projection",
     )
-    assert current.down_revision == retired_permissions.revision
+    assert vendor_payment.down_revision == reports_retire.revision
+    vendor_review = _load_migration(
+        "373_vendor_lifecycle_review_evidence.py",
+        "migration_373_vendor_lifecycle_review_evidence",
+    )
+    assert vendor_review.down_revision == vendor_payment.revision
+    as_built_review = _load_migration(
+        "374_as_built_review_evidence.py",
+        "migration_374_as_built_review_evidence",
+    )
+    assert as_built_review.down_revision == vendor_review.revision
+    work_order_evidence = _load_migration(
+        "375_work_order_evidence_policy.py",
+        "migration_375_work_order_evidence_policy",
+    )
+    assert work_order_evidence.down_revision == as_built_review.revision
+    current = _load_migration(
+        "383_replaceable_backoffice_boundary.py",
+        "migration_383_replaceable_backoffice_boundary",
+    )
+    assert current.down_revision == "382_ticket_work_order_handoff"
 
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == [current.revision]
+    # Single-headed with 375 in the head's ancestry; later revisions (e.g. the
+    # integration platform chain) may extend past it — asserting the exact
+    # head breaks on every subsequent migration.
+    heads = script.get_heads()
+    assert len(heads) == 1
+    ancestry = {
+        rev.revision for rev in script.walk_revisions(base="base", head=heads[0])
+    }
+    assert current.revision in ancestry
     legacy = script.get_revision("153_ip_assignments_subscription_owner")
     assert legacy is not None
     assert "368_merge_legacy_ip_assignments_branch" in {

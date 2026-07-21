@@ -23,8 +23,8 @@ from app.services.customer_identity_normalization import (
     default_country_code,
     normalize_channel_address,
 )
-from app.services.integrations.connectors import whatsapp as whatsapp_connector
-from app.websocket.events import EventType
+from app.services.integrations.connectors import whatsapp_runtime
+from app.services.realtime_platform import EventType
 
 _INACTIVE_SUBSCRIBER_STATUSES = {
     SubscriberStatus.disabled.value,
@@ -465,7 +465,7 @@ def receive_whatsapp_webhook(
     payload: dict,
     fallback_service_team_id: str | UUID | None = None,
 ) -> InboundChannelReceiveResult:
-    normalized = whatsapp_connector.normalize_inbound_webhook(
+    normalized = whatsapp_runtime.normalize_inbound_webhook(
         provider=provider,
         payload=payload,
     )
@@ -512,22 +512,39 @@ def receive_whatsapp_webhook_batch_committed(
     payloads: list[dict[str, Any]],
     status_items: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
-    def _process() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
-        from app.services import team_inbox_outbound
+    return _commit(
+        db,
+        lambda: receive_whatsapp_webhook_batch(
+            db,
+            provider=provider,
+            payloads=payloads,
+            status_items=status_items,
+        ),
+    )
 
-        results = [
-            receive_result_payload(
-                receive_whatsapp_webhook(db, provider=provider, payload=payload)
-            )
-            for payload in payloads
-        ]
-        statuses = [
-            team_inbox_outbound.apply_whatsapp_delivery_status(db, item)
-            for item in (status_items or [])
-        ]
-        return results, statuses
 
-    return _commit(db, _process)
+def receive_whatsapp_webhook_batch(
+    db: Session,
+    *,
+    provider: str,
+    payloads: list[dict[str, Any]],
+    status_items: list[dict[str, Any]] | None = None,
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Apply verified observations without taking transaction ownership."""
+
+    from app.services import team_inbox_outbound
+
+    results = [
+        receive_result_payload(
+            receive_whatsapp_webhook(db, provider=provider, payload=payload)
+        )
+        for payload in payloads
+    ]
+    statuses = [
+        team_inbox_outbound.apply_whatsapp_delivery_status(db, item)
+        for item in (status_items or [])
+    ]
+    return results, statuses
 
 
 def receive_inbound_channel_batch_committed(

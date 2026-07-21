@@ -52,11 +52,24 @@
                     </span>
                     <div class="flex-1">
                         <p class="text-sm font-medium {{ 'text-stone-900 dark:text-white' if s.status != 'pending' else 'text-stone-500 dark:text-stone-400' }}">{{ s.title }}</p>
-                        {% if s.completed_at %}<p class="text-xs text-stone-400 dark:text-stone-500">Done {{ s.completed_at[:10] }}</p>{% endif %}
+                        {% if s.completed_at %}<p class="text-xs text-stone-400 dark:text-stone-500">Done {{ s.completed_at | portal_datetime('%b %d, %Y') }}</p>{% endif %}
+                        {% if s.work_orders %}
+                        <p class="mt-1 text-xs text-stone-500 dark:text-stone-400">
+                            {% for visit in s.work_orders %}<a href="/portal/work-orders" class="font-semibold text-[var(--color-brand-600)] hover:underline">{{ visit.title }}</a> · {{ visit.status | replace('_', ' ') | title }}{% if not loop.last %}<br>{% endif %}{% endfor %}
+                        </p>
+                        {% endif %}
+                        {% if s.ticket %}<p class="mt-1 text-xs"><a href="/portal/support/{{ s.ticket.id }}" class="font-semibold text-[var(--color-brand-600)] hover:underline">Ticket {{ s.ticket.number or s.ticket.id }}</a> · {{ s.ticket.status | replace('_', ' ') | title }}</p>{% endif %}
                     </div>
                 </li>
                 {% endfor %}
             </ol>
+            {% endif %}
+
+            {% if p.work_orders %}
+            <div class="mt-4 rounded-xl bg-stone-50 p-3 text-sm dark:bg-stone-700/40">
+                <p class="font-semibold text-stone-800 dark:text-stone-100">Other field visits</p>
+                {% for visit in p.work_orders %}<p class="mt-1 text-stone-600 dark:text-stone-300">{{ visit.title }} · {{ visit.status | replace('_', ' ') | title }}</p>{% endfor %}
+            </div>
             {% endif %}
 
             <div class="mt-4 border-t border-stone-100 pt-4 dark:border-stone-700">

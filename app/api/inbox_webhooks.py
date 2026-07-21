@@ -10,30 +10,25 @@ from sqlalchemy.orm import Session
 
 from app.api.webhook_observation import webhook_observation
 from app.db import get_db
-from app.models.domain_settings import SettingDomain
 from app.services import team_inbox_channel_receive
-from app.services.credential_crypto import decrypt_credential
-from app.services.settings_spec import resolve_value
+from app.services.integrations import inbox as integration_inbox
+from app.services.integrations.whatsapp_capability import (
+    WHATSAPP_RECEIVE_CAPABILITY,
+    inbound_secret_material,
+    require_binding,
+)
 
 router = APIRouter(prefix="/webhooks/whatsapp", tags=["whatsapp-webhook"])
 
 SIGNATURE_HEADER = "X-Hub-Signature-256"
 
 
-def _secret_setting(db: Session, key: str) -> str:
-    raw = str(resolve_value(db, SettingDomain.comms, key) or "").strip()
-    if not raw:
-        return ""
-    decrypted = decrypt_credential(raw)
-    return str(decrypted or raw).strip()
-
-
 def _verify_token(db: Session) -> str:
-    return _secret_setting(db, "meta_webhook_verify_token")
+    return str(inbound_secret_material(db).get("webhook_verify_token") or "").strip()
 
 
 def _app_secret(db: Session) -> str:
-    return _secret_setting(db, "meta_app_secret")
+    return str(inbound_secret_material(db).get("webhook_signing_secret") or "").strip()
 
 
 def _verify_meta_signature(db: Session, raw_body: bytes, presented: str | None) -> None:
@@ -230,18 +225,51 @@ async def receive_meta_whatsapp_webhook(
             )
         for item in _iter_meta_whatsapp_statuses(payload):
             status_items.append(item)
-        results, status_results = (
-            team_inbox_channel_receive.receive_whatsapp_webhook_batch_committed(
-                db,
-                provider="meta_cloud_api",
-                payloads=inbound_payloads,
-                status_items=status_items,
-            )
+        binding = require_binding(db, capability_id=WHATSAPP_RECEIVE_CAPABILITY)
+        receipt, should_process = integration_inbox.receive_and_claim_verified(
+            db,
+            capability_binding_id=binding.id,
+            provider_event_id=f"meta:{hashlib.sha256(raw_body).hexdigest()}",
+            event_type="whatsapp.meta.webhook.v1",
+            payload=payload,
+            headers={
+                key: value
+                for key, value in {
+                    "content-type": request.headers.get("content-type"),
+                    "user-agent": request.headers.get("user-agent"),
+                }.items()
+                if value
+            },
         )
-        return {
-            "status": "ok",
-            "processed": len(results),
-            "status_processed": len(status_results),
-            "items": results,
-            "status_items": status_results,
-        }
+        if not should_process:
+            return dict(receipt.consequence_json)
+        try:
+            results, status_results = (
+                team_inbox_channel_receive.receive_whatsapp_webhook_batch(
+                    db,
+                    provider="meta_cloud_api",
+                    payloads=inbound_payloads,
+                    status_items=status_items,
+                )
+            )
+            consequence: dict[str, object] = {
+                "status": "ok",
+                "processed": len(results),
+                "status_processed": len(status_results),
+                "items": results,
+                "status_items": status_results,
+            }
+            integration_inbox.complete_consequence(
+                db,
+                receipt=receipt,
+                consequence=consequence,
+            )
+        except Exception as exc:
+            integration_inbox.fail_consequence(
+                db,
+                receipt=receipt,
+                error_code="whatsapp_consequence_failed",
+                error_detail=type(exc).__name__,
+            )
+            raise
+        return consequence

@@ -31,11 +31,9 @@ def deliver_erp_sync_events() -> dict:
     logger.info("DELIVER_ERP_SYNC_EVENTS_START")
     results: dict[str, object] = {}
     try:
-        from app.db import task_session
-        from app.services.dotmac_erp import outbox
+        from app.services.dotmac_erp.outbox import run_deliver_pending
 
-        with task_session() as db:
-            results = outbox.deliver_pending(db).as_dict()
+        results = run_deliver_pending()
     except Exception:
         status = "error"
         raise
@@ -62,11 +60,11 @@ def refresh_expense_claim_statuses() -> dict:
     logger.info("REFRESH_EXPENSE_CLAIM_STATUSES_START")
     results: dict[str, object] = {}
     try:
-        from app.db import task_session
-        from app.services.dotmac_erp.expense_sync import refresh_expense_claim_statuses
+        from app.services.dotmac_erp.expense_sync import (
+            run_refresh_expense_claim_statuses,
+        )
 
-        with task_session() as db:
-            results = refresh_expense_claim_statuses(db)
+        results = run_refresh_expense_claim_statuses()
     except Exception:
         status = "error"
         raise
@@ -94,13 +92,11 @@ def refresh_material_request_statuses() -> dict:
     logger.info("REFRESH_MATERIAL_REQUEST_STATUSES_START")
     results: dict[str, object] = {}
     try:
-        from app.db import task_session
         from app.services.dotmac_erp.material_sync import (
-            refresh_material_request_statuses,
+            run_refresh_material_request_statuses,
         )
 
-        with task_session() as db:
-            results = refresh_material_request_statuses(db)
+        results = run_refresh_material_request_statuses()
     except Exception:
         status = "error"
         raise
@@ -116,20 +112,43 @@ def refresh_material_request_statuses() -> dict:
 @celery_app.task(name="app.tasks.dotmac_erp_outbox.repair_purchase_invoice_sync")
 def repair_purchase_invoice_sync() -> dict:
     """Queue PO-ready invoices and retry attachment uploads."""
-    from app.db import task_session
     from app.services.dotmac_erp.purchase_invoice_sync import (
-        repair_purchase_invoice_sync as repair,
+        run_repair_purchase_invoice_sync,
     )
 
-    with task_session() as db:
-        return repair(db)
+    return run_repair_purchase_invoice_sync()
+
+
+@celery_app.task(name="app.tasks.dotmac_erp_outbox.refresh_purchase_invoice_statuses")
+def refresh_purchase_invoice_statuses() -> dict:
+    """Poll ERP for current vendor supplier-invoice settlement observations."""
+    from app.metrics import observe_job
+
+    start = time.monotonic()
+    status = "success"
+    logger.info("REFRESH_PURCHASE_INVOICE_STATUSES_START")
+    results: dict[str, object] = {}
+    try:
+        from app.services.dotmac_erp.purchase_invoice_sync import (
+            run_refresh_purchase_invoice_statuses,
+        )
+
+        results = run_refresh_purchase_invoice_statuses()
+    except Exception:
+        status = "error"
+        raise
+    finally:
+        observe_job(
+            "refresh_purchase_invoice_statuses", status, time.monotonic() - start
+        )
+
+    logger.info("REFRESH_PURCHASE_INVOICE_STATUSES_COMPLETE %s", results)
+    return results
 
 
 @celery_app.task(name="app.tasks.dotmac_erp_outbox.sync_erp_operational_domains")
 def sync_erp_operational_domains() -> dict:
     """Push native project, ticket and work-order context to ERP."""
-    from app.db import task_session
-    from app.services.dotmac_erp.domain_sync import sync_operational_domains
+    from app.services.dotmac_erp.domain_sync import run_sync_operational_domains
 
-    with task_session() as db:
-        return sync_operational_domains(db)
+    return run_sync_operational_domains()

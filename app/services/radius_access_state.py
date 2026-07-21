@@ -41,6 +41,7 @@ _BLOCKED_STATUSES: frozenset[SubscriptionStatus] = frozenset(
         SubscriptionStatus.suspended,
         SubscriptionStatus.blocked,
         SubscriptionStatus.stopped,
+        SubscriptionStatus.disabled,
     }
 )
 
@@ -48,7 +49,6 @@ _TERMINATED_STATUSES: frozenset[SubscriptionStatus] = frozenset(
     {
         SubscriptionStatus.canceled,
         SubscriptionStatus.expired,
-        SubscriptionStatus.disabled,
     }
 )
 

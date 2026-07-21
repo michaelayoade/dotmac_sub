@@ -8,9 +8,9 @@ subscriber, invoice, timer, lock, or access state.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
-from typing import Any
+from enum import StrEnum
 from uuid import UUID
 
 from sqlalchemy.orm import Session, selectinload
@@ -19,8 +19,44 @@ from app.models.catalog import BillingMode, PolicySet, Subscription, Subscriptio
 from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Reseller, Subscriber
 from app.services import settings_spec
-from app.services.billing_profile import resolve_billing_profile
+from app.services.billing_profile import (
+    require_effective_billing_mode,
+    resolve_billing_profile,
+)
 from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
+from app.services.domain_errors import DomainError
+
+
+class GracePolicySource(StrEnum):
+    ACCOUNT_OVERRIDE = "account_override"
+    POLICY_SET = "policy_set"
+    BILLING_MODE_DEFAULT = "billing_mode_default"
+
+
+class GracePolicySetSource(StrEnum):
+    EXPLICIT = "explicit"
+    ACCOUNT = "account"
+    RESELLER = "reseller"
+    OFFER_VERSION = "offer_version"
+    OFFER = "offer"
+    BILLING_MODE_DEFAULT = "billing_mode_default"
+    NONE = "none"
+
+
+class GracePhase(StrEnum):
+    NOT_STARTED = "not_started"
+    IN_GRACE = "in_grace"
+    ACTIONABLE = "actionable"
+
+
+class GracePolicyError(DomainError):
+    """Stable failure for invalid or ambiguous grace-policy evidence."""
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedPolicySet:
+    policy_set_id: UUID | None
+    source: GracePolicySetSource
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,16 +64,18 @@ class EffectiveGracePolicy:
     """The effective grace duration and the exact source that supplied it."""
 
     days: int
-    source: str
+    source: GracePolicySource
     billing_mode: BillingMode
     policy_set_id: UUID | None
+    policy_set_source: GracePolicySetSource = GracePolicySetSource.NONE
 
-    def as_dict(self) -> dict[str, Any]:
+    def as_dict(self) -> dict[str, object]:
         return {
             "days": self.days,
-            "source": self.source,
+            "source": self.source.value,
             "billing_mode": self.billing_mode.value,
             "policy_set_id": str(self.policy_set_id) if self.policy_set_id else None,
+            "policy_set_source": self.policy_set_source.value,
         }
 
 
@@ -49,34 +87,56 @@ class GraceDecision:
     starts_at: datetime | None
     ends_at: datetime | None
     as_of: datetime
-    phase: str
+    phase: GracePhase
     elapsed_days_after_grace: int
 
-    def as_dict(self) -> dict[str, Any]:
-        result = asdict(self)
-        result["policy"] = self.policy.as_dict()
-        for key in ("starts_at", "ends_at", "as_of"):
-            value = result[key]
-            result[key] = value.isoformat() if value is not None else None
-        return result
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "policy": self.policy.as_dict(),
+            "starts_at": self.starts_at.isoformat() if self.starts_at else None,
+            "ends_at": self.ends_at.isoformat() if self.ends_at else None,
+            "as_of": self.as_of.isoformat(),
+            "phase": self.phase.value,
+            "elapsed_days_after_grace": self.elapsed_days_after_grace,
+        }
+
+
+def _grace_days(value: object, *, source: GracePolicySource) -> int:
+    if isinstance(value, bool):
+        days = -1
+    else:
+        try:
+            days = int(str(value))
+        except (TypeError, ValueError):
+            days = -1
+    if days < 0:
+        raise GracePolicyError(
+            code="financial.grace_policy.invalid_grace_days",
+            message="Grace days must be a non-negative integer.",
+            details={"source": source.value},
+        )
+    return days
 
 
 def effective_billing_mode(db: Session, account: Subscriber) -> BillingMode:
     """Resolve the same billing mode used by collections automation."""
 
     profile = resolve_billing_profile(db, account)
-    return profile.effective_mode or account.billing_mode or BillingMode.prepaid
+    return require_effective_billing_mode(profile)
 
 
-def resolve_policy_set_for_account(db: Session, account: Subscriber) -> UUID | None:
+def resolve_policy_set_decision(db: Session, account: Subscriber) -> ResolvedPolicySet:
     """Resolve account -> reseller -> offer/version -> mode-default policy."""
 
     if account.policy_set_id:
-        return account.policy_set_id
+        return ResolvedPolicySet(account.policy_set_id, GracePolicySetSource.ACCOUNT)
     if account.reseller_id:
         reseller = db.get(Reseller, account.reseller_id)
         if reseller and reseller.policy_set_id:
-            return reseller.policy_set_id
+            return ResolvedPolicySet(
+                reseller.policy_set_id,
+                GracePolicySetSource.RESELLER,
+            )
 
     subscriptions = (
         db.query(Subscription)
@@ -102,9 +162,15 @@ def resolve_policy_set_for_account(db: Session, account: Subscriber) -> UUID | N
     )
     for subscription in subscriptions:
         if subscription.offer_version and subscription.offer_version.policy_set_id:
-            return subscription.offer_version.policy_set_id
+            return ResolvedPolicySet(
+                subscription.offer_version.policy_set_id,
+                GracePolicySetSource.OFFER_VERSION,
+            )
         if subscription.offer and subscription.offer.policy_set_id:
-            return subscription.offer.policy_set_id
+            return ResolvedPolicySet(
+                subscription.offer.policy_set_id,
+                GracePolicySetSource.OFFER,
+            )
 
     mode = effective_billing_mode(db, account)
     key = (
@@ -112,21 +178,27 @@ def resolve_policy_set_for_account(db: Session, account: Subscriber) -> UUID | N
         if mode == BillingMode.prepaid
         else "default_postpaid_policy_set_id"
     )
-    from app.models.domain_settings import DomainSetting
-
-    raw = (
-        db.query(DomainSetting.value_text)
-        .filter(DomainSetting.domain == SettingDomain.collections)
-        .filter(DomainSetting.key == key)
-        .filter(DomainSetting.is_active.is_(True))
-        .scalar()
-    )
+    raw = settings_spec.resolve_value(db, SettingDomain.collections, key)
     if not raw:
-        return None
+        return ResolvedPolicySet(None, GracePolicySetSource.NONE)
     try:
-        return UUID(str(raw))
+        policy_set_id = UUID(str(raw))
     except (TypeError, ValueError):
-        return None
+        raise GracePolicyError(
+            code="financial.grace_policy.invalid_policy_set_id",
+            message="The default grace policy-set identifier is invalid.",
+            details={"setting": f"collections.{key}"},
+        ) from None
+    return ResolvedPolicySet(
+        policy_set_id,
+        GracePolicySetSource.BILLING_MODE_DEFAULT,
+    )
+
+
+def resolve_policy_set_for_account(db: Session, account: Subscriber) -> UUID | None:
+    """Return the policy-set identifier projection for compatibility callers."""
+
+    return resolve_policy_set_decision(db, account).policy_set_id
 
 
 def resolve_effective_grace_policy(
@@ -138,35 +210,45 @@ def resolve_effective_grace_policy(
     """Resolve explicit account override -> policy -> billing-mode default."""
 
     mode = effective_billing_mode(db, account)
-    selected_policy_id = policy_set_id or resolve_policy_set_for_account(db, account)
+    selected_policy = (
+        ResolvedPolicySet(policy_set_id, GracePolicySetSource.EXPLICIT)
+        if policy_set_id is not None
+        else resolve_policy_set_decision(db, account)
+    )
+    selected_policy_id = selected_policy.policy_set_id
     if account.grace_period_days is not None:
         return EffectiveGracePolicy(
-            days=max(0, int(account.grace_period_days)),
-            source="account_override",
+            days=_grace_days(
+                account.grace_period_days,
+                source=GracePolicySource.ACCOUNT_OVERRIDE,
+            ),
+            source=GracePolicySource.ACCOUNT_OVERRIDE,
             billing_mode=mode,
             policy_set_id=selected_policy_id,
+            policy_set_source=selected_policy.source,
         )
 
     policy = db.get(PolicySet, selected_policy_id) if selected_policy_id else None
     if policy is not None and policy.is_active and policy.grace_days is not None:
         return EffectiveGracePolicy(
-            days=max(0, int(policy.grace_days)),
-            source="policy_set",
+            days=_grace_days(
+                policy.grace_days,
+                source=GracePolicySource.POLICY_SET,
+            ),
+            source=GracePolicySource.POLICY_SET,
             billing_mode=mode,
             policy_set_id=policy.id,
+            policy_set_source=selected_policy.source,
         )
 
     key = f"{mode.value}_default_grace_period_days"
     raw = settings_spec.resolve_value(db, SettingDomain.billing, key)
-    try:
-        days = max(0, int(str(raw or 0)))
-    except (TypeError, ValueError):
-        days = 0
     return EffectiveGracePolicy(
-        days=days,
-        source="billing_mode_default",
+        days=_grace_days(raw, source=GracePolicySource.BILLING_MODE_DEFAULT),
+        source=GracePolicySource.BILLING_MODE_DEFAULT,
         billing_mode=mode,
         policy_set_id=selected_policy_id,
+        policy_set_source=selected_policy.source,
     )
 
 
@@ -179,13 +261,15 @@ def decide_grace(
     """Resolve the phase using the date-based semantics used by dunning."""
 
     now = as_of or datetime.now(UTC)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
     if starts_at is None:
         return GraceDecision(
             policy=policy,
             starts_at=None,
             ends_at=None,
             as_of=now,
-            phase="not_started",
+            phase=GracePhase.NOT_STARTED,
             elapsed_days_after_grace=0,
         )
     start = starts_at
@@ -197,7 +281,7 @@ def decide_grace(
             starts_at=start,
             ends_at=start,
             as_of=now,
-            phase="actionable" if now >= start else "in_grace",
+            phase=(GracePhase.ACTIONABLE if now >= start else GracePhase.IN_GRACE),
             elapsed_days_after_grace=max((now.date() - start.date()).days, 0),
         )
     raw_days = max((now.date() - start.date()).days, 0)
@@ -212,7 +296,9 @@ def decide_grace(
         starts_at=start,
         ends_at=ends_at,
         as_of=now,
-        phase="in_grace" if raw_days <= policy.days else "actionable",
+        phase=(
+            GracePhase.IN_GRACE if raw_days <= policy.days else GracePhase.ACTIONABLE
+        ),
         elapsed_days_after_grace=elapsed,
     )
 

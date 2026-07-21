@@ -1,6 +1,5 @@
 """Online payment provider flows for customer portal."""
 
-import json
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -28,6 +27,7 @@ from app.services import billing as billing_service
 from app.services import control_registry
 from app.services import customer_portal_flow_payment_methods as customer_cards
 from app.services.account_credit_deposits import AccountCreditDeposits
+from app.services.billing import collection_account_directory
 from app.services.billing._common import lock_account
 from app.services.billing.account_credit import eligible_invoices
 from app.services.billing_adapter import PaymentIntent, billing_adapter
@@ -145,15 +145,15 @@ def _topup_payment_options(
 
 
 def direct_bank_transfer_settings(db: Session) -> dict[str, str]:
-    """Customer-visible direct bank transfer settings."""
+    """Customer-visible direct bank transfer policy and copy.
+
+    Only the toggle and the instructions are settings. The accounts themselves
+    come from `collection_accounts` via the directory below; the retired
+    account-detail keys are no longer read.
+    """
     keys = [
         "direct_bank_transfer_enabled",
-        "direct_bank_transfer_bank_name",
-        "direct_bank_transfer_account_name",
-        "direct_bank_transfer_account_number",
-        "direct_bank_transfer_sort_code",
         "direct_bank_transfer_instructions",
-        "direct_bank_transfer_accounts",
     ]
     settings = dict.fromkeys(keys, "")
     rows = db.scalars(
@@ -164,63 +164,14 @@ def direct_bank_transfer_settings(db: Session) -> dict[str, str]:
     ).all()
     for row in rows:
         settings[row.key] = str(row.value_text or "").strip()
-    settings["direct_bank_transfer_accounts_list"] = direct_bank_transfer_accounts(
-        settings
+    # Accounts come from `collection_accounts`, the owner — never from the
+    # settings blob, which is being retired. `direct_bank_transfer_enabled` and
+    # `_instructions` stay settings: those are policy and copy, not a duplicated
+    # record of a bank account.
+    settings["direct_bank_transfer_accounts_list"] = (
+        collection_account_directory.enabled_transfer_accounts(db)
     )
     return settings
-
-
-def direct_bank_transfer_accounts(
-    settings: dict[str, str] | None = None,
-) -> list[dict[str, str]]:
-    settings = settings or {}
-    raw = settings.get("direct_bank_transfer_accounts") or ""
-    accounts: list[dict[str, str]] = []
-    if raw:
-        try:
-            parsed = json.loads(raw)
-        except json.JSONDecodeError:
-            parsed = []
-        if isinstance(parsed, list):
-            for item in parsed:
-                if not isinstance(item, dict):
-                    continue
-                account = {
-                    "id": str(item.get("id") or "").strip() or uuid.uuid4().hex,
-                    "enabled": "true"
-                    if str(item.get("enabled", "")).lower()
-                    in {"1", "true", "yes", "on"}
-                    else "false",
-                    "bank_name": str(item.get("bank_name") or "").strip(),
-                    "account_name": str(item.get("account_name") or "").strip(),
-                    "account_number": str(item.get("account_number") or "").strip(),
-                    "sort_code": str(item.get("sort_code") or "").strip(),
-                }
-                if (
-                    account["bank_name"]
-                    and account["account_name"]
-                    and account["account_number"]
-                ):
-                    accounts.append(account)
-    if accounts:
-        return accounts
-
-    bank_name = (settings.get("direct_bank_transfer_bank_name") or "").strip()
-    account_name = (settings.get("direct_bank_transfer_account_name") or "").strip()
-    account_number = (settings.get("direct_bank_transfer_account_number") or "").strip()
-    sort_code = (settings.get("direct_bank_transfer_sort_code") or "").strip()
-    if bank_name and account_name and account_number:
-        accounts.append(
-            {
-                "id": "legacy",
-                "enabled": "true",
-                "bank_name": bank_name,
-                "account_name": account_name,
-                "account_number": account_number,
-                "sort_code": sort_code,
-            }
-        )
-    return accounts
 
 
 def enabled_direct_bank_transfer_accounts(db: Session) -> list[dict[str, str]]:
@@ -794,7 +745,7 @@ def _init_flutterwave_checkout(
     Shared by the top-up and invoice-pay flows; they differ only in
     ``default_callback_path`` (the verify route to return to).
     """
-    from app.services import flutterwave
+    from app.services.integrations import payment_capability
 
     callback_url = redirect_url or default_callback_path
     if callback_url.startswith("/"):
@@ -807,8 +758,9 @@ def _init_flutterwave_checkout(
             callback_url = f"{base_url}{callback_url}"
     separator = "&" if "?" in callback_url else "?"
     try:
-        checkout = flutterwave.initialize_transaction(
+        checkout = payment_capability.initialize_transaction(
             db,
+            provider_type="flutterwave",
             email=_resolve_customer_email(db, customer),
             amount=amount,
             reference=reference,
@@ -891,14 +843,14 @@ def _charge_saved_card_for_invoice(
         metadata={**checkout_metadata, "provider_id": provider_id},
     )
 
-    from app.services import paystack
+    from app.services.integrations import payment_capability
 
     try:
-        paystack.charge_authorization(
+        payment_capability.charge_authorization(
             db,
             authorization_code=token,
             email=_resolve_customer_email(db, customer),
-            amount_kobo=paystack.amount_to_kobo(amount),
+            amount_kobo=payment_capability.amount_to_kobo(amount),
             reference=reference,
             metadata=checkout_metadata,
         )
@@ -1522,14 +1474,14 @@ def create_topup_intent(
     checkout_metadata = {"topup_intent_id": str(intent.id)}
     charged = False
     if selected_payment_method is not None:
-        from app.services import paystack
+        from app.services.integrations import payment_capability
 
         try:
-            paystack.charge_authorization(
+            payment_capability.charge_authorization(
                 db,
                 authorization_code=selected_payment_token,
                 email=customer_email,
-                amount_kobo=paystack.amount_to_kobo(requested_amount),
+                amount_kobo=payment_capability.amount_to_kobo(requested_amount),
                 reference=gateway_context.reference,
                 metadata=checkout_metadata,
             )

@@ -38,6 +38,7 @@ from app.services.status_presentation import (
     outage_status_presentation,
     payment_status_presentation,
     subscription_status_presentation,
+    supplier_invoice_status_presentation,
     system_job_status_presentation,
     ticket_status_presentation,
     vendor_purchase_invoice_status_presentation,
@@ -78,6 +79,33 @@ def test_vendor_purchase_invoice_presentation_covers_authoritative_enum(
     presentation = vendor_purchase_invoice_status_presentation(status)
 
     assert presentation.value == status.value
+    assert presentation.label
+    assert presentation.tone in StatusTone
+    assert presentation.icon in StatusIcon
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        "draft",
+        "submitted",
+        "pending_approval",
+        "approved",
+        "posted",
+        "partially_paid",
+        "paid",
+        "on_hold",
+        "rejected",
+        "void",
+        "disputed",
+    ],
+)
+def test_erp_supplier_invoice_presentation_covers_authoritative_statuses(
+    status: str,
+) -> None:
+    presentation = supplier_invoice_status_presentation(status)
+
+    assert presentation.value == status
     assert presentation.label
     assert presentation.tone in StatusTone
     assert presentation.icon in StatusIcon

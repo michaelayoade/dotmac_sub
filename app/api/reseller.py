@@ -32,10 +32,10 @@ from app.schemas.portal import (
 )
 from app.services import chat_session as chat_session_service
 from app.services import (
+    customer_work_order_selfcare,
     quotes_mirror,
     reseller_crm_views,
     reseller_portal,
-    work_orders_mirror,
 )
 from app.services.auth_dependencies import require_user_auth
 
@@ -218,8 +218,9 @@ def reseller_work_order_technician_location(
     account = reseller_portal.owned_account(db, reseller_id, account_id)
     if account is None:
         raise HTTPException(status_code=404, detail="Account not found")
-    data = work_orders_mirror.technician_location(db, str(account.id), work_order_id)
-    return TechnicianLocation.model_validate(data)
+    return customer_work_order_selfcare.technician_location(
+        db, str(account.id), work_order_id
+    )
 
 
 @router.post(
@@ -239,7 +240,7 @@ def reseller_rate_technician(
     if account is None:
         raise HTTPException(status_code=404, detail="Account not found")
     try:
-        data = work_orders_mirror.rate_technician(
+        return customer_work_order_selfcare.rate_technician(
             db,
             str(account.id),
             work_order_id,
@@ -252,7 +253,6 @@ def reseller_rate_technician(
         raise HTTPException(
             status_code=409, detail="Work order is not completed"
         ) from exc
-    return TechnicianRatingResponse.model_validate(data)
 
 
 @router.get("/profile")
@@ -570,11 +570,12 @@ def my_reseller_account_tickets(
 
     from app.services import crm_portal
     from app.services.crm_client import CRMClientError
+    from app.services.integrations.crm_capability import capability_client
 
     try:
         crm_sub_id = crm_portal.resolve_crm_subscriber_id(db, account_id)
         tickets = (
-            crm_portal.get_crm_client().list_tickets(subscriber_id=crm_sub_id)
+            capability_client(db).list_tickets(subscriber_id=crm_sub_id)
             if crm_sub_id
             else []
         )
@@ -680,9 +681,7 @@ def my_reseller_projects(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ) -> dict:
-    """Installation/projects across all the reseller's customers (stage +
-    progress). Served from the local mirror, or natively behind
-    the ``projects_native_read_enabled`` ownership flag."""
+    """Native installation lifecycle across the reseller's customers."""
     reseller_id = _reseller_id(db, principal)
     return reseller_crm_views.projects_for_reseller(db, reseller_id)
 
@@ -692,8 +691,7 @@ def my_reseller_work_orders(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ) -> dict:
-    """Field-service work orders across all the reseller's customers (technician,
-    schedule, ETA, status), from the local mirror."""
+    """Sub-owned field visits across all the reseller's customers."""
     reseller_id = _reseller_id(db, principal)
     return reseller_crm_views.work_orders_for_reseller(db, reseller_id)
 

@@ -50,8 +50,11 @@ class _FakeERPClient:
 
 
 def _patch_erp(client):
-    """Patch the lazily-imported ERP client factory the sections resolve."""
-    return patch("app.services.dotmac_erp.client.build_erp_client", return_value=client)
+    """Patch the lazily-imported capability facade the sections resolve."""
+    return patch(
+        "app.services.integrations.erp_capability.capability_client",
+        return_value=client,
+    )
 
 
 def _patch_complaints(report):
@@ -80,7 +83,7 @@ def test_subscribers_section_is_native_no_http(db_session):
 
 
 def test_subscribers_section_does_not_build_an_erp_client(db_session):
-    with patch("app.services.dotmac_erp.client.build_erp_client") as build:
+    with patch("app.services.integrations.erp_capability.capability_client") as build:
         ncc_regulatory_pack.subscribers_section(db_session)
     build.assert_not_called()
 
@@ -138,11 +141,11 @@ def test_unreachable_erp_never_yields_a_headcount_number(db_session):
 
 def test_staff_section_degrades_when_erp_unconfigured(db_session):
     with patch(
-        "app.services.dotmac_erp.client.build_erp_client",
+        "app.services.integrations.erp_capability.capability_client",
         side_effect=ValueError("DotMac ERP is not configured"),
     ):
         section = ncc_regulatory_pack.staff_section(db_session)
-    assert section == {"available": False, "error": "dotmac_erp is not configured"}
+    assert section == {"available": False, "error": "back-office source unavailable"}
 
 
 # ── ③F financials ───────────────────────────────────────────────────────────

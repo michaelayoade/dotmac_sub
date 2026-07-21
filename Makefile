@@ -68,6 +68,12 @@ test-cov: ## Run tests with coverage report
 test-fast: ## Run tests, stop on first failure
 	poetry run pytest tests/ -x --tb=short
 
+test-architecture: ## Run architecture guards with the measured four-worker default
+	poetry run pytest tests/architecture -q -n 4
+
+test-architecture-serial: ## Run architecture guards serially for isolation/debugging
+	poetry run pytest tests/architecture -q
+
 test-e2e: ## Run end-to-end browser tests
 	poetry run pytest tests/e2e/ -v --headed
 

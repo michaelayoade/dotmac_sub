@@ -171,7 +171,6 @@ from app.models.crm_sync_failure import (  # noqa: F401
     CrmSyncFailure,
     CrmSyncFailureStatus,
 )
-from app.models.crm_webhook_delivery import CrmWebhookDelivery  # noqa: F401
 from app.models.cross_app_drift import (  # noqa: F401
     CrossAppDriftFinding,
     CrossAppDriftFindingEvent,
@@ -343,12 +342,17 @@ from app.models.integration_connector import (  # noqa: F401
     IntegrationConnectorStatus,
     IntegrationConnectorType,
 )
-from app.models.integration_hook import (  # noqa: F401
-    IntegrationHook,
-    IntegrationHookAuthType,
-    IntegrationHookExecution,
-    IntegrationHookExecutionStatus,
-    IntegrationHookType,
+from app.models.integration_platform import (  # noqa: F401
+    IntegrationBindingState,
+    IntegrationCapabilityBinding,
+    IntegrationCheckpoint,
+    IntegrationConfigRevision,
+    IntegrationDelivery,
+    IntegrationEventSubscription,
+    IntegrationInbox,
+    IntegrationInstallation,
+    IntegrationInstallationState,
+    IntegrationValidationStatus,
 )
 from app.models.legal import (  # noqa: F401
     LegalDocument,
@@ -619,10 +623,6 @@ from app.models.project import (  # noqa: F401
     ProjectTemplateTaskDependency,
     ProjectType,
 )
-from app.models.project_mirror import (  # noqa: F401
-    ProjectMirror,
-    ProjectSyncState,
-)
 from app.models.provisioning import (  # noqa: F401
     AppointmentStatus,
     ProvisioningRun,
@@ -867,6 +867,8 @@ from app.models.usage import (  # noqa: F401
 from app.models.vendor_routes import (  # noqa: F401
     AsBuiltLineItem,
     AsBuiltRoute,
+    AsBuiltRouteReviewEvent,
+    AsBuiltRouteReviewEventImmutableError,
     AsBuiltRouteStatus,
     InstallationProject,
     InstallationProjectLifecycleEvent,
@@ -886,13 +888,6 @@ from app.models.vendor_routes import (  # noqa: F401
     VendorPurchaseInvoiceStatus,
     VendorUser,
 )
-from app.models.webhook import (  # noqa: F401
-    WebhookDelivery,
-    WebhookDeliveryStatus,
-    WebhookEndpoint,
-    WebhookEventType,
-    WebhookSubscription,
-)
 from app.models.wireguard import (  # noqa: F401
     WireGuardConnectionLog,
     WireGuardPeer,
@@ -904,8 +899,5 @@ from app.models.work_link import (  # noqa: F401
     WorkLink,
     WorkLinkType,
 )
-from app.models.work_order import (  # noqa: F401
-    WorkOrder,
-    WorkOrderSyncState,
-)
+from app.models.work_order import WorkOrder  # noqa: F401
 from app.models.workqueue import WorkqueueItemKind, WorkqueueSnooze  # noqa: F401

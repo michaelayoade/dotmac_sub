@@ -57,6 +57,7 @@ def payment_channels_create(
     is_default: str | None = Form(None),
     is_active: str | None = Form(None),
     fee_rules: str | None = Form(None),
+    accounting_code: str | None = Form(None),
     notes: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
@@ -70,6 +71,7 @@ def payment_channels_create(
             is_default=is_default,
             is_active=is_active,
             fee_rules=fee_rules,
+            accounting_code=accounting_code,
             notes=notes,
         )
         return RedirectResponse(url="/admin/billing/payment-channels", status_code=303)
@@ -130,6 +132,7 @@ def payment_channels_update(
     is_default: str | None = Form(None),
     is_active: str | None = Form(None),
     fee_rules: str | None = Form(None),
+    accounting_code: str | None = Form(None),
     notes: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
@@ -144,6 +147,7 @@ def payment_channels_update(
             is_default=is_default,
             is_active=is_active,
             fee_rules=fee_rules,
+            accounting_code=accounting_code,
             notes=notes,
         )
         return RedirectResponse(url="/admin/billing/payment-channels", status_code=303)

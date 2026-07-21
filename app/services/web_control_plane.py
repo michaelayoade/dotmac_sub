@@ -18,8 +18,13 @@ from sqlalchemy.orm import Session
 from app.models.audit import AuditEvent
 from app.models.auth import Session as AuthSession
 from app.models.auth import SessionStatus
-from app.models.connector import ConnectorConfig
 from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.integration_platform import (
+    IntegrationCapabilityBinding,
+    IntegrationDelivery,
+    IntegrationEventSubscription,
+    IntegrationInstallation,
+)
 from app.models.rbac import (
     Permission,
     Role,
@@ -29,11 +34,6 @@ from app.models.rbac import (
 )
 from app.models.scheduler import ScheduledTask, ScheduleType
 from app.models.subscription_engine import SettingValueType
-from app.models.webhook import (
-    WebhookDelivery,
-    WebhookDeliveryStatus,
-    WebhookEndpoint,
-)
 from app.services import control_registry, settings_spec
 from app.services.redis_client import redis_health_check
 from app.services.web_integrations import build_installed_integrations_data
@@ -405,24 +405,31 @@ def _integration_entries(db: Session) -> list[dict[str, object]]:
         rows = []
     entries = []
     for row in rows:
-        connector = cast(ConnectorConfig, row["connector"])
+        installation = cast(IntegrationInstallation, row["installation"])
         stats = cast(dict[str, object], row.get("health_stats") or {})
         last_run_at = stats.get("last_run_at")
         entries.append(
             _entry(
-                key=f"connector:{connector.id}",
-                label=str(row.get("title") or connector.name),
+                key=f"installation:{installation.id}",
+                label=str(row.get("title") or installation.name),
                 value=(
-                    f"{'Enabled' if connector.is_active else 'Disabled'}; "
-                    f"{_enum_value(connector.connector_type)} / "
-                    f"{_enum_value(connector.auth_type)}"
+                    f"{installation.state.title()}; "
+                    f"{installation.connector_key} / {installation.connector_version}"
                 ),
-                source="connector_configs database",
-                precedence="connector active → target/job active → adapter execution",
+                source="integration_installations database",
+                precedence=(
+                    "manifest pin → current config revision → enabled capability binding"
+                ),
                 scope=str(row.get("root") or "integrations"),
-                health="disabled" if not connector.is_active else str(row["health"]),
-                last_change=last_run_at or connector.updated_at,
-                detail_url=f"/admin/integrations/connectors/{connector.id}",
+                health=(
+                    "disabled"
+                    if installation.state != "enabled"
+                    else str(row["health"])
+                ),
+                last_change=last_run_at or installation.updated_at,
+                detail_url=str(
+                    row.get("manage_url") or "/admin/integrations/installed"
+                ),
             )
         )
     return entries
@@ -431,44 +438,72 @@ def _integration_entries(db: Session) -> list[dict[str, object]]:
 def _webhook_entries(db: Session) -> list[dict[str, object]]:
     since = datetime.now(UTC) - timedelta(days=7)
     delivery_stats = {
-        row.endpoint_id: (int(row.total or 0), int(row.failed or 0), row.last_attempt)
+        row.installation_id: (
+            int(row.total or 0),
+            int(row.failed or 0),
+            row.last_attempt,
+        )
         for row in db.query(
-            WebhookDelivery.endpoint_id,
-            func.count(WebhookDelivery.id).label("total"),
+            IntegrationCapabilityBinding.installation_id,
+            func.count(IntegrationDelivery.id).label("total"),
             func.sum(
                 case(
-                    (WebhookDelivery.status == WebhookDeliveryStatus.failed, 1),
+                    (IntegrationDelivery.state == "dead_letter", 1),
                     else_=0,
                 )
             ).label("failed"),
-            func.max(WebhookDelivery.last_attempt_at).label("last_attempt"),
+            func.max(IntegrationDelivery.last_attempt_at).label("last_attempt"),
         )
-        .filter(WebhookDelivery.created_at >= since)
-        .group_by(WebhookDelivery.endpoint_id)
+        .join(
+            IntegrationDelivery,
+            IntegrationDelivery.capability_binding_id
+            == IntegrationCapabilityBinding.id,
+        )
+        .filter(IntegrationDelivery.created_at >= since)
+        .group_by(IntegrationCapabilityBinding.installation_id)
         .all()
     }
     entries = []
-    for endpoint in db.query(WebhookEndpoint).order_by(WebhookEndpoint.name).all():
-        subscriptions = list(endpoint.subscriptions)
-        active_subscriptions = sum(1 for item in subscriptions if item.is_active)
+    endpoints = (
+        db.query(IntegrationInstallation)
+        .filter(
+            IntegrationInstallation.connector_key == "webhook.http",
+            IntegrationInstallation.state != "retired",
+        )
+        .order_by(IntegrationInstallation.name)
+        .all()
+    )
+    for endpoint in endpoints:
+        binding_ids = [binding.id for binding in endpoint.capability_bindings]
+        subscriptions = (
+            db.query(IntegrationEventSubscription)
+            .filter(IntegrationEventSubscription.capability_binding_id.in_(binding_ids))
+            .all()
+            if binding_ids
+            else []
+        )
+        active_subscriptions = sum(
+            1 for item in subscriptions if item.state == "enabled"
+        )
         total, failed, last_attempt = delivery_stats.get(endpoint.id, (0, 0, None))
-        health = "disabled" if not endpoint.is_active else "unknown"
-        if endpoint.is_active and total:
+        is_active = endpoint.state == "enabled"
+        health = "disabled" if not is_active else "unknown"
+        if is_active and total:
             health = "degraded" if failed / total >= 0.10 else "healthy"
         entries.append(
             _entry(
                 key=f"webhook:{endpoint.id}",
                 label=endpoint.name,
                 value=(
-                    f"{'Enabled' if endpoint.is_active else 'Disabled'}; "
+                    f"{'Enabled' if is_active else endpoint.state.title()}; "
                     f"{active_subscriptions}/{len(subscriptions)} subscriptions active"
                 ),
-                source="webhook endpoint/subscription database",
-                precedence="endpoint active → subscription active → event match → retry policy",
+                source="integration installations/subscriptions/deliveries",
+                precedence="installation enabled → capability bound → subscription enabled → retry policy",
                 scope=f"{active_subscriptions} subscribed event types",
                 health=health,
                 last_change=last_attempt or endpoint.updated_at,
-                detail_url=f"/admin/system/webhooks/{endpoint.id}/edit",
+                detail_url=f"/admin/integrations/webhooks/{endpoint.id}",
             )
         )
     return entries

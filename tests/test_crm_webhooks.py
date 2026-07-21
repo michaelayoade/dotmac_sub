@@ -8,28 +8,33 @@ import hmac
 import json
 import threading
 from contextlib import contextmanager
+from datetime import date
 from unittest.mock import patch
 
+import pytest
 from fastapi import FastAPI, HTTPException
 
 from app.api.crm_webhooks import receive_crm_customer, receive_crm_event, router
-from app.config import settings
 from app.db import get_db
 from app.models.audit import AuditEvent
-from app.models.subscriber import Subscriber
+from app.models.subscriber import Gender, Subscriber, UserType
+from app.schemas.subscriber import SubscriberRead
+from app.services.crm_customers import upsert_customer_from_payload
+from app.services.web_customer_details import build_customer_detail_snapshot
+from tests.integration_platform_helpers import enable_crm_inbound
 
 SECRET = "test-webhook-secret"
 
 
 @contextmanager
 def _with_secret(value: str):
-    """Temporarily set the frozen settings' webhook secret."""
-    original = settings.crm_webhook_secret
-    object.__setattr__(settings, "crm_webhook_secret", value)
-    try:
-        yield
-    finally:
-        object.__setattr__(settings, "crm_webhook_secret", original)
+    """Compatibility-free test scope; the secret lives in the installation."""
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _crm_inbound_installation(db_session, monkeypatch):
+    enable_crm_inbound(db_session, monkeypatch, signing_secret=SECRET)
 
 
 class _FakeRequest:
@@ -39,6 +44,9 @@ class _FakeRequest:
 
     async def body(self) -> bytes:
         return self._raw
+
+    async def json(self):
+        return json.loads(self._raw)
 
 
 class _RouteResponse:
@@ -162,7 +170,7 @@ def test_ticket_event_noop_when_pull_disabled(monkeypatch, db_session):
     assert resp.status_code == 200
     assert resp.json() == {
         "status": "ignored",
-        "reason": "ticket_pull_disabled",
+        "reason": "ticket_observation_disabled",
         "event": "ticket.created",
     }
     enqueue.assert_not_called()
@@ -180,7 +188,7 @@ def test_ticket_event_noop_when_pull_setting_missing(monkeypatch, db_session):
     ):
         resp = _post(body, "ticket.created", _sign(raw), db_session)
     assert resp.status_code == 200
-    assert resp.json()["reason"] == "ticket_pull_disabled"
+    assert resp.json()["reason"] == "ticket_observation_disabled"
     enqueue.assert_not_called()
 
 
@@ -205,49 +213,64 @@ def test_ticket_branch_gated_by_canonical_control(monkeypatch, db_session):
     control_registry.update_canonical_feature_controls(
         db_session, payload={"crm.ticket_pull": False}
     )
+    body = {"ticket_id": "abc-456"}
+    raw = json.dumps(body).encode()
     with (
         _with_secret(SECRET),
         patch("app.services.queue_adapter.enqueue_task") as enqueue,
     ):
         resp = _post(body, "ticket.created", _sign(raw), db_session)
     assert resp.status_code == 200
-    assert resp.json()["reason"] == "ticket_pull_disabled"
+    assert resp.json()["reason"] == "ticket_observation_disabled"
     enqueue.assert_not_called()
 
 
-def test_bad_signature_rejected():
+def test_bad_signature_rejected(db_session):
     body = {"ticket_id": "abc-123"}
     with (
         _with_secret(SECRET),
         patch("app.services.queue_adapter.enqueue_task") as enqueue,
     ):
-        resp = _post(body, "ticket.created", "sha256=deadbeef")
+        resp = _post(body, "ticket.created", "sha256=deadbeef", db_session)
     assert resp.status_code == 401
     enqueue.assert_not_called()
 
 
-def test_missing_signature_rejected():
+def test_missing_signature_rejected(db_session):
     with _with_secret(SECRET):
-        resp = _post({"ticket_id": "x"}, "ticket.created", None)
+        resp = _post({"ticket_id": "x"}, "ticket.created", None, db_session)
     assert resp.status_code == 401
 
 
-def test_unconfigured_secret_fails_closed():
+def test_disabled_inbound_capability_fails_closed(db_session):
+    from app.services.integrations import installations
+
+    binding = installations.require_enabled_capability_binding(
+        db_session,
+        connector_key="dotmac.crm",
+        capability_id="crm.events.receive.v1",
+    )
+    installations.retire_installation(
+        db_session,
+        installation_id=binding.installation_id,
+        reason="test_disabled",
+    )
+    db_session.commit()
     body = {"ticket_id": "x"}
     raw = json.dumps(body).encode()
     with _with_secret(""):
-        resp = _post(body, "ticket.created", _sign(raw))
+        resp = _post(body, "ticket.created", _sign(raw), db_session)
     assert resp.status_code == 503
 
 
-def test_unknown_event_acknowledged_without_enqueue():
+def test_unknown_event_acknowledged_without_enqueue(db_session):
     body = {"ticket_id": "x"}
     raw = json.dumps(body).encode()
     with (
         _with_secret(SECRET),
         patch("app.services.queue_adapter.enqueue_task") as enqueue,
     ):
-        resp = _post(body, "invoice.paid", _sign(raw))
+        resp = _post(body, "invoice.paid", _sign(raw), db_session)
     assert resp.status_code == 200
     assert resp.json()["status"] == "ignored"
     enqueue.assert_not_called()
@@ -277,8 +300,15 @@ def test_customer_accepted_creates_subscriber_and_returns_readable_id(db_session
         "email": "aminuumara@example.com",
         "phone": "+07011115972",
         "address": "12 Test Street",
+        "date_of_birth": "1990-05-14",
+        "gender": "female",
         "status": "new",
-        "metadata": {"subscriber_category": "residential"},
+        "metadata": {
+            "subscriber_category": "residential",
+            # Retained for CRM compatibility, but top-level values are authoritative.
+            "date_of_birth": "1980-01-01",
+            "gender": "male",
+        },
     }
     with _with_secret(SECRET):
         resp = _post_customer(db_session, body)
@@ -294,6 +324,8 @@ def test_customer_accepted_creates_subscriber_and_returns_readable_id(db_session
     subscriber = db_session.get(Subscriber, data["id"])
     assert subscriber is not None
     assert subscriber.email == "aminuumara@example.com"
+    assert str(subscriber.date_of_birth) == "1990-05-14"
+    assert subscriber.gender == Gender.female
     assert subscriber.metadata_["crm_project_id"] == body["crm_project_id"]
 
 
@@ -343,6 +375,8 @@ def test_customer_webhook_audits_identity_overwrite(db_session):
         "email": "changed.customer@example.com",
         "phone": "+09000000004",
         "address": {"city": "Lagos"},
+        "date_of_birth": "1993-07-15",
+        "gender": "female",
         "status": "active",
     }
 
@@ -372,7 +406,111 @@ def test_customer_webhook_audits_identity_overwrite(db_session):
     }
     assert changes["phone"] == {"old": "+09000000003", "new": "+09000000004"}
     assert changes["city"] == {"old": None, "new": "Lagos"}
+    assert changes["date_of_birth"] == {"old": None, "new": "1993-07-15"}
+    assert changes["gender"] == {"old": "unknown", "new": "female"}
     assert event.metadata_["crm_person_id"] == body["crm_person_id"]
+
+
+def test_customer_webhook_missing_identity_fields_preserve_existing_values(db_session):
+    subscriber = Subscriber(
+        first_name="Existing",
+        last_name="Customer",
+        email="existing.identity@example.com",
+        date_of_birth=date(1988, 2, 3),
+        gender=Gender.male,
+        metadata_={"crm_person_id": "identity-preserve-1"},
+    )
+    db_session.add(subscriber)
+    db_session.commit()
+
+    body = {
+        "crm_person_id": "identity-preserve-1",
+        "name": "Existing Customer",
+        "email": "existing.identity@example.com",
+        "date_of_birth": "",
+        "gender": None,
+        "metadata": {"date_of_birth": "2000-01-01", "gender": "female"},
+    }
+    with _with_secret(SECRET):
+        response = _post_customer(db_session, body)
+
+    assert response.status_code == 200
+    db_session.refresh(subscriber)
+    assert str(subscriber.date_of_birth) == "1988-02-03"
+    assert subscriber.gender == Gender.male
+
+
+@pytest.mark.parametrize(
+    "field,value", [("date_of_birth", "not-a-date"), ("gender", "invalid-gender")]
+)
+def test_customer_webhook_rejects_invalid_identity_values_without_overwrite(
+    db_session, field, value
+):
+    # Asserted at the consequence owner: the route wraps this in inbox-receipt
+    # bookkeeping whose fail path commits durably, which the outer-transaction
+    # test harness cannot represent.
+    subscriber = Subscriber(
+        first_name="Safe",
+        last_name="Customer",
+        email="safe.identity@example.com",
+        date_of_birth=date(1988, 2, 3),
+        gender=Gender.male,
+        metadata_={"crm_person_id": "identity-invalid-1"},
+    )
+    db_session.add(subscriber)
+    db_session.commit()
+
+    body = {
+        "crm_person_id": "identity-invalid-1",
+        "name": "Safe Customer",
+        "email": "safe.identity@example.com",
+        field: value,
+    }
+    with pytest.raises(HTTPException) as exc_info:
+        upsert_customer_from_payload(db_session, body)
+
+    assert exc_info.value.status_code == 422
+    # Validation fails before any mutation, so the session holds no pending
+    # writes; refresh proves the stored identity survived untouched.
+    db_session.refresh(subscriber)
+    assert str(subscriber.date_of_birth) == "1988-02-03"
+    assert subscriber.gender == Gender.male
+
+
+def test_customer_webhook_identity_replay_is_idempotent_and_shown_in_admin_detail(
+    db_session,
+):
+    body = {
+        "crm_person_id": "identity-replay-1",
+        "name": "Replay Customer",
+        "email": "replay.identity@example.com",
+        "date_of_birth": "1994-04-05",
+        "gender": "non_binary",
+    }
+    with _with_secret(SECRET):
+        first = _post_customer(db_session, body)
+        second = _post_customer(db_session, body)
+
+    assert first.status_code == second.status_code == 200
+    assert first.json()["id"] == second.json()["id"]
+    assert (
+        db_session.query(Subscriber).filter(Subscriber.email == body["email"]).count()
+        == 1
+    )
+    subscriber = db_session.get(Subscriber, first.json()["id"])
+    assert subscriber is not None
+    assert str(subscriber.date_of_birth) == "1994-04-05"
+    assert subscriber.gender == Gender.non_binary
+
+    subscriber.user_type = UserType.customer
+    db_session.commit()
+    detail = build_customer_detail_snapshot(db_session, str(subscriber.id))
+    assert str(detail["customer"].date_of_birth) == "1994-04-05"
+    assert detail["customer"].gender == Gender.non_binary
+
+    api_projection = SubscriberRead.model_validate(subscriber).model_dump(mode="json")
+    assert api_projection["date_of_birth"] == "1994-04-05"
+    assert api_projection["gender"] == "non_binary"
 
 
 def test_customer_webhook_matches_existing_customer_by_normalized_phone(db_session):
@@ -469,5 +607,5 @@ def test_ticket_webhook_replay_is_deduped(monkeypatch, db_session):
         first = _post(body, "ticket.created", _sign(raw), db_session)
         replay = _post(body, "ticket.created", _sign(raw), db_session)
     assert first.status_code == 200
-    assert replay.status_code == 200 and replay.json().get("reason") == "duplicate"
+    assert replay.status_code == 200 and replay.json()["status"] == "queued"
     assert enqueue.call_count == 1

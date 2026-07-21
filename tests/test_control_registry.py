@@ -327,36 +327,10 @@ def test_resolution_explains_module_composition(db_session):
     assert resolution.source.startswith("owner module billing disabled")
 
 
-def test_work_order_pull_defaults_on_and_flips_via_canonical_row(db_session):
-    """Phase 2 flip lever: crm.work_order_pull fails OPEN (inert until flipped)
-    and the canonical row turns it off — both through the resolver and
-    through the scheduler chokepoint that gates work_order_mirror_reconcile."""
-    from app.models.domain_settings import SettingDomain
-
-    assert control_registry.is_enabled(db_session, "crm.work_order_pull") is True
-    assert (
-        scheduler_config._effective_bool(
-            db_session,
-            SettingDomain.scheduler,
-            "crm_work_order_pull_enabled",
-            "CRM_WORK_ORDER_PULL_ENABLED",
-            True,
-        )
-        is True
-    )
-
-    _set_canonical(db_session, "crm.work_order_pull", False)
-    assert control_registry.is_enabled(db_session, "crm.work_order_pull") is False
-    assert (
-        scheduler_config._effective_bool(
-            db_session,
-            SettingDomain.scheduler,
-            "crm_work_order_pull_enabled",
-            "CRM_WORK_ORDER_PULL_ENABLED",
-            True,
-        )
-        is False
-    )
+def test_retired_work_lifecycle_controls_are_absent():
+    keys = {control.key for control in control_registry.all_controls()}
+    assert "crm.work_order_pull" not in keys
+    assert "projects.native_read" not in keys
 
 
 def test_disabled_components_covers_all_capture_features(db_session):

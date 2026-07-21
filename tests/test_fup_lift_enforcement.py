@@ -19,6 +19,8 @@ from app.models.fup_state import FupActionStatus, FupState
 from app.services.account_lifecycle import get_active_locks, suspend_subscription
 from app.services.enforcement import lift_fup_enforcement
 
+NOW = datetime(2026, 7, 20, 12, 0, tzinfo=UTC)
+
 
 def _sub(db, subscriber, catalog_offer, status=SubscriptionStatus.active):
     sub = Subscription(
@@ -64,7 +66,7 @@ def test_throttle_lifted_restores_original_profile(
     )
     db_session.commit()
 
-    result = lift_fup_enforcement(db_session, str(sub.id))
+    result = lift_fup_enforcement(db_session, str(sub.id), evaluated_at=NOW)
 
     assert "restore_profile" in result["actions"]
     db_session.refresh(cred)
@@ -97,7 +99,7 @@ def test_blocked_via_suspension_lifted_resumes_subscription(
     db_session.commit()
     assert sub.status == SubscriptionStatus.suspended
 
-    result = lift_fup_enforcement(db_session, str(sub.id))
+    result = lift_fup_enforcement(db_session, str(sub.id), evaluated_at=NOW)
 
     assert "resume" in result["actions"]
     db_session.refresh(sub)
@@ -110,5 +112,5 @@ def test_blocked_via_suspension_lifted_resumes_subscription(
 
 def test_lift_noop_when_no_state(db_session, subscriber, catalog_offer):
     sub = _sub(db_session, subscriber, catalog_offer)
-    result = lift_fup_enforcement(db_session, str(sub.id))
+    result = lift_fup_enforcement(db_session, str(sub.id), evaluated_at=NOW)
     assert result["lifted"] is False

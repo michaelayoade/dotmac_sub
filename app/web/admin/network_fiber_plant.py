@@ -13,10 +13,10 @@ from app.services import web_network_fdh as web_network_fdh_service
 from app.services import web_network_fiber as web_network_fiber_service
 from app.services import web_network_fiber_plant as web_network_fiber_plant_service
 from app.services import (
-    web_network_fiber_plant_ledger as web_network_fiber_plant_ledger_service,
+    web_network_fiber_plant_actions as web_network_fiber_plant_actions_service,
 )
 from app.services import (
-    web_network_fiber_plant_actions as web_network_fiber_plant_actions_service,
+    web_network_fiber_plant_ledger as web_network_fiber_plant_ledger_service,
 )
 from app.services import (
     web_network_ont_identity_reviews as ont_identity_review_service,

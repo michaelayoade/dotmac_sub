@@ -18,7 +18,6 @@ from app.models.audit import AuditActorType
 from app.models.billing import (
     BankAccount,
     BankAccountType,
-    CollectionAccount,
     Invoice,
     InvoiceLine,
     InvoiceStatus,
@@ -59,8 +58,6 @@ from app.schemas.audit import AuditEventCreate
 from app.schemas.billing import (
     BankAccountCreate,
     BankAccountUpdate,
-    CollectionAccountCreate,
-    CollectionAccountUpdate,
     LedgerEntryCreate,
     PaymentAllocationApply,
     PaymentAllocationConfirm,
@@ -183,6 +180,7 @@ class PaymentCreationPreview:
     unallocated_amount: Decimal
     unallocated_ledger_entry_type: LedgerEntryType | None
     unallocated_ledger_source: LedgerSource | None
+    include_prepaid_service_effect: bool
     prepaid_service_effect: PaymentPrepaidServiceEffect | None
     access_consequence: str
     fingerprint: str
@@ -1097,6 +1095,11 @@ def _apply_previewed_prepaid_service_effect(
     payment: Payment,
     preview: PaymentCreationPreview,
 ) -> LedgerEntry | None:
+    # Typed account-credit deposits fingerprint prepaid renewal as excluded.
+    # Execution must honor that owner decision instead of invoking the generic
+    # payment-triggered renewal path and manufacturing a consequence afterward.
+    if not preview.include_prepaid_service_effect:
+        return None
     apply_prepaid_service_credit(db, payment)
     entry = _existing_prepaid_renewal_debit(db, payment)
     actual = (
@@ -1642,6 +1645,7 @@ def _build_payment_creation_preview(
             unallocated_amount=Decimal("0.00"),
             unallocated_ledger_entry_type=None,
             unallocated_ledger_source=None,
+            include_prepaid_service_effect=include_prepaid_service_effect,
             prepaid_service_effect=None,
             access_consequence="none_until_payment_settlement",
             fingerprint=fingerprint,
@@ -1756,6 +1760,7 @@ def _build_payment_creation_preview(
             LedgerEntryType.credit if remaining > 0 else None
         ),
         unallocated_ledger_source=(LedgerSource.payment if remaining > 0 else None),
+        include_prepaid_service_effect=include_prepaid_service_effect,
         prepaid_service_effect=prepaid_service_effect,
         access_consequence="recheck_after_payment_settlement",
         fingerprint=fingerprint,
@@ -2577,10 +2582,10 @@ class Payments(ListResponseMixin):
             return existing
 
         key_material = f"{provider_id}:{external}"
-        settlement_key = (
-            "provider-settlement-"
-            + hashlib.sha256(key_material.encode("utf-8")).hexdigest()
-        )
+        settlement_fingerprint = hashlib.sha256(
+            key_material.encode("utf-8")
+        ).hexdigest()
+        settlement_key = f"provider-settlement-{settlement_fingerprint}"
         payment = Payment(
             account_id=account_id,
             provider_id=provider_id,
@@ -2590,7 +2595,7 @@ class Payments(ListResponseMixin):
             status=PaymentStatus.succeeded,
             paid_at=paid_at or datetime.now(UTC),
             auto_allocate_on_settlement=False,
-            creation_preview_fingerprint=settlement_key,
+            creation_preview_fingerprint=settlement_fingerprint,
             external_id=external,
             memo=memo,
         )
@@ -2612,7 +2617,7 @@ class Payments(ListResponseMixin):
                 prepaid_amount=Decimal("0.00"),
                 currency=code,
                 origin=PaymentSettlementOrigin.provider_event,
-                preview_fingerprint=settlement_key,
+                preview_fingerprint=settlement_fingerprint,
                 idempotency_key=settlement_key,
             )
             db.add(settlement)
@@ -5241,72 +5246,12 @@ class PaymentAllocations(ListResponseMixin):
         db.commit()
 
 
-class CollectionAccounts(ListResponseMixin):
-    @staticmethod
-    def create(db: Session, payload: CollectionAccountCreate):
-        account = CollectionAccount(**payload.model_dump())
-        db.add(account)
-        db.commit()
-        db.refresh(account)
-        return account
-
-    @staticmethod
-    def get(db: Session, account_id: str):
-        account = get_by_id(db, CollectionAccount, account_id)
-        if not account:
-            raise HTTPException(status_code=404, detail="Collection account not found")
-        return account
-
-    @staticmethod
-    def list(
-        db: Session,
-        is_active: bool | None,
-        order_by: str,
-        order_dir: str,
-        limit: int,
-        offset: int,
-    ):
-        query = db.query(CollectionAccount)
-        if is_active is None:
-            query = query.filter(CollectionAccount.is_active.is_(True))
-        else:
-            query = query.filter(CollectionAccount.is_active == is_active)
-        query = apply_ordering(
-            query,
-            order_by,
-            order_dir,
-            {
-                "created_at": CollectionAccount.created_at,
-                "name": CollectionAccount.name,
-            },
-        )
-        return apply_pagination(query, limit, offset).all()
-
-    @staticmethod
-    def update(db: Session, account_id: str, payload: CollectionAccountUpdate):
-        account = get_by_id(db, CollectionAccount, account_id)
-        if not account:
-            raise HTTPException(status_code=404, detail="Collection account not found")
-        data = payload.model_dump(exclude_unset=True)
-        for key, value in data.items():
-            setattr(account, key, value)
-        db.commit()
-        db.refresh(account)
-        return account
-
-    @staticmethod
-    def delete(db: Session, account_id: str):
-        account = get_by_id(db, CollectionAccount, account_id)
-        if not account:
-            raise HTTPException(status_code=404, detail="Collection account not found")
-        account.is_active = False
-        db.commit()
-
-
 class PaymentChannels(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: PaymentChannelCreate):
         data = payload.model_dump()
+        if "accounting_code" in data:
+            data["accounting_code"] = str(data["accounting_code"] or "").strip() or None
         if data.get("default_collection_account_id"):
             _validate_collection_account(
                 db, str(data["default_collection_account_id"]), None
@@ -5382,6 +5327,8 @@ class PaymentChannels(ListResponseMixin):
         if not channel:
             raise HTTPException(status_code=404, detail="Payment channel not found")
         data = payload.model_dump(exclude_unset=True)
+        if "accounting_code" in data:
+            data["accounting_code"] = str(data["accounting_code"] or "").strip() or None
         if data.get("default_collection_account_id"):
             _validate_collection_account(
                 db, str(data["default_collection_account_id"]), None

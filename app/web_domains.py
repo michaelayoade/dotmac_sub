@@ -55,9 +55,7 @@ from app.services import (
 from app.services import (
     radius as radius_service,
 )
-from app.services import (
-    rbac as rbac_service,
-)
+from app.services import rbac_catalog
 from app.services import (
     scheduler as scheduler_service,
 )
@@ -75,9 +73,6 @@ from app.services import (
 )
 from app.services import (
     usage as usage_service,
-)
-from app.services import (
-    webhook as webhook_service,
 )
 from app.services.network import cpe as cpe_service
 
@@ -254,7 +249,7 @@ def subscribers_home(request: Request, db: Session = Depends(get_db)):
 
 @router.get("/rbac", response_class=HTMLResponse)
 def rbac_home(request: Request, db: Session = Depends(get_db)):
-    items = rbac_service.roles.list(
+    items = rbac_catalog.list_roles(
         db=db,
         is_active=None,
         order_by="created_at",
@@ -338,19 +333,6 @@ def connectors_home(request: Request, db: Session = Depends(get_db)):
         offset=0,
     )
     return _render(request, "Connector Configs", items)
-
-
-@router.get("/webhooks", response_class=HTMLResponse)
-def webhooks_home(request: Request, db: Session = Depends(get_db)):
-    items = webhook_service.webhook_endpoints.list(
-        db=db,
-        is_active=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=25,
-        offset=0,
-    )
-    return _render(request, "Webhook Endpoints", items)
 
 
 @router.get("/gis", response_class=HTMLResponse)

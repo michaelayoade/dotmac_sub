@@ -6,7 +6,9 @@ import pytest
 from fastapi.routing import APIRoute
 
 from app.api import crm_referrals as referral_api
+from app.models.audit import AuditEvent
 from app.models.domain_settings import DomainSetting, SettingDomain, SettingValueType
+from app.models.event_store import EventStore
 from app.models.party import PartyType
 from app.models.referral_native import Referral
 from app.models.sales import Lead
@@ -16,7 +18,10 @@ from app.schemas.subscriber import SubscriberCreate
 from app.services import party as party_service
 from app.services import referral_account_conversion
 from app.services import subscriber as subscriber_service
-from app.services.referrals import referrals
+from app.services.db_session_adapter import db_session_adapter
+from app.services.domain_errors import DomainError
+from app.services.owner_commands import CommandContext
+from tests.referral_program_testkit import capture, ensure_code
 
 
 def _email(prefix: str = "ref-convert") -> str:
@@ -53,8 +58,8 @@ def _enable_program(db) -> None:
 def _captured(db):
     _enable_program(db)
     referrer = _subscriber(db)
-    code = referrals.ensure_code(db, str(referrer.id))
-    referral = referrals.capture(
+    code = ensure_code(db, referrer.id)
+    referral = capture(
         db,
         code=code.code,
         name="Reviewed Prospect",
@@ -73,14 +78,53 @@ def _payload(*, status: SubscriberStatus = SubscriberStatus.new) -> SubscriberCr
 
 
 def _create(db, referral: Referral, *, payload: SubscriberCreate | None = None):
+    referral_id = referral.id
+    referred_party_id = referral.referred_party_id
+    referred_lead_id = referral.referred_lead_id
+    db_session_adapter.release_read_transaction(db)
     return referral_account_conversion.create_account(
         db,
-        referral_id=referral.id,
-        referred_party_id=referral.referred_party_id,
-        referred_lead_id=referral.referred_lead_id,
-        subscriber_payload=payload or _payload(),
-        source="test_referral_account_conversion",
-        reason="Operator reviewed exact Referral, Party, and Lead context",
+        referral_account_conversion.CreateReferralAccountCommand(
+            context=CommandContext.system(
+                actor="test_referral_account_conversion",
+                scope=referral_account_conversion.REFERRAL_ACCOUNT_CONVERSION_SCOPE,
+                reason="Operator reviewed exact Referral, Party, and Lead context",
+                idempotency_key=f"test-referral-create:{referral_id}",
+            ),
+            referral_id=referral_id,
+            referred_party_id=referred_party_id,
+            referred_lead_id=referred_lead_id,
+            subscriber_payload=payload or _payload(),
+        ),
+    )
+
+
+def _attach(
+    db,
+    referral: Referral,
+    subscriber_id,
+    *,
+    referred_party_id=None,
+    reason: str = "Operator reviewed protected evidence for this exact Party",
+):
+    referral_id = referral.id
+    resolved_party_id = referred_party_id or referral.referred_party_id
+    referred_lead_id = referral.referred_lead_id
+    db_session_adapter.release_read_transaction(db)
+    return referral_account_conversion.attach_existing_account(
+        db,
+        referral_account_conversion.AttachExistingReferralAccountCommand(
+            context=CommandContext.system(
+                actor="test_operator_adjudication",
+                scope=referral_account_conversion.REFERRAL_ACCOUNT_CONVERSION_SCOPE,
+                reason=reason,
+                idempotency_key=(f"test-referral-attach:{referral_id}:{subscriber_id}"),
+            ),
+            referral_id=referral_id,
+            referred_party_id=resolved_party_id,
+            referred_lead_id=referred_lead_id,
+            subscriber_id=subscriber_id,
+        ),
     )
 
 
@@ -90,6 +134,7 @@ def test_create_account_preserves_exact_context_and_is_idempotent(db_session):
 
     created = _create(db_session, referral)
 
+    assert not db_session.in_transaction()
     assert created.outcome == "created"
     assert created.referral_id == referral.id
     assert created.referred_party_id == referral.referred_party_id
@@ -104,11 +149,40 @@ def test_create_account_preserves_exact_context_and_is_idempotent(db_session):
     lead = db_session.get(Lead, referral.referred_lead_id)
     assert lead is not None
     assert lead.subscriber_id == subscriber.id
+    conversion_event = (
+        db_session.query(EventStore)
+        .filter(EventStore.event_type == "referral_account.converted")
+        .one()
+    )
+    conversion_audit = (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.action == "referrals.account_converted")
+        .one()
+    )
+    assert conversion_event.payload["schema_version"] == 1
+    assert conversion_event.payload["outcome"] == "created"
+    assert conversion_event.payload["subscriber_id"] == str(subscriber.id)
+    assert set(conversion_event.payload).isdisjoint(
+        {"email", "phone", "name", "address", "conversion_token"}
+    )
+    assert conversion_audit.metadata_["command_id"] == str(created.command_id)
 
     replay = _create(db_session, referral, payload=_payload())
     assert replay.outcome == "already_attached"
     assert replay.subscriber_id == subscriber.id
     assert db_session.query(Subscriber).count() == before + 1
+    assert (
+        db_session.query(EventStore)
+        .filter(EventStore.event_type == "referral_account.converted")
+        .count()
+        == 1
+    )
+    assert (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.action == "referrals.account_converted")
+        .count()
+        == 1
+    )
 
 
 def test_create_account_preserves_requested_billing_block_state(db_session):
@@ -130,15 +204,7 @@ def test_attach_existing_account_adjudicates_only_the_exact_party(db_session):
     referral, _ = _captured(db_session)
     subscriber = subscriber_service.subscribers.create(db_session, _payload())
 
-    result = referral_account_conversion.attach_existing_account(
-        db_session,
-        referral_id=referral.id,
-        referred_party_id=referral.referred_party_id,
-        referred_lead_id=referral.referred_lead_id,
-        subscriber_id=subscriber.id,
-        source="test_operator_adjudication",
-        reason="Operator reviewed protected evidence for this exact Party",
-    )
+    result = _attach(db_session, referral, subscriber.id)
 
     assert result.outcome == "attached"
     db_session.refresh(subscriber)
@@ -146,17 +212,26 @@ def test_attach_existing_account_adjudicates_only_the_exact_party(db_session):
     assert subscriber.party_id == referral.referred_party_id
     assert referral.referred_subscriber_id == subscriber.id
     assert subscriber.party_binding_source == "test_operator_adjudication"
+    conversion_event = (
+        db_session.query(EventStore)
+        .filter(EventStore.event_type == "referral_account.converted")
+        .one()
+    )
+    assert conversion_event.payload["outcome"] == "attached"
 
-    replay = referral_account_conversion.attach_existing_account(
+    replay = _attach(
         db_session,
-        referral_id=referral.id,
-        referred_party_id=referral.referred_party_id,
-        referred_lead_id=referral.referred_lead_id,
-        subscriber_id=subscriber.id,
-        source="test_operator_adjudication",
+        referral,
+        subscriber.id,
         reason="Exact operator retry",
     )
     assert replay.outcome == "already_attached"
+    assert (
+        db_session.query(EventStore)
+        .filter(EventStore.event_type == "referral_account.converted")
+        .count()
+        == 1
+    )
 
 
 def test_stale_context_and_different_party_are_refused_without_repoint(db_session):
@@ -167,13 +242,11 @@ def test_stale_context_and_different_party_are_refused_without_repoint(db_sessio
         referral_account_conversion.ReferralAccountConversionError,
         match="Party context is stale",
     ):
-        referral_account_conversion.attach_existing_account(
+        _attach(
             db_session,
-            referral_id=referral.id,
+            referral,
+            subscriber.id,
             referred_party_id=uuid.uuid4(),
-            referred_lead_id=referral.referred_lead_id,
-            subscriber_id=subscriber.id,
-            source="test_operator_adjudication",
             reason="Stale hidden form context",
         )
 
@@ -195,13 +268,10 @@ def test_stale_context_and_different_party_are_refused_without_repoint(db_sessio
         referral_account_conversion.ReferralAccountConversionError,
         match="already bound to Party",
     ):
-        referral_account_conversion.attach_existing_account(
+        _attach(
             db_session,
-            referral_id=referral.id,
-            referred_party_id=referral.referred_party_id,
-            referred_lead_id=referral.referred_lead_id,
-            subscriber_id=subscriber.id,
-            source="test_operator_adjudication",
+            referral,
+            subscriber.id,
             reason="Must not repoint",
         )
 
@@ -219,13 +289,10 @@ def test_self_referral_failure_rolls_back_temporary_party_binding(db_session):
         referral_account_conversion.ReferralAccountConversionError,
         match="self-refer",
     ):
-        referral_account_conversion.attach_existing_account(
+        _attach(
             db_session,
-            referral_id=referral.id,
-            referred_party_id=referral.referred_party_id,
-            referred_lead_id=referral.referred_lead_id,
-            subscriber_id=referrer.id,
-            source="test_operator_adjudication",
+            referral,
+            referrer.id,
             reason="Invalid self-referral attempt",
         )
 
@@ -233,6 +300,56 @@ def test_self_referral_failure_rolls_back_temporary_party_binding(db_session):
     db_session.refresh(referral)
     assert referrer.party_id is None
     assert referral.referred_subscriber_id is None
+
+
+def test_late_event_failure_rolls_back_account_and_all_conversion_links(
+    db_session, monkeypatch
+):
+    referral, _ = _captured(db_session)
+    referral_id = referral.id
+    before = db_session.query(Subscriber).count()
+
+    def fail_event(*_args, **_kwargs):
+        raise RuntimeError("conversion event unavailable")
+
+    monkeypatch.setattr(referral_account_conversion, "emit_event", fail_event)
+
+    with pytest.raises(RuntimeError, match="conversion event unavailable"):
+        _create(db_session, referral)
+
+    assert not db_session.in_transaction()
+    canonical_referral = db_session.get(Referral, referral_id)
+    assert canonical_referral is not None
+    assert canonical_referral.referred_subscriber_id is None
+    assert db_session.query(Subscriber).count() == before
+    assert (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.action == "referrals.account_converted")
+        .count()
+        == 0
+    )
+
+
+def test_owner_rejects_an_active_caller_transaction(db_session):
+    referral, _ = _captured(db_session)
+    command = referral_account_conversion.CreateReferralAccountCommand(
+        context=CommandContext.system(
+            actor="test_referral_account_conversion",
+            scope=referral_account_conversion.REFERRAL_ACCOUNT_CONVERSION_SCOPE,
+            reason="Caller must not own the conversion transaction",
+        ),
+        referral_id=referral.id,
+        referred_party_id=referral.referred_party_id,
+        referred_lead_id=referral.referred_lead_id,
+        subscriber_payload=_payload(),
+    )
+    assert db_session.in_transaction()
+
+    with pytest.raises(DomainError) as exc:
+        referral_account_conversion.create_account(db_session, command)
+
+    assert exc.value.code == "referrals.account_conversion.active_caller_transaction"
+    assert not db_session.in_transaction()
 
 
 def _route(path: str) -> APIRoute:

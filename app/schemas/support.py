@@ -13,6 +13,7 @@ from pydantic import (
 )
 
 from app.models.support import TicketChannel, TicketCommentAuthorType, TicketPriority
+from app.schemas.portal import CustomerSelfCareAction
 from app.schemas.status_presentation import StatusPresentation
 
 
@@ -180,12 +181,24 @@ class TicketRead(BaseModel):
 
         return ticket_status_presentation(self.status)
 
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def resolution_actions(self) -> list[CustomerSelfCareAction]:
+        """Customer actions are projected by the lifecycle read owner."""
+        from app.services.customer_experience_lifecycle import ticket_actions
+
+        return ticket_actions(self)
+
 
 class TicketSatisfactionRequest(BaseModel):
     """Customer CSAT on a resolved/closed support ticket."""
 
     rating: int = Field(ge=1, le=5)
     comment: str | None = Field(default=None, max_length=2000)
+
+
+class TicketResolutionDisputeRequest(BaseModel):
+    reason: str | None = Field(default=None, max_length=2000)
 
 
 class TicketBulkUpdateItem(BaseModel):
@@ -207,6 +220,28 @@ class TicketBulkUpdateItem(BaseModel):
 
 class TicketBulkUpdateRequest(BaseModel):
     items: list[TicketBulkUpdateItem]
+
+
+class TicketWorkOrderIssueRequest(BaseModel):
+    """Explicit field-action scope issued from an assigned support ticket."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    reason: str = Field(min_length=1, max_length=2000)
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = None
+    project_id: UUID | None = None
+    project_task_id: UUID | None = None
+    priority: str | None = Field(default=None, max_length=20)
+    work_type: str = Field(default="repair", min_length=1, max_length=20)
+    address: str | None = Field(default=None, max_length=255)
+    scheduled_start: datetime | None = None
+    scheduled_end: datetime | None = None
+    estimated_duration_minutes: int | None = Field(default=None, ge=0)
+    required_skills: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    access_notes: str | None = Field(default=None, max_length=2000)
+    requires_as_built_evidence: bool = True
 
 
 class TicketCommentBase(BaseModel):

@@ -1522,9 +1522,12 @@ def build_beat_schedule() -> dict:
         if not integration_jobs:
             logger.info("EMAIL_POLL_EXIT reason=no_jobs")
         for job in integration_jobs:
-            adapter_key = str(getattr(job, "adapter_key", "") or "").strip().lower()
-            action = str(getattr(job, "action", "") or "").strip().lower()
-            if adapter_key == "crm" and action == "pull_tickets":
+            binding = getattr(job, "capability_binding", None)
+            if (
+                binding is not None
+                and getattr(binding, "capability_id", None)
+                == "crm.ticket_observation.v1"
+            ):
                 logger.info(
                     "integration_interval_job_skipped_dedicated_crm_pull job_id=%s",
                     getattr(job, "id", ""),
@@ -2008,45 +2011,6 @@ def build_beat_schedule() -> dict:
             task_name="app.tasks.nas.run_scheduled_backups",
             enabled=True,
             interval_seconds=max(nas_backup_interval, 900),
-        )
-        # Project/installation mirror reconcile — backstop for missed project.*
-        # webhook deliveries so "where's my install?" stays accurate.
-        project_reconcile_seconds = _resolve_int(
-            session,
-            SettingDomain.subscriber,
-            "project_reconcile_interval_seconds",
-            3600,
-        )
-        _sync_scheduled_task(
-            session,
-            name="project_mirror_reconcile",
-            task_name="app.tasks.projects.reconcile_project_mirror",
-            enabled=True,
-            interval_seconds=max(project_reconcile_seconds, 900),
-        )
-        # Work-order/field-service mirror reconcile — backstop for missed
-        # work_order.* webhook deliveries. Gated by the crm.work_order_pull
-        # Native work-order authority kill switch: off means Sub
-        # is the work-order system-of-record and the CRM is no longer polled.
-        work_order_pull_enabled = _effective_bool(
-            session,
-            SettingDomain.scheduler,
-            "crm_work_order_pull_enabled",
-            "CRM_WORK_ORDER_PULL_ENABLED",
-            True,
-        )
-        work_order_reconcile_seconds = _resolve_int(
-            session,
-            SettingDomain.subscriber,
-            "work_order_reconcile_interval_seconds",
-            3600,
-        )
-        _sync_scheduled_task(
-            session,
-            name="work_order_mirror_reconcile",
-            task_name="app.tasks.work_orders.reconcile_work_order_mirror",
-            enabled=work_order_pull_enabled,
-            interval_seconds=max(work_order_reconcile_seconds, 900),
         )
         # Self-serve quote mirror reconcile — backstop for missed quote.* webhooks.
         quote_reconcile_seconds = _resolve_int(
@@ -2557,41 +2521,19 @@ def build_beat_schedule() -> dict:
                 "kwargs": {"full": True},
             }
 
-        # CRM-to-native sync window: while CRM is still the
-        # writer for projects/quotes/referrals, pull CRM deltas into the
-        # NATIVE tables by running the backfill importer's watermark mode in
-        # process (webhooks cover status freshness; this covers full shapes).
-        # Gated by the same crm_phase3_native_sync_enabled flag as the
-        # webhook adapter. Default OFF; retire the entry with the compatibility
-        # adapter after native ownership is verified.
-        crm_phase3_native_sync_enabled = control_registry.is_enabled(
-            session, "crm.phase3_native_sync"
+        # ERP schedules derive from validated capability bindings. Per-flow
+        # single-writer ownership remains the independent business cutover gate.
+        from app.services.integrations.backoffice_contracts import (
+            ERP_OPERATIONAL_SYNC_CAPABILITY,
+            ERP_OUTBOX_CAPABILITY,
+            ERP_STATUS_CAPABILITY,
         )
-        crm_phase3_delta_interval = _effective_int(
-            session,
-            SettingDomain.scheduler,
-            "crm_phase3_native_delta_interval_minutes",
-            "CRM_PHASE3_NATIVE_DELTA_INTERVAL_MINUTES",
-            5,
-        )
-        crm_phase3_delta_interval = max(crm_phase3_delta_interval, 1)
-        if crm_phase3_native_sync_enabled:
-            schedule["crm_phase3_native_delta"] = {
-                "task": "app.tasks.crm_native_sync.pull_crm_phase3_native_delta",
-                "schedule": timedelta(minutes=crm_phase3_delta_interval),
-            }
+        from app.services.integrations.erp_capability import capability_enabled
 
-        # DotMac ERP outbox delivery (ERP re-home). Sweeps
-        # field_erp_sync_events → ERP's /sync/crm/* API. Master kill-switch is
-        # dotmac_erp_sync_enabled (integration domain, default OFF) so the entry
-        # is inert until a flow is cut over to sub; per-flow single-writer is
-        # further gated inside the task by sync_flow_ownership.
-        dotmac_erp_sync_enabled = _effective_bool(
-            session,
-            SettingDomain.integration,
-            "dotmac_erp_sync_enabled",
-            "DOTMAC_ERP_SYNC_ENABLED",
-            False,
+        erp_outbox_enabled = capability_enabled(session, ERP_OUTBOX_CAPABILITY)
+        erp_status_enabled = capability_enabled(session, ERP_STATUS_CAPABILITY)
+        erp_operational_sync_enabled = capability_enabled(
+            session, ERP_OPERATIONAL_SYNC_CAPABILITY
         )
         dotmac_erp_outbox_interval = _effective_int(
             session,
@@ -2605,12 +2547,12 @@ def build_beat_schedule() -> dict:
             session,
             name="dotmac_erp_outbox_delivery",
             task_name="app.tasks.dotmac_erp_outbox.deliver_erp_sync_events",
-            enabled=dotmac_erp_sync_enabled,
+            enabled=erp_outbox_enabled,
             interval_seconds=dotmac_erp_outbox_interval,
         )
 
         # Expense-claim status reconciliation. Polls ERP for
-        # in-flight claims and refreshes erp_claim_status on the source row.
+        # in-flight claims and refreshes expense_claim_status on the source row.
         # Same master gate (dotmac_erp_sync_enabled, default OFF) → inert until
         # cutover; read-only against ERP, so re-running is always safe.
         dotmac_erp_expense_refresh_interval = _effective_int(
@@ -2624,12 +2566,12 @@ def build_beat_schedule() -> dict:
             session,
             name="dotmac_erp_expense_status_refresh",
             task_name="app.tasks.dotmac_erp_outbox.refresh_expense_claim_statuses",
-            enabled=dotmac_erp_sync_enabled,
+            enabled=erp_status_enabled,
             interval_seconds=max(dotmac_erp_expense_refresh_interval, 120),
         )
 
         # Material-request status reconciliation. Polls ERP for
-        # in-flight ISSUE requests and refreshes erp_material_status on the source
+        # in-flight ISSUE requests and refreshes support_status on the source
         # row (flipping to fulfilled when ERP reports it). Same master gate
         # (dotmac_erp_sync_enabled, default OFF) → inert until cutover; read-only
         # against ERP, so re-running is always safe.
@@ -2644,7 +2586,7 @@ def build_beat_schedule() -> dict:
             session,
             name="dotmac_erp_material_status_refresh",
             task_name="app.tasks.dotmac_erp_outbox.refresh_material_request_statuses",
-            enabled=dotmac_erp_sync_enabled,
+            enabled=erp_status_enabled,
             interval_seconds=max(dotmac_erp_material_refresh_interval, 120),
         )
 
@@ -2654,24 +2596,35 @@ def build_beat_schedule() -> dict:
             session,
             name="dotmac_erp_purchase_invoice_repair",
             task_name="app.tasks.dotmac_erp_outbox.repair_purchase_invoice_sync",
-            enabled=dotmac_erp_sync_enabled,
+            enabled=erp_outbox_enabled,
             interval_seconds=max(dotmac_erp_outbox_interval, 60),
         )
 
-        # Non-money operational context replaces ERP's legacy pull from CRM.
-        # It has a separate switch so money-flow cutovers remain independent.
-        dotmac_erp_domain_sync_enabled = _effective_bool(
+        # ERP remains authoritative for AP settlement. Poll its dedicated
+        # source-invoice read contract and project timestamped observations for
+        # the vendor portal; never infer payment from the creation response.
+        dotmac_erp_purchase_invoice_status_interval = _effective_int(
             session,
             SettingDomain.integration,
-            "dotmac_erp_domain_sync_enabled",
-            "DOTMAC_ERP_DOMAIN_SYNC_ENABLED",
-            False,
+            "dotmac_erp_purchase_invoice_status_refresh_interval_seconds",
+            "DOTMAC_ERP_PURCHASE_INVOICE_STATUS_REFRESH_INTERVAL_SECONDS",
+            300,
         )
+        _sync_scheduled_task(
+            session,
+            name="dotmac_erp_purchase_invoice_status_refresh",
+            task_name=("app.tasks.dotmac_erp_outbox.refresh_purchase_invoice_statuses"),
+            enabled=erp_status_enabled,
+            interval_seconds=max(dotmac_erp_purchase_invoice_status_interval, 120),
+        )
+
+        # Operational context has its own capability so money transport and
+        # context projection can be enabled independently.
         _sync_scheduled_task(
             session,
             name="dotmac_erp_operational_domain_sync",
             task_name="app.tasks.dotmac_erp_outbox.sync_erp_operational_domains",
-            enabled=dotmac_erp_domain_sync_enabled,
+            enabled=erp_operational_sync_enabled,
             interval_seconds=300,
         )
 

@@ -15,6 +15,7 @@ from app.api import crm_referrals as referral_api
 from app.models.audit import AuditEvent
 from app.models.auth import AuthProvider, UserCredential
 from app.models.domain_settings import DomainSetting, SettingDomain, SettingValueType
+from app.models.event_store import EventStore
 from app.models.notification import (
     CommunicationIntentRecord,
     Notification,
@@ -42,14 +43,17 @@ from app.services import (
     auth_flow,
     communication_eligibility,
     customer_credential_enrollment,
+    settings_spec,
     web_customer_auth,
 )
 from app.services import (
     email as email_service,
 )
-from app.services.referrals import referrals
+from app.services.db_session_adapter import db_session_adapter
+from app.services.owner_commands import CommandContext
 from app.tasks import notifications as notification_tasks
 from app.web.customer import auth as customer_auth_web
+from tests.referral_program_testkit import ensure_code
 
 
 def _email(prefix: str) -> str:
@@ -124,7 +128,7 @@ def _signup(
 
     monkeypatch.setattr(email_service, "send_email", _send)
     _enable_program(db)
-    code = referrals.ensure_code(db, str(_referrer(db).id))
+    code = ensure_code(db, _referrer(db).id)
     capture = referral_api.capture_referral(
         ReferralCaptureRequest(
             code=code.code,
@@ -175,6 +179,88 @@ def _complete(db, token: str, *, username: str | None = None):
         ),
         db,
     )
+
+
+def _owner_context(reason: str) -> CommandContext:
+    command_id = uuid.uuid4()
+    return CommandContext(
+        command_id=command_id,
+        correlation_id=command_id,
+        actor="service:credential-enrollment-test",
+        scope=(customer_credential_enrollment.CUSTOMER_CREDENTIAL_ENROLLMENT_SCOPE),
+        reason=reason,
+        idempotency_key=f"credential-enrollment-test:{command_id}",
+    )
+
+
+def test_enrollment_policy_tunables_are_registered_with_one_settings_owner():
+    expected = {
+        "user_invite_expiry_minutes": 1440,
+        "password_min_length": 8,
+        "credential_enrollment_request_limit": 3,
+        "credential_enrollment_request_window_seconds": 900,
+    }
+
+    for key, default in expected.items():
+        spec = settings_spec.get_spec(SettingDomain.auth, key)
+        assert spec is not None
+        assert spec.default == default
+
+
+def _set_auth_integer(db, key: str, value: int) -> None:
+    setting = (
+        db.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.auth)
+        .filter(DomainSetting.key == key)
+        .one_or_none()
+    )
+    if setting is None:
+        setting = DomainSetting(
+            domain=SettingDomain.auth,
+            key=key,
+            value_type=SettingValueType.integer,
+            value_text=str(value),
+            is_active=True,
+        )
+        db.add(setting)
+    else:
+        setting.value_type = SettingValueType.integer
+        setting.value_text = str(value)
+        setting.is_active = True
+    db.commit()
+
+
+def test_delivery_uses_canonical_invite_lifetime_setting(db_session, monkeypatch):
+    _set_auth_integer(db_session, "user_invite_expiry_minutes", 30)
+
+    _, _, _, sent = _signup(db_session, monkeypatch)
+
+    claims = jwt.get_unverified_claims(str(sent["reset_token"]))
+    assert claims["exp"] - claims["iat"] == 30 * 60
+
+
+def test_request_uses_canonical_rate_policy_settings(db_session, monkeypatch):
+    _set_auth_integer(db_session, "credential_enrollment_request_limit", 4)
+    _set_auth_integer(
+        db_session,
+        "credential_enrollment_request_window_seconds",
+        1200,
+    )
+    observed: dict[str, int] = {}
+
+    def allow(_key, *, limit, window_seconds):
+        observed.update(limit=limit, window_seconds=window_seconds)
+        return type(
+            "Decision",
+            (),
+            {"allowed": True, "retry_after_seconds": None},
+        )()
+
+    monkeypatch.setattr(customer_credential_enrollment, "allow_operation", allow)
+
+    _signup(db_session, monkeypatch, deliver_now=False)
+
+    assert observed == {"limit": 4, "window_seconds": 1200}
 
 
 def test_signup_sends_pii_free_capability_without_placeholder_credential(
@@ -234,6 +320,15 @@ def test_signup_sends_pii_free_capability_without_placeholder_credential(
     )
     assert request_audits
     assert all(token not in str(event.metadata_) for event in request_audits)
+    request_event = (
+        db_session.query(EventStore)
+        .filter(EventStore.event_type == "customer_credential_enrollment.requested")
+        .one()
+    )
+    serialized_event = str(request_event.payload).lower()
+    assert subscriber.email.lower() not in serialized_event
+    assert token not in serialized_event
+    assert "password" not in serialized_event
     claims = jwt.get_unverified_claims(token)
     assert claims["typ"] == "referral_credential_enrollment"
     assert claims["referral_id"] == str(referral.id)
@@ -341,6 +436,100 @@ def test_enrollment_capability_is_single_use_and_does_not_change_password_on_rep
     )
 
 
+def test_request_replay_converges_on_one_delivery_intent(db_session, monkeypatch):
+    referral, subscriber, _, _ = _signup(
+        db_session,
+        monkeypatch,
+        deliver_now=False,
+    )
+    referral_id = referral.id
+    referred_party_id = referral.referred_party_id
+    referred_lead_id = referral.referred_lead_id
+    subscriber_id = subscriber.id
+    db_session.commit()
+
+    result = customer_credential_enrollment.request_referral_enrollment(
+        db_session,
+        customer_credential_enrollment.RequestReferralEnrollmentCommand(
+            context=_owner_context("Retry an accepted enrollment request"),
+            referral_id=referral_id,
+            referred_party_id=referred_party_id,
+            referred_lead_id=referred_lead_id,
+            subscriber_id=subscriber_id,
+        ),
+    )
+
+    assert result.status == "queued"
+    assert (
+        db_session.query(CommunicationIntentRecord)
+        .filter(
+            CommunicationIntentRecord.event_type
+            == "auth.referral_credential_enrollment"
+        )
+        .count()
+        == 1
+    )
+    assert (
+        db_session.query(EventStore)
+        .filter(EventStore.event_type == "customer_credential_enrollment.requested")
+        .count()
+        == 2
+    )
+
+
+def test_completion_event_repairs_auth_cache_strictly(db_session, monkeypatch):
+    _, subscriber, _, sent = _signup(db_session, monkeypatch)
+    calls: list[tuple[str, str]] = []
+    from app.services.events.handlers import credential_session_projection
+
+    monkeypatch.setattr(
+        credential_session_projection.auth_cache,
+        "invalidate_principal_strict",
+        lambda principal_type, principal_id: calls.append(
+            (principal_type, principal_id)
+        ),
+    )
+
+    _complete(db_session, str(sent["reset_token"]))
+
+    assert calls == [("subscriber", str(subscriber.id))]
+    completion_event = (
+        db_session.query(EventStore)
+        .filter(EventStore.event_type == "customer_credential_enrollment.completed")
+        .one()
+    )
+    serialized_event = str(completion_event.payload).lower()
+    assert subscriber.email.lower() not in serialized_event
+    assert str(sent["reset_token"]) not in serialized_event
+    assert "password_hash" not in serialized_event
+
+
+def test_completion_rolls_back_credential_and_verification_when_event_staging_fails(
+    db_session, monkeypatch
+):
+    _, subscriber, _, sent = _signup(db_session, monkeypatch)
+
+    def fail_event_staging(*_args, **_kwargs):
+        raise RuntimeError("event store unavailable")
+
+    monkeypatch.setattr(
+        customer_credential_enrollment,
+        "emit_event",
+        fail_event_staging,
+    )
+    with pytest.raises(RuntimeError, match="event store unavailable"):
+        _complete(db_session, str(sent["reset_token"]))
+
+    db_session.refresh(subscriber)
+    assert subscriber.email_verified is False
+    assert (
+        db_session.query(UserCredential)
+        .filter(UserCredential.subscriber_id == subscriber.id)
+        .count()
+        == 0
+    )
+
+
 def test_enrollment_rejects_tampering_expiry_and_changed_email(db_session, monkeypatch):
     referral, subscriber, _, sent = _signup(db_session, monkeypatch)
     token = str(sent["reset_token"])
@@ -363,6 +552,7 @@ def test_enrollment_rejects_tampering_expiry_and_changed_email(db_session, monke
         context,
         now=datetime.now(UTC) - timedelta(days=2),
     )
+    db_session_adapter.release_read_transaction(db_session)
     with pytest.raises(HTTPException) as exc:
         _complete(db_session, expired)
     assert exc.value.status_code == 401
@@ -546,11 +736,13 @@ def test_selfcare_enrollment_form_delegates_to_owner(db_session, monkeypatch):
     assert "window.location.hash" in body
     assert 'x-model="token"' in body
     assert "_csrf_token" in body
+    db_session.rollback()
 
     captured: dict[str, object] = {}
 
-    def _complete(db, **kwargs):
-        captured.update(kwargs)
+    def _complete(db, command):
+        captured["db"] = db
+        captured["command"] = command
         return object()
 
     monkeypatch.setattr(
@@ -569,8 +761,16 @@ def test_selfcare_enrollment_form_delegates_to_owner(db_session, monkeypatch):
 
     assert response.status_code == 303
     assert response.headers["location"] == "/portal/auth/login?enrollment=success"
-    assert captured == {
-        "token": token,
-        "new_password": "Customer-selected-password-42",
-        "username": "customer.login",
-    }
+    assert captured["db"] is db_session
+    command = captured["command"]
+    assert isinstance(
+        command,
+        customer_credential_enrollment.CompleteReferralEnrollmentCommand,
+    )
+    assert command.token == token
+    assert command.new_password == "Customer-selected-password-42"
+    assert command.username == "customer.login"
+    assert (
+        command.context.scope
+        == customer_credential_enrollment.CUSTOMER_CREDENTIAL_ENROLLMENT_SCOPE
+    )

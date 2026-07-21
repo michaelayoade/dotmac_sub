@@ -5,7 +5,9 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 
+from app.models.project import Project
 from app.models.subscriber import Subscriber, UserType
+from app.models.support import Ticket
 from app.models.system_user import SystemUser
 from app.schemas.dispatch import TechnicianProfileCreate
 from app.services import dispatch
@@ -70,11 +72,26 @@ def _technician(db_session):
 def test_list_page_counts_filters_and_options(db_session):
     sub = _subscriber(db_session)
     _technician(db_session)
-    web_dispatch.create_from_form(
+    project = Project(name="Jabi fibre build", subscriber_id=sub.id)
+    db_session.add(project)
+    db_session.commit()
+    ticket = Ticket(
+        number="TKT-DISPATCH-ORIGIN",
+        title="Customer outage",
+        subscriber_id=sub.id,
+        customer_account_id=sub.id,
+        status="open",
+        priority="high",
+    )
+    db_session.add(ticket)
+    db_session.flush()
+    work_order = web_dispatch.create_from_form(
         db_session,
         {
             "public_id": "sub-web-wo-1",
             "subscriber_id": str(sub.id),
+            "project_id": str(project.id),
+            "requires_as_built_evidence": "0",
             "title": "Fibre install",
             "status": "scheduled",
             "priority": "high",
@@ -84,6 +101,8 @@ def test_list_page_counts_filters_and_options(db_session):
             "tags": "native, install",
         },
     )
+    work_order.origin_ticket_id = ticket.id
+    db_session.commit()
 
     page = web_dispatch.list_page(
         db_session, status="scheduled", q="Jabi", page=1, per_page=25
@@ -93,8 +112,12 @@ def test_list_page_counts_filters_and_options(db_session):
     assert page["counts"]["scheduled"] >= 1
     assert page["items"][0]["work_order"].public_id == "sub-web-wo-1"
     assert page["items"][0]["subscriber_label"]
+    assert page["items"][0]["project_label"] == "Jabi fibre build"
+    assert page["items"][0]["origin_ticket"].id == ticket.id
+    assert page["items"][0]["work_order"].requires_as_built_evidence is False
     assert page["status_filter"] == "scheduled"
     assert page["subscriber_options"]
+    assert {item["id"] for item in page["project_options"]} == {str(project.id)}
     assert page["technician_options"]
 
 
@@ -128,6 +151,17 @@ def test_update_and_queue_from_form(db_session):
     assert updated.status == "scheduled"
     assert updated.assigned_to_name is None
     assert updated.scheduled_start is not None
+    assert updated.requires_as_built_evidence is True
+
+    updated = web_dispatch.update_from_form(
+        db_session,
+        "sub-web-wo-2",
+        {
+            "title": "Router swap & test",
+            "requires_as_built_evidence": "0",
+        },
+    )
+    assert updated.requires_as_built_evidence is False
 
     queued = web_dispatch.queue_assignment_from_form(
         db_session,

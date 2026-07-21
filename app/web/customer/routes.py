@@ -527,6 +527,54 @@ def customer_support_rate(
     )
 
 
+@router.post("/support/{ticket_id}/confirm-resolution")
+def customer_support_confirm_resolution(
+    request: Request,
+    ticket_id: str,
+    db: Session = Depends(get_db),
+) -> Response:
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="support")
+    result = crm_portal.handle_ticket_resolution_response(
+        db,
+        resolve_allowed_subscriber_ids(customer, db),
+        ticket_id,
+        confirm=True,
+    )
+    status = "confirmed" if result.get("success") else "resolution_error"
+    return RedirectResponse(
+        url=f"/portal/support/{ticket_id}?resolution={status}", status_code=303
+    )
+
+
+@router.post("/support/{ticket_id}/dispute-resolution")
+def customer_support_dispute_resolution(
+    request: Request,
+    ticket_id: str,
+    reason: str = Form(""),
+    db: Session = Depends(get_db),
+) -> Response:
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="support")
+    result = crm_portal.handle_ticket_resolution_response(
+        db,
+        resolve_allowed_subscriber_ids(customer, db),
+        ticket_id,
+        confirm=False,
+        reason=reason,
+    )
+    status = "disputed" if result.get("success") else "resolution_error"
+    return RedirectResponse(
+        url=f"/portal/support/{ticket_id}?resolution={status}", status_code=303
+    )
+
+
 # ── Work Orders (CRM-backed) ─────────────────────────────────────────────
 
 

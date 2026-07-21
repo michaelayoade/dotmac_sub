@@ -5,7 +5,7 @@ from app.api.deps import get_db
 from app.schemas.common import ListResponse
 from app.schemas.field import FieldInventoryItemRead, FieldInventoryLocationRead
 from app.services.auth_dependencies import require_user_auth
-from app.services.dotmac_erp.client import build_erp_client
+from app.services.backoffice import BackofficeUnavailableError, build_gateway
 from app.services.field.inventory import field_inventory_lookup
 
 router = APIRouter(prefix="/inventory", tags=["field-inventory"])
@@ -37,9 +37,9 @@ def list_field_inventory_locations(
     db: Session = Depends(get_db),
 ):
     try:
-        with build_erp_client(db) as client:
+        with build_gateway(db) as client:
             warehouses = client.list_inventory_warehouses()
-    except ValueError:
+    except (BackofficeUnavailableError, ValueError):
         warehouses = field_inventory_lookup.list_locations()
     items = [
         {
@@ -66,8 +66,12 @@ def list_erp_inventory_stock(
     _auth: dict = Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
-    """Live stock read from ERP; Sub does not maintain a second stock ledger."""
-    with build_erp_client(db) as client:
+    """Live stock read; Sub does not maintain a second stock ledger.
+
+    The legacy Python operation name is retained for generated-client
+    compatibility; provider selection happens behind the Sub-local gateway.
+    """
+    with build_gateway(db) as client:
         return client.list_inventory(
             search=search,
             category_code=category_code,
@@ -88,7 +92,7 @@ def get_erp_inventory_stock_item(
 ):
     from fastapi import HTTPException
 
-    with build_erp_client(db) as client:
+    with build_gateway(db) as client:
         item = client.get_inventory_item(item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="Inventory item not found")
@@ -100,7 +104,7 @@ def list_erp_inventory_categories(
     _auth: dict = Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
-    with build_erp_client(db) as client:
+    with build_gateway(db) as client:
         items = client.list_inventory_categories()
     return {"items": items, "count": len(items)}
 
@@ -114,7 +118,7 @@ def list_erp_available_serials(
     _auth: dict = Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
-    with build_erp_client(db) as client:
+    with build_gateway(db) as client:
         return client.list_available_serials(
             item_code=item_code,
             warehouse_code=warehouse_code,

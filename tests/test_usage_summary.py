@@ -436,9 +436,9 @@ def test_fup_summary_full_speed_when_no_state(db_session, subscriber, subscripti
 
 def _add_throttle_rule(db_session, subscription, threshold_gb=100):
     from app.models.fup import FupAction, FupConsumptionPeriod, FupDataUnit, FupRule
-    from app.services.fup import fup_policies
+    from tests.fup_helpers import ensure_fup_policy
 
-    policy = fup_policies.get_or_create(db_session, str(subscription.offer_id))
+    policy = ensure_fup_policy(db_session, str(subscription.offer_id))
     rule = FupRule(
         policy_id=policy.id,
         name=f"Monthly {threshold_gb}GB cap",
@@ -504,10 +504,10 @@ def test_fup_summary_throttled_with_plain_language(
 ):
     from app.models.fup import FupAction, FupConsumptionPeriod, FupDataUnit, FupRule
     from app.models.fup_state import FupActionStatus
-    from app.services.fup import fup_policies
-    from app.services.fup_state import fup_state
+    from app.services.fup_state import ApplyFupRuntimeState, fup_state
+    from tests.fup_helpers import ensure_fup_policy
 
-    policy = fup_policies.get_or_create(db_session, str(subscription.offer_id))
+    policy = ensure_fup_policy(db_session, str(subscription.offer_id))
     rule = FupRule(
         policy_id=policy.id,
         name="Monthly 100GB cap",
@@ -522,12 +522,15 @@ def test_fup_summary_throttled_with_plain_language(
 
     fup_state.apply_action(
         db_session,
-        str(subscription.id),
-        offer_id=str(subscription.offer_id),
-        rule_id=str(rule.id),
-        action_status=FupActionStatus.throttled,
-        speed_reduction_percent=75.0,
-        cap_resets_at=datetime(2026, 7, 1, tzinfo=UTC),
+        ApplyFupRuntimeState(
+            subscription_id=subscription.id,
+            offer_id=subscription.offer_id,
+            rule_id=rule.id,
+            action_status=FupActionStatus.throttled,
+            speed_reduction_percent=75.0,
+            cap_resets_at=datetime(2026, 7, 1, tzinfo=UTC),
+            evaluated_at=datetime(2026, 6, 30, tzinfo=UTC),
+        ),
     )
     db_session.commit()
 

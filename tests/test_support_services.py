@@ -12,7 +12,6 @@ from app.models.notification import (
     NotificationChannel,
     NotificationStatus,
 )
-from app.models.provisioning import ServiceOrder
 from app.models.service_team import ServiceTeam, ServiceTeamMember, ServiceTeamType
 from app.models.subscriber import Subscriber, SubscriberContact
 from app.models.subscription_engine import SettingValueType
@@ -292,7 +291,7 @@ def test_ticket_resolved_and_closed_set_timestamps(db_session, subscriber):
     assert closed.closed_at is not None
 
 
-def test_crm_origin_ticket_writes_are_locked_until_cutover(db_session, subscriber):
+def test_crm_provenance_does_not_create_a_second_write_owner(db_session, subscriber):
     ticket = support_service.tickets.create(
         db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id)
     )
@@ -300,31 +299,24 @@ def test_crm_origin_ticket_writes_are_locked_until_cutover(db_session, subscribe
     db_session.add(ticket)
     db_session.commit()
 
-    assert support_service.is_crm_origin_ticket(ticket) is True
-    assert support_service.crm_ticket_user_writes_locked(ticket) is True
-
-    with pytest.raises(HTTPException) as update_exc:
-        support_service.tickets.update(
-            db_session,
-            str(ticket.id),
-            TicketUpdate(status="closed"),
-            actor_id=str(subscriber.id),
-        )
-    assert update_exc.value.status_code == 409
-    assert "still owned by CRM" in str(update_exc.value.detail)
-
-    with pytest.raises(HTTPException) as comment_exc:
-        support_service.tickets.create_comment(
-            db_session,
-            str(ticket.id),
-            TicketCommentCreate(
-                body="Should stay in CRM",
-                is_internal=False,
-                author_person_id=subscriber.id,
-            ),
-            actor_id=str(subscriber.id),
-        )
-    assert comment_exc.value.status_code == 409
+    updated = support_service.tickets.update(
+        db_session,
+        str(ticket.id),
+        TicketUpdate(status="closed"),
+        actor_id=str(subscriber.id),
+    )
+    assert updated.status == "closed"
+    comment = support_service.tickets.create_comment(
+        db_session,
+        str(ticket.id),
+        TicketCommentCreate(
+            body="Handled by Sub",
+            is_internal=False,
+            author_person_id=subscriber.id,
+        ),
+        actor_id=str(subscriber.id),
+    )
+    assert comment.body == "Handled by Sub"
 
 
 def test_resolution_confirmation_request_mints_token(db_session, subscriber):
@@ -422,6 +414,7 @@ def test_resolution_confirmation_queues_customer_notifications(
         "+2348012345678",
         "authorized@example.com",
         "+2348099999999",
+        str(subscriber.id),
     }
     assert all(row.status == NotificationStatus.queued for row in rows)
     assert all("/ticket-confirm/" in (row.body or "") for row in rows)
@@ -434,7 +427,10 @@ def test_resolution_confirmation_queues_customer_notifications(
         row.channel
         for row in rows
         if row.recipient in {"+2348012345678", "+2348099999999"}
-    } == {NotificationChannel.sms}
+    } == {NotificationChannel.whatsapp}
+    assert {row.channel for row in rows if row.recipient == str(subscriber.id)} == {
+        NotificationChannel.push
+    }
 
 
 def test_resolution_confirmation_confirm_closes_ticket(db_session, subscriber):
@@ -495,7 +491,7 @@ def test_auto_confirm_pending_closes_after_grace_window(db_session, subscriber):
     assert updated.status == TicketStatus.closed.value
 
 
-def test_auto_confirm_pending_skips_crm_origin_ticket(db_session, subscriber):
+def test_auto_confirm_pending_ignores_crm_provenance(db_session, subscriber):
     ticket = support_service.tickets.create(
         db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id)
     )
@@ -510,12 +506,68 @@ def test_auto_confirm_pending_skips_crm_origin_ticket(db_session, subscriber):
 
     count = support_service.tickets.auto_confirm_pending(db_session)
 
-    assert count == 0
+    assert count == 1
     db_session.refresh(ticket)
     db_session.refresh(token_row)
-    assert ticket.status == TicketStatus.pending_confirmation.value
-    assert token_row.is_active is True
-    assert token_row.responded_at is None
+    assert ticket.status == TicketStatus.closed.value
+    assert token_row.is_active is False
+    assert token_row.responded_at is not None
+
+
+def test_authenticated_selfcare_resolution_uses_same_confirmation_owner(
+    db_session, subscriber
+):
+    ticket = support_service.tickets.create(
+        db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id)
+    )
+    support_service.tickets.request_resolution_confirmation(
+        db_session, str(ticket.id), actor_id=str(subscriber.id)
+    )
+
+    confirmed = support_service.tickets.respond_to_resolution_for_customer(
+        db_session, ticket, confirm=True
+    )
+
+    assert confirmed.status == TicketStatus.closed.value
+    assert confirmed.closed_at is not None
+
+
+def test_authenticated_selfcare_dispute_reopens_with_reason(db_session, subscriber):
+    ticket = support_service.tickets.create(
+        db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id)
+    )
+    support_service.tickets.request_resolution_confirmation(
+        db_session, str(ticket.id), actor_id=str(subscriber.id)
+    )
+
+    reopened = support_service.tickets.respond_to_resolution_for_customer(
+        db_session,
+        ticket,
+        confirm=False,
+        reason="Optical light is still red",
+    )
+
+    assert reopened.status == TicketStatus.open.value
+    assert reopened.metadata_["resolution_confirmation"]["customer_dispute_reason"] == (
+        "Optical light is still red"
+    )
+
+
+def test_authenticated_selfcare_rejects_expired_confirmation(db_session, subscriber):
+    ticket = support_service.tickets.create(
+        db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id)
+    )
+    _, token = support_service.tickets.request_resolution_confirmation(
+        db_session, str(ticket.id), actor_id=str(subscriber.id)
+    )
+    token.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as expired:
+        support_service.tickets.respond_to_resolution_for_customer(
+            db_session, ticket, confirm=True
+        )
+    assert expired.value.status_code == 409
 
 
 def test_resolution_confirmation_rejects_closed_ticket(db_session, subscriber):
@@ -537,7 +589,7 @@ def test_resolution_confirmation_rejects_closed_ticket(db_session, subscriber):
     assert exc.value.status_code == 409
 
 
-def test_resolution_confirmation_respects_crm_origin_write_lock(db_session, subscriber):
+def test_resolution_confirmation_accepts_crm_provenance(db_session, subscriber):
     ticket = support_service.tickets.create(
         db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id)
     )
@@ -545,20 +597,14 @@ def test_resolution_confirmation_respects_crm_origin_write_lock(db_session, subs
     token_row = support_service.ticket_access_tokens.mint(db_session, ticket)
     db_session.commit()
 
-    with pytest.raises(HTTPException) as exc:
-        support_service.tickets.confirm_resolution(db_session, token_row)
-
-    assert exc.value.status_code == 409
-    assert "still owned by CRM" in str(exc.value.detail)
+    confirmed = support_service.tickets.confirm_resolution(db_session, token_row)
+    assert confirmed.status == TicketStatus.closed.value
 
 
-def test_native_ticket_writes_remain_enabled_before_crm_cutover(db_session, subscriber):
+def test_native_ticket_writes_remain_enabled(db_session, subscriber):
     ticket = support_service.tickets.create(
         db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id)
     )
-
-    assert support_service.is_crm_origin_ticket(ticket) is False
-    assert support_service.crm_ticket_user_writes_locked(ticket) is False
 
     updated = support_service.tickets.update(
         db_session,
@@ -570,10 +616,8 @@ def test_native_ticket_writes_remain_enabled_before_crm_cutover(db_session, subs
     assert updated.status == "closed"
 
 
-def test_field_visit_tag_creates_native_work_order_once(db_session, subscriber):
-    """Phase 2 (sub = work-order SoT): a field_visit ticket births a native
-    dispatch work-order header — visible to dispatch and field_mobile — not
-    the legacy provisioning ServiceOrder stub."""
+def test_field_visit_tag_is_descriptive_and_does_not_issue_work(db_session, subscriber):
+    """A tag may describe triage but cannot cross the field-work boundary."""
     from app.models.work_order import WorkOrder
 
     ticket = support_service.tickets.create(
@@ -588,52 +632,10 @@ def test_field_visit_tag_creates_native_work_order_once(db_session, subscriber):
         actor_id=str(subscriber.id),
     )
 
-    db_session.refresh(ticket)
-    work_order_id = (ticket.metadata_ or {}).get("work_order_id")
-    assert work_order_id is not None
-    assert work_order_id.startswith("sub-")  # native dispatch public id
-    row = db_session.query(WorkOrder).filter_by(public_id=work_order_id).one()
-    assert row.subscriber_id == subscriber.id
-    assert row.crm_ticket_id == str(ticket.id)
-    assert row.title == "Field visit — Fiber issue"
-    assert (row.metadata_ or {}).get("native_source") == "sub"
-    assert (row.metadata_ or {}).get("created_from") == "support_ticket"
-    # No legacy provisioning ServiceOrder stub anymore.
-    assert db_session.query(ServiceOrder).count() == 0
+    assert "work_order_id" not in (ticket.metadata_ or {})
+    assert db_session.query(WorkOrder).count() == 0
 
     # Updating with field_visit again should not duplicate the work order.
-    support_service.tickets.update(
-        db_session,
-        str(ticket.id),
-        TicketUpdate(tags=["field_visit"]),
-        actor_id=str(subscriber.id),
-    )
-    assert db_session.query(WorkOrder).count() == 1
-
-
-def test_legacy_service_order_backed_ticket_not_double_created(db_session, subscriber):
-    """A pre-cutover ticket whose metadata.work_order_id points at a legacy
-    ServiceOrder stub is honored for dedupe — no new work order on update."""
-    from app.models.provisioning import ServiceOrder as ServiceOrderModel
-    from app.models.work_order import WorkOrder
-
-    legacy = ServiceOrderModel(subscriber_id=subscriber.id)
-    db_session.add(legacy)
-    db_session.commit()
-
-    ticket = support_service.tickets.create(
-        db_session,
-        TicketCreate(
-            title="Old flow",
-            description="pre-cutover",
-            subscriber_id=subscriber.id,
-            customer_account_id=subscriber.id,
-        ),
-        actor_id=str(subscriber.id),
-    )
-    ticket.metadata_ = {"work_order_id": str(legacy.id)}
-    db_session.commit()
-
     support_service.tickets.update(
         db_session,
         str(ticket.id),
@@ -643,9 +645,8 @@ def test_legacy_service_order_backed_ticket_not_double_created(db_session, subsc
     assert db_session.query(WorkOrder).count() == 0
 
 
-def test_automation_added_field_visit_tag_births_work_order(db_session, subscriber):
-    """Automation→WO hook: an add_tag rule stamping field_visit on
-    ticket_created births the native work order in the same create flow."""
+def test_automation_added_field_visit_tag_does_not_issue_work(db_session, subscriber):
+    """Automation may tag triage; explicit assigned-team issuance is separate."""
     from app.models.support import AutomationActionType, AutomationTrigger
     from app.models.work_order import WorkOrder
 
@@ -672,9 +673,8 @@ def test_automation_added_field_visit_tag_births_work_order(db_session, subscrib
 
     db_session.refresh(ticket)
     assert "field_visit" in (ticket.tags or [])
-    work_order_id = (ticket.metadata_ or {}).get("work_order_id")
-    assert work_order_id is not None
-    assert db_session.query(WorkOrder).filter_by(public_id=work_order_id).count() == 1
+    assert "work_order_id" not in (ticket.metadata_ or {})
+    assert db_session.query(WorkOrder).count() == 0
 
 
 def test_merge_moves_comments_assignees_and_blocks_source_mutations(

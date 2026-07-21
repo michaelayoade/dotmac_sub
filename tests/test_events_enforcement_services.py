@@ -20,7 +20,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from app.models.billing import Invoice, InvoiceStatus
-from app.models.catalog import BillingMode, NasDevice, NasVendor, SubscriptionStatus
+from app.models.catalog import (
+    BillingMode,
+    NasDevice,
+    NasVendor,
+    RadiusProfile,
+    SubscriptionStatus,
+)
 from app.models.enforcement_lock import EnforcementLock
 from app.models.notification import (
     Notification,
@@ -29,6 +35,7 @@ from app.models.notification import (
 )
 from app.models.provisioning import ProvisioningVendor
 from app.models.subscriber import SubscriberStatus as AccountStatus
+from app.services.enforcement_event_policy import AccessEventPolicyError
 from app.services.events.dispatcher import EventDispatcher
 from app.services.events.handlers.enforcement import EnforcementHandler
 from app.services.events.handlers.lifecycle import LifecycleHandler
@@ -38,10 +45,7 @@ from app.services.events.handlers.notification import (
     NotificationHandler,
 )
 from app.services.events.handlers.provisioning import ProvisioningHandler
-from app.services.events.handlers.webhook import (
-    EVENT_TYPE_TO_WEBHOOK,
-    WebhookHandler,
-)
+from app.services.events.handlers.webhook import WebhookHandler
 from app.services.events.types import (
     SUBSCRIPTION_LIFECYCLE_MAP,
     Event,
@@ -74,6 +78,7 @@ class TestEventType:
         assert EventType.subscription_suspended.value == "subscription.suspended"
         assert EventType.subscription_resumed.value == "subscription.resumed"
         assert EventType.subscription_canceled.value == "subscription.canceled"
+        assert EventType.subscription_disabled.value == "subscription.disabled"
         assert EventType.subscription_upgraded.value == "subscription.upgraded"
         assert EventType.subscription_downgraded.value == "subscription.downgraded"
         assert EventType.subscription_expiring.value == "subscription.expiring"
@@ -116,6 +121,7 @@ class TestEventType:
             EventType.subscription_activated,
             EventType.subscription_suspended,
             EventType.subscription_resumed,
+            EventType.subscription_disabled,
             EventType.subscription_canceled,
             EventType.subscription_upgraded,
             EventType.subscription_downgraded,
@@ -129,6 +135,7 @@ class TestEventType:
         )
         assert SUBSCRIPTION_LIFECYCLE_MAP[EventType.subscription_suspended] == "suspend"
         assert SUBSCRIPTION_LIFECYCLE_MAP[EventType.subscription_resumed] == "resume"
+        assert SUBSCRIPTION_LIFECYCLE_MAP[EventType.subscription_disabled] == "other"
         assert SUBSCRIPTION_LIFECYCLE_MAP[EventType.subscription_canceled] == "cancel"
 
 
@@ -677,6 +684,8 @@ class TestEnforcementHandler:
         def settings_side_effect(db, domain, key):
             if key == "fup_action":
                 return "block"
+            if key == "group_routing_enabled":
+                return False
             return None
 
         mock_settings.resolve_value.side_effect = settings_side_effect
@@ -710,6 +719,8 @@ class TestEnforcementHandler:
         def settings_side_effect(db, domain, key):
             if key == "fup_action":
                 return "block"
+            if key == "group_routing_enabled":
+                return False
             return None
 
         mock_settings.resolve_value.side_effect = settings_side_effect
@@ -739,6 +750,8 @@ class TestEnforcementHandler:
         def settings_side_effect(db, domain, key):
             if key == "fup_action":
                 return "throttle"
+            if key == "group_routing_enabled":
+                return False
             return None
 
         mock_settings.resolve_value.side_effect = settings_side_effect
@@ -815,9 +828,21 @@ class TestEnforcementHandler:
     @patch("app.services.events.handlers.enforcement.apply_radius_profile_to_account")
     @patch("app.services.enforcement_event_policy.settings_spec")
     def test_usage_exhausted_throttle_action(
-        self, mock_settings, mock_apply_profile, mock_disconnect, db_session
+        self,
+        mock_settings,
+        mock_apply_profile,
+        mock_disconnect,
+        db_session,
+        subscription,
     ):
-        throttle_profile_id = uuid.uuid4()
+        throttle_profile = RadiusProfile(
+            name=f"FUP throttle {uuid.uuid4()}", is_active=True
+        )
+        db_session.add(throttle_profile)
+        db_session.commit()
+        throttle_profile_id = throttle_profile.id
+        subscription_id = subscription.id
+        account_id = subscription.subscriber_id
 
         def settings_side_effect(db, domain, key):
             if key == "fup_action":
@@ -832,29 +857,39 @@ class TestEnforcementHandler:
         mock_apply_profile.return_value = 1
 
         handler = EnforcementHandler()
-        sub_id = uuid.uuid4()
-        acc_id = uuid.uuid4()
         event = self._make_event(
             EventType.usage_exhausted,
-            subscription_id=sub_id,
-            account_id=acc_id,
+            subscription_id=subscription_id,
+            account_id=account_id,
         )
         handler.handle(db_session, event)
 
         mock_apply_profile.assert_called_once_with(
-            db_session, str(acc_id), str(throttle_profile_id)
+            db_session, str(account_id), str(throttle_profile_id)
         )
         mock_disconnect.assert_called_once_with(
-            db_session, str(acc_id), reason="fup_throttle"
+            db_session, str(account_id), reason="fup_throttle"
         )
 
     @patch("app.services.events.handlers.enforcement.disconnect_account_sessions")
     @patch("app.services.events.handlers.enforcement.apply_radius_profile_to_account")
     @patch("app.services.enforcement_event_policy.settings_spec")
     def test_usage_exhausted_payload_reduce_speed_overrides_global_block(
-        self, mock_settings, mock_apply_profile, mock_disconnect, db_session
+        self,
+        mock_settings,
+        mock_apply_profile,
+        mock_disconnect,
+        db_session,
+        subscription,
     ):
-        throttle_profile_id = uuid.uuid4()
+        throttle_profile = RadiusProfile(
+            name=f"FUP throttle {uuid.uuid4()}", is_active=True
+        )
+        db_session.add(throttle_profile)
+        db_session.commit()
+        throttle_profile_id = throttle_profile.id
+        subscription_id = subscription.id
+        account_id = subscription.subscriber_id
 
         def settings_side_effect(db, domain, key):
             if key == "fup_action":
@@ -869,26 +904,24 @@ class TestEnforcementHandler:
         mock_apply_profile.return_value = 1
 
         handler = EnforcementHandler()
-        sub_id = uuid.uuid4()
-        acc_id = uuid.uuid4()
         event = self._make_event(
             EventType.usage_exhausted,
             payload={"action": "reduce_speed"},
-            subscription_id=sub_id,
-            account_id=acc_id,
+            subscription_id=subscription_id,
+            account_id=account_id,
         )
         handler.handle(db_session, event)
 
         mock_apply_profile.assert_called_once_with(
-            db_session, str(acc_id), str(throttle_profile_id)
+            db_session, str(account_id), str(throttle_profile_id)
         )
         mock_disconnect.assert_called_once_with(
-            db_session, str(acc_id), reason="fup_throttle"
+            db_session, str(account_id), reason="fup_throttle"
         )
 
     @patch("app.services.events.handlers.enforcement.apply_radius_profile_to_account")
     @patch("app.services.enforcement_event_policy.settings_spec")
-    def test_usage_exhausted_throttle_without_profile_is_noop(
+    def test_usage_exhausted_throttle_without_profile_fails_visibly(
         self, mock_settings, mock_apply_profile, db_session
     ):
         def settings_side_effect(db, domain, key):
@@ -908,7 +941,10 @@ class TestEnforcementHandler:
             subscription_id=sub_id,
             account_id=acc_id,
         )
-        handler.handle(db_session, event)
+        with pytest.raises(AccessEventPolicyError) as captured:
+            handler.handle(db_session, event)
+
+        assert captured.value.code == "access.event_policy.throttle_profile_required"
         mock_apply_profile.assert_not_called()
 
     def test_enforcement_handler_ignores_unrelated_events(self, db_session):
@@ -1875,15 +1911,10 @@ class TestInvoiceOverdueObservationBoundary:
 
 
 class TestWebhookHandler:
-    def test_event_type_to_webhook_mapping_completeness(self):
-        # Most event types should have a webhook mapping
-        assert EventType.subscriber_created in EVENT_TYPE_TO_WEBHOOK
-        assert EventType.subscription_activated in EVENT_TYPE_TO_WEBHOOK
-        assert EventType.invoice_paid in EVENT_TYPE_TO_WEBHOOK
-        assert EventType.payment_received in EVENT_TYPE_TO_WEBHOOK
-        assert EventType.payment_reversed in EVENT_TYPE_TO_WEBHOOK
-        assert EventType.provisioning_completed in EVENT_TYPE_TO_WEBHOOK
-        assert EventType.custom in EVENT_TYPE_TO_WEBHOOK
+    def test_webhook_delivery_scope_is_subscription_driven(self):
+        from app.services.control_relationships import handler_event_types
+
+        assert handler_event_types("WebhookHandler") is None
 
     def test_webhook_handler_ignores_unmapped_events(self, db_session):
         handler = WebhookHandler()

@@ -29,11 +29,19 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import cast
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.models.network_monitoring import DeviceProjection
 from app.services.common import coerce_uuid
+from app.services.domain_errors import DomainError
+from app.services.events import emit_event
+from app.services.events.types import EventType
+from app.services.owner_commands import (
+    CommandContext,
+    OwnerCommandDefinition,
+    execute_owner_command,
+)
 from app.services.web_network_core_devices_inventory import collect_devices
 
 logger = logging.getLogger(__name__)
@@ -50,6 +58,27 @@ _PROJECTED_FIELDS = (
     "last_seen",
 )
 
+_RECONCILE_COMMAND = OwnerCommandDefinition(
+    owner="network.device_projection",
+    concern="device_projections materialised table",
+    name="reconcile_device_projections",
+)
+# Stable PostgreSQL transaction-level advisory lock. It prevents two beat or
+# operator-triggered rebuilds from racing the natural-key upsert.
+_RECONCILE_LOCK_KEY = 328_160_319
+
+
+class DeviceProjectionCommandError(DomainError):
+    """Stable validation failure for the projection reconcile command."""
+
+
+@dataclass(frozen=True)
+class ReconcileDeviceProjectionsCommand:
+    """Typed request to rebuild the canonical network-device projection."""
+
+    context: CommandContext
+    reconciled_at: datetime | None = None
+
 
 @dataclass(frozen=True)
 class DeviceProjectionReconcileResult:
@@ -58,6 +87,9 @@ class DeviceProjectionReconcileResult:
     inserted: int
     updated: int
     pruned: int
+    reconciled_at: datetime
+    command_id: uuid.UUID
+    correlation_id: uuid.UUID
 
     @property
     def total(self) -> int:
@@ -78,14 +110,34 @@ def _subscriber_id(subscriber: object) -> uuid.UUID | None:
     return cast("uuid.UUID | None", coerce_uuid(candidate))
 
 
-def reconcile_device_projections(
-    db: Session, *, now: datetime | None = None
-) -> DeviceProjectionReconcileResult:
-    """Rebuild ``device_projections`` from the authoritative device tables.
+def _acquire_reconcile_lock(db: Session) -> None:
+    """Serialize projection rebuilds across PostgreSQL workers."""
 
-    Idempotent: safe to run on any schedule. Returns a summary of what changed.
-    """
-    stamp = now or datetime.now(UTC)
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(
+            text("SELECT pg_advisory_xact_lock(:lock_key)"),
+            {"lock_key": _RECONCILE_LOCK_KEY},
+        )
+
+
+def _validate_command(command: ReconcileDeviceProjectionsCommand) -> datetime:
+    stamp = command.reconciled_at or datetime.now(UTC)
+    if stamp.tzinfo is None or stamp.utcoffset() is None:
+        raise DeviceProjectionCommandError(
+            code="network.device_projection.invalid_command",
+            message="Projection reconciliation time must include a UTC offset.",
+            details={"field": "reconciled_at"},
+        )
+    return stamp.astimezone(UTC)
+
+
+def _reconcile(
+    db: Session,
+    *,
+    command: ReconcileDeviceProjectionsCommand,
+    stamp: datetime,
+) -> DeviceProjectionReconcileResult:
+    _acquire_reconcile_lock(db)
 
     existing: dict[tuple[str, str], DeviceProjection] = {
         (row.device_type, row.source_id): row
@@ -132,14 +184,65 @@ def reconcile_device_projections(
             db.delete(row)
             pruned += 1
 
-    db.commit()
+    emit_event(
+        db,
+        EventType.device_projection_reconciled,
+        {
+            "schema_version": 1,
+            "command_id": str(command.context.command_id),
+            "correlation_id": str(command.context.correlation_id),
+            "causation_id": (
+                str(command.context.causation_id)
+                if command.context.causation_id is not None
+                else None
+            ),
+            "idempotency_key": command.context.idempotency_key,
+            "aggregate_type": "device_projection",
+            "aggregate_id": "network:global",
+            "aggregate_version": str(command.context.command_id),
+            "scope": command.context.scope,
+            "reason": command.context.reason,
+            "reconciled_at": stamp.isoformat(),
+            "inserted": inserted,
+            "updated": updated,
+            "pruned": pruned,
+        },
+        actor=command.context.actor,
+    )
 
     logger.info(
-        "device_projection reconcile: %d inserted, %d updated, %d pruned",
+        "device_projection reconcile staged: %d inserted, %d updated, %d pruned",
         inserted,
         updated,
         pruned,
     )
     return DeviceProjectionReconcileResult(
-        inserted=inserted, updated=updated, pruned=pruned
+        inserted=inserted,
+        updated=updated,
+        pruned=pruned,
+        reconciled_at=stamp,
+        command_id=command.context.command_id,
+        correlation_id=command.context.correlation_id,
+    )
+
+
+def reconcile_device_projections(
+    db: Session,
+    command: ReconcileDeviceProjectionsCommand,
+) -> DeviceProjectionReconcileResult:
+    """Rebuild the projection in a manifest-verified owner transaction.
+
+    Idempotent: safe to request on any schedule. The session must have no
+    active caller transaction; success or failure completes before return.
+    """
+
+    def operation() -> DeviceProjectionReconcileResult:
+        stamp = _validate_command(command)
+        return _reconcile(db, command=command, stamp=stamp)
+
+    return execute_owner_command(
+        db,
+        definition=_RECONCILE_COMMAND,
+        context=command.context,
+        operation=operation,
     )

@@ -15,19 +15,35 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from fastapi import HTTPException
 from jose import JWTError
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.idempotency import IdempotencyKey
 from app.schemas.vendor_portal import VendorAsBuiltCreate
 from app.services import context_signing
+from app.services.domain_errors import DomainError
+from app.services.events import EventType, emit_event
+from app.services.owner_commands import (
+    CommandContext,
+    OwnerCommandDefinition,
+    execute_owner_command,
+)
 from app.services.vendor_portal_operations import (
-    VendorProjectLifecycleError,
+    StageVendorAsBuiltSubmission,
+    StageVendorQuoteSubmission,
     vendor_portal_operations,
 )
-from app.services.vendor_purchase_invoices import vendor_purchase_invoices
+from app.services.vendor_project_lifecycle import (
+    PreviewVendorProjectLifecycle,
+    StageVendorProjectTransition,
+    VendorProjectLifecycleError,
+    preview_project_lifecycle,
+    stage_project_transition,
+)
+from app.services.vendor_purchase_invoices import (
+    StageVendorPurchaseInvoiceSubmission,
+    vendor_purchase_invoices,
+)
 
 _TOKEN_TYPE = "vendor_submission_confirmation"
 _TOKEN_ISSUER = "dotmac_sub.vendor_submission_proposals"
@@ -41,16 +57,36 @@ _SCOPES = {
     "project_complete": "vendor_project_complete",
 }
 
+_CONFIRM_COMMAND = OwnerCommandDefinition(
+    owner="operations.vendor_submission_confirmation",
+    concern="vendor submission idempotency and replay result",
+    name="confirm_vendor_submission",
+)
 
-def _lifecycle_http_error(exc: VendorProjectLifecycleError) -> HTTPException:
-    status_code = {
-        "not_found": 404,
-        "not_assigned": 403,
-        "unsupported_action": 400,
-        "actor_required": 400,
-        "invalid_transition": 409,
-    }.get(exc.code, 409)
-    return HTTPException(status_code=status_code, detail=exc.message)
+
+class VendorSubmissionError(DomainError):
+    """Stable, transport-neutral vendor submission rejection."""
+
+
+def _error(
+    suffix: str,
+    message: str,
+    **details: object,
+) -> VendorSubmissionError:
+    return VendorSubmissionError(
+        code=f"operations.vendor_submission_confirmation.{suffix}",
+        message=message,
+        details=details,
+    )
+
+
+def _lifecycle_error(exc: VendorProjectLifecycleError) -> VendorSubmissionError:
+    suffix = exc.code.rsplit(".", 1)[-1]
+    return _error(
+        f"lifecycle_{suffix}",
+        exc.message,
+        lifecycle_code=exc.code,
+    )
 
 
 @dataclass(frozen=True)
@@ -74,6 +110,15 @@ class VendorSubmissionResult:
     replayed: bool
 
 
+@dataclass(frozen=True)
+class ConfirmVendorSubmissionCommand:
+    context: CommandContext
+    confirmation_token: str
+    vendor_id: str
+    user_id: str
+    project_id: str
+
+
 def _fingerprint(state: dict[str, Any]) -> str:
     encoded = json.dumps(
         state,
@@ -93,7 +138,10 @@ def _issue(
 ) -> VendorSubmissionProposal:
     submission_type = str(preview["submission_type"])
     if submission_type not in _SCOPES:
-        raise ValueError("Unsupported vendor submission type")
+        raise _error(
+            "unsupported_submission_type",
+            "Vendor submission type is unsupported.",
+        )
     issued_at = datetime.now(UTC)
     expires_at = issued_at + _TOKEN_TTL
     claims: dict[str, Any] = {
@@ -177,24 +225,29 @@ def issue_project_lifecycle(
     user_id: str,
 ) -> VendorSubmissionProposal:
     try:
-        preview = vendor_portal_operations.preview_project_lifecycle(
-            db, project_id, vendor_id=vendor_id, action=action
+        preview = preview_project_lifecycle(
+            db,
+            PreviewVendorProjectLifecycle(
+                project_id=project_id,
+                vendor_id=vendor_id,
+                action=action,
+            ),
         )
     except VendorProjectLifecycleError as exc:
-        raise _lifecycle_http_error(exc) from exc
+        raise _lifecycle_error(exc) from exc
     return _issue(db, preview, vendor_id=vendor_id, user_id=user_id)
 
 
 def _decode(db: Session, token: str) -> dict[str, Any]:
     normalized = str(token or "").strip()
     if not normalized or len(normalized) > 131_072:
-        raise HTTPException(status_code=400, detail="Confirmation proposal is invalid")
+        raise _error("invalid_proposal", "Confirmation proposal is invalid.")
     try:
         claims = context_signing.verify_context_token(db, normalized)
     except JWTError as exc:
-        raise HTTPException(
-            status_code=409,
-            detail="Confirmation proposal is invalid or expired; preview again",
+        raise _error(
+            "expired_proposal",
+            "Confirmation proposal is invalid or expired; preview again.",
         ) from exc
     if (
         claims.get("typ") != _TOKEN_TYPE
@@ -202,16 +255,16 @@ def _decode(db: Session, token: str) -> dict[str, Any]:
         or claims.get("ver") != _TOKEN_VERSION
         or claims.get("submission_type") not in _SCOPES
     ):
-        raise HTTPException(status_code=400, detail="Confirmation proposal is invalid")
+        raise _error("invalid_proposal", "Confirmation proposal is invalid.")
     return claims
 
 
-def _replay_or_reserve(
+def _locked_replay(
     db: Session,
     *,
     scope: str,
     key: str,
-) -> IdempotencyKey:
+) -> IdempotencyKey | None:
     existing = (
         db.query(IdempotencyKey)
         .filter(IdempotencyKey.scope == scope, IdempotencyKey.key == key)
@@ -221,148 +274,196 @@ def _replay_or_reserve(
     if existing is not None:
         if existing.ref_id:
             return existing
-        raise HTTPException(
-            status_code=409, detail="This submission confirmation is already running"
+        raise _error(
+            "confirmation_in_progress",
+            "This submission confirmation is already running.",
         )
-    reservation = IdempotencyKey(scope=scope, key=key)
-    db.add(reservation)
-    try:
-        db.flush()
-    except IntegrityError:
-        db.rollback()
-        replay = (
-            db.query(IdempotencyKey)
-            .filter(IdempotencyKey.scope == scope, IdempotencyKey.key == key)
-            .one_or_none()
-        )
-        if replay is not None and replay.ref_id:
-            return replay
-        raise HTTPException(
-            status_code=409, detail="This submission confirmation is already running"
-        ) from None
-    return reservation
+    return None
 
 
 def confirm_submission(
     db: Session,
-    *,
-    confirmation_token: str,
-    vendor_id: str,
-    user_id: str,
-    project_id: str,
+    command: ConfirmVendorSubmissionCommand,
 ) -> VendorSubmissionResult:
     """Verify, stale-check, reserve, and execute one vendor submission once."""
-    claims = _decode(db, confirmation_token)
-    if (
-        str(claims.get("vendor_id") or "") != str(vendor_id)
-        or str(claims.get("user_id") or "") != str(user_id)
-        or str(claims.get("project_id") or "") != str(project_id)
-    ):
-        raise HTTPException(
-            status_code=403, detail="Confirmation proposal belongs to another context"
-        )
-    submission_type = str(claims["submission_type"])
-    scope = _SCOPES[submission_type]
-    key = str(claims.get("jti") or "").strip()
-    if not key:
-        raise HTTPException(status_code=400, detail="Confirmation proposal is invalid")
 
-    prior = (
-        db.query(IdempotencyKey)
-        .filter(IdempotencyKey.scope == scope, IdempotencyKey.key == key)
-        .one_or_none()
-    )
-    if prior is not None and prior.ref_id:
-        return VendorSubmissionResult(
-            submission_type=submission_type,
-            project_id=str(project_id),
-            result_id=prior.ref_id,
-            replayed=True,
-        )
+    def operation() -> VendorSubmissionResult:
+        session = db
+        claims = _decode(session, command.confirmation_token)
+        if (
+            str(claims.get("vendor_id") or "") != str(command.vendor_id)
+            or str(claims.get("user_id") or "") != str(command.user_id)
+            or str(claims.get("project_id") or "") != str(command.project_id)
+        ):
+            raise _error(
+                "proposal_context_mismatch",
+                "Confirmation proposal belongs to another context.",
+            )
+        submission_type = str(claims["submission_type"])
+        scope = _SCOPES[submission_type]
+        key = str(claims.get("jti") or "").strip()
+        if not key:
+            raise _error("invalid_proposal", "Confirmation proposal is invalid.")
 
-    reservation = _replay_or_reserve(db, scope=scope, key=key)
-    if reservation.ref_id:
-        return VendorSubmissionResult(
-            submission_type=submission_type,
-            project_id=str(project_id),
-            result_id=reservation.ref_id,
-            replayed=True,
+        prior = (
+            session.query(IdempotencyKey)
+            .filter(IdempotencyKey.scope == scope, IdempotencyKey.key == key)
+            .one_or_none()
         )
-    target_id = str(claims.get("target_id") or "")
-    try:
+        if prior is not None and prior.ref_id:
+            return VendorSubmissionResult(
+                submission_type=submission_type,
+                project_id=str(command.project_id),
+                result_id=prior.ref_id,
+                replayed=True,
+            )
+
+        target_id = str(claims.get("target_id") or "")
+        as_built_payload: VendorAsBuiltCreate | None = None
         if submission_type == "quote":
             preview = vendor_portal_operations.preview_quote_submission(
-                db, target_id, vendor_id, for_update=True
+                session, target_id, command.vendor_id, for_update=True
             )
         elif submission_type == "purchase_invoice":
             preview = vendor_purchase_invoices.preview_submission(
-                db, target_id, vendor_id=vendor_id, for_update=True
+                session,
+                target_id,
+                vendor_id=command.vendor_id,
+                for_update=True,
             )
         elif submission_type == "as_built":
             try:
-                payload = VendorAsBuiltCreate.model_validate(claims.get("payload"))
+                as_built_payload = VendorAsBuiltCreate.model_validate(
+                    claims.get("payload")
+                )
             except (TypeError, ValueError) as exc:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Confirmation proposal payload is invalid",
+                raise _error(
+                    "invalid_payload",
+                    "Confirmation proposal payload is invalid.",
                 ) from exc
             preview = vendor_portal_operations.preview_as_built_submission(
-                db, payload, vendor_id, for_update=True
+                session, as_built_payload, command.vendor_id, for_update=True
             )
         else:
             action = "start" if submission_type == "project_start" else "complete"
             try:
-                preview = vendor_portal_operations.preview_project_lifecycle(
-                    db,
-                    target_id,
-                    vendor_id=vendor_id,
-                    action=action,
+                preview = preview_project_lifecycle(
+                    session,
+                    PreviewVendorProjectLifecycle(
+                        project_id=target_id,
+                        vendor_id=command.vendor_id,
+                        action=action,
+                    ),
                     for_update=True,
                 )
             except VendorProjectLifecycleError as exc:
-                raise _lifecycle_http_error(exc) from exc
+                raise _lifecycle_error(exc) from exc
+
+        # The aggregate lock serializes confirmations for this target. Recheck
+        # replay evidence after acquiring it so a concurrent exact retry that
+        # waited for the first commit returns the original result instead of
+        # comparing the now-mutated aggregate with the earlier fingerprint.
+        replay = _locked_replay(session, scope=scope, key=key)
+        if replay is not None:
+            return VendorSubmissionResult(
+                submission_type=submission_type,
+                project_id=str(command.project_id),
+                result_id=str(replay.ref_id),
+                replayed=True,
+            )
         if not hmac.compare_digest(
             str(claims.get("state_fingerprint") or ""),
             _fingerprint(preview["state"]),
         ):
-            raise HTTPException(
-                status_code=409,
-                detail="Submission data changed after preview; review it again",
+            raise _error(
+                "stale_proposal",
+                "Submission data changed after preview; review it again.",
             )
+
+        # Reserve only after stale verification so rejected proposals leave no
+        # idempotency row and never require a helper rollback.
+        reservation = IdempotencyKey(scope=scope, key=key)
+        session.add(reservation)
+        session.flush()
+
         if submission_type == "quote":
-            result = vendor_portal_operations.submit_quote(
-                db, target_id, vendor_id, commit=False
+            result = vendor_portal_operations.stage_quote_submission(
+                session,
+                StageVendorQuoteSubmission(
+                    context=command.context,
+                    quote_id=target_id,
+                    vendor_id=command.vendor_id,
+                ),
             )
         elif submission_type == "purchase_invoice":
-            result = vendor_purchase_invoices.submit(
-                db, target_id, vendor_id=vendor_id, commit=False
+            result = vendor_purchase_invoices.stage_submission(
+                session,
+                StageVendorPurchaseInvoiceSubmission(
+                    context=command.context,
+                    invoice_id=target_id,
+                    vendor_id=command.vendor_id,
+                ),
             )
         elif submission_type == "as_built":
-            result = vendor_portal_operations.submit_as_built(
-                db, payload, vendor_id, user_id, commit=False
+            if as_built_payload is None:
+                raise _error(
+                    "invalid_payload",
+                    "Confirmation proposal payload is invalid.",
+                )
+            result = vendor_portal_operations.stage_as_built_submission(
+                session,
+                StageVendorAsBuiltSubmission(
+                    context=command.context,
+                    payload=as_built_payload,
+                    vendor_id=command.vendor_id,
+                    user_id=command.user_id,
+                ),
             )
         else:
             action = "start" if submission_type == "project_start" else "complete"
             try:
-                result = vendor_portal_operations.transition_project(
-                    db,
-                    target_id,
-                    vendor_id=vendor_id,
-                    action=action,
-                    actor_id=user_id,
-                    actor_type="vendor_user",
-                    commit=False,
+                result = stage_project_transition(
+                    session,
+                    StageVendorProjectTransition(
+                        project_id=target_id,
+                        vendor_id=command.vendor_id,
+                        action=action,
+                        actor_id=command.user_id,
+                        actor_type="vendor_user",
+                    ),
                 )
             except VendorProjectLifecycleError as exc:
-                raise _lifecycle_http_error(exc) from exc
-        reservation.ref_id = str(result.get("lifecycle_event_id") or result.get("id"))
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
-    return VendorSubmissionResult(
-        submission_type=submission_type,
-        project_id=str(project_id),
-        result_id=reservation.ref_id,
-        replayed=False,
+                raise _lifecycle_error(exc) from exc
+        result_id = str(result.get("lifecycle_event_id") or result.get("id") or "")
+        if not result_id:
+            raise _error(
+                "missing_result_evidence",
+                "Vendor submission completed without stable result evidence.",
+            )
+        reservation.ref_id = result_id
+        emit_event(
+            session,
+            EventType.vendor_submission_confirmed,
+            {
+                "schema_version": 1,
+                "submission_type": submission_type,
+                "project_id": str(command.project_id),
+                "result_id": result_id,
+                "command_id": str(command.context.command_id),
+                "correlation_id": str(command.context.correlation_id),
+            },
+            actor=command.context.actor,
+        )
+        return VendorSubmissionResult(
+            submission_type=submission_type,
+            project_id=str(command.project_id),
+            result_id=result_id,
+            replayed=False,
+        )
+
+    return execute_owner_command(
+        db,
+        definition=_CONFIRM_COMMAND,
+        context=command.context,
+        operation=operation,
     )

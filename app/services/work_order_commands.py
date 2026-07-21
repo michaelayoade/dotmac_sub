@@ -27,7 +27,9 @@ from app.models.dispatch import (
     TechnicianProfile,
     WorkOrderAssignmentQueue,
 )
+from app.models.project import Project, ProjectTask
 from app.models.subscriber import Subscriber
+from app.models.support import Ticket
 from app.models.system_user import SystemUser
 from app.models.work_order import WorkOrder
 from app.schemas.dispatch import (
@@ -44,6 +46,7 @@ from app.services.field.work_order_status import (
     WORK_ORDER_STATUSES,
     WorkOrderStatus,
 )
+from app.services.work_order_errors import WorkOrderCommandError
 
 _CREATE_ID_NAMESPACE = uuid.UUID("cbf90ef0-a977-49fb-a2ac-a636eb3b2342")
 _QUEUE_STATUSES = frozenset(
@@ -264,6 +267,62 @@ class WorkOrderCommands:
         return normalized
 
     @staticmethod
+    def validate_project_target(
+        db: Session,
+        project_id: object,
+        *,
+        subscriber_id: object,
+    ) -> uuid.UUID:
+        """Validate the native project binding owned by the work order."""
+
+        normalized = coerce_uuid(project_id)
+        project = db.get(Project, normalized)
+        if project is None or not project.is_active:
+            raise WorkOrderCommandError(
+                "project_not_found", "Project not found", kind="not_found"
+            )
+        subscriber_uuid = coerce_uuid(subscriber_id)
+        if (
+            project.subscriber_id is not None
+            and project.subscriber_id != subscriber_uuid
+        ):
+            raise WorkOrderCommandError(
+                "project_subscriber_mismatch",
+                "Work order and project must belong to the same subscriber",
+                kind="invalid",
+            )
+        return normalized
+
+    @staticmethod
+    def validate_project_task_target(
+        db: Session,
+        project_task_id: object,
+        *,
+        subscriber_id: object,
+        project_id: object | None = None,
+    ) -> tuple[uuid.UUID, uuid.UUID]:
+        """Validate a native execution scope and return task/project ids."""
+
+        normalized = coerce_uuid(project_task_id)
+        task = db.get(ProjectTask, normalized)
+        if task is None or not task.is_active:
+            raise WorkOrderCommandError(
+                "project_task_not_found", "Project task not found", kind="not_found"
+            )
+        if project_id is not None and coerce_uuid(project_id) != task.project_id:
+            raise WorkOrderCommandError(
+                "project_task_project_mismatch",
+                "Project task does not belong to the selected project",
+                kind="invalid",
+            )
+        WorkOrderCommands.validate_project_target(
+            db,
+            task.project_id,
+            subscriber_id=subscriber_id,
+        )
+        return normalized, task.project_id
+
+    @staticmethod
     def create(
         db: Session,
         payload: WorkOrderHeaderCreate,
@@ -272,6 +331,7 @@ class WorkOrderCommands:
         request_id: str | None = None,
         idempotency_key: str | None = None,
         owner_metadata: dict[str, Any] | None = None,
+        origin_ticket_id: object | None = None,
         commit: bool = True,
     ) -> WorkOrder:
         data = _data(payload)
@@ -297,7 +357,42 @@ class WorkOrderCommands:
             )
         _validate_schedule(data.get("scheduled_start"), data.get("scheduled_end"))
 
-        WorkOrderCommands.validate_subscriber_target(db, data["subscriber_id"])
+        data["subscriber_id"] = WorkOrderCommands.validate_subscriber_target(
+            db, data["subscriber_id"]
+        )
+        if data.get("project_task_id") is not None:
+            normalized_task_id, task_project_id = (
+                WorkOrderCommands.validate_project_task_target(
+                    db,
+                    data["project_task_id"],
+                    subscriber_id=data["subscriber_id"],
+                    project_id=data.get("project_id"),
+                )
+            )
+            data["project_task_id"] = normalized_task_id
+            data["project_id"] = task_project_id
+        elif data.get("project_id") is not None:
+            data["project_id"] = WorkOrderCommands.validate_project_target(
+                db,
+                data["project_id"],
+                subscriber_id=data["subscriber_id"],
+            )
+        normalized_origin_ticket_id: uuid.UUID | None = None
+        if origin_ticket_id is not None:
+            normalized_origin_ticket_id = coerce_uuid(origin_ticket_id)
+            ticket = db.get(Ticket, normalized_origin_ticket_id)
+            if ticket is None or not ticket.is_active:
+                raise WorkOrderCommandError(
+                    "origin_ticket_not_found",
+                    "Origin ticket not found",
+                    kind="not_found",
+                )
+            if ticket.subscriber_id != data["subscriber_id"]:
+                raise WorkOrderCommandError(
+                    "origin_ticket_subscriber_mismatch",
+                    "Work order and origin ticket must belong to the same subscriber",
+                    kind="invalid",
+                )
 
         supplied_metadata = dict(data.pop("metadata_", None) or {})
         supplied_metadata.pop("fiber_field_verification_plan", None)
@@ -310,7 +405,12 @@ class WorkOrderCommands:
             )
         supplied_metadata.update(owned_metadata)
         command_fingerprint = _fingerprint(
-            {"public_id": public_id, **data, "metadata": supplied_metadata}
+            {
+                "public_id": public_id,
+                **data,
+                "origin_ticket_id": normalized_origin_ticket_id,
+                "metadata": supplied_metadata,
+            }
         )
         existing = (
             db.query(WorkOrder).filter(WorkOrder.public_id == public_id).one_or_none()
@@ -332,6 +432,7 @@ class WorkOrderCommands:
             # Native work orders have no CRM provenance. Compatibility output
             # derives from public_id at the read boundary.
             metadata_=metadata,
+            origin_ticket_id=normalized_origin_ticket_id,
             work_order_created_at=data.get("work_order_created_at"),
             **data,
         )
@@ -350,6 +451,13 @@ class WorkOrderCommands:
                         "public_id": row.public_id,
                         "status": row.status,
                         "subscriber_id": str(row.subscriber_id),
+                        "origin_ticket_id": str(row.origin_ticket_id)
+                        if row.origin_ticket_id
+                        else None,
+                        "project_id": str(row.project_id) if row.project_id else None,
+                        "project_task_id": str(row.project_task_id)
+                        if row.project_task_id
+                        else None,
                     },
                 },
             )
@@ -387,6 +495,8 @@ class WorkOrderCommands:
     ) -> WorkOrder:
         row = _get_work_order(db, public_id, lock=True)
         data = _data(payload, exclude_unset=True)
+        project_supplied = "project_id" in data
+        project_task_supplied = "project_task_id" in data
         direct_assignment_fields = sorted(_ASSIGNMENT_HEADER_FIELDS.intersection(data))
         if direct_assignment_fields:
             raise HTTPException(
@@ -401,6 +511,72 @@ class WorkOrderCommands:
             subscriber = db.get(Subscriber, coerce_uuid(data["subscriber_id"]))
             if subscriber is None:
                 raise HTTPException(status_code=404, detail="Subscriber not found")
+        if "project_id" in data:
+            requested_project_id = data["project_id"]
+            if requested_project_id is None and row.project_id is not None:
+                raise WorkOrderCommandError(
+                    "project_binding_immutable",
+                    "A native work-order project binding cannot be removed",
+                )
+            if (
+                row.project_id is not None
+                and requested_project_id is not None
+                and coerce_uuid(requested_project_id) != row.project_id
+            ):
+                raise WorkOrderCommandError(
+                    "project_binding_immutable",
+                    "A native work-order project binding cannot be changed",
+                )
+        if "project_task_id" in data:
+            requested_task_id = data["project_task_id"]
+            if requested_task_id is None and row.project_task_id is not None:
+                raise WorkOrderCommandError(
+                    "project_task_binding_immutable",
+                    "A native work-order project-task binding cannot be removed",
+                )
+            if (
+                row.project_task_id is not None
+                and requested_task_id is not None
+                and coerce_uuid(requested_task_id) != row.project_task_id
+            ):
+                raise WorkOrderCommandError(
+                    "project_task_binding_immutable",
+                    "A native work-order project-task binding cannot be changed",
+                )
+        if (
+            "requires_as_built_evidence" in data
+            and data["requires_as_built_evidence"] is None
+        ):
+            raise WorkOrderCommandError(
+                "invalid_evidence_policy",
+                "requires_as_built_evidence cannot be null",
+                kind="invalid",
+            )
+        effective_project_id = data.get("project_id", row.project_id)
+        effective_subscriber_id = data.get("subscriber_id", row.subscriber_id)
+        effective_project_task_id = data.get("project_task_id", row.project_task_id)
+        if effective_project_task_id is not None:
+            normalized_task_id, task_project_id = (
+                WorkOrderCommands.validate_project_task_target(
+                    db,
+                    effective_project_task_id,
+                    subscriber_id=effective_subscriber_id,
+                    project_id=effective_project_id,
+                )
+            )
+            if project_task_supplied:
+                data["project_task_id"] = normalized_task_id
+            if effective_project_id is None:
+                data["project_id"] = task_project_id
+                effective_project_id = task_project_id
+        if effective_project_id is not None:
+            normalized_project_id = WorkOrderCommands.validate_project_target(
+                db,
+                effective_project_id,
+                subscriber_id=effective_subscriber_id,
+            )
+            if project_supplied:
+                data["project_id"] = normalized_project_id
         if "status" in data and data["status"] is not None:
             status = _validate_status(data["status"])
             if row.status in TERMINAL_WORK_ORDER_STATUSES and status != row.status:

@@ -4,6 +4,7 @@ from fastapi.routing import APIRoute
 
 from app.api import catalog as api_catalog
 from app.api import network_device_groups as api_network_device_groups
+from app.api import support as api_support
 from app.web.admin import admin_hub as admin_system_hub
 from app.web.admin import catalog as admin_catalog
 from app.web.admin import catalog_settings as admin_catalog_settings
@@ -127,6 +128,17 @@ def test_dispatch_work_order_routes_require_operations_dispatch_permission():
             method,
             permission,
         )
+
+
+def test_ticket_work_order_handoff_requires_support_and_dispatch_permissions():
+    admin_path = "/support/tickets/{ticket_id}/work-orders"
+    api_path = "/support/tickets/{ticket_id}/work-orders"
+    for router, path in (
+        (admin_support_tickets.router, admin_path),
+        (api_support.router, api_path),
+    ):
+        assert _route_has_permission(router, path, "POST", "support:ticket:update")
+        assert _route_has_permission(router, path, "POST", "operations:dispatch:write")
 
 
 def test_notification_routes_require_granular_notification_permissions():
@@ -709,11 +721,9 @@ def test_integrations_connector_lifecycle_require_permissions():
     )
     for path in (
         "/integrations/connectors",
-        "/integrations/register",
         "/integrations/installed/{connector_id}/uninstall",
         "/integrations/targets",
         "/integrations/jobs",
-        "/integrations/hooks/{hook_id}/test",
     ):
         assert _route_has_permission(
             admin_integrations.router, path, "POST", "system:settings:write"

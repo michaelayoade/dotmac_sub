@@ -435,9 +435,105 @@ def ticket_create(
 def ticket_detail(request: Request, ticket_lookup: str, db: Session = Depends(get_db)):
     context = _ctx(request, db)
     context.update(
-        support_web_service.build_ticket_detail_context(db, ticket_lookup=ticket_lookup)
+        support_web_service.build_ticket_detail_context(
+            db,
+            ticket_lookup=ticket_lookup,
+            actor_id=_actor_id(request),
+        )
     )
+    context["handoff_notice"] = request.query_params.get("handoff_notice")
+    context["handoff_error"] = request.query_params.get("handoff_error")
     return templates.TemplateResponse("admin/support/tickets/detail.html", context)
+
+
+@router.post(
+    "/{ticket_id}/work-orders",
+    response_class=HTMLResponse,
+    dependencies=[
+        Depends(require_permission("support:ticket:update")),
+        Depends(require_permission("operations:dispatch:write")),
+    ],
+)
+def issue_ticket_work_order(
+    request: Request,
+    ticket_id: UUID,
+    reason: str = Form(...),
+    idempotency_key: str = Form(...),
+    title: str | None = Form(default=None),
+    description: str | None = Form(default=None),
+    project_id: str | None = Form(default=None),
+    project_task_id: str | None = Form(default=None),
+    priority: str | None = Form(default=None),
+    work_type: str = Form(default="repair"),
+    address: str | None = Form(default=None),
+    scheduled_start: str | None = Form(default=None),
+    scheduled_end: str | None = Form(default=None),
+    estimated_duration_minutes: str | None = Form(default=None),
+    required_skills: str | None = Form(default=None),
+    tags: str | None = Form(default=None),
+    access_notes: str | None = Form(default=None),
+    requires_as_built_evidence: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+):
+    from app.schemas.support import TicketWorkOrderIssueRequest
+    from app.services import ticket_work_order_handoff
+
+    def _clean(value: str | None) -> str | None:
+        cleaned = (value or "").strip()
+        return cleaned or None
+
+    try:
+        payload = TicketWorkOrderIssueRequest(
+            reason=reason,
+            title=_clean(title),
+            description=_clean(description),
+            project_id=_clean(project_id),
+            project_task_id=_clean(project_task_id),
+            priority=_clean(priority),
+            work_type=work_type,
+            address=_clean(address),
+            scheduled_start=_clean(scheduled_start),
+            scheduled_end=_clean(scheduled_end),
+            estimated_duration_minutes=_clean(estimated_duration_minutes),
+            required_skills=[
+                item.strip()
+                for item in (required_skills or "").split(",")
+                if item.strip()
+            ],
+            tags=[item.strip() for item in (tags or "").split(",") if item.strip()],
+            access_notes=_clean(access_notes),
+            requires_as_built_evidence=str(requires_as_built_evidence or "").lower()
+            in {"1", "true", "yes", "on"},
+        )
+        result = ticket_work_order_handoff.issue_work_order(
+            db,
+            ticket_id,
+            payload,
+            actor_id=_actor_id(request),
+            auth=getattr(request.state, "auth", None),
+            idempotency_key=idempotency_key,
+            request_id=getattr(request.state, "request_id", None),
+        )
+    except (
+        ValidationError,
+        ticket_work_order_handoff.TicketWorkOrderHandoffError,
+    ) as exc:
+        message = (
+            exc.message
+            if isinstance(exc, ticket_work_order_handoff.TicketWorkOrderHandoffError)
+            else _ticket_form_error(exc)
+        )
+        query = urlencode({"handoff_error": message})
+        return RedirectResponse(
+            url=f"/admin/support/tickets/{ticket_id}?{query}", status_code=303
+        )
+    verb = "replayed" if result.replayed else "issued"
+    query = urlencode(
+        {"handoff_notice": f"Work order {result.work_order.public_id} {verb}"}
+    )
+    return RedirectResponse(
+        url=f"/admin/support/tickets/{ticket_id}?{query}", status_code=303
+    )
 
 
 @router.post(

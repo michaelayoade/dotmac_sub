@@ -18,7 +18,6 @@ env 1 app/services/credential_rotation_schedule.py
 env 1 app/services/crm_client.py
 env 1 app/services/email.py
 env 11 app/services/file_upload.py
-env 3 app/services/flutterwave.py
 env 2 app/services/genieacs_client.py
 env 8 app/services/infrastructure_health.py
 env 1 app/services/ip_consistency_audit.py
@@ -33,13 +32,11 @@ env 1 app/services/network/ont_features.py
 env 1 app/services/network/reconcile/alerts.py
 env 3 app/services/notification.py
 env 1 app/services/notification_adapter.py
-env 1 app/services/operation_notifications.py
 env 2 app/services/poller_health.py
 env 3 app/services/push.py
 env 1 app/services/radius_population.py
 env 5 app/services/radius_probe.py
 env 1 app/services/radius_reconciliation.py
-env 1 app/services/referrals.py
 env 1 app/services/scheduler_config.py
 env 2 app/services/session_store.py
 env 1 app/services/sms.py
@@ -58,14 +55,11 @@ env 4 app/services/worker_control.py
 env 1 app/services/workqueue/scoring_config.py
 env 3 app/syslog/listener.py
 env 3 app/tasks/bandwidth.py
-env 3 app/tasks/crm_native_sync.py
 env 2 app/tasks/tr069.py
-env 1 app/websocket/manager.py
 setting 9 app/main.py
 setting 4 app/services/auth.py
 setting 4 app/services/auth_flow.py
 setting 4 app/services/billing_settings.py
-setting 4 app/services/collections/grace_policy.py
 setting 8 app/services/credential_key_rotation.py
 setting 4 app/services/credential_rotation_schedule.py
 setting 4 app/services/customer_location_requests.py

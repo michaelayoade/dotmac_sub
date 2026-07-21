@@ -9,7 +9,7 @@ additive and back-fills on the next reconcile pass.
 
 ## Slice status
 - **b1 DONE** (commit 1fb65f91): `DeviceProjection.class_facts` JSONB (nullable) +
-  migration `373_device_projection_class_facts` (off single head `372`). Tests green.
+  migration `388_device_projection_class_facts` (off single head `387`). Tests green.
 - **b2 / b3 / b4 pending** — below. b2 (reconciler dedup) is the highest-risk piece.
 
 ## b2 — reconciler: collect NAS + routers, populate class_facts

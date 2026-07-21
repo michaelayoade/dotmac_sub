@@ -85,6 +85,9 @@ def _make_subscription(
         offer_id=offer.id,
         status=status,
         billing_mode=billing_mode,
+        unit_price=(
+            Decimal("1000.00") if billing_mode == BillingMode.prepaid else None
+        ),
         next_billing_at=next_billing_at,
     )
     db.add(subscription)

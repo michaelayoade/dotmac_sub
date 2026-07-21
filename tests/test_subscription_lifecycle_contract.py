@@ -170,6 +170,33 @@ def test_cancel_preview_stops_collection_and_deprovisions_access(
     assert preview.access_impact.proposed_state == "terminated"
 
 
+def test_disable_preview_pauses_billing_and_preserves_reactivation(
+    db_session, subscriber, catalog_offer
+):
+    subscription = _subscription(db_session, subscriber, catalog_offer)
+
+    preview = preview_subscription_command(
+        db_session,
+        SubscriptionLifecycleCommand(
+            subscription_id=str(subscription.id),
+            kind=SubscriptionCommandKind.disable,
+            source="admin:test",
+            reason="administrative pause",
+        ),
+        now=datetime(2026, 7, 14, 12, 0, tzinfo=UTC),
+    )
+
+    assert preview.eligible is True
+    assert preview.proposed.status == SubscriptionStatus.disabled.value
+    assert preview.proposed.terminal is False
+    assert preview.billing_impact.action == "stop_collection"
+    assert preview.billing_impact.collectible_before is True
+    assert preview.billing_impact.collectible_after is False
+    assert preview.billing_impact.possible_prorated_credit is False
+    assert preview.access_impact.session_action == SubscriptionSessionAction.disconnect
+    assert preview.access_impact.proposed_state == "suspended"
+
+
 @pytest.mark.parametrize(
     ("current_status", "kind", "proposed_status", "session_action"),
     [
@@ -181,6 +208,12 @@ def test_cancel_preview_stops_collection_and_deprovisions_access(
         ),
         (
             SubscriptionStatus.suspended,
+            SubscriptionCommandKind.restore,
+            SubscriptionStatus.active,
+            SubscriptionSessionAction.authorize,
+        ),
+        (
+            SubscriptionStatus.disabled,
             SubscriptionCommandKind.restore,
             SubscriptionStatus.active,
             SubscriptionSessionAction.authorize,

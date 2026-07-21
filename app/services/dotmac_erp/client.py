@@ -3,11 +3,11 @@
 Ported from ``dotmac_crm/app/services/dotmac_erp/client.py`` for the ERP re-home:
 sub becomes an ``X-API-Key`` client of ERP's neutral ``/sync/sub/*`` API.
 
-This module owns the reusable substrate: a generic ``post``/``get`` surface plus
+This module owns the database-free HTTP substrate: a generic ``post``/``get`` surface plus
 the ``DotMacERPTransientError`` / permanent-error split the outbox keys its
 retry-vs-dead-letter decision off. Flow-specific methods (expense claims, etc.)
 belong to their owning flow modules. Config (base URL, token, timeout, retries) is resolved
-from the ``integration`` settings domain via ``build_erp_client``.
+from the version-pinned ``dotmac.erp`` connector runtime.
 """
 
 from __future__ import annotations
@@ -417,6 +417,13 @@ class DotMacERPClient:
             expected_status_codes={200, 201},
         )
 
+    def get_purchase_invoice_status(self, source_invoice_id: str) -> dict | None:
+        """Read ERP's current AP settlement state for a Sub invoice."""
+        try:
+            return self.get(f"/api/v1/sync/sub/purchase-invoices/{source_invoice_id}")
+        except DotMacERPNotFoundError:
+            return None
+
     def upload_purchase_invoice_attachment(
         self,
         purchase_invoice_id: str,
@@ -538,43 +545,3 @@ class DotMacERPClient:
             (category -> nationality -> gender -> count)
         """
         return self.get("/api/v1/sync/crm/ncc/staff-headcount")
-
-
-def build_erp_client(db) -> DotMacERPClient:
-    """Build a DotMac ERP client from the ``integration`` settings domain.
-
-    Raises ``ValueError`` when ERP is not configured (missing base URL or token),
-    so callers degrade instead of pushing to a blank endpoint.
-    """
-    from app.models.domain_settings import SettingDomain
-    from app.services import settings_spec
-    from app.services.secrets import resolve_secret
-
-    base_url = settings_spec.resolve_value(
-        db, SettingDomain.integration, "dotmac_erp_base_url"
-    )
-    token = resolve_secret(
-        settings_spec.resolve_value(db, SettingDomain.integration, "dotmac_erp_token")
-    )
-    if not base_url or not token:
-        raise ValueError(
-            "DotMac ERP is not configured (missing dotmac_erp_base_url or "
-            "dotmac_erp_token in the integration settings domain)"
-        )
-
-    timeout = settings_spec.resolve_value(
-        db, SettingDomain.integration, "dotmac_erp_timeout_seconds"
-    )
-    retries = settings_spec.resolve_value(
-        db, SettingDomain.integration, "dotmac_erp_max_retries"
-    )
-    return DotMacERPClient(
-        base_url=str(base_url),
-        token=str(token),
-        timeout=int(timeout)
-        if timeout is not None
-        else DotMacERPClient.DEFAULT_TIMEOUT,
-        retries=int(retries)
-        if retries is not None
-        else DotMacERPClient.DEFAULT_RETRIES,
-    )

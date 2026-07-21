@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hmac
 import logging
 from datetime import UTC, datetime, time
 from decimal import Decimal, InvalidOperation
@@ -9,10 +8,8 @@ from typing import Any
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
-from app.config import settings
 from app.db import get_db
 from app.services import crm_api
-from app.services.secrets import resolve_secret
 
 logger = logging.getLogger(__name__)
 
@@ -35,18 +32,10 @@ CRM_INTEGRATION_PERMISSION = "integration:crm"
 
 def require_crm_service_auth(
     request: Request,
-    authorization: str | None = Header(default=None),
     x_api_key: str | None = Header(default=None, alias="X-Api-Key"),
     db: Session = Depends(get_db),
 ) -> None:
-    """Authenticate the CRM service caller.
-
-    Preferred: a scoped, rotatable ``ApiKey`` (fail-closed — the key must hold
-    the ``integration:crm`` permission, wildcard-aware). During migration the
-    legacy shared bearer (``selfcare_api_token``) is still accepted while
-    ``settings.crm_legacy_bearer_enabled`` is true; flip it off after CRM
-    switches to ``X-Api-Key`` to retire the unscoped credential.
-    """
+    """Require a scoped, rotatable Sub API key from the CRM caller."""
     if isinstance(x_api_key, str) and x_api_key:
         from app.services.auth_dependencies import _api_key_principal, has_permission
 
@@ -57,21 +46,7 @@ def require_crm_service_auth(
             status.HTTP_401_UNAUTHORIZED,
             "Invalid or insufficiently scoped API key.",
         )
-    if not settings.crm_legacy_bearer_enabled:
-        _error(status.HTTP_401_UNAUTHORIZED, "CRM API requires an X-Api-Key.")
-    expected = resolve_secret(settings.selfcare_api_token) or ""
-    if not expected:
-        _error(status.HTTP_401_UNAUTHORIZED, "CRM API bearer token is not configured.")
-    scheme, _, token = str(authorization or "").partition(" ")
-    if scheme.lower() != "bearer" or not token:
-        _error(status.HTTP_401_UNAUTHORIZED, "Missing bearer token.")
-    if not hmac.compare_digest(token, expected):
-        _error(status.HTTP_401_UNAUTHORIZED, "Invalid bearer token.")
-    logger.warning(
-        "crm api authenticated via legacy shared bearer (deprecated); "
-        "provision a scoped ApiKey with %s and set CRM_LEGACY_BEARER_ENABLED=false",
-        CRM_INTEGRATION_PERMISSION,
-    )
+    _error(status.HTTP_401_UNAUTHORIZED, "CRM API requires a scoped X-Api-Key.")
 
 
 def _envelope(data: Any, meta: dict[str, Any] | None = None) -> dict[str, Any]:

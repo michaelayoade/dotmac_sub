@@ -81,11 +81,20 @@ class Organization(Base):
             name="ck_organizations_party_binding_evidence",
         ),
         UniqueConstraint("party_id", name="uq_organizations_party_id"),
+        UniqueConstraint(
+            "backoffice_system",
+            "backoffice_account_reference",
+            name="uq_organizations_backoffice_system_reference",
+        ),
+        UniqueConstraint(
+            "legacy_account_system",
+            "legacy_account_reference",
+            name="uq_organizations_legacy_account_system_reference",
+        ),
         Index("ix_organizations_parent", "parent_id"),
         Index("ix_organizations_account_type", "account_type"),
         Index("ix_organizations_status", "account_status"),
         Index("ix_organizations_owner", "owner_id"),
-        Index("ix_organizations_erp", "erp_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -143,8 +152,10 @@ class Organization(Base):
     country_code: Mapped[str | None] = mapped_column(String(2))
 
     # External integrations
-    erp_id: Mapped[str | None] = mapped_column(String(100), unique=True)
-    erpnext_id: Mapped[str | None] = mapped_column(String(100), unique=True, index=True)
+    backoffice_system: Mapped[str | None] = mapped_column(String(40))
+    backoffice_account_reference: Mapped[str | None] = mapped_column(String(100))
+    legacy_account_system: Mapped[str | None] = mapped_column(String(40))
+    legacy_account_reference: Mapped[str | None] = mapped_column(String(100))
 
     # Metadata
     notes: Mapped[str | None] = mapped_column(Text)

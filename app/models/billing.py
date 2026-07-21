@@ -140,23 +140,6 @@ class PaymentProviderEventStatus(enum.Enum):
     failed = "failed"
 
 
-class PaymentWebhookDeadLetterStatus(enum.Enum):
-    # Captured on receipt, before processing was attempted. A row stuck in this
-    # state means the worker died mid-ingest (crash/OOM/kill) — it is replayable.
-    received = "received"
-    # Ingest raised an unexpected/transient error. The provider was told to
-    # retry (HTTP 5xx); this row is replayable if the provider stops retrying.
-    failed = "failed"
-    # Ingest deterministically rejected the payload (HTTP 4xx, e.g. bad data).
-    # Replaying as-is will not help; needs human attention.
-    rejected = "rejected"
-    # Legacy/manual replay result. Retained rows are treated as unresolved
-    # because old replay code set this without proving money was posted. New
-    # successful replays return this status as an API snapshot, then delete the
-    # dead-letter row; PaymentProviderEvent is the durable success record.
-    replayed = "replayed"
-
-
 class LedgerEntryType(enum.Enum):
     debit = "debit"
     credit = "credit"
@@ -2332,10 +2315,6 @@ class PaymentProvider(Base):
     provider_type: Mapped[PaymentProviderType] = mapped_column(
         Enum(PaymentProviderType), default=PaymentProviderType.custom
     )
-    connector_config_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("connector_configs.id")
-    )
-    webhook_secret_ref: Mapped[str | None] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     notes: Mapped[str | None] = mapped_column(Text)
 
@@ -2348,14 +2327,26 @@ class PaymentProvider(Base):
         onupdate=lambda: datetime.now(UTC),
     )
 
-    connector_config = relationship("ConnectorConfig")
     payments = relationship("Payment", back_populates="provider")
     events = relationship("PaymentProviderEvent", back_populates="provider")
 
 
 class CollectionAccount(Base):
     __tablename__ = "collection_accounts"
-    __table_args__ = (UniqueConstraint("name", name="uq_collection_accounts_name"),)
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_collection_accounts_name"),
+        Index(
+            "uq_collection_accounts_bank_number_currency",
+            "bank_name",
+            "account_number",
+            "currency",
+            unique=True,
+            postgresql_where=text(
+                "bank_name IS NOT NULL AND account_number IS NOT NULL"
+            ),
+            sqlite_where=text("bank_name IS NOT NULL AND account_number IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -2366,6 +2357,21 @@ class CollectionAccount(Base):
     )
     bank_name: Mapped[str | None] = mapped_column(String(120))
     account_last4: Mapped[str | None] = mapped_column(String(4))
+    # Full payment details. Present so this table can be the single owner of a
+    # Dotmac receiving account: `account_last4` alone identifies an account for
+    # reconciliation but cannot tell a customer where to pay, which is why those
+    # details previously lived in a settings blob. These are the company's own
+    # published receiving accounts — never customer payment credentials.
+    account_number: Mapped[str | None] = mapped_column(String(64))
+    account_name: Mapped[str | None] = mapped_column(String(200))
+    sort_code: Mapped[str | None] = mapped_column(String(32))
+    # External accounting-system mapping (QuickBooks/Xero/Sage GL code). Sub
+    # carries the mapping only; it does not model a chart of accounts.
+    accounting_code: Mapped[str | None] = mapped_column(String(64))
+    # Explicit customer-presentment order. Higher values win; new accounts
+    # default to zero so creating one cannot silently replace the invoice bank
+    # account selected during migration.
+    presentment_priority: Mapped[int] = mapped_column(Integer, default=0)
     currency: Mapped[str] = mapped_column(String(3), default="NGN")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     notes: Mapped[str | None] = mapped_column(Text)
@@ -2403,6 +2409,8 @@ class PaymentChannel(Base):
         UUID(as_uuid=True), ForeignKey("collection_accounts.id")
     )
     fee_rules: Mapped[dict | None] = mapped_column(JSON)
+    # External accounting-system mapping code; see CollectionAccount.accounting_code.
+    accounting_code: Mapped[str | None] = mapped_column(String(64))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
     notes: Mapped[str | None] = mapped_column(Text)
@@ -2518,56 +2526,6 @@ class PaymentProviderEvent(Base):
     invoice = relationship("Invoice")
     refunds = relationship("PaymentRefund", back_populates="provider_event")
     reversals = relationship("PaymentReversal", back_populates="provider_event")
-
-
-class PaymentWebhookDeadLetter(Base):
-    """Durable capture of an inbound payment-provider webhook.
-
-    A row is written (and committed in its own transaction) the moment a
-    signature-verified webhook arrives, *before* ingest is attempted, so the
-    raw payload survives even if ingest's transaction rolls back or the worker
-    dies mid-processing. On success the row is deleted; on failure it is kept
-    (status ``failed``/``rejected``) for replay. This closes the silent-loss
-    gap where a transient ingest error returned HTTP 200 and the provider never
-    retried.
-
-    ``provider_type`` is stored as a plain string (not an FK) because a webhook
-    can arrive before — or without — a matching provider being configured, and
-    we must never lose it for that reason.
-    """
-
-    __tablename__ = "payment_webhook_dead_letters"
-    __table_args__ = (
-        Index(
-            "ix_payment_webhook_dead_letters_status",
-            "status",
-        ),
-        Index(
-            "ix_payment_webhook_dead_letters_provider_idem",
-            "provider_type",
-            "idempotency_key",
-        ),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    provider_type: Mapped[str] = mapped_column(String(40), nullable=False)
-    event_type: Mapped[str | None] = mapped_column(String(120))
-    external_id: Mapped[str | None] = mapped_column(String(160))
-    idempotency_key: Mapped[str | None] = mapped_column(String(160))
-    status: Mapped[PaymentWebhookDeadLetterStatus] = mapped_column(
-        Enum(PaymentWebhookDeadLetterStatus),
-        default=PaymentWebhookDeadLetterStatus.received,
-        nullable=False,
-    )
-    payload: Mapped[dict | None] = mapped_column(JSON)
-    error: Mapped[str | None] = mapped_column(Text)
-    retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    received_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC)
-    )
-    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class BillingRun(Base):

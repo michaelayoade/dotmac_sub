@@ -67,6 +67,11 @@ class Ticket(Base):
         Index("ix_support_tickets_priority", "priority"),
         Index("ix_support_tickets_subscriber", "subscriber_id"),
         Index("ix_support_tickets_active", "is_active"),
+        Index(
+            "ix_support_tickets_external_system_reference",
+            "external_system",
+            "external_reference",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -124,7 +129,8 @@ class Ticket(Base):
     ncc_category_source: Mapped[str | None] = mapped_column(String(16))
     ncc_subcategory: Mapped[str | None] = mapped_column(String(120))
     ncc_subcategory_source: Mapped[str | None] = mapped_column(String(16))
-    erpnext_id: Mapped[str | None] = mapped_column(String(100))
+    external_system: Mapped[str | None] = mapped_column(String(40))
+    external_reference: Mapped[str | None] = mapped_column(String(100))
     channel: Mapped[TicketChannel] = mapped_column(
         Enum(TicketChannel, values_callable=lambda x: [e.value for e in x]),
         default=TicketChannel.web,
