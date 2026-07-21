@@ -2,36 +2,25 @@
 
 from __future__ import annotations
 
-import logging
-import secrets
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import cast
-from uuid import UUID
 
 from pydantic import ValidationError
-from sqlalchemy import func, inspect, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
-from app.config import settings
-from app.models.auth import AuthProvider, UserCredential
 from app.models.billing import Invoice, Payment, PaymentStatus
 from app.models.catalog import CatalogOffer, Subscription, SubscriptionStatus
 from app.models.offer_availability import OfferResellerAvailability
 from app.models.rbac import Role
 from app.models.subscriber import Reseller, ResellerUser, Subscriber, UserType
 from app.models.support import Ticket
-from app.schemas.auth import UserCredentialCreate
-from app.schemas.rbac import SubscriberRoleCreate
-from app.schemas.subscriber import ResellerCreate, ResellerUpdate, SubscriberCreate
-from app.services import auth as auth_service
+from app.schemas.subscriber import ResellerCreate, ResellerUpdate
 from app.services import catalog as catalog_service
-from app.services import rbac as rbac_service
-from app.services import reseller_portal
+from app.services import rbac_catalog, reseller_onboarding
 from app.services import subscriber as subscriber_service
-from app.services import web_system_user_mutations as web_system_user_mutations_service
-from app.services.auth_flow import hash_password
 from app.services.common import coerce_uuid
 from app.services.customer_support_links import ticket_customer_any_link_filter
 from app.services.invoice_collectibility import (
@@ -41,12 +30,11 @@ from app.services.invoice_collectibility import (
     overdue_debt_filters_for_accounts,
 )
 from app.services.list_query import ListDefinition, ListFieldDefinition, ListQuery
+from app.services.owner_commands import CommandContext
 from app.services.status_presentation import (
     invoice_status_presentation,
     payment_status_presentation,
 )
-
-logger = logging.getLogger(__name__)
 
 RESOLVED_TICKET_STATUSES = {
     "resolved",
@@ -56,42 +44,9 @@ RESOLVED_TICKET_STATUSES = {
 }
 
 
-def _normalize_identity(value: str | None) -> str:
-    return (value or "").strip().lower()
-
-
-def _ensure_reseller_user_identity_available(
-    db: Session,
-    *,
-    email: str,
-    username: str | None,
-) -> None:
-    normalized_email = _normalize_identity(email)
-    normalized_username = _normalize_identity(username or email)
-
-    existing_subscriber = (
-        db.query(Subscriber)
-        .filter(func.lower(Subscriber.email) == normalized_email)
-        .first()
-    )
-    if existing_subscriber:
-        raise ValueError("Email already exists. Use a different email address.")
-
-    existing_credential = (
-        db.query(UserCredential)
-        .filter(UserCredential.provider == AuthProvider.local)
-        .filter(func.lower(UserCredential.username) == normalized_username)
-        .first()
-    )
-    if existing_credential:
-        raise ValueError(
-            "Username already exists. This email is already used by another login."
-        )
-
-
 def _roles_for_form(db: Session) -> list[Role]:
     return list(
-        rbac_service.roles.list(
+        rbac_catalog.list_roles(
             db=db,
             is_active=True,
             order_by="name",
@@ -300,7 +255,13 @@ def validate_create_user_payload(
     return None
 
 
-def create_reseller_from_form(db: Session, form) -> tuple[Reseller, str | None]:
+def create_reseller_from_form(
+    db: Session,
+    form,
+    *,
+    context: CommandContext,
+    assignment_context: CommandContext | None = None,
+) -> tuple[reseller_onboarding.ResellerOnboardingOutcome, str | None]:
     payload = parse_reseller_payload(form)
     try:
         data = ResellerCreate.model_validate(payload)
@@ -308,14 +269,29 @@ def create_reseller_from_form(db: Session, form) -> tuple[Reseller, str | None]:
         raise ValueError(
             exc.errors()[0].get("msg", "Invalid reseller details.")
         ) from exc
-    reseller = subscriber_service.resellers.create(db=db, payload=data)
     user_payload = parse_create_user_payload(form)
-    invite_note = None
-    if user_payload:
-        invite_note = create_reseller_with_user(
-            db, reseller=reseller, user_payload=user_payload
+    user_spec = (
+        reseller_onboarding.ResellerPortalUserSpec(
+            first_name=user_payload["first_name"] or "",
+            last_name=user_payload["last_name"] or "",
+            email=user_payload["email"] or "",
+            username=user_payload.get("username"),
+            role_name=user_payload.get("role"),
+            send_invite=True,
         )
-    return reseller, invite_note
+        if user_payload
+        else None
+    )
+    outcome = reseller_onboarding.create_reseller(
+        db,
+        reseller_onboarding.CreateResellerCommand(
+            context=context,
+            reseller=data,
+            portal_user=user_spec,
+            assignment_context=assignment_context,
+        ),
+    )
+    return outcome, "Invitation queued." if outcome.invite_requested else None
 
 
 def update_reseller_from_form(db: Session, *, reseller_id: str, form) -> None:
@@ -339,189 +315,6 @@ def update_reseller_active_status(
     db.commit()
     db.refresh(reseller)
     return reseller
-
-
-def _reseller_users_table_available(db: Session) -> bool:
-    """Return True when the dedicated reseller link table exists."""
-    bind = db.get_bind()
-    return bool(inspect(bind).has_table("reseller_users"))
-
-
-def _link_via_subscriber_fallback(
-    db: Session,
-    *,
-    reseller_id: UUID,
-    subscriber_id: UUID,
-) -> ResellerUser:
-    """Compatibility link path for schemas without reseller_users table."""
-    subscriber = db.get(Subscriber, subscriber_id)
-    if not subscriber:
-        raise ValueError("Subscriber not found for reseller linking")
-    subscriber.reseller_id = reseller_id
-    subscriber.user_type = getattr(
-        type(subscriber.user_type), "reseller", subscriber.user_type
-    )
-    db.flush()
-    return cast(
-        ResellerUser,
-        SimpleNamespace(
-            id=subscriber.id,
-            reseller_id=reseller_id,
-            subscriber_id=subscriber.id,
-            person_id=subscriber.id,
-            is_active=True,
-            created_at=subscriber.created_at,
-        ),
-    )
-
-
-def create_subscriber_credential(
-    db: Session,
-    *,
-    first_name: str,
-    last_name: str,
-    email: str,
-    username: str | None = None,
-    password: str | None = None,
-    require_password_change: bool = True,
-) -> Subscriber:
-    """Create a subscriber with local auth credentials."""
-    _ensure_reseller_user_identity_available(
-        db,
-        email=email,
-        username=username,
-    )
-    subscriber = cast(
-        Subscriber,
-        subscriber_service.subscribers.create(
-            db=db,
-            payload=SubscriberCreate(
-                first_name=first_name,
-                last_name=last_name,
-                email=email,
-                is_active=True,
-            ),
-        ),
-    )
-    credential_payload = UserCredentialCreate(
-        subscriber_id=subscriber.id,
-        provider=AuthProvider.local,
-        username=(username or email).strip(),
-        password_hash=hash_password(password or secrets.token_urlsafe(24)),
-        must_change_password=require_password_change,
-        password_updated_at=datetime.now(UTC),
-        is_active=True,
-    )
-    subscriber_id = subscriber.id
-    try:
-        auth_service.user_credentials.create(db=db, payload=credential_payload)
-    except Exception:
-        db.rollback()
-        orphaned = db.get(Subscriber, subscriber_id)
-        if orphaned is not None:
-            db.delete(orphaned)
-            db.commit()
-        raise
-    return subscriber
-
-
-def get_role_by_name(db: Session, role_name: str) -> Role | None:
-    """Look up a role by its name."""
-    stmt = select(Role).where(Role.name == role_name)
-    return db.scalars(stmt).first()
-
-
-def create_reseller_user_link(
-    db: Session,
-    *,
-    reseller_id: UUID,
-    subscriber_id: UUID,
-) -> ResellerUser:
-    """Create a ResellerUser link between a reseller and subscriber."""
-    if not _reseller_users_table_available(db):
-        return _link_via_subscriber_fallback(
-            db,
-            reseller_id=reseller_id,
-            subscriber_id=subscriber_id,
-        )
-
-    link = ResellerUser(
-        reseller_id=reseller_id,
-        subscriber_id=subscriber_id,
-        is_active=True,
-    )
-    db.add(link)
-    db.flush()
-    return link
-
-
-def create_reseller_with_user(
-    db: Session,
-    *,
-    reseller: Reseller,
-    user_payload: dict[str, str | None],
-) -> str | None:
-    """Create a reseller portal login and link it to the reseller.
-
-    Commits the transaction on success. When RESELLER_USER_PRINCIPAL_ENABLED is
-    on (Layer 3 cutover done), the login is a first-class ResellerUser principal
-    with no backing Subscriber; otherwise it falls back to the legacy
-    subscriber-with-user_type=reseller path (kept for rollback safety).
-    """
-    if settings.reseller_user_principal_enabled:
-        email = user_payload["email"] or ""
-        full_name = (
-            f"{user_payload['first_name'] or ''} {user_payload['last_name'] or ''}"
-        ).strip() or None
-        reseller_portal.create_reseller_user_principal(
-            db,
-            reseller_id=str(reseller.id),
-            username=(user_payload.get("username") or email).strip(),
-            password=user_payload.get("password") or secrets.token_urlsafe(24),
-            email=email,
-            full_name=full_name,
-            must_change_password=True,
-        )
-        invite_note = send_reseller_portal_invite(db, email=email)
-        if "could not" in invite_note.lower():
-            logger.warning("Reseller invite issue for %s: %s", email, invite_note)
-        return invite_note
-
-    subscriber = create_subscriber_credential(
-        db,
-        first_name=user_payload["first_name"] or "",
-        last_name=user_payload["last_name"] or "",
-        email=user_payload["email"] or "",
-        username=user_payload.get("username"),
-        password=user_payload.get("password"),
-        require_password_change=True,
-    )
-    subscriber.user_type = getattr(
-        type(subscriber.user_type), "reseller", subscriber.user_type
-    )
-    subscriber.reseller_id = reseller.id
-    if user_payload.get("role"):
-        role = get_role_by_name(db, user_payload["role"] or "")
-        if role:
-            rbac_service.subscriber_roles.create(
-                db,
-                SubscriberRoleCreate(
-                    subscriber_id=subscriber.id,
-                    role_id=role.id,
-                ),
-            )
-    create_reseller_user_link(
-        db,
-        reseller_id=reseller.id,
-        subscriber_id=subscriber.id,
-    )
-    db.commit()
-    invite_note = send_reseller_portal_invite(db, email=subscriber.email)
-    if "could not" in invite_note.lower():
-        logger.warning(
-            "Reseller invite issue for %s: %s", subscriber.email, invite_note
-        )
-    return invite_note
 
 
 def list_reseller_subscribers(
@@ -926,51 +719,27 @@ def create_and_link_reseller_user(
     username: str | None = None,
     password: str | None = None,
     role: str | None = None,
-) -> None:
-    """Create a new subscriber with credentials and link to a reseller."""
-    subscriber = create_subscriber_credential(
-        db,
-        first_name=first_name,
-        last_name=last_name,
-        email=email,
-        username=username,
-        password=password,
-        require_password_change=True,
-    )
-    reseller_uuid = coerce_uuid(reseller_id)
-    subscriber.user_type = getattr(
-        type(subscriber.user_type), "reseller", subscriber.user_type
-    )
-    subscriber.reseller_id = reseller_uuid
-    if role:
-        role_record = get_role_by_name(db, role)
-        if role_record:
-            rbac_service.subscriber_roles.create(
-                db,
-                SubscriberRoleCreate(
-                    subscriber_id=subscriber.id,
-                    role_id=role_record.id,
-                ),
-            )
-    create_reseller_user_link(
-        db,
-        reseller_id=reseller_uuid,
-        subscriber_id=subscriber.id,
-    )
-    db.commit()
-    invite_note = send_reseller_portal_invite(db, email=subscriber.email)
-    if "could not" in invite_note.lower():
-        logger.warning(
-            "Reseller invite issue for %s: %s", subscriber.email, invite_note
-        )
+    context: CommandContext,
+    assignment_context: CommandContext | None = None,
+) -> reseller_onboarding.ResellerOnboardingOutcome:
+    """Translate the admin form into the canonical onboarding command."""
 
-
-def send_reseller_portal_invite(db: Session, *, email: str) -> str:
-    """Send a welcome invite with reseller-portal login destination."""
-    return web_system_user_mutations_service.send_user_invite(
+    return reseller_onboarding.provision_reseller_user(
         db,
-        email=email,
-        next_login_path="/reseller/auth/login?next=/reseller/dashboard",
+        reseller_onboarding.ProvisionResellerUserCommand(
+            context=context,
+            reseller_id=coerce_uuid(reseller_id),
+            portal_user=reseller_onboarding.ResellerPortalUserSpec(
+                first_name=first_name,
+                last_name=last_name,
+                email=email,
+                username=username,
+                password=password,
+                role_name=role,
+                send_invite=True,
+            ),
+            assignment_context=assignment_context,
+        ),
     )
 
 

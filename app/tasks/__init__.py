@@ -130,7 +130,6 @@ from app.tasks.payment_reconciliation import reconcile_topups
 from app.tasks.profile_sync import (
     execute_due_profile_sync_tasks,
 )
-from app.tasks.projects import reconcile_project_mirror
 from app.tasks.provisioning import (
     reap_stale_provisioning_runs,
     retry_pending_compensation_failures,
@@ -214,7 +213,6 @@ from app.tasks.wireguard import (
 from app.tasks.wireguard import (
     generate_connection_log_report as wireguard_connection_report,
 )
-from app.tasks.work_orders import reconcile_work_order_mirror
 from app.tasks.workflow import detect_sla_breaches as retired_detect_sla_breaches
 
 __all__ = [
@@ -357,9 +355,7 @@ __all__ = [
     "sync_all_interfaces",
     "sync_all_system_info",
     "run_scheduled_credential_rotation",
-    "reconcile_project_mirror",
     "reconcile_quote_mirror",
     "reconcile_referral_mirror",
     "send_scheduled_ncc_report",
-    "reconcile_work_order_mirror",
 ]

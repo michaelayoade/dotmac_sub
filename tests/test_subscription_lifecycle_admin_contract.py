@@ -97,11 +97,17 @@ def test_generic_edit_form_does_not_offer_parallel_lifecycle_mutations() -> None
         'value="{{ subscription.offer_id }}">' in template
     )
     assert "Use <strong>Change Plan</strong>" in template
-    assert '<select name="status"' not in template
-    assert (
-        'name="status" value="{{ subscription.status if subscription.id '
-        "else 'pending' }}\""
-    ) in template
+    assert '<select name="status" id="status"' in template
+    for value, label in (
+        ("pending", "Pending"),
+        ("active", "Active"),
+        ("suspended", "Suspended"),
+        ("disabled", "Disabled"),
+        ("canceled", "Canceled"),
+    ):
+        assert f'<option value="{value}"' in template
+        assert f">{label}</option>" in template
+    assert 'name="status" value="{{ subscription.status }}"' in template
     assert (
         'id="billing_mode" x-model="billingMode" '
         "{% if subscription.id %}disabled" in template
@@ -111,6 +117,6 @@ def test_generic_edit_form_does_not_offer_parallel_lifecycle_mutations() -> None
     assert 'id="canceled_at" readonly' in template
     assert 'id="cancel_reason" readonly' in template
     assert "{% if subscription.id %}\n        {# Lifecycle facts" in template
-    assert "Activate after creation" in template
+    assert "Activate after creation" not in template
     assert "Set status to Active instead of Pending" not in template
     assert "bg-violet-600" not in template

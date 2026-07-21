@@ -12,6 +12,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.models.project import ProjectTask
 from app.models.subscriber import Subscriber
 from app.models.support import (
     Ticket,
@@ -1305,6 +1306,13 @@ def build_ticket_detail_context(
     priority_options = support_ticket_settings_service.list_priority_options(db)
     ticket = support_service.tickets.get_by_lookup(db, ticket_lookup)
     linked_work_orders = ticket_work_order_handoff.list_for_ticket(db, ticket.id)
+    linked_project_tasks = (
+        db.query(ProjectTask)
+        .filter(ProjectTask.ticket_id == ticket.id)
+        .filter(ProjectTask.is_active.is_(True))
+        .order_by(ProjectTask.created_at.asc(), ProjectTask.id.asc())
+        .all()
+    )
     comments = support_service.ticket_comments.list(
         db, str(ticket.id), limit=500, offset=0
     )
@@ -1379,6 +1387,7 @@ def build_ticket_detail_context(
         ),
         "identity_resolution": _identity_resolution_summary(ticket),
         "linked_work_orders": linked_work_orders,
+        "linked_project_tasks": linked_project_tasks,
         "issue_work_order_action": ticket_work_order_handoff.issue_action(
             db, ticket, actor_id=actor_id
         ),

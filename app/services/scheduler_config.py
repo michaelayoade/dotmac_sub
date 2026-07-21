@@ -2012,45 +2012,6 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(nas_backup_interval, 900),
         )
-        # Project/installation mirror reconcile — backstop for missed project.*
-        # webhook deliveries so "where's my install?" stays accurate.
-        project_reconcile_seconds = _resolve_int(
-            session,
-            SettingDomain.subscriber,
-            "project_reconcile_interval_seconds",
-            3600,
-        )
-        _sync_scheduled_task(
-            session,
-            name="project_mirror_reconcile",
-            task_name="app.tasks.projects.reconcile_project_mirror",
-            enabled=True,
-            interval_seconds=max(project_reconcile_seconds, 900),
-        )
-        # Work-order/field-service mirror reconcile — backstop for missed
-        # work_order.* webhook deliveries. Gated by the crm.work_order_pull
-        # Native work-order authority kill switch: off means Sub
-        # is the work-order system-of-record and the CRM is no longer polled.
-        work_order_pull_enabled = _effective_bool(
-            session,
-            SettingDomain.scheduler,
-            "crm_work_order_pull_enabled",
-            "CRM_WORK_ORDER_PULL_ENABLED",
-            True,
-        )
-        work_order_reconcile_seconds = _resolve_int(
-            session,
-            SettingDomain.subscriber,
-            "work_order_reconcile_interval_seconds",
-            3600,
-        )
-        _sync_scheduled_task(
-            session,
-            name="work_order_mirror_reconcile",
-            task_name="app.tasks.work_orders.reconcile_work_order_mirror",
-            enabled=work_order_pull_enabled,
-            interval_seconds=max(work_order_reconcile_seconds, 900),
-        )
         # Self-serve quote mirror reconcile — backstop for missed quote.* webhooks.
         quote_reconcile_seconds = _resolve_int(
             session,
@@ -2562,7 +2523,7 @@ def build_beat_schedule() -> dict:
 
         # ERP schedules derive from validated capability bindings. Per-flow
         # single-writer ownership remains the independent business cutover gate.
-        from app.services.integrations.connectors.dotmac_erp import (
+        from app.services.integrations.backoffice_contracts import (
             ERP_OPERATIONAL_SYNC_CAPABILITY,
             ERP_OUTBOX_CAPABILITY,
             ERP_STATUS_CAPABILITY,
@@ -2591,7 +2552,7 @@ def build_beat_schedule() -> dict:
         )
 
         # Expense-claim status reconciliation. Polls ERP for
-        # in-flight claims and refreshes erp_claim_status on the source row.
+        # in-flight claims and refreshes expense_claim_status on the source row.
         # Same master gate (dotmac_erp_sync_enabled, default OFF) → inert until
         # cutover; read-only against ERP, so re-running is always safe.
         dotmac_erp_expense_refresh_interval = _effective_int(
@@ -2610,7 +2571,7 @@ def build_beat_schedule() -> dict:
         )
 
         # Material-request status reconciliation. Polls ERP for
-        # in-flight ISSUE requests and refreshes erp_material_status on the source
+        # in-flight ISSUE requests and refreshes support_status on the source
         # row (flipping to fulfilled when ERP reports it). Same master gate
         # (dotmac_erp_sync_enabled, default OFF) → inert until cutover; read-only
         # against ERP, so re-running is always safe.

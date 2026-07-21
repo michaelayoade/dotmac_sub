@@ -85,7 +85,7 @@ def _subscription_billing_mode_for_write(
     except BillingModeWriteRejected as exc:
         raise HTTPException(
             status_code=409,
-            detail=f"Subscription billing mode is not aligned: {exc.reason}",
+            detail=(f"Subscription billing mode is not aligned: {exc.reason.value}"),
         ) from exc
 
 
@@ -525,7 +525,10 @@ def _emit_subscription_status_event(
         _sync_credentials_to_radius(db, subscription.subscriber_id)
 
         # If resuming from suspension, restore connectivity
-        if from_status == SubscriptionStatus.suspended:
+        if from_status in {
+            SubscriptionStatus.suspended,
+            SubscriptionStatus.disabled,
+        }:
             try:
                 from app.services.enforcement import restore_subscription_connectivity
 
@@ -589,7 +592,15 @@ def _emit_subscription_status_event(
             subscription_id=subscription.id,
             account_id=subscription.subscriber_id,
         )
-    elif to_status in {SubscriptionStatus.stopped, SubscriptionStatus.disabled}:
+    elif to_status == SubscriptionStatus.disabled:
+        emit_event(
+            db,
+            EventType.subscription_disabled,
+            payload,
+            subscription_id=subscription.id,
+            account_id=subscription.subscriber_id,
+        )
+    elif to_status == SubscriptionStatus.stopped:
         # Previously emitted nothing → subscriber kept connectivity until the
         # orphan sweep. Gated enforcement (default off) + always-on audit log.
         _enforce_or_record_connectivity_gap(db, subscription, to_status)
@@ -703,13 +714,19 @@ def _handle_status_transition_via_lifecycle(
         compute_account_status(db, subscriber_id)
         _emit_subscription_status_event(db, subscription, from_status, to_status)
 
+    elif to_status == SubscriptionStatus.disabled:
+        from app.services.account_lifecycle import resolve_all_locks
+
+        resolve_all_locks(db, subscription, "disabled")
+        compute_account_status(db, subscriber_id)
+        _emit_subscription_status_event(db, subscription, from_status, to_status)
+
     else:
-        # Catch-all branch. The other terminal statuses (disabled/hidden/
-        # archived) only reach the catalog write path here — there is no
+        # Catch-all branch. The other terminal statuses (hidden/archived) only
+        # reach the catalog write path here — there is no
         # dedicated domain op for them — so they must get the same terminal
         # side-effects (resolve enforcement locks + release service IPs) as
-        # cancel/expire, otherwise a "disabled" service leaks its IPAM
-        # allocation and keeps a stale active lock.
+        # cancel/expire.
         from app.services.account_lifecycle import (
             TERMINAL_STATUSES,
             _release_service_ips,
@@ -1633,7 +1650,7 @@ class Subscriptions(ListResponseMixin):
 
         status = data.get("status", subscription.status)
         # State-machine guard: the raw form/CRUD write path must not resurrect a
-        # terminal service (canceled/expired/disabled/hidden/archived → active).
+        # terminal service (canceled/expired/hidden/archived → active).
         # The account_lifecycle domain ops already reject these edges; this is
         # the path that historically bypassed them.
         from app.services.account_lifecycle import (

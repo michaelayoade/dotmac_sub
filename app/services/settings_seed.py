@@ -1043,6 +1043,24 @@ def _seed_missing_notification_templates(db: Session) -> int:
         },
     ]
 
+    # Refer & Earn defaults are owned by the executable event-notification
+    # policy. Seed from that canonical spec so editable database templates do
+    # not maintain a second copy of the subject/body/channel decision.
+    from app.services.events.handlers.notification import EVENT_NOTIFICATION_SPECS
+    from app.services.events.types import EventType
+
+    referral_reward_spec = EVENT_NOTIFICATION_SPECS[EventType.referral_reward_issued]
+    templates.extend(
+        {
+            "code": referral_reward_spec.template_code,
+            "name": "Referral Reward Issued",
+            "channel": channel,
+            "subject": referral_reward_spec.subject,
+            "body": referral_reward_spec.body,
+        }
+        for channel in referral_reward_spec.channels
+    )
+
     created = 0
     for tmpl_data in templates:
         from sqlalchemy import select as sa_select

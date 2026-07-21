@@ -623,10 +623,6 @@ from app.models.project import (  # noqa: F401
     ProjectTemplateTaskDependency,
     ProjectType,
 )
-from app.models.project_mirror import (  # noqa: F401
-    ProjectMirror,
-    ProjectSyncState,
-)
 from app.models.provisioning import (  # noqa: F401
     AppointmentStatus,
     ProvisioningRun,
@@ -903,8 +899,5 @@ from app.models.work_link import (  # noqa: F401
     WorkLink,
     WorkLinkType,
 )
-from app.models.work_order import (  # noqa: F401
-    WorkOrder,
-    WorkOrderSyncState,
-)
+from app.models.work_order import WorkOrder  # noqa: F401
 from app.models.workqueue import WorkqueueItemKind, WorkqueueSnooze  # noqa: F401

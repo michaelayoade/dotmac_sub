@@ -1344,8 +1344,6 @@ def _build_network_access_cards(
         status = str(
             status_value if status_value is not None else raw_status or "unknown"
         )
-        if status == SubscriptionStatus.disabled.value:
-            continue
         if not sub.login and not sub.ipv4_address:
             continue
         sub_id = str(sub.id)

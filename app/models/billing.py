@@ -2333,7 +2333,20 @@ class PaymentProvider(Base):
 
 class CollectionAccount(Base):
     __tablename__ = "collection_accounts"
-    __table_args__ = (UniqueConstraint("name", name="uq_collection_accounts_name"),)
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_collection_accounts_name"),
+        Index(
+            "uq_collection_accounts_bank_number_currency",
+            "bank_name",
+            "account_number",
+            "currency",
+            unique=True,
+            postgresql_where=text(
+                "bank_name IS NOT NULL AND account_number IS NOT NULL"
+            ),
+            sqlite_where=text("bank_name IS NOT NULL AND account_number IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -2344,6 +2357,21 @@ class CollectionAccount(Base):
     )
     bank_name: Mapped[str | None] = mapped_column(String(120))
     account_last4: Mapped[str | None] = mapped_column(String(4))
+    # Full payment details. Present so this table can be the single owner of a
+    # Dotmac receiving account: `account_last4` alone identifies an account for
+    # reconciliation but cannot tell a customer where to pay, which is why those
+    # details previously lived in a settings blob. These are the company's own
+    # published receiving accounts — never customer payment credentials.
+    account_number: Mapped[str | None] = mapped_column(String(64))
+    account_name: Mapped[str | None] = mapped_column(String(200))
+    sort_code: Mapped[str | None] = mapped_column(String(32))
+    # External accounting-system mapping (QuickBooks/Xero/Sage GL code). Sub
+    # carries the mapping only; it does not model a chart of accounts.
+    accounting_code: Mapped[str | None] = mapped_column(String(64))
+    # Explicit customer-presentment order. Higher values win; new accounts
+    # default to zero so creating one cannot silently replace the invoice bank
+    # account selected during migration.
+    presentment_priority: Mapped[int] = mapped_column(Integer, default=0)
     currency: Mapped[str] = mapped_column(String(3), default="NGN")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     notes: Mapped[str | None] = mapped_column(Text)
@@ -2381,6 +2409,8 @@ class PaymentChannel(Base):
         UUID(as_uuid=True), ForeignKey("collection_accounts.id")
     )
     fee_rules: Mapped[dict | None] = mapped_column(JSON)
+    # External accounting-system mapping code; see CollectionAccount.accounting_code.
+    accounting_code: Mapped[str | None] = mapped_column(String(64))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
     notes: Mapped[str | None] = mapped_column(Text)

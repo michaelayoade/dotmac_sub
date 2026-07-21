@@ -82,7 +82,9 @@ def _approved_install(
     db.add(project)
     db.flush()
 
-    vendor = Vendor(name="Skyline Fiber Ltd", code=vendor_code, erp_id=vendor_erp_id)
+    vendor = Vendor(
+        name="Skyline Fiber Ltd", code=vendor_code, supplier_reference=vendor_erp_id
+    )
     db.add(vendor)
     db.flush()
 
@@ -308,7 +310,11 @@ def test_delivery_writes_erp_po_id_back(db_session):
 
     db_session.refresh(install)
     assert result.accepted == 1
-    assert install.erp_purchase_order_id == "PO-ERP-1"
+    assert install.procurement_order_reference == "PO-ERP-1"
+    assert install.procurement_system == "dotmac_erp"
+    assert install.procurement_delivery_status == "accepted"
+    assert install.procurement_delivery_error is None
+    assert install.procurement_delivered_at is not None
     assert client.posts[0]["path"] == "/api/v1/sync/sub/purchase-orders"
     assert client.posts[0]["idempotency_key"] == f"po-ip-{install.id}"
 
@@ -330,7 +336,7 @@ def test_delivery_refused_when_flow_owned_by_crm(db_session):
     db_session.refresh(install)
     assert result.skipped_not_owned == 1
     assert client.posts == []
-    assert install.erp_purchase_order_id is None
+    assert install.procurement_order_reference is None
     row = _outbox_rows(db_session, install)[0]
     assert row.status == FieldErpSyncStatus.pending.value
     assert row.attempts == 0
@@ -351,15 +357,15 @@ def test_repair_restores_lost_writeback_without_reemitting(db_session):
     # Simulate a DROPPED write-back: the outbox row is terminal-accepted and holds
     # the ERP id, but the install lost its back-reference.
     db_session.refresh(install)
-    assert install.erp_purchase_order_id == "PO-ERP-9"
-    install.erp_purchase_order_id = None
+    assert install.procurement_order_reference == "PO-ERP-9"
+    install.procurement_order_reference = None
     db_session.commit()
 
     result = purchase_order_sync.repair_purchase_order_writebacks(db_session)
 
     db_session.refresh(install)
     assert result["repaired"] == 1
-    assert install.erp_purchase_order_id == "PO-ERP-9"
+    assert install.procurement_order_reference == "PO-ERP-9"
     # No re-emit: still exactly one outbox row, still terminal-accepted.
     rows = _outbox_rows(db_session, install)
     assert len(rows) == 1
@@ -377,4 +383,4 @@ def test_repair_is_noop_when_writeback_already_present(db_session):
 
     db_session.refresh(install)
     assert result["repaired"] == 0
-    assert install.erp_purchase_order_id == "PO-ERP-7"
+    assert install.procurement_order_reference == "PO-ERP-7"

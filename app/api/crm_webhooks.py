@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.integration_platform import IntegrationInbox
-from app.services import projects_mirror, quotes_mirror, work_orders_mirror
+from app.services import quotes_mirror
 from app.services.crm_customers import upsert_customer_from_payload
 from app.services.integrations import inbox as integration_inbox
 from app.services.integrations.crm_capability import inbound_secret_material
@@ -29,21 +29,6 @@ DELIVERY_HEADER = "X-Webhook-Delivery-Id"
 TICKET_EVENTS = {"ticket.created", "ticket.resolved", "ticket.escalated"}
 CUSTOMER_EVENTS = {"customer.accepted"}
 CHAT_EVENTS = {"message.outbound"}
-PROJECT_EVENTS = {
-    "project.created",
-    "project.updated",
-    "project.completed",
-    "project.canceled",
-    "project_task.completed",
-    "project_task.updated",
-}
-WORK_ORDER_EVENTS = {
-    "work_order.created",
-    "work_order.updated",
-    "work_order.dispatched",
-    "work_order.completed",
-    "work_order.canceled",
-}
 QUOTE_EVENTS = {
     "quote.created",
     "quote.updated",
@@ -107,7 +92,7 @@ async def _receive_verified(
     provider_event_id = str(request.headers.get(DELIVERY_HEADER) or "").strip()
     if not provider_event_id:
         provider_event_id = f"{event_type}:{hashlib.sha256(raw_body).hexdigest()}"
-    receipt, _created = integration_inbox.receive_verified(
+    receipt, should_process = integration_inbox.receive_and_claim_verified(
         db,
         capability_binding_id=binding.id,
         provider_event_id=provider_event_id,
@@ -122,9 +107,7 @@ async def _receive_verified(
             if value
         },
     )
-    if not integration_inbox.claim_for_processing(receipt):
-        return event_type, payload, receipt, False
-    return event_type, payload, receipt, True
+    return event_type, payload, receipt, should_process
 
 
 def _body(payload: dict[str, Any]) -> dict[str, Any]:
@@ -137,18 +120,20 @@ def _complete(
     receipt: IntegrationInbox,
     consequence: dict[str, Any],
 ) -> dict[str, Any]:
-    integration_inbox.mark_processed(receipt, consequence=consequence)
-    db.commit()
-    return consequence
+    return integration_inbox.complete_consequence(
+        db,
+        receipt=receipt,
+        consequence=consequence,
+    )
 
 
 def _failed(db: Session, receipt: IntegrationInbox, exc: Exception) -> None:
-    integration_inbox.mark_failed(
-        receipt,
+    integration_inbox.fail_consequence(
+        db,
+        receipt=receipt,
         error_code="crm_consequence_failed",
         error_detail=type(exc).__name__,
     )
-    db.commit()
 
 
 def _existing(receipt: IntegrationInbox, should_process: bool) -> dict[str, Any] | None:
@@ -334,35 +319,6 @@ async def _receive_mirror_event(
     except Exception as exc:
         _failed(db, receipt, exc)
         raise
-
-
-@router.post("/projects")
-async def receive_crm_project_event(
-    request: Request,
-    db: Session = Depends(get_db),
-) -> dict[str, Any]:
-    return await _receive_mirror_event(
-        request,
-        db,
-        allowed_events=PROJECT_EVENTS,
-        default_event="project.updated",
-        consequence_owner=projects_mirror.apply_webhook,
-    )
-
-
-@router.post("/work-orders")
-async def receive_crm_work_order_event(
-    request: Request,
-    db: Session = Depends(get_db),
-) -> dict[str, Any]:
-    return await _receive_mirror_event(
-        request,
-        db,
-        allowed_events=WORK_ORDER_EVENTS,
-        default_event="work_order.updated",
-        consequence_owner=work_orders_mirror.apply_webhook,
-        control_key="crm.work_order_pull",
-    )
 
 
 @router.post("/quotes")

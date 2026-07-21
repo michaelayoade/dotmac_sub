@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+from enum import StrEnum
+from typing import Literal
+from uuid import UUID
+
 from pydantic import BaseModel, Field
+
+from app.schemas.status_presentation import StatusPresentation
 
 
 class PortalSessionResponse(BaseModel):
@@ -66,68 +73,138 @@ class ReferAFriendResponse(BaseModel):
     message: str = "Referral submitted"
 
 
-# ── Installation / Project tracker (served from the local mirror) ────────────
+# ── Native customer-experience lifecycle ────────────────────────────────────
+
+
+class CustomerExperienceState(StrEnum):
+    planned = "planned"
+    in_progress = "in_progress"
+    field_work = "field_work"
+    waiting_on_customer = "waiting_on_customer"
+    on_hold = "on_hold"
+    resolved = "resolved"
+    canceled = "canceled"
+
+
+class ProjectStageState(StrEnum):
+    pending = "pending"
+    in_progress = "in_progress"
+    blocked = "blocked"
+    done = "done"
+    canceled = "canceled"
+
+
+class CustomerActionKey(StrEnum):
+    view_project = "view_project"
+    view_work_order = "view_work_order"
+    track_technician = "track_technician"
+    rate_technician = "rate_technician"
+    view_ticket = "view_ticket"
+    confirm_resolution = "confirm_resolution"
+    dispute_resolution = "dispute_resolution"
+    rate_support = "rate_support"
+    contact_support = "contact_support"
+
+
+class CustomerSelfCareAction(BaseModel):
+    key: CustomerActionKey
+    label: str
+    allowed: bool = True
+    reason: str | None = None
+    method: Literal["GET", "POST"] = "GET"
+    api_path: str | None = None
+
+
+class CustomerTicketReference(BaseModel):
+    id: UUID
+    number: str | None = None
+    title: str
+    status: str
+    status_presentation: StatusPresentation
+    resolved_at: datetime | None = None
+    closed_at: datetime | None = None
+    actions: list[CustomerSelfCareAction] = Field(default_factory=list)
+
+
+class CustomerWorkOrderReference(BaseModel):
+    id: UUID
+    public_id: str
+    project_id: UUID | None = None
+    project_task_id: UUID | None = None
+    origin_ticket_id: UUID | None = None
+    title: str
+    status: str
+    status_presentation: StatusPresentation
+    scheduled_start: datetime | None = None
+    scheduled_end: datetime | None = None
+    estimated_arrival_at: datetime | None = None
+    completed_at: datetime | None = None
+    technician_name: str | None = None
+    technician_phone: str | None = None
+    technician_rating: int | None = None
+    actions: list[CustomerSelfCareAction] = Field(default_factory=list)
 
 
 class ProjectStage(BaseModel):
+    task_id: UUID | None = None
     key: str | None = None
     title: str
-    status: str = "pending"  # pending | in_progress | done
-    completed_at: str | None = None
+    status: ProjectStageState = ProjectStageState.pending
+    status_presentation: StatusPresentation
+    completed_at: datetime | None = None
+    ticket: CustomerTicketReference | None = None
+    work_orders: list[CustomerWorkOrderReference] = Field(default_factory=list)
 
 
 class ProjectItem(BaseModel):
-    id: str
+    id: UUID
     name: str
     status: str
+    status_presentation: StatusPresentation
+    experience_state: CustomerExperienceState
     project_type: str | None = None
     progress_pct: int = 0
     current_stage: str | None = None
     stages: list[ProjectStage] = Field(default_factory=list)
+    work_orders: list[CustomerWorkOrderReference] = Field(default_factory=list)
+    related_tickets: list[CustomerTicketReference] = Field(default_factory=list)
+    actions: list[CustomerSelfCareAction] = Field(default_factory=list)
     customer_address: str | None = None
     region: str | None = None
-    start_at: str | None = None
-    due_at: str | None = None
-    completed_at: str | None = None
-    created_at: str | None = None
+    start_at: datetime | None = None
+    due_at: datetime | None = None
+    completed_at: datetime | None = None
+    created_at: datetime | None = None
 
 
 class MyProjectsResponse(BaseModel):
-    """The signed-in subscriber's installations/projects, served from the local
-    mirror (Installation tracker)."""
+    """Sub-owned project/task/field/support lifecycle for one subscriber."""
 
     projects: list[ProjectItem] = Field(default_factory=list)
     total: int = 0
     active: int = 0
 
 
-# ── Field Service / Work Orders (served from the local mirror) ───────────────
+# ── Field Service / Work Orders ─────────────────────────────────────────────
 
 
-class WorkOrderItem(BaseModel):
-    id: str
-    title: str
-    status: str
+class WorkOrderItem(CustomerWorkOrderReference):
     work_type: str | None = None
     priority: str | None = None
-    technician_name: str | None = None
-    technician_phone: str | None = None
     address: str | None = None
-    scheduled_start: str | None = None
-    scheduled_end: str | None = None
-    estimated_arrival_at: str | None = None
     estimated_duration_minutes: int | None = None
-    started_at: str | None = None
-    paused_at: str | None = None
-    resumed_at: str | None = None
-    completed_at: str | None = None
+    started_at: datetime | None = None
+    paused_at: datetime | None = None
+    resumed_at: datetime | None = None
     total_active_seconds: int | None = None
-    created_at: str | None = None
+    created_at: datetime | None = None
+    project_name: str | None = None
+    project_task_title: str | None = None
+    origin_ticket: CustomerTicketReference | None = None
 
 
 class MyWorkOrdersResponse(BaseModel):
-    """The signed-in subscriber's field-service work orders (Field Service
-    tracker)."""
+    """The signed-in subscriber's Sub-owned field-service work orders."""
 
     work_orders: list[WorkOrderItem] = Field(default_factory=list)
     total: int = 0
@@ -242,8 +319,8 @@ class TechnicianLocation(BaseModel):
     latitude: float | None = None
     longitude: float | None = None
     accuracy_m: float | None = None
-    updated_at: str | None = None
-    estimated_arrival_at: str | None = None
+    updated_at: datetime | None = None
+    estimated_arrival_at: datetime | None = None
 
 
 class TechnicianRatingRequest(BaseModel):

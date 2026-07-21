@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 
 from app.models.audit import AuditEvent
+from app.models.project import Project, ProjectTask
 from app.models.service_team import ServiceTeam, ServiceTeamMember, ServiceTeamType
 from app.models.subscriber import Subscriber
 from app.models.support import Ticket
@@ -159,6 +160,68 @@ def test_handoff_rejects_non_member_and_terminal_ticket(db_session):
             idempotency_key="terminal",
         )
     assert terminal.value.code == "ticket_terminal"
+
+
+def test_handoff_scopes_field_visit_to_ticket_linked_project_task(db_session):
+    subscriber, _team, actor_id, ticket = _ticket_with_team(db_session)
+    project = Project(name="Repair project", subscriber_id=subscriber.id)
+    db_session.add(project)
+    db_session.flush()
+    task = ProjectTask(
+        project_id=project.id,
+        ticket_id=ticket.id,
+        title="Trace feeder",
+        status="todo",
+    )
+    db_session.add(task)
+    db_session.commit()
+
+    result = ticket_work_order_handoff.issue_work_order(
+        db_session,
+        ticket.id,
+        TicketWorkOrderIssueRequest(
+            reason="Field trace required",
+            project_task_id=task.id,
+        ),
+        actor_id=actor_id,
+        auth={"principal_type": "system_user", "principal_id": str(actor_id)},
+        idempotency_key="project-task-scope",
+    )
+
+    assert result.work_order.project_id == project.id
+    assert result.work_order.project_task_id == task.id
+    assert result.work_order.origin_ticket_id == ticket.id
+
+
+def test_handoff_rejects_project_task_linked_to_another_ticket(db_session):
+    subscriber, _team, actor_id, ticket = _ticket_with_team(db_session)
+    other_ticket = Ticket(title="Other incident", subscriber_id=subscriber.id)
+    project = Project(name="Repair project", subscriber_id=subscriber.id)
+    db_session.add_all([project, other_ticket])
+    db_session.flush()
+    task = ProjectTask(
+        project_id=project.id,
+        ticket_id=other_ticket.id,
+        title="Other scope",
+    )
+    db_session.add(task)
+    db_session.commit()
+
+    with pytest.raises(
+        ticket_work_order_handoff.TicketWorkOrderHandoffError
+    ) as mismatch:
+        ticket_work_order_handoff.issue_work_order(
+            db_session,
+            ticket.id,
+            TicketWorkOrderIssueRequest(
+                reason="Wrong task",
+                project_task_id=task.id,
+            ),
+            actor_id=actor_id,
+            auth=None,
+            idempotency_key="wrong-task",
+        )
+    assert mismatch.value.code == "project_task_ticket_mismatch"
 
 
 def test_generic_work_order_writes_cannot_accept_origin_ticket_id():

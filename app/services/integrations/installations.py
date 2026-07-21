@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, TypeVar
 from uuid import UUID
 
 from sqlalchemy import func
@@ -32,6 +33,24 @@ from app.services.secrets import is_secret_ref
 
 class InstallationError(ValueError):
     """Raised when an installation violates its manifest or lifecycle."""
+
+
+CommandResultT = TypeVar("CommandResultT")
+
+
+def execute_command(
+    db: Session,
+    command: Callable[[], CommandResultT],
+) -> CommandResultT:
+    """Complete one installation-owned unit of work."""
+
+    try:
+        result = command()
+        db.commit()
+        return result
+    except Exception:
+        db.rollback()
+        raise
 
 
 def config_revision_digest(

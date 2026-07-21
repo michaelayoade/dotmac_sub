@@ -48,7 +48,6 @@ _TERMINAL = frozenset(
     {
         SubscriptionStatus.canceled,
         SubscriptionStatus.expired,
-        SubscriptionStatus.disabled,
     }
 )
 # Any status that still implies the subscriber should hold network resources
@@ -62,6 +61,7 @@ _NON_TERMINAL = frozenset(
         SubscriptionStatus.pending,
         SubscriptionStatus.hidden,
         SubscriptionStatus.archived,
+        SubscriptionStatus.disabled,
     }
 )
 

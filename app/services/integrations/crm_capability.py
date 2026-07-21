@@ -167,80 +167,12 @@ class CrmCapabilityClient:
             correlation_id=correlation,
         )
 
-    def list_work_orders(
-        self, subscriber_id: str | None = None
-    ) -> list[dict[str, Any]]:
-        return list(
-            self._operational(
-                "list_work_orders",
-                {"subscriber_id": subscriber_id},
-                f"crm-work-orders:{subscriber_id or 'all'}",
-            ).get("items")
-            or []
-        )
-
-    def get_work_order(self, work_order_id: str) -> dict[str, Any]:
-        return dict(
-            self._operational(
-                "get_work_order",
-                {"work_order_id": work_order_id},
-                f"crm-work-order:{work_order_id}",
-            ).get("item")
-            or {}
-        )
-
-    def list_work_order_notes(self, work_order_id: str) -> list[dict[str, Any]]:
-        return list(
-            self._operational(
-                "list_work_order_notes",
-                {"work_order_id": work_order_id},
-                f"crm-work-order-notes:{work_order_id}",
-            ).get("items")
-            or []
-        )
-
     def get_portal_referrals(self, crm_subscriber_id: str) -> dict[str, Any]:
         return dict(
             self._operational(
                 "get_portal_referrals",
                 {"crm_subscriber_id": crm_subscriber_id},
                 f"crm-portal-referrals:{crm_subscriber_id}",
-            ).get("item")
-            or {}
-        )
-
-    def get_portal_projects(self, crm_subscriber_id: str) -> dict[str, Any]:
-        return dict(
-            self._operational(
-                "get_portal_projects",
-                {"crm_subscriber_id": crm_subscriber_id},
-                f"crm-portal-projects:{crm_subscriber_id}",
-            ).get("item")
-            or {}
-        )
-
-    def get_portal_work_orders(self, crm_subscriber_id: str) -> dict[str, Any]:
-        return dict(
-            self._operational(
-                "get_portal_work_orders",
-                {"crm_subscriber_id": crm_subscriber_id},
-                f"crm-portal-work-orders:{crm_subscriber_id}",
-            ).get("item")
-            or {}
-        )
-
-    def get_portal_technician_location(
-        self, crm_subscriber_id: str, work_order_id: str, *, actor: str = "subscriber"
-    ) -> dict[str, Any]:
-        return dict(
-            self._operational(
-                "get_portal_technician_location",
-                {
-                    "crm_subscriber_id": crm_subscriber_id,
-                    "work_order_id": work_order_id,
-                    "actor": actor,
-                },
-                f"crm-portal-location:{work_order_id}",
             ).get("item")
             or {}
         )

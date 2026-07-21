@@ -28,13 +28,13 @@ PORTAL_VISIBLE_SERVICE_STATUSES = frozenset(
         SubscriptionStatus.blocked,
         SubscriptionStatus.suspended,
         SubscriptionStatus.stopped,
+        SubscriptionStatus.disabled,
     }
 )
 TERMINAL_SERVICE_STATUSES = frozenset(
     {
         SubscriptionStatus.expired,
         SubscriptionStatus.canceled,
-        SubscriptionStatus.disabled,
         SubscriptionStatus.archived,
         SubscriptionStatus.hidden,
     }

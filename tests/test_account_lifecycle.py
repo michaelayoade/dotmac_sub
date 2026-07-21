@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 
 import pytest
 from sqlalchemy.orm import Session
@@ -67,6 +68,7 @@ def _make_subscription(
         "offer_id": offer.id,
         "status": SubscriptionStatus.active,
         "billing_mode": BillingMode.prepaid,
+        "unit_price": Decimal("100.00"),
     }
     defaults.update(kwargs)
     sub = Subscription(**defaults)

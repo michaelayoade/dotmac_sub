@@ -15,6 +15,7 @@ from sqlalchemy import String, cast, exists, or_, select
 from sqlalchemy.sql.elements import ClauseElement, ColumnElement
 
 from app.models.project import Project, ProjectTask, ProjectTaskAssignee
+from app.models.work_order import WorkOrder
 from app.services.dynamic_filters import (
     DEFAULT_OPERATORS_BY_TYPE,
     NULL_TOKENS,
@@ -68,6 +69,39 @@ def _task_assigned_to_expression(operator: str, value: object) -> ClauseElement:
         return ~_match(value)
     raise FilterValidationError(
         f"Operator '{operator}' is not allowed for assigned_to_person_id"
+    )
+
+
+def _task_work_order_expression(operator: str, value: object) -> ClauseElement:
+    """Match native work-order ids through the one-to-many task relation."""
+
+    def _match(work_order_id: object) -> ColumnElement[bool]:
+        coerced = _coerce_scalar(work_order_id, "uuid")
+        return exists(
+            select(WorkOrder.id)
+            .where(WorkOrder.project_task_id == ProjectTask.id)
+            .where(WorkOrder.id == coerced)
+        )
+
+    linked = exists(
+        select(WorkOrder.id).where(WorkOrder.project_task_id == ProjectTask.id)
+    )
+    if operator in {"is", "is not"}:
+        token = str(value).strip().lower() if value is not None else None
+        if token not in NULL_TOKENS:
+            raise FilterValidationError(
+                "work_order_id supports only NULL checks for 'is'/'is not'"
+            )
+        return ~linked if operator == "is" else linked
+    if operator in {"in", "not in"}:
+        matches = or_(*[_match(item) for item in _coerce_list(value, "uuid")])
+        return matches if operator == "in" else ~matches
+    if operator == "=":
+        return _match(value)
+    if operator == "!=":
+        return ~_match(value)
+    raise FilterValidationError(
+        f"Operator '{operator}' is not allowed for work_order_id"
     )
 
 
@@ -228,8 +262,9 @@ PROJECT_TASK_FILTER_SPECS: dict[str, FilterFieldSpec] = {
     ),
     "work_order_id": FilterFieldSpec(
         field="work_order_id",
-        expression=ProjectTask.work_order_id,
         field_type="uuid",
+        operators={"=", "!=", "in", "not in", "is", "is not"},
+        builder=_task_work_order_expression,
     ),
     "effort_hours": FilterFieldSpec(
         field="effort_hours",

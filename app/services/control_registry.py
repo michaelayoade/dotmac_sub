@@ -607,36 +607,6 @@ _FEATURE_CONTROLS: tuple[Control, ...] = (
         description="Pull tickets from CRM.",
     ),
     Control(
-        # Native work-order authority lever: gates the CRM work-order webhook
-        # branch, the work_order_mirror_reconcile beat entry, and the lazy CRM
-        # refresh in work_orders_mirror.read_for_subscriber. Fail-OPEN so the
-        # switch is inert (mirror keeps pulling) until deliberately flipped off
-        # — at which point sub serves and writes work orders natively only.
-        key="crm.work_order_pull",
-        layer=Layer.feature,
-        owner_module="crm",
-        default=True,
-        on_missing=True,
-        legacy=(
-            LegacyAlias(
-                _SCH, "crm_work_order_pull_enabled", "CRM_WORK_ORDER_PULL_ENABLED"
-            ),
-        ),
-        description="Pull work orders from CRM (webhook + reconcile + lazy refresh).",
-    ),
-    Control(
-        key="projects.native_read",
-        layer=Layer.feature,
-        default=False,
-        on_missing=False,
-        legacy=(
-            LegacyAlias(
-                _PRJ, "projects_native_read_enabled", "PROJECTS_NATIVE_READ_ENABLED"
-            ),
-        ),
-        description="Serve project reads from native project tables.",
-    ),
-    Control(
         key="quotes.native_read",
         layer=Layer.feature,
         default=False,

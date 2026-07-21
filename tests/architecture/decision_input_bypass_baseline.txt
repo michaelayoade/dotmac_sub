@@ -37,7 +37,6 @@ env 3 app/services/push.py
 env 1 app/services/radius_population.py
 env 5 app/services/radius_probe.py
 env 1 app/services/radius_reconciliation.py
-env 1 app/services/referrals.py
 env 1 app/services/scheduler_config.py
 env 2 app/services/session_store.py
 env 1 app/services/sms.py
@@ -62,7 +61,6 @@ setting 9 app/main.py
 setting 4 app/services/auth.py
 setting 4 app/services/auth_flow.py
 setting 4 app/services/billing_settings.py
-setting 4 app/services/collections/grace_policy.py
 setting 8 app/services/credential_key_rotation.py
 setting 4 app/services/credential_rotation_schedule.py
 setting 4 app/services/customer_location_requests.py

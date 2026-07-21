@@ -39,7 +39,8 @@ class TechnicianProfileBase(BaseModel):
     crm_person_id: str | None = Field(default=None, max_length=64)
     title: str | None = Field(default=None, max_length=120)
     region: str | None = Field(default=None, max_length=120)
-    erp_employee_id: str | None = Field(default=None, max_length=100)
+    workforce_system: str | None = Field(default=None, max_length=40)
+    workforce_employee_reference: str | None = Field(default=None, max_length=100)
     metadata_: dict | None = Field(default=None, serialization_alias="metadata")
     is_active: bool = True
 
@@ -64,7 +65,8 @@ class TechnicianProfileUpdate(BaseModel):
     crm_person_id: str | None = Field(default=None, max_length=64)
     title: str | None = Field(default=None, max_length=120)
     region: str | None = Field(default=None, max_length=120)
-    erp_employee_id: str | None = Field(default=None, max_length=100)
+    workforce_system: str | None = Field(default=None, max_length=40)
+    workforce_employee_reference: str | None = Field(default=None, max_length=100)
     metadata_: dict | None = Field(default=None, serialization_alias="metadata")
     is_active: bool | None = None
 
@@ -117,7 +119,8 @@ class ShiftCreate(TimeWindowMixin):
     technician_id: UUID
     timezone: str | None = Field(default=None, max_length=64)
     shift_type: str | None = Field(default=None, max_length=60)
-    erp_id: str | None = Field(default=None, max_length=100)
+    workforce_system: str | None = Field(default=None, max_length=40)
+    workforce_record_reference: str | None = Field(default=None, max_length=100)
     is_active: bool = True
 
 
@@ -126,7 +129,8 @@ class ShiftUpdate(BaseModel):
     end_at: datetime | None = None
     timezone: str | None = Field(default=None, max_length=64)
     shift_type: str | None = Field(default=None, max_length=60)
-    erp_id: str | None = Field(default=None, max_length=100)
+    workforce_system: str | None = Field(default=None, max_length=40)
+    workforce_record_reference: str | None = Field(default=None, max_length=100)
     is_active: bool | None = None
 
     @model_validator(mode="after")
@@ -153,7 +157,8 @@ class AvailabilityBlockCreate(TimeWindowMixin):
     reason: str | None = Field(default=None, max_length=160)
     block_type: str | None = Field(default=None, max_length=60)
     is_available: bool = False
-    erp_id: str | None = Field(default=None, max_length=100)
+    workforce_system: str | None = Field(default=None, max_length=40)
+    workforce_record_reference: str | None = Field(default=None, max_length=100)
     is_active: bool = True
 
 
@@ -163,7 +168,8 @@ class AvailabilityBlockUpdate(BaseModel):
     reason: str | None = Field(default=None, max_length=160)
     block_type: str | None = Field(default=None, max_length=60)
     is_available: bool | None = None
-    erp_id: str | None = Field(default=None, max_length=100)
+    workforce_system: str | None = Field(default=None, max_length=40)
+    workforce_record_reference: str | None = Field(default=None, max_length=100)
     is_active: bool | None = None
 
     @model_validator(mode="after")
@@ -227,6 +233,7 @@ class WorkOrderHeaderBase(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     subscriber_id: UUID
     project_id: UUID | None = None
+    project_task_id: UUID | None = None
     requires_as_built_evidence: bool = True
     description: str | None = None
     status: str = Field(default="draft", max_length=20)
@@ -279,6 +286,7 @@ class WorkOrderHeaderUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=200)
     subscriber_id: UUID | None = None
     project_id: UUID | None = None
+    project_task_id: UUID | None = None
     requires_as_built_evidence: bool | None = None
     description: str | None = None
     status: str | None = Field(default=None, max_length=20)

@@ -309,6 +309,16 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
             "Please contact billing if you need more information."
         ),
     ),
+    EventType.referral_reward_issued: EventNotificationSpec(
+        template_code="referral_reward_issued",
+        category="billing",
+        channels=(NotificationChannel.push,),
+        subject="You earned a referral reward",
+        body=(
+            "Dear {subscriber_name},\n\n"
+            "Your referral reward of {amount} has been added to your account credit."
+        ),
+    ),
     EventType.arrangement_defaulted: EventNotificationSpec(
         template_code="arrangement_defaulted",
         category="billing",
@@ -629,7 +639,11 @@ class NotificationHandler:
                         body=body,
                         channels=(channel,),
                         persist_policy_suppressions=False,
-                        subscriber_recipients={channel: recipient},
+                        recipients={channel: recipient},
+                        dedupe_key=(
+                            f"event-notification:{event.event_id}:"
+                            f"{spec.template_code}:{channel.value}"
+                        ),
                     ),
                 )
                 queued_count = len(result.queued)

@@ -12,6 +12,8 @@ from app.models.subscriber import Subscriber, SubscriberStatus, UserType
 from app.services.billing_communication_policy import billing_communication_decisions
 from app.services.billing_profile import (
     BillingProfile,
+    BillingProfileReason,
+    BillingProfileSource,
     plan_billing_mode_transition,
     plan_subscription_billing_mode_write,
 )
@@ -72,9 +74,11 @@ def test_billing_mode_transition_blocks_mixed_collectible_modes():
         account_mode=BillingMode.prepaid,
         subscription_modes=frozenset({BillingMode.prepaid, BillingMode.postpaid}),
         effective_mode=None,
-        source="mixed_subscriptions",
+        source=BillingProfileSource.MIXED_SUBSCRIPTIONS,
         account_subscription_mismatch=True,
-        invalid_reason="mixed_collectible_subscription_billing_modes",
+        invalid_reason=(
+            BillingProfileReason.MIXED_COLLECTIBLE_SUBSCRIPTION_BILLING_MODES
+        ),
     )
 
     decision = plan_billing_mode_transition(profile, BillingMode.postpaid)

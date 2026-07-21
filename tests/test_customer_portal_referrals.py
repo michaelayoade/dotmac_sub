@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import uuid
+from types import SimpleNamespace
 from unittest.mock import patch
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.db import get_db
+from app.services.referrals import ReferralProgramError
 from app.web.customer.referrals import router
 
 
@@ -31,14 +34,19 @@ def test_get_redirects_to_login_when_anonymous(db_session):
 
 def test_post_refers_a_friend_and_redirects(db_session):
     client = _client(db_session)
+    subscriber_id = uuid.uuid4()
     with (
         patch(
             "app.web.customer.referrals.get_current_customer_from_request",
-            return_value={"subscriber_id": "s1"},
+            return_value={"subscriber_id": str(subscriber_id)},
         ),
         patch(
-            "app.web.customer.referrals.referrals_service.referrals.refer_a_friend",
-            return_value={"id": "r2", "status": "pending"},
+            "app.web.customer.referrals.optional_customer_subscriber_id",
+            return_value=subscriber_id,
+        ),
+        patch(
+            "app.web.customer.referrals.referrals_service.refer_friend",
+            return_value=SimpleNamespace(referral_id=uuid.uuid4(), status="pending"),
         ) as refer,
     ):
         r = client.post(
@@ -49,21 +57,26 @@ def test_post_refers_a_friend_and_redirects(db_session):
     assert r.status_code == 303
     assert "referred=1" in r.headers["location"]
     refer.assert_called_once()
-    assert refer.call_args.kwargs["email"] == "friend@example.com"
+    assert refer.call_args.args[1].email == "friend@example.com"
 
 
 def test_post_surfaces_referral_error(db_session):
     client = _client(db_session)
+    subscriber_id = uuid.uuid4()
     with (
         patch(
             "app.web.customer.referrals.get_current_customer_from_request",
-            return_value={"subscriber_id": "s1"},
+            return_value={"subscriber_id": str(subscriber_id)},
         ),
         patch(
-            "app.web.customer.referrals.referrals_service.referrals.refer_a_friend",
-            side_effect=HTTPException(
-                status_code=422,
-                detail="An email or phone number is required.",
+            "app.web.customer.referrals.optional_customer_subscriber_id",
+            return_value=subscriber_id,
+        ),
+        patch(
+            "app.web.customer.referrals.referrals_service.refer_friend",
+            side_effect=ReferralProgramError(
+                code="referrals.program.contact_required",
+                message="An email or phone number is required.",
             ),
         ),
     ):

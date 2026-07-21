@@ -745,7 +745,7 @@ def load_invoice_detail_data(
         "pdf_export": pdf_export,
         "is_proforma": is_proforma_invoice(invoice),
         "invoice_bank_details": invoice_bank_details_service.get_invoice_bank_details(
-            db
+            db, currency=invoice.currency
         ),
     }
 

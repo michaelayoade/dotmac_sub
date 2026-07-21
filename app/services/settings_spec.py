@@ -855,6 +855,22 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.collections,
+        key="default_prepaid_policy_set_id",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default=None,
+        label="Default Prepaid Collections Policy Set",
+    ),
+    SettingSpec(
+        domain=SettingDomain.collections,
+        key="default_postpaid_policy_set_id",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default=None,
+        label="Default Postpaid Collections Policy Set",
+    ),
+    SettingSpec(
+        domain=SettingDomain.collections,
         key="billing_enforcement_min_enforcing_day_offset",
         env_var="BILLING_ENFORCEMENT_MIN_ENFORCING_DAY_OFFSET",
         value_type=SettingValueType.integer,
@@ -1322,18 +1338,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=5,
         min_value=1,
         label="CRM Ticket Pull Interval (minutes)",
-    ),
-    SettingSpec(
-        # flip lever: gates the CRM work-order webhook branch, the
-        # work_order_mirror_reconcile beat, and the lazy mirror refresh
-        # (crm.work_order_pull in the control registry). Default ON — inert
-        # until the work-order SoT flip deliberately turns it off.
-        domain=SettingDomain.scheduler,
-        key="crm_work_order_pull_enabled",
-        env_var="CRM_WORK_ORDER_PULL_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=True,
-        label="CRM Work-Order Pull Enabled",
     ),
     SettingSpec(
         domain=SettingDomain.scheduler,
@@ -2159,38 +2163,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.billing,
-        key="direct_bank_transfer_bank_name",
-        env_var=None,
-        value_type=SettingValueType.string,
-        default="",
-        label="Direct Bank Transfer Bank Name",
-    ),
-    SettingSpec(
-        domain=SettingDomain.billing,
-        key="direct_bank_transfer_account_name",
-        env_var=None,
-        value_type=SettingValueType.string,
-        default="",
-        label="Direct Bank Transfer Account Name",
-    ),
-    SettingSpec(
-        domain=SettingDomain.billing,
-        key="direct_bank_transfer_account_number",
-        env_var=None,
-        value_type=SettingValueType.string,
-        default="",
-        label="Direct Bank Transfer Account Number",
-    ),
-    SettingSpec(
-        domain=SettingDomain.billing,
-        key="direct_bank_transfer_sort_code",
-        env_var=None,
-        value_type=SettingValueType.string,
-        default="",
-        label="Direct Bank Transfer Sort Code",
-    ),
-    SettingSpec(
-        domain=SettingDomain.billing,
         key="direct_bank_transfer_instructions",
         env_var=None,
         value_type=SettingValueType.string,
@@ -2423,6 +2395,16 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.subscriber,
+        key="referral_signup_context_expiry_minutes",
+        env_var="REFERRAL_SIGNUP_CONTEXT_EXPIRY_MINUTES",
+        value_type=SettingValueType.integer,
+        default=1440,
+        min_value=5,
+        max_value=10080,
+        label="Referral signup context expiry (minutes)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.subscriber,
         key="referral_reward_amount",
         env_var="REFERRAL_REWARD_AMOUNT",
         value_type=SettingValueType.string,
@@ -2436,6 +2418,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.string,
         default="NGN",
         label="Referral Reward Currency",
+    ),
+    SettingSpec(
+        domain=SettingDomain.subscriber,
+        key="referral_share_base_url",
+        env_var="PORTAL_REFERRAL_SHARE_BASE",
+        value_type=SettingValueType.string,
+        default="https://app.dotmac.io",
+        label="Referral Share Base URL",
     ),
     SettingSpec(
         domain=SettingDomain.subscriber,
@@ -3557,6 +3547,26 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=1440,
         min_value=5,
     ),
+    SettingSpec(
+        domain=SettingDomain.auth,
+        key="credential_enrollment_request_limit",
+        env_var="CREDENTIAL_ENROLLMENT_REQUEST_LIMIT",
+        value_type=SettingValueType.integer,
+        default=3,
+        min_value=1,
+        max_value=10,
+        label="Credential enrollment request limit",
+    ),
+    SettingSpec(
+        domain=SettingDomain.auth,
+        key="credential_enrollment_request_window_seconds",
+        env_var="CREDENTIAL_ENROLLMENT_REQUEST_WINDOW_SECONDS",
+        value_type=SettingValueType.integer,
+        default=900,
+        min_value=60,
+        max_value=86400,
+        label="Credential enrollment request window (seconds)",
+    ),
     # ============== Comms Domain: External API Timeouts ==============
     SettingSpec(
         domain=SettingDomain.comms,
@@ -3904,22 +3914,8 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=False,
         label="Quotes: native write path",
     ),
-    # read-flip flags: OFF =
-    # the read surfaces (/me/*, web customer portal, reseller views) keep
-    # serving the CRM mirrors; ON = they serve the native services
-    # (projects.portal_read_for_subscriber, sales.selfserve read,
-    # referrals.read_for_subscriber). Shapes are identical (
-    # golden-payload contract), so flipping back is the cheap rollback
-    # during the sync window. Sales orders have no read surface of their
-    # own.
-    SettingSpec(
-        domain=SettingDomain.projects,
-        key="projects_native_read_enabled",
-        env_var="PROJECTS_NATIVE_READ_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=False,
-        label="Projects: native read path",
-    ),
+    # Quotes retain their independent read cutover. Project/task/work-order
+    # customer reads are unconditionally native Sub paths.
     SettingSpec(
         domain=SettingDomain.projects,
         key="quotes_native_read_enabled",
@@ -3927,6 +3923,16 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.boolean,
         default=False,
         label="Quotes: native read path",
+    ),
+    SettingSpec(
+        domain=SettingDomain.projects,
+        key="vendor_quote_validity_days",
+        env_var=None,
+        value_type=SettingValueType.integer,
+        default=30,
+        min_value=1,
+        max_value=365,
+        label="Vendor quote validity (days)",
     ),
     # --- AI provider transport (docs/designs/AI_SOT.md, ai.gateway) ----------
     # Every value defaults OFF/empty: the transport is inert until an operator
@@ -4187,7 +4193,6 @@ _RETIRED_FEATURE_ALIAS_SPECS = frozenset(
         (SettingDomain.collections, "dunning_enabled"),
         (SettingDomain.collections, "billing_notifications_hourly_enabled"),
         (SettingDomain.scheduler, "crm_ticket_pull_enabled"),
-        (SettingDomain.scheduler, "crm_work_order_pull_enabled"),
         (SettingDomain.radius, "coa_enabled"),
         (SettingDomain.billing, "prepaid_monthly_invoicing_enabled"),
         (SettingDomain.billing, "overdue_check_enabled"),
@@ -4200,7 +4205,6 @@ _RETIRED_FEATURE_ALIAS_SPECS = frozenset(
         (SettingDomain.network, "wireguard_log_cleanup_enabled"),
         (SettingDomain.network, "wireguard_token_cleanup_enabled"),
         (SettingDomain.projects, "quotes_native_write_enabled"),
-        (SettingDomain.projects, "projects_native_read_enabled"),
         (SettingDomain.projects, "quotes_native_read_enabled"),
     }
 )

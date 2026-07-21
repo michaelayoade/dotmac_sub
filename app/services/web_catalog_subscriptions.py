@@ -445,6 +445,7 @@ def default_subscription_form(account_id: str, subscriber_id: str) -> dict[str, 
         "subscriber_id": subscriber_id,
         "offer_id": "",
         "status": SubscriptionStatus.pending.value,
+        "requested_status": SubscriptionStatus.pending.value,
         "billing_mode": "",
         "contract_term": ContractTerm.month_to_month.value,
         "start_at": "",
@@ -546,12 +547,17 @@ def parse_subscription_form(
     if subscription_id:
         data["id"] = subscription_id
     else:
+        requested_status = str(data["status"] or SubscriptionStatus.pending.value)
+        if form.get("activate_immediately") == "1":
+            # Backward compatibility for submissions from the previous form.
+            requested_status = SubscriptionStatus.active.value
         # Creation establishes technical and commercial intent only. Lifecycle
         # facts are owned by subscription_lifecycle_commands after the record
         # and its provisioning inputs have been staged.
         data.update(
             {
                 "status": SubscriptionStatus.pending.value,
+                "requested_status": requested_status,
                 "start_at": "",
                 "end_at": "",
                 "next_billing_at": "",
@@ -610,6 +616,14 @@ def validate_subscription_form(
             return "Account is required."
     if not subscription.get("offer_id"):
         return "Offer is required."
+    if for_create and str(subscription.get("requested_status") or "") not in {
+        SubscriptionStatus.pending.value,
+        SubscriptionStatus.active.value,
+        SubscriptionStatus.suspended.value,
+        SubscriptionStatus.disabled.value,
+        SubscriptionStatus.canceled.value,
+    }:
+        return "Select a valid lifecycle state."
     return None
 
 
@@ -2903,7 +2917,10 @@ def apply_create_quick_options(
     payload_data: dict[str, object], form: FormData
 ) -> tuple[bool, bool, bool]:
     """Return create follow-up flags without bypassing lifecycle ownership."""
-    activate_immediately = form.get("activate_immediately") == "1"
+    activate_immediately = (
+        str(form.get("status") or "").strip().lower() == SubscriptionStatus.active.value
+        or form.get("activate_immediately") == "1"
+    )
     generate_invoice = form.get("generate_invoice") == "1"
     send_welcome_email = form.get("send_welcome_email") == "1"
     if activate_immediately:
@@ -3962,6 +3979,7 @@ def bulk_update_status(
                 SubscriptionStatus.blocked,
                 SubscriptionStatus.suspended,
                 SubscriptionStatus.stopped,
+                SubscriptionStatus.disabled,
             }:
                 command_kind_by_status[status] = SubscriptionCommandKind.restore
         elif target_status == SubscriptionStatus.suspended:
