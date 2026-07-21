@@ -16,6 +16,7 @@ from app.services import (
 from app.services import web_billing_invoice_cache as web_billing_invoice_cache_service
 from app.services import web_billing_invoice_forms as web_billing_invoice_forms_service
 from app.services import web_billing_invoices as web_billing_invoices_service
+from app.services import web_billing_ledger as web_billing_ledger_service
 from app.services import web_billing_overview as web_billing_overview_service
 from app.services.auth_dependencies import require_permission
 from app.services.list_query import ListQuery
@@ -564,3 +565,26 @@ def invoice_search(request: Request, db: Session = Depends(get_db)):
 )
 def invoice_filter(request: Request, db: Session = Depends(get_db)):
     return HTMLResponse("")
+
+
+@router.get(
+    "/ledger",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:invoice:read"))],
+)
+def billing_ledger(
+    request: Request,
+    facet: str = Query(default="invoices"),
+    db: Session = Depends(get_db),
+):
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    context = {
+        "request": request,
+        "active_page": "billing",
+        "active_menu": "billing",
+        "current_user": get_current_user(request),
+        "sidebar_stats": get_sidebar_stats(db),
+    }
+    context.update(web_billing_ledger_service.billing_ledger_data(db, facet))
+    return templates.TemplateResponse("admin/billing/ledger.html", context)
