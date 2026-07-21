@@ -1,457 +1,153 @@
-"""CRM customer webhook service helpers."""
+"""Read-only interpretation of verified CRM customer observations.
+
+The Integration Inbox owns the durable provider payload. This module may
+identify an existing Subscriber only from exact retained CRM provenance; it
+never creates or updates customer state and never completes a transaction.
+"""
 
 from __future__ import annotations
 
-import logging
-from datetime import UTC, date, datetime
-from typing import Any
+from collections.abc import Mapping
+from dataclasses import dataclass
+from enum import StrEnum
+from uuid import UUID
 
-from fastapi import HTTPException, status
-from sqlalchemy import or_, text
 from sqlalchemy.orm import Session
 
-from app.models.audit import AuditActorType
-from app.models.subscriber import (
-    Gender,
-    Subscriber,
-    SubscriberCategory,
-    SubscriberStatus,
-)
-from app.schemas.audit import AuditEventCreate
-from app.schemas.subscriber import SubscriberCreate, SubscriberUpdate
-from app.services import audit as audit_service
-from app.services import subscriber as subscriber_service
-from app.services.customer_identity_normalization import (
-    default_country_code,
-    normalize_phone_identifier,
-)
-
-logger = logging.getLogger(__name__)
+from app.models.subscriber import Subscriber
 
 
-def _text(value: Any) -> str:
-    return str(value or "").strip()
+def _text(value: object) -> str | None:
+    normalized = str(value or "").strip()
+    return normalized or None
 
 
-def _name_parts(payload: dict[str, Any]) -> tuple[str, str, str]:
-    display_name = (
-        _text(payload.get("display_name"))
-        or _text(payload.get("name"))
-        or _text(payload.get("full_name"))
-        or _text(payload.get("customer_name"))
-    )
-    first_name = _text(payload.get("first_name"))
-    last_name = _text(payload.get("last_name"))
-    if not first_name and not last_name and display_name:
-        parts = display_name.split()
-        if len(parts) == 1:
-            first_name, last_name = parts[0], "Customer"
-        else:
-            first_name, last_name = " ".join(parts[:-1]), parts[-1]
-    if not display_name:
-        display_name = " ".join(part for part in (first_name, last_name) if part)
-    return first_name, last_name, display_name
+@dataclass(frozen=True, slots=True)
+class CRMCustomerObservation:
+    """Allowlisted identity provenance from one verified CRM receipt."""
+
+    crm_person_id: str | None
+    crm_quote_id: str | None
+    crm_sales_order_id: str | None
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, object]) -> CRMCustomerObservation:
+        return cls(
+            crm_person_id=_text(payload.get("crm_person_id")),
+            crm_quote_id=_text(payload.get("crm_quote_id")),
+            crm_sales_order_id=_text(payload.get("crm_sales_order_id")),
+        )
 
 
-def _address_fields(payload: dict[str, Any]) -> dict[str, Any]:
-    address = payload.get("address")
-    if isinstance(address, dict):
-        return {
-            "address_line1": _text(
-                address.get("address_line1")
-                or address.get("line1")
-                or address.get("street")
-                or address.get("address")
-            )
-            or None,
-            "address_line2": _text(address.get("address_line2") or address.get("line2"))
-            or None,
-            "city": _text(address.get("city")) or None,
-            "region": _text(address.get("region") or address.get("state")) or None,
-            "postal_code": _text(address.get("postal_code") or address.get("postcode"))
-            or None,
-            "country_code": _text(address.get("country_code") or address.get("country"))
-            or None,
+class CRMCustomerObservationStatus(StrEnum):
+    MATCHED = "matched"
+    UNMATCHED = "unmatched"
+    AMBIGUOUS = "ambiguous"
+
+
+@dataclass(frozen=True, slots=True)
+class CRMCustomerObservationOutcome:
+    """PII-free result of comparing CRM provenance with Sub records."""
+
+    status: CRMCustomerObservationStatus
+    subscriber_id: str | None = None
+    subscriber_number: str | None = None
+    account_number: str | None = None
+    matched_via: tuple[str, ...] = ()
+
+    def as_consequence(self) -> dict[str, object]:
+        result: dict[str, object] = {
+            "status": "observed",
+            "observation_status": self.status.value,
+            "matched_via": list(self.matched_via),
         }
-    return {
-        "address_line1": _text(address or payload.get("address_line1")) or None,
-        "address_line2": _text(payload.get("address_line2")) or None,
-        "city": _text(payload.get("city")) or None,
-        "region": _text(payload.get("region") or payload.get("state")) or None,
-        "postal_code": _text(payload.get("postal_code") or payload.get("postcode"))
-        or None,
-        "country_code": _text(payload.get("country_code") or payload.get("country"))
-        or None,
-    }
-
-
-def _status(value: Any) -> SubscriberStatus:
-    raw = _text(value).lower() or SubscriberStatus.new.value
-    try:
-        return SubscriberStatus(raw)
-    except ValueError:
-        return SubscriberStatus.new
-
-
-def _category(value: Any) -> SubscriberCategory:
-    raw = _text(value).lower() or SubscriberCategory.residential.value
-    try:
-        return SubscriberCategory(raw)
-    except ValueError:
-        return SubscriberCategory.residential
-
-
-def _crm_metadata(payload: dict[str, Any]) -> dict[str, Any]:
-    metadata = payload.get("metadata")
-    if not isinstance(metadata, dict):
-        metadata = {}
-    result = dict(metadata)
-    for key in (
-        "crm_person_id",
-        "crm_project_id",
-        "crm_quote_id",
-        "crm_sales_order_id",
-    ):
-        value = _text(payload.get(key))
-        if value:
-            result[key] = value
-    result.setdefault("source", _text(payload.get("source")) or "dotmac_omni")
-    result["synced_at"] = datetime.now(UTC).isoformat()
-    category = _text(
-        payload.get("subscriber_category") or metadata.get("subscriber_category")
-    )
-    if category:
-        result["subscriber_category"] = category
-    return result
-
-
-def _normalized_name(subscriber: Subscriber) -> str:
-    value = (
-        _text(subscriber.display_name)
-        or _text(getattr(subscriber, "name", ""))
-        or " ".join(
-            part
-            for part in (_text(subscriber.first_name), _text(subscriber.last_name))
-            if part
-        )
-    )
-    return " ".join(value.lower().split())
-
-
-def _matching_metadata_clause(metadata: dict[str, Any]):
-    # Match only on identifiers that are 1:1 with a single CRM customer:
-    # the person, and the order/quote that belongs to one customer. crm_person_id
-    # is the strongest identity, so when present we match on it alone. We
-    # deliberately do NOT match on crm_project_id — a project can span multiple
-    # customers, so an OR on it could merge two distinct customers (overwriting
-    # one with the other's name/email/phone on a later webhook).
-    person_id = _text(metadata.get("crm_person_id"))
-    if person_id:
-        return Subscriber.metadata_["crm_person_id"].as_string() == person_id
-
-    clauses = []
-    for key in ("crm_sales_order_id", "crm_quote_id"):
-        value = _text(metadata.get(key))
-        if value:
-            clauses.append(Subscriber.metadata_[key].as_string() == value)
-    return or_(*clauses) if clauses else None
-
-
-def _metadata_match_via(metadata: dict[str, Any]) -> str:
-    if _text(metadata.get("crm_person_id")):
-        return "crm_person_id"
-    if _text(metadata.get("crm_sales_order_id")):
-        return "crm_sales_order_id"
-    if _text(metadata.get("crm_quote_id")):
-        return "crm_quote_id"
-    return "crm_metadata"
-
-
-def _lock_crm_person(db: Session, metadata: dict[str, Any]) -> None:
-    """Serialize concurrent customer-create webhooks for one CRM person.
-
-    ``crm_person_id`` is the identity key but lives in ``metadata_`` JSON with no
-    unique constraint, so two webhooks firing near-simultaneously (project
-    created + order confirmed) both see "not found" and both insert — one CRM
-    person becomes two subscribers. A transaction-level advisory lock keyed on
-    the person id makes the second webhook block until the first commits, so it
-    then matches the existing row instead of racing it. No-op off PostgreSQL
-    (SQLite test harness) and when no person id is present.
-    """
-    person_id = _text(metadata.get("crm_person_id"))
-    if not person_id:
-        return
-    if db.get_bind().dialect.name != "postgresql":
-        return
-    db.execute(
-        text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
-        {"key": f"crm_customer:{person_id}"},
-    )
-
-
-def _find_existing_customer(
-    db: Session, payload: dict[str, Any], metadata: dict[str, Any], display_name: str
-) -> tuple[Subscriber | None, str | None]:
-    clause = _matching_metadata_clause(metadata)
-    if clause is not None:
-        existing = db.query(Subscriber).filter(clause).first()
-        if existing is not None:
-            return existing, _metadata_match_via(metadata)
-
-    expected_name = " ".join(display_name.lower().split())
-    candidates = []
-    email = _text(payload.get("email")).lower()
-    phone = _text(payload.get("phone"))
-    if email:
-        candidates.extend(
-            db.query(Subscriber).filter(Subscriber.email.ilike(email)).limit(10).all()
-        )
-    normalized_phone = None
-    if phone:
-        country_code = default_country_code(db)
-        normalized_phone = normalize_phone_identifier(
-            phone,
-            default_country_code=country_code,
-        )
-        candidates.extend(
-            db.query(Subscriber)
-            .filter(Subscriber.phone.isnot(None))
-            .order_by(Subscriber.id)
-            .limit(500)
-            .all()
-        )
-    seen: set[str] = set()
-    for subscriber in candidates:
-        sid = str(subscriber.id)
-        if sid in seen:
-            continue
-        seen.add(sid)
-        if not expected_name or _normalized_name(subscriber) != expected_name:
-            continue
-        if email and _text(subscriber.email).lower() == email:
-            return subscriber, "email_name"
-        if (
-            normalized_phone
-            and normalize_phone_identifier(
-                subscriber.phone,
-                default_country_code=default_country_code(db),
+        if self.subscriber_id is not None:
+            result.update(
+                {
+                    "id": self.subscriber_id,
+                    "subscriber_id": self.subscriber_number or self.subscriber_id,
+                    "subscriber_number": self.subscriber_number,
+                    "account_number": self.account_number,
+                }
             )
-            == normalized_phone
-        ):
-            return subscriber, "phone_name"
-    return None, None
+        return result
 
 
-def _record_identity_overwrite_audit(
+def _matches_for_identifier(
     db: Session,
     *,
-    subscriber: Subscriber,
-    changes: dict[str, dict[str, str | None]],
-    metadata: dict[str, Any],
-) -> None:
-    if not changes:
-        return
-    audit_service.audit_events.create(
-        db=db,
-        payload=AuditEventCreate(
-            actor_type=AuditActorType.service,
-            actor_id="crm_webhook",
-            action="crm_customer_identity_update",
-            entity_type="subscriber",
-            entity_id=str(subscriber.id),
-            status_code=200,
-            is_success=True,
-            metadata_={
-                "source": "crm_customer_webhook",
-                "crm_person_id": metadata.get("crm_person_id"),
-                "crm_quote_id": metadata.get("crm_quote_id"),
-                "crm_sales_order_id": metadata.get("crm_sales_order_id"),
-                "changes": changes,
-            },
-        ),
+    key: str,
+    value: str,
+) -> tuple[Subscriber, ...]:
+    return tuple(
+        db.query(Subscriber)
+        .filter(Subscriber.metadata_[key].as_string() == value)
+        .order_by(Subscriber.id)
+        .limit(2)
+        .all()
     )
 
 
-def _track_change(
-    changes: dict[str, dict[str, str | None]],
-    field: str,
-    before: Any,
-    after: Any,
-) -> None:
-    before_text = None if before is None else str(before)
-    after_text = None if after is None else str(after)
-    if before_text != after_text:
-        changes[field] = {"old": before_text, "new": after_text}
-
-
-def _enum_value(value: Any) -> str | None:
-    return getattr(value, "value", None) if value is not None else None
-
-
-def _crm_identity_fields(
-    payload: dict[str, Any],
-) -> tuple[date | None, Gender | None]:
-    """Validate authoritative profile values sent by the CRM.
-
-    Only top-level fields are authoritative. CRM metadata is retained verbatim
-    for backwards compatibility, but must not be able to overwrite the
-    Selfcare profile projection. Missing, null, and blank fields intentionally
-    produce ``None`` so an existing value is preserved.
-    """
-    values: dict[str, Any] = {}
-    for field in ("date_of_birth", "gender"):
-        value = payload.get(field)
-        if value is not None and _text(value):
-            values[field] = value
-    if not values:
-        return None, None
-    try:
-        validated = SubscriberUpdate.model_validate(values)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Invalid CRM customer date_of_birth or gender.",
-        ) from exc
-    return validated.date_of_birth, validated.gender
-
-
-def _update_existing_customer(
+def observe_customer(
     db: Session,
-    subscriber: Subscriber,
-    payload: dict[str, Any],
-    metadata: dict[str, Any],
-) -> Subscriber:
-    changes: dict[str, dict[str, str | None]] = {}
-    date_of_birth, gender = _crm_identity_fields(payload)
-    first_name, last_name, display_name = _name_parts(payload)
-    if first_name:
-        _track_change(changes, "first_name", subscriber.first_name, first_name)
-        subscriber.first_name = first_name
-    if last_name:
-        _track_change(changes, "last_name", subscriber.last_name, last_name)
-        subscriber.last_name = last_name
-    if display_name:
-        _track_change(changes, "display_name", subscriber.display_name, display_name)
-        subscriber.display_name = display_name
-    if _text(payload.get("email")):
-        email = _text(payload.get("email"))
-        _track_change(changes, "email", subscriber.email, email)
-        subscriber.email = email
-    if _text(payload.get("phone")):
-        phone = _text(payload.get("phone"))
-        _track_change(changes, "phone", subscriber.phone, phone)
-        subscriber.phone = phone
-    for key, value in _address_fields(payload).items():
-        if value:
-            _track_change(changes, key, getattr(subscriber, key), value)
-            setattr(subscriber, key, value)
-    status_value = _status(payload.get("status"))
-    category_value = _category(
-        payload.get("subscriber_category") or metadata.get("subscriber_category")
-    )
-    _track_change(
-        changes,
-        "category",
-        _enum_value(subscriber.category),
-        category_value.value,
-    )
-    subscriber.category = category_value
-    if date_of_birth is not None:
-        _track_change(
-            changes,
-            "date_of_birth",
-            subscriber.date_of_birth,
-            date_of_birth,
+    observation: CRMCustomerObservation,
+) -> CRMCustomerObservationOutcome:
+    """Resolve exact provenance without inferring identity or changing state."""
+
+    if observation.crm_person_id is not None:
+        matches = _matches_for_identifier(
+            db,
+            key="crm_person_id",
+            value=observation.crm_person_id,
         )
-        subscriber.date_of_birth = date_of_birth
-    if gender is not None:
-        _track_change(
-            changes,
-            "gender",
-            _enum_value(subscriber.gender),
-            gender.value,
+        if len(matches) > 1:
+            return CRMCustomerObservationOutcome(
+                status=CRMCustomerObservationStatus.AMBIGUOUS,
+                matched_via=("crm_person_id",),
+            )
+        if len(matches) == 1:
+            subscriber = matches[0]
+            return CRMCustomerObservationOutcome(
+                status=CRMCustomerObservationStatus.MATCHED,
+                subscriber_id=str(subscriber.id),
+                subscriber_number=subscriber.subscriber_number,
+                account_number=subscriber.account_number,
+                matched_via=("crm_person_id",),
+            )
+        return CRMCustomerObservationOutcome(
+            status=CRMCustomerObservationStatus.UNMATCHED,
+            matched_via=("crm_person_id",),
         )
-        subscriber.gender = gender
-    merged = dict(subscriber.metadata_ or {})
-    merged.update(metadata)
-    merged["crm_reported_status"] = status_value.value
-    subscriber.metadata_ = merged
-    db.commit()
-    db.refresh(subscriber)
-    _record_identity_overwrite_audit(
-        db,
-        subscriber=subscriber,
-        changes=changes,
-        metadata=metadata,
-    )
-    return subscriber
 
+    candidates: dict[UUID, Subscriber] = {}
+    matched_via: list[str] = []
+    for key, value in (
+        ("crm_sales_order_id", observation.crm_sales_order_id),
+        ("crm_quote_id", observation.crm_quote_id),
+    ):
+        if value is None:
+            continue
+        matches = _matches_for_identifier(db, key=key, value=value)
+        if matches:
+            matched_via.append(key)
+        for subscriber in matches:
+            candidates[subscriber.id] = subscriber
 
-def _create_customer_from_crm(
-    db: Session, payload: dict[str, Any], metadata: dict[str, Any]
-) -> Subscriber:
-    first_name, last_name, display_name = _name_parts(payload)
-    date_of_birth, gender = _crm_identity_fields(payload)
-    if not first_name or not last_name:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Customer name is required.",
+    if len(candidates) > 1:
+        return CRMCustomerObservationOutcome(
+            status=CRMCustomerObservationStatus.AMBIGUOUS,
+            matched_via=tuple(matched_via),
         )
-    email = _text(payload.get("email"))
-    if not email:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Customer email is required.",
+    if len(candidates) == 1:
+        subscriber = next(iter(candidates.values()))
+        return CRMCustomerObservationOutcome(
+            status=CRMCustomerObservationStatus.MATCHED,
+            subscriber_id=str(subscriber.id),
+            subscriber_number=subscriber.subscriber_number,
+            account_number=subscriber.account_number,
+            matched_via=tuple(matched_via),
         )
-    create_payload = SubscriberCreate(
-        first_name=first_name,
-        last_name=last_name,
-        display_name=display_name or None,
-        email=email,
-        phone=_text(payload.get("phone")) or None,
-        status=_status(payload.get("status")),
-        category=_category(
-            payload.get("subscriber_category") or metadata.get("subscriber_category")
-        ),
-        date_of_birth=date_of_birth,
-        gender=gender or Gender.unknown,
-        metadata_=metadata,
-        **_address_fields(payload),
+    return CRMCustomerObservationOutcome(
+        status=CRMCustomerObservationStatus.UNMATCHED,
+        matched_via=tuple(matched_via),
     )
-    return subscriber_service.subscribers.create(db, create_payload)
-
-
-def _customer_response(subscriber: Subscriber) -> dict[str, Any]:
-    subscriber_number = _text(subscriber.subscriber_number) or str(subscriber.id)
-    return {
-        "id": str(subscriber.id),
-        "subscriber_id": subscriber_number,
-        "subscriber_number": subscriber.subscriber_number,
-        "account_number": subscriber.account_number,
-    }
-
-
-def upsert_customer_from_payload(
-    db: Session, payload: dict[str, Any]
-) -> dict[str, Any]:
-    metadata = _crm_metadata(payload)
-    _, _, display_name = _name_parts(payload)
-    # Take the per-person lock BEFORE the find so a concurrent create for the
-    # same CRM person can't slip between our find and insert (see _lock_crm_person).
-    _lock_crm_person(db, metadata)
-    existing, matched_via = _find_existing_customer(db, payload, metadata, display_name)
-    logger.info(
-        "crm_customer_match_decision action=%s matched_via=%s crm_person_id=%s crm_quote_id=%s crm_sales_order_id=%s subscriber_id=%s",
-        "update" if existing is not None else "create",
-        matched_via or "none",
-        metadata.get("crm_person_id"),
-        metadata.get("crm_quote_id"),
-        metadata.get("crm_sales_order_id"),
-        existing.id if existing is not None else None,
-    )
-    subscriber = (
-        _update_existing_customer(db, existing, payload, metadata)
-        if existing is not None
-        else _create_customer_from_crm(db, payload, metadata)
-    )
-    return _customer_response(subscriber)

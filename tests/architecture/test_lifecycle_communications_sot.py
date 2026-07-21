@@ -69,7 +69,38 @@ def test_notification_owner_wraps_unowned_customer_deliveries_in_intents():
     assert "submit(" in source
 
 
-def test_crm_customer_status_is_observed_not_authoritative():
+def test_crm_customer_observer_cannot_write_sub_state():
     source = (APP / "services" / "crm_customers.py").read_text()
-    assert 'merged["crm_reported_status"]' in source
-    assert "subscriber.status = status_value" not in source
+    for forbidden in (
+        "SubscriberCreate",
+        "SubscriberUpdate",
+        "HTTPException",
+        ".commit(",
+        ".flush(",
+        "db.add(",
+        "setattr(",
+        "first_name =",
+        "last_name =",
+        "display_name =",
+        "email =",
+        "phone =",
+        "date_of_birth =",
+        "gender =",
+        "category =",
+        "status =",
+    ):
+        assert forbidden not in source
+    assert "def observe_customer(" in source
+    assert 'key="crm_person_id"' in source
+    assert "Subscriber.metadata_[key].as_string()" in source
+
+
+def test_crm_customer_route_records_observation_without_domain_consequence():
+    source = (APP / "api" / "crm_webhooks.py").read_text()
+    customer_route = source.split('@router.post("/customers")', 1)[1].split(
+        '@router.post("")', 1
+    )[0]
+    assert "CRMCustomerObservation.from_payload(payload)" in customer_route
+    assert "observe_customer(db, observation)" in customer_route
+    assert "upsert_customer_from_payload" not in customer_route
+    assert "Subscriber(" not in customer_route

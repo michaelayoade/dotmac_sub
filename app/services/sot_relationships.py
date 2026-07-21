@@ -267,6 +267,155 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="customer.name_repairs",
+                module="app.services.customer_name_repairs",
+                owns=("evidence-bound legacy Subscriber name repair",),
+                depends_on=(
+                    "customer.accounts",
+                    "party.registry",
+                    "observability.audit_log",
+                    "events.dispatcher",
+                ),
+                notes=(
+                    "This temporary repair owner corrects only legacy, Party-unbound "
+                    "Subscriber names from exact immutable incident audit evidence. "
+                    "Party-bound identities fail closed to party.registry."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="evidence-bound legacy Subscriber name repair",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "approved customer-name repair manifest",
+                                "canonical legacy Subscriber name state",
+                                "immutable CRM overwrite audit evidence",
+                                "canonical Party identity binding",
+                            ),
+                            canonical_writer="customer.name_repairs",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="approved customer-name repair manifest",
+                            owner="customer.name_repairs",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed expected/replacement names, exact source audit "
+                                "UUIDs, manifest digest, actor, reason, and named target"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical legacy Subscriber name state",
+                            owner="customer.accounts",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="locked Party-unbound Subscriber name columns",
+                        ),
+                        AuthorityInput(
+                            name="immutable CRM overwrite audit evidence",
+                            owner="observability.audit_log",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "crm_customer_identity_update old/new field evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical Party identity binding",
+                            owner="party.registry",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Subscriber.party_id cutover boundary",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "repair_customer_names enters execute_owner_command once; "
+                            "name writes, identity-index rebuilds, audits, and events "
+                            "commit or roll back together"
+                        ),
+                        locking=(
+                            "All manifest Subscriber rows lock in stable UUID order; "
+                            "current names are rechecked after locking."
+                        ),
+                        idempotency=(
+                            "The SHA-256 manifest digest is the unique completed-batch "
+                            "audit identity."
+                        ),
+                        retries=(
+                            "An identical completed digest returns already_applied; "
+                            "stale, missing, ambiguous, or Party-bound input fails closed."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "customer.name_repairs.active_caller_transaction",
+                            "customer.name_repairs.command_contract_violation",
+                            "customer.name_repairs.invalid_command_context",
+                            "customer.name_repairs.nested_owner_command",
+                            "customer.name_repairs.nested_transaction_completion",
+                            "customer.name_repairs.invalid_manifest",
+                            "customer.name_repairs.invalid_replacement",
+                            "customer.name_repairs.missing_evidence",
+                            "customer.name_repairs.invalid_evidence",
+                            "customer.name_repairs.missing_subscriber",
+                            "customer.name_repairs.party_bound",
+                            "customer.name_repairs.stale_manifest",
+                        ),
+                        mapping_owner=(
+                            "scripts.one_off.restore_crm_placeholder_identity"
+                        ),
+                        fail_closed_on=(
+                            "missing or mismatched immutable audit evidence",
+                            "stale current Subscriber name",
+                            "Party-bound Subscriber identity",
+                            "invalid or repeated repair manifest entry",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("subscriber.updated",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Existing subscriber.updated consumers receive an additive "
+                            "changed_fields and remediation-reason payload."
+                        ),
+                        replay=(
+                            "The completed manifest digest suppresses duplicate mutation "
+                            "and event staging."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "direct one-off CLI writes and web_customer_actions repair helper"
+                        ),
+                        new_owner="customer.name_repairs",
+                        verification=(
+                            "Owner-command, stale-manifest, immutable-evidence, Party-bound, "
+                            "idempotency, audit, event, and architecture tests."
+                        ),
+                        cutover_gate=(
+                            "The incident CLI constructs the typed command on a clean "
+                            "session and never writes or commits directly."
+                        ),
+                        fallback_retirement=(
+                            "No script, route, webhook, or generic profile helper writes "
+                            "the repair outside customer.name_repairs."
+                        ),
+                    ),
+                    steward="customer operations",
+                    design_refs=(
+                        "docs/PARTY_CUSTOMER_LIFECYCLE.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/adr/0002-owner-command-transaction-boundary.md",
+                    ),
+                    test_refs=(
+                        "tests/test_restore_crm_placeholder_identity.py",
+                        "tests/architecture/test_crm_customer_boundary.py",
+                    ),
+                ),
+            ),
+            SOTService(
                 name="customer.network_context",
                 module="app.services.customer_network_context",
                 owns=(

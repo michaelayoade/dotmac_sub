@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models.integration_platform import IntegrationInbox
 from app.services import quotes_mirror
-from app.services.crm_customers import upsert_customer_from_payload
+from app.services.crm_customers import CRMCustomerObservation, observe_customer
 from app.services.integrations import inbox as integration_inbox
 from app.services.integrations.crm_capability import inbound_secret_material
 
@@ -127,12 +127,19 @@ def _complete(
     )
 
 
-def _failed(db: Session, receipt: IntegrationInbox, exc: Exception) -> None:
+def _failed(
+    db: Session,
+    receipt: IntegrationInbox,
+    exc: Exception,
+    *,
+    error_code: str = "crm_consequence_failed",
+    error_detail: str | None = None,
+) -> None:
     integration_inbox.fail_consequence(
         db,
         receipt=receipt,
-        error_code="crm_consequence_failed",
-        error_detail=type(exc).__name__,
+        error_code=error_code,
+        error_detail=error_detail or type(exc).__name__,
     )
 
 
@@ -156,8 +163,8 @@ async def receive_crm_customer(
     try:
         if event_type not in CUSTOMER_EVENTS:
             return _complete(db, receipt, {"status": "ignored", "event": event_type})
-        consequence = upsert_customer_from_payload(db, payload)
-        consequence["status"] = "ok"
+        observation = CRMCustomerObservation.from_payload(payload)
+        consequence = observe_customer(db, observation).as_consequence()
         return _complete(db, receipt, consequence)
     except Exception as exc:
         _failed(db, receipt, exc)
