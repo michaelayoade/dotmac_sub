@@ -1,7 +1,18 @@
-"""Retire the unused prepaid payment-application table.
+"""Retire prepaid payment-application runtime while preserving its evidence.
 
 Revision ID: 394_retire_payment_prepaid_applications
 Revises: 393_prepaid_coverage_reconciliation
+
+The runtime model and writers are retired, but rows in this table are historical
+financial and access evidence.  Rename the physical table into an archive in one
+transaction instead of copying or deleting it.  PostgreSQL's table rename takes
+an ACCESS EXCLUSIVE lock, so the deployment migration lock/statement budgets
+apply; a lock failure is retried only by retrying the whole migration.
+
+Production inspection on 2026-07-21 found one row.  The rename preserves the
+table object, constraints, indexes, and every value exactly.  Finance operations
+is the archive steward.  The archive has no application model or writer and is
+retained until a separately reviewed retention decision approves deletion.
 """
 
 from __future__ import annotations
@@ -15,23 +26,46 @@ down_revision = "393_prepaid_coverage_reconciliation"
 branch_labels = None
 depends_on = None
 
+_LEGACY_TABLE = "payment_prepaid_applications"
+_ARCHIVE_TABLE = "payment_prepaid_applications_archive"
+
+
+def _has_table(bind, table_name: str) -> bool:
+    return sa.inspect(bind).has_table(table_name)
+
+
+def _row_count(bind, table_name: str) -> int:
+    table = sa.Table(table_name, sa.MetaData(), autoload_with=bind)
+    return int(bind.scalar(sa.select(sa.func.count()).select_from(table)) or 0)
+
 
 def upgrade() -> None:
     bind = op.get_bind()
-    row_exists = bool(
-        bind.scalar(
-            sa.text("SELECT EXISTS (SELECT 1 FROM payment_prepaid_applications)")
-        )
-    )
-    if row_exists:
+    legacy_exists = _has_table(bind, _LEGACY_TABLE)
+    archive_exists = _has_table(bind, _ARCHIVE_TABLE)
+
+    if legacy_exists and archive_exists:
         raise RuntimeError(
-            "payment_prepaid_applications contains evidence; reconcile or archive "
-            "it before retiring the legacy table"
+            "prepaid payment-application retirement is ambiguous: both "
+            f"{_LEGACY_TABLE} and {_ARCHIVE_TABLE} exist"
         )
-    op.drop_table("payment_prepaid_applications")
+    if archive_exists or not legacy_exists:
+        # The archive already exists, or this database applied the original
+        # empty-table retirement. Revision 396 supplies the empty compatibility
+        # archive for the latter case.
+        return
+
+    source_count = _row_count(bind, _LEGACY_TABLE)
+    op.rename_table(_LEGACY_TABLE, _ARCHIVE_TABLE)
+    archive_count = _row_count(bind, _ARCHIVE_TABLE)
+    if archive_count != source_count:
+        raise RuntimeError(
+            "prepaid payment-application archive verification failed: "
+            f"source_count={source_count}, archive_count={archive_count}"
+        )
 
 
 def downgrade() -> None:
-    # Forward-only authority retirement: downgrade must not recreate a second
-    # prepaid service-consumption evidence model.
+    # Forward-only authority retirement: downgrade must not restore the archive
+    # as a live prepaid service-consumption model or writer.
     pass

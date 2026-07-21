@@ -34,10 +34,13 @@ becomes evidenced credit.
 
 The receipt presents gross cash received separately from the settlement value
 credited after provider fees, invoice applications, any settlement-owned
-prepaid application, and the remaining payment-backed credit. A receipt does
-not promise service duration. When the downstream renewal owner actually funds
-a period it publishes the exact `prepaid_service.renewed` outcome; portal and
-notification views display that owner-provided renewed-through date.
+prepaid application recorded by the retired historical path, and the remaining
+payment-backed credit. Those historical application rows remain only in
+`payment_prepaid_applications_archive`; they are not a live decision or write
+path. A receipt does not promise service duration. When the downstream renewal
+owner actually funds a period it publishes the exact `prepaid_service.renewed`
+outcome; portal and notification views display that owner-provided
+renewed-through date.
 
 `financial.account_credit_applications` then locks the account, chooses eligible
 invoices and payment-backed credit deterministically, and invokes the payment

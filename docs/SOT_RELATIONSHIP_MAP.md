@@ -1122,6 +1122,16 @@ Payment creation, settlement, and allocation are one coherent owner contract:
   `financial.prepaid_service_coverage_reconciliation`, which creates missing
   entitlement evidence from an exact existing debit or paid invoice line and
   quarantines ambiguity without posting money.
+- Retired payment-application evidence boundary: the former
+  `PaymentPrepaidApplication` runtime is not a current financial or coverage
+  owner. Revision `394_retire_payment_prepaid_applications` renames its physical
+  table to `payment_prepaid_applications_archive` so historical payment,
+  settlement, ledger, entitlement, period, and access-recheck provenance remains
+  intact without an application model or writer. Finance operations owns
+  retention; deletion requires a separate reviewed decision. Revision
+  `396_payment_prepaid_application_archive` supplies only an empty compatibility
+  archive to databases that had already passed the original empty-table-only
+  retirement.
 - Cutover gate: pending/no-money tests, stale-preview rejection, idempotent
   creation/settlement/allocation replay, exact settlement/allocation/prepaid
   links, provider replay, explicit historical reconciliation, canonical renewal

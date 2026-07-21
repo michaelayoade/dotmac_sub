@@ -60,6 +60,17 @@ retired by migration 393. The signed readiness record owns the intended
 activation time; the feature control owns enabled/disabled state. This removes
 a second activation clock without removing the emergency kill switch.
 
+The former `PaymentPrepaidApplication` runtime is also retired. Its rows are
+historical payment-funded-period, ledger, entitlement, and access-recheck
+provenance; they are not current coverage or renewal authority. Migration 394
+atomically renames the physical table to
+`payment_prepaid_applications_archive`, preserving every row, constraint, and
+index while leaving it without an application model or writer. Finance
+operations owns archive retention. Migration 396 creates the same empty archive
+shape only for an environment that had already applied the original
+empty-table-only form of migration 394. The archive is append-only operational
+evidence and requires a separate reviewed retention decision before deletion.
+
 The enforcement kill switch remains. Coverage integrity, canonical-renewal
 availability, currency validity, and fresh enablement readiness are not optional
 health flags and cannot be bypassed by disabling generic health checks.
@@ -118,7 +129,11 @@ hash and cannot be recorded while a repairable or quarantined item remains.
 
 ## Production cutover runbook
 
-1. Deploy migrations 392 and 393 with enforcement disabled.
+1. With enforcement disabled, inventory both
+   `payment_prepaid_applications` and `payment_prepaid_applications_archive`.
+   Both names existing at once is an ambiguity and blocks deployment. Deploy
+   migrations 392 through the current head; migration 394 must leave exactly
+   one archive table with the same row count as the legacy source.
 2. Enable and dry-run `billing.prepaid_service_renewals`; repair missing prices,
    baseline quarantine, malformed service periods, and parent/subscription
    lifecycle drift.
@@ -138,7 +153,9 @@ hash and cannot be recorded while a repairable or quarantined item remains.
 6. Record a fresh full-cohort readiness generation with its intended activation
    time, then deliberately enable `collections.prepaid_balance_enforcement`.
 7. Verify the first sweep and the next scheduled renewal/sweep cycle before
-   closing the cutover. Retain the kill switch; do not recreate retired flags.
+   closing the cutover. Verify the payment-application archive remains present
+   with its pre-deploy row count. Retain the kill switch; do not recreate retired
+   flags or a payment-application runtime writer.
 
 ## Transaction boundaries
 
