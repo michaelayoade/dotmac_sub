@@ -997,17 +997,20 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "typed deposit intent lifecycle and provider correlation",
                     "atomic deposit settlement composition",
                     "deposit-to-payment evidence link",
-                    "deposit settlement outbox event",
+                    "post-application funding-change outbox event",
                 ),
                 depends_on=(
                     "financial.payments",
                     "financial.account_credit_applications",
+                    "financial.prepaid_service_renewals",
                     "financial.access_resolution",
                 ),
                 notes=(
                     "A deposit first records the whole confirmed receipt as "
                     "unallocated account credit, grants no service duration, and "
-                    "then asks the canonical applicator to settle eligible debt."
+                    "then asks the canonical applicator to settle eligible debt. "
+                    "Only after that application completes does its chained event "
+                    "request due-service renewal before access reconciliation."
                 ),
             ),
             SOTService(
@@ -1056,6 +1059,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "payment settlement access-reconciliation handoff",
                     "payment-originated ledger postings",
                     "cash-first verified provider settlement evidence",
+                    "settlement-aware customer receipt application summary",
                     "payment allocation reconciliation exception lifecycle",
                     "payment refund eligibility and preview",
                     "payment refund confirmation and exact ledger evidence",
@@ -2256,11 +2260,22 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "locked and idempotent prepaid renewal debit",
                     "exact debit-to-entitlement evidence",
                     "prepaid subscription paid-through advancement",
+                    "canonical prepaid renewed-through outcome",
+                    "post-credit-application due-service consequence",
                     "bounded scheduled renewal catch-up",
                 ),
                 depends_on=(
                     "financial.account_adjustments",
+                    "financial.invoices",
                     "financial.prepaid_funding_reconstruction",
+                    "events.dispatcher",
+                ),
+                notes=(
+                    "A payment receipt proves cash settlement, not service duration. "
+                    "Each forward renewal stages prepaid_service.renewed with the "
+                    "exact entitlement, debit and renewed-through boundary in the "
+                    "same transaction; payment correlation is a trigger, not source "
+                    "attribution for pooled account credit."
                 ),
             ),
             SOTService(
@@ -2582,8 +2597,13 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "verified invoice-payment cash-first orchestration",
                     "post-settlement invoice-allocation request",
                     "allocation-failure exception handoff",
+                    "idempotent post-allocation funding-change outbox event",
                 ),
-                depends_on=("financial.payments", "financial.invoices"),
+                depends_on=(
+                    "financial.payments",
+                    "financial.invoices",
+                    "financial.prepaid_service_renewals",
+                ),
             ),
             SOTService(
                 name="financial.payment_provider_events",

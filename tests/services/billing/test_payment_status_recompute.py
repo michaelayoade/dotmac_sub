@@ -4,6 +4,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+import pytest
 from sqlalchemy.orm import Session
 
 from app.models.billing import (
@@ -31,6 +32,7 @@ from app.models.catalog import (
     SubscriptionStatus,
 )
 from app.models.enforcement_lock import EnforcementReason
+from app.models.event_store import EventStore
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.schemas.billing import PaymentAllocationApply, PaymentCreate
 from app.services import billing as billing_service
@@ -442,7 +444,17 @@ def test_current_prepaid_invoice_payment_keeps_existing_period_anchor(db_session
     assert entitlement.ends_at == _utc_naive(period_end)
 
 
-def test_direct_prepaid_wallet_renewal_creates_entitlement(db_session):
+@pytest.mark.parametrize(
+    "subscription_status",
+    [
+        SubscriptionStatus.active,
+        SubscriptionStatus.blocked,
+        SubscriptionStatus.suspended,
+    ],
+)
+def test_direct_prepaid_credit_renewal_creates_entitlement(
+    db_session, subscription_status
+):
     from app.services.billing.payments import apply_prepaid_service_credit
 
     subscriber = _make_subscriber(db_session, status=SubscriberStatus.active)
@@ -450,7 +462,7 @@ def test_direct_prepaid_wallet_renewal_creates_entitlement(db_session):
     subscription = _make_subscription(
         db_session,
         subscriber,
-        status=SubscriptionStatus.active,
+        status=subscription_status,
         billing_mode=BillingMode.prepaid,
         billing_cycle=BillingCycle.monthly,
         next_billing_at=paid_at.replace(hour=0, minute=0, second=0, microsecond=0),
@@ -500,3 +512,16 @@ def test_direct_prepaid_wallet_renewal_creates_entitlement(db_session):
     assert entitlement.amount_funded == Decimal("1000.00")
     assert entitlement.starts_at == _utc_naive(datetime(2026, 8, 5, tzinfo=UTC))
     assert entitlement.ends_at == subscription.next_billing_at
+    event = (
+        db_session.query(EventStore)
+        .filter_by(
+            event_type="prepaid_service.renewed",
+            subscription_id=subscription.id,
+        )
+        .one()
+    )
+    assert event.payload["source"] == "direct_payment"
+    assert event.payload["trigger_payment_id"] == str(payment.id)
+    assert (
+        event.payload["renewed_through"] == datetime(2026, 9, 5, tzinfo=UTC).isoformat()
+    )

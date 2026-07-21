@@ -52,6 +52,7 @@ HANDLED_EVENT_TYPES = frozenset(
         EventType.subscriber_throttled,
         EventType.usage_exhausted,
         EventType.payment_received,
+        EventType.account_credit_deposited,
         EventType.invoice_overdue,
     }
 )
@@ -91,7 +92,10 @@ class EnforcementHandler:
             self._handle_account_unthrottle(db, event)
         elif event.event_type == EventType.usage_exhausted:
             self._handle_usage_exhausted(db, event)
-        elif event.event_type == EventType.payment_received:
+        elif event.event_type in {
+            EventType.payment_received,
+            EventType.account_credit_deposited,
+        }:
             self._handle_payment_received(db, event)
         elif event.event_type == EventType.invoice_overdue:
             self._handle_invoice_overdue(db, event)

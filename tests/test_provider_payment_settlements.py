@@ -1,6 +1,6 @@
 import hashlib
 import importlib
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from app.models.billing import (
@@ -14,10 +14,25 @@ from app.models.billing import (
     PaymentProvider,
     PaymentProviderType,
     PaymentSettlement,
+    ServiceEntitlement,
     TopupIntent,
 )
+from app.models.catalog import (
+    BillingCycle,
+    BillingMode,
+    OfferPrice,
+    PriceType,
+    SubscriptionStatus,
+)
+from app.models.enforcement_lock import EnforcementLock, EnforcementReason
+from app.models.event_store import EventStore
+from app.models.subscriber import SubscriberStatus
 from app.schemas.billing import InvoiceCreate
 from app.services import billing as billing_service
+from app.services.billing_payment_receipts import (
+    get_payment_receipt_context,
+    render_receipt_document_html,
+)
 from app.services.payment_gateway_adapter import payment_gateway_adapter
 from app.services.payment_reconciliation import _settle_intent
 from app.services.provider_payment_settlements import (
@@ -154,6 +169,18 @@ def test_verified_provider_money_is_recorded_before_successful_allocation(
     assert result.reconciliation_exception is None
     assert invoice.status == InvoiceStatus.paid
 
+    receipt = get_payment_receipt_context(db_session, str(payment.id))
+    assert receipt["amount_received"] == Decimal("1020.00")
+    assert receipt["amount_credited"] == Decimal("1000.00")
+    assert receipt["amount_applied"] == Decimal("1000.00")
+    assert receipt["prepaid_amount_applied"] == Decimal("0.00")
+    assert receipt["unallocated_credit"] == Decimal("0.00")
+    assert receipt["settlement_evidenced"] is True
+    rendered = render_receipt_document_html(receipt)
+    assert "Amount Credited" in rendered
+    assert "₦1,000.00" in rendered
+    assert "Account Credit Remaining" in rendered
+
     replay = settle_verified_invoice_payment(
         db_session,
         account_id=subscriber.id,
@@ -176,6 +203,12 @@ def test_verified_provider_money_is_recorded_before_successful_allocation(
     assert (
         db_session.query(PaymentAllocation)
         .filter_by(payment_id=payment.id, invoice_id=invoice.id)
+        .count()
+        == 1
+    )
+    assert (
+        db_session.query(EventStore)
+        .filter_by(event_type="account_credit.deposited", account_id=subscriber.id)
         .count()
         == 1
     )
@@ -266,6 +299,86 @@ def test_allocation_failure_keeps_net_credit_and_one_exception(db_session, subsc
     )
     assert len(exceptions) == 1
     assert exceptions[0].attempt_count == 2
+
+
+def test_draft_invoice_failure_renews_due_prepaid_service_from_retained_cash(
+    db_session, subscriber, subscription
+):
+    now = datetime.now(UTC)
+    subscriber.billing_mode = BillingMode.prepaid
+    subscriber.status = SubscriberStatus.suspended
+    subscription.billing_mode = BillingMode.prepaid
+    subscription.billing_cycle = BillingCycle.monthly
+    subscription.status = SubscriptionStatus.suspended
+    subscription.next_billing_at = now - timedelta(days=10)
+    subscription.unit_price = Decimal("1000.00")
+    subscription.offer.billing_cycle = BillingCycle.monthly
+    subscription.offer.is_active = True
+    db_session.add(
+        OfferPrice(
+            offer_id=subscription.offer_id,
+            price_type=PriceType.recurring,
+            amount=Decimal("1000.00"),
+            currency="NGN",
+            billing_cycle=BillingCycle.monthly,
+            is_active=True,
+        )
+    )
+    lock = EnforcementLock(
+        subscriber_id=subscriber.id,
+        subscription_id=subscription.id,
+        reason=EnforcementReason.prepaid,
+        source="pytest:prepaid-balance",
+        is_active=True,
+    )
+    db_session.add(lock)
+    db_session.commit()
+    provider = _provider(db_session)
+    invoice = _invoice(db_session, subscriber.id, status=InvoiceStatus.draft)
+
+    result = settle_verified_invoice_payment(
+        db_session,
+        account_id=subscriber.id,
+        invoice_id=invoice.id,
+        topup_intent_id=None,
+        provider_id=provider.id,
+        provider_reference="DMAC-DRAFT-DUE-PREPAID",
+        external_id="paystack-draft-due-prepaid-1",
+        gross_amount=Decimal("1020.00"),
+        provider_fee=Decimal("20.00"),
+        net_amount=Decimal("1000.00"),
+        currency="NGN",
+        memo="Paystack verified draft invoice payment",
+        paid_at=now,
+    )
+
+    db_session.refresh(subscription)
+    db_session.refresh(lock)
+    assert result.allocation is None
+    assert result.reconciliation_exception is not None
+    assert db_session.query(ServiceEntitlement).count() == 1
+    assert subscription.next_billing_at.replace(tzinfo=UTC) > now
+    assert subscription.status == SubscriptionStatus.active
+    assert lock.is_active is False
+    renewal_event = (
+        db_session.query(EventStore)
+        .filter_by(
+            event_type="prepaid_service.renewed",
+            account_id=subscriber.id,
+            subscription_id=subscription.id,
+        )
+        .one()
+    )
+    assert renewal_event.payload["trigger_payment_id"] == str(result.payment.id)
+    assert renewal_event.payload["source"] == "account_credit"
+    assert renewal_event.payload["renewed_through"] == (
+        subscription.next_billing_at.replace(tzinfo=UTC).isoformat()
+    )
+    receipt = get_payment_receipt_context(db_session, str(result.payment.id))
+    assert len(receipt["renewals"]) == 1
+    assert receipt["renewals"][0].renewed_through == (
+        subscription.next_billing_at.replace(tzinfo=UTC)
+    )
 
 
 def test_recovery_completes_intent_after_cash_recording_when_allocation_fails(

@@ -828,11 +828,14 @@ def _seed_missing_notification_templates(db: Session) -> int:
             "code": "payment_received",
             "name": "Payment Received",
             "channel": NotificationChannel.email,
-            "subject": "Payment received — thank you",
+            "subject": "Payment receipt {receipt_number}",
             "body": (
                 "Dear {subscriber_name},\n\n"
                 "We have received your payment of {amount}. Thank you!\n\n"
-                "Your account balance has been updated accordingly.\n\n"
+                "Receipt: {receipt_number}\n"
+                "View or download: {receipt_url}\n\n"
+                "You can review how the payment was applied in your billing "
+                "history.\n\n"
                 "If you have questions about your billing, please contact support."
             ),
         },
@@ -841,7 +844,22 @@ def _seed_missing_notification_templates(db: Session) -> int:
             "name": "Payment Received SMS",
             "channel": NotificationChannel.sms,
             "subject": None,
-            "body": ("We received your payment of {amount}. Thank you."),
+            "body": (
+                "We received your payment of {amount}. Receipt {receipt_number}: "
+                "{receipt_url}"
+            ),
+        },
+        {
+            "code": "prepaid_service_renewed",
+            "name": "Prepaid Service Renewed",
+            "channel": NotificationChannel.email,
+            "subject": "Your {offer_name} service is renewed",
+            "body": (
+                "Dear {subscriber_name},\n\n"
+                "We applied {amount} to your {offer_name} service. "
+                "Your service is renewed through {renewed_through}.\n\n"
+                "This renewal confirmation is separate from your payment receipt."
+            ),
         },
         {
             "code": "payment_failed",

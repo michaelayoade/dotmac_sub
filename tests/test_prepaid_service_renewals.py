@@ -8,6 +8,8 @@ from fastapi import HTTPException
 
 from app.models.billing import (
     AccountAdjustment,
+    Invoice,
+    InvoiceStatus,
     LedgerEntryType,
     LedgerSource,
     ServiceEntitlement,
@@ -21,9 +23,12 @@ from app.models.catalog import (
     SubscriptionStatus,
 )
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
+from app.models.event_store import EventStore
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services.customer_financial_ledger import calculate_customer_balance
 from app.services.prepaid_service_renewals import (
+    FundingChangeRenewalDisposition,
+    apply_due_prepaid_service_after_funding_change,
     confirm_prepaid_service_renewal,
     preview_prepaid_service_renewal,
     run_due_prepaid_service_renewals,
@@ -463,3 +468,86 @@ def test_scheduled_owner_restores_canonically_funded_prepaid_lock(
     assert summary["prepaid_renewals_restored"] == 1
     assert lock.is_active is False
     assert subscription.status == SubscriptionStatus.active
+    event = (
+        db_session.query(EventStore)
+        .filter_by(
+            event_type="prepaid_service.renewed",
+            subscription_id=subscription.id,
+        )
+        .one()
+    )
+    assert event.payload["source"] == "scheduled"
+    assert event.payload["trigger_payment_id"] is None
+    assert event.payload["renewed_through"] == "2026-08-01T00:00:00+00:00"
+
+
+def test_funding_change_renews_suspended_due_service_from_payment_day(
+    db_session, subscriber, subscription
+):
+    _prepare_scheduled_cycle(db_session, subscriber, subscription)
+    subscription.status = SubscriptionStatus.suspended
+    db_session.commit()
+
+    result = apply_due_prepaid_service_after_funding_change(
+        db_session,
+        account_id=subscriber.id,
+        effective_at=datetime(2026, 7, 20, 17, 30, tzinfo=UTC),
+        funding_currency="NGN",
+        evidence_ref="pytest:account-credit-event",
+    )
+    db_session.commit()
+
+    db_session.refresh(subscription)
+    entitlement = db_session.query(ServiceEntitlement).one()
+    assert result.disposition == FundingChangeRenewalDisposition.funded
+    assert result.funded == 1
+    assert entitlement.starts_at.replace(tzinfo=UTC) == datetime(
+        2026, 7, 20, tzinfo=UTC
+    )
+    assert entitlement.ends_at.replace(tzinfo=UTC) == datetime(2026, 8, 20, tzinfo=UTC)
+    assert subscription.next_billing_at.replace(tzinfo=UTC) == datetime(
+        2026, 8, 20, tzinfo=UTC
+    )
+    assert calculate_customer_balance(db_session, subscriber.id) == Decimal("50.00")
+    assert len(result.renewals) == 1
+    assert result.renewals[0].renewed_through == datetime(2026, 8, 20, tzinfo=UTC)
+    assert result.renewals[0].source.value == "account_credit"
+    event = (
+        db_session.query(EventStore)
+        .filter_by(event_type="prepaid_service.renewed")
+        .one()
+    )
+    assert event.payload["renewed_through"] == "2026-08-20T00:00:00+00:00"
+
+
+def test_funding_change_leaves_service_due_while_payable_invoice_remains(
+    db_session, subscriber, subscription
+):
+    _prepare_scheduled_cycle(db_session, subscriber, subscription)
+    db_session.add(
+        Invoice(
+            account_id=subscriber.id,
+            invoice_number="INV-FIRST-CLAIM",
+            status=InvoiceStatus.partially_paid,
+            currency="NGN",
+            total=Decimal("75.00"),
+            balance_due=Decimal("25.00"),
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    result = apply_due_prepaid_service_after_funding_change(
+        db_session,
+        account_id=subscriber.id,
+        effective_at=datetime(2026, 7, 20, 17, 30, tzinfo=UTC),
+        funding_currency="NGN",
+        evidence_ref="pytest:account-credit-event",
+    )
+
+    assert result.disposition == (
+        FundingChangeRenewalDisposition.payable_invoice_remaining
+    )
+    assert result.funded == 0
+    assert db_session.query(AccountAdjustment).count() == 0
+    assert db_session.query(ServiceEntitlement).count() == 0

@@ -236,6 +236,24 @@ class PaymentCreationResult:
 
 
 @dataclass(frozen=True)
+class PaymentApplicationSummary:
+    """Customer-facing application of one confirmed payment.
+
+    ``Payment.amount`` is the gross cash receipt. The settlement amount is the
+    value credited to the customer after provider fees, and the remaining
+    fields reconcile that value across invoice, prepaid-service and retained
+    account-credit consequences.
+    """
+
+    amount_received: Decimal
+    amount_credited: Decimal
+    invoice_amount_applied: Decimal
+    prepaid_amount_applied: Decimal
+    unallocated_credit: Decimal
+    settlement_evidenced: bool
+
+
+@dataclass(frozen=True)
 class PrepaidLegacyCycleRepairPreview:
     account_id: UUID
     subscription_id: UUID
@@ -970,11 +988,15 @@ def _active_prepaid_monthly_subscription(
     db: Session,
     account_id,
 ) -> Subscription | None:
+    from app.services.prepaid_service_renewals import (
+        PREPAID_SERVICE_RENEWAL_ELIGIBLE_STATUSES,
+    )
+
     rows = (
         db.query(Subscription)
         .join(CatalogOffer, CatalogOffer.id == Subscription.offer_id)
         .filter(Subscription.subscriber_id == account_id)
-        .filter(Subscription.status == SubscriptionStatus.active)
+        .filter(Subscription.status.in_(PREPAID_SERVICE_RENEWAL_ELIGIBLE_STATUSES))
         .filter(Subscription.billing_mode == BillingMode.prepaid)
         .filter(CatalogOffer.billing_cycle == BillingCycle.monthly)
         .filter(CatalogOffer.is_active.is_(True))
@@ -1003,11 +1025,12 @@ def apply_prepaid_service_credit(
     db: Session,
     payment: Payment,
 ) -> bool:
-    """Consume unallocated credit for one active prepaid monthly renewal.
+    """Consume unallocated credit for one eligible prepaid monthly renewal.
 
     This is intentionally narrow: it runs only for succeeded account-scoped
     payments, only when no open invoice remains, and only when exactly one active
-    prepaid monthly service exists. It leaves ambiguous wallet credit untouched.
+    or financially suspended prepaid monthly service exists. It leaves ambiguous
+    account credit untouched.
     """
     if payment.account_id is None or payment.status != PaymentStatus.succeeded:
         return False
@@ -1075,14 +1098,38 @@ def apply_prepaid_service_credit(
     )
     db.add(ledger_entry)
     db.flush()
-    ensure_prepaid_entitlement_for_wallet_debit(
+    entitlement = ensure_prepaid_entitlement_for_wallet_debit(
         db,
         subscription=subscription,
         ledger_entry=ledger_entry,
         starts_at=period_start,
         ends_at=period_end,
     )
+    if entitlement is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Prepaid service credit produced no entitlement evidence",
+        )
     subscription.next_billing_at = period_end
+
+    from app.services.prepaid_service_renewals import (
+        PrepaidServiceRenewalSource,
+        stage_prepaid_service_renewed_outcome,
+    )
+
+    stage_prepaid_service_renewed_outcome(
+        db,
+        account_id=payment.account_id,
+        subscription_id=subscription.id,
+        entitlement_id=entitlement.id,
+        ledger_entry_id=ledger_entry.id,
+        period_start=period_start,
+        renewed_through=period_end,
+        amount=charge_amount,
+        currency=currency,
+        source=PrepaidServiceRenewalSource.direct_payment,
+        trigger_payment_id=payment.id,
+    )
 
     from app.services.account_lifecycle import compute_account_status
 
@@ -2484,6 +2531,13 @@ def _prepaid_legacy_cycle_repair_preview(
 
 
 class Payments(ListResponseMixin):
+    @staticmethod
+    def application_summary(
+        db: Session,
+        payment: Payment,
+    ) -> PaymentApplicationSummary:
+        return payment_application_summary(db, payment)
+
     @staticmethod
     def record_verified_provider_settlement(
         db: Session,
@@ -4631,6 +4685,50 @@ def _payment_unallocated_credit_remaining(
             - to_decimal(settlement.prepaid_amount)
             - to_decimal(consumed)
         ),
+    )
+
+
+def payment_application_summary(
+    db: Session,
+    payment: Payment,
+) -> PaymentApplicationSummary:
+    """Project one payment's settled value without treating fees as credit.
+
+    Historical succeeded payments may predate structural settlement evidence;
+    those retain the former amount-minus-allocation display. New settlements
+    use the owner's exact settlement and consumption evidence.
+    """
+    amount_received = round_money(to_decimal(payment.amount))
+    invoice_amount_applied = round_money(
+        sum(
+            (
+                to_decimal(allocation.amount)
+                for allocation in payment.allocations
+                if allocation.is_active
+            ),
+            Decimal("0.00"),
+        )
+    )
+    settlement = payment.settlement
+    if settlement is None:
+        return PaymentApplicationSummary(
+            amount_received=amount_received,
+            amount_credited=amount_received,
+            invoice_amount_applied=invoice_amount_applied,
+            prepaid_amount_applied=Decimal("0.00"),
+            unallocated_credit=round_money(
+                max(Decimal("0.00"), amount_received - invoice_amount_applied)
+            ),
+            settlement_evidenced=False,
+        )
+
+    return PaymentApplicationSummary(
+        amount_received=amount_received,
+        amount_credited=round_money(to_decimal(settlement.amount)),
+        invoice_amount_applied=invoice_amount_applied,
+        prepaid_amount_applied=round_money(to_decimal(settlement.prepaid_amount)),
+        unallocated_credit=_payment_unallocated_credit_remaining(db, payment),
+        settlement_evidenced=True,
     )
 
 

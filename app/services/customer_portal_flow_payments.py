@@ -535,8 +535,30 @@ def _build_topup_summary(db: Session, payment: Payment) -> dict:
         )
 
     total_allocated = round_money(total_allocated)
-    payment_amount = round_money(to_decimal(getattr(payment, "amount", 0) or 0))
-    credit_added = round_money(max(Decimal("0.00"), payment_amount - total_allocated))
+    application = billing_service.payments.application_summary(db, payment)
+    # The payment owner distinguishes gross cash received from customer value
+    # credited after provider fees. Never display the fee as retained credit.
+    credit_added = application.unallocated_credit
+
+    from app.models.catalog import CatalogOffer, Subscription
+    from app.services.prepaid_service_renewals import renewal_outcomes_for_payment
+
+    renewed_services: list[dict[str, object]] = []
+    for outcome in renewal_outcomes_for_payment(db, payment.id):
+        subscription = db.get(Subscription, outcome.subscription_id)
+        offer = (
+            db.get(CatalogOffer, subscription.offer_id)
+            if subscription is not None
+            else None
+        )
+        renewed_services.append(
+            {
+                "subscription_id": str(outcome.subscription_id),
+                "offer_name": getattr(offer, "name", None) or "Service",
+                "amount": outcome.amount,
+                "renewed_through": outcome.renewed_through,
+            }
+        )
 
     available_balance: Decimal | None = None
     try:
@@ -553,8 +575,11 @@ def _build_topup_summary(db: Session, payment: Payment) -> dict:
     return {
         "allocated_to_invoices": allocated_to_invoices,
         "allocated_total": total_allocated,
+        "amount_credited": application.amount_credited,
+        "prepaid_amount_applied": application.prepaid_amount_applied,
         "credit_added": credit_added,
         "available_balance": available_balance,
+        "renewed_services": renewed_services,
     }
 
 

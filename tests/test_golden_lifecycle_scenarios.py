@@ -273,6 +273,12 @@ class TestPrepaidTopupRenewalRowShapes:
         settlement = _settlement(db_session, payment.id)
         assert settlement.prepaid_amount == Decimal("1000.00")
         assert settlement.prepaid_ledger_entry_id is not None
+        application = Payments.application_summary(db_session, payment)
+        assert application.amount_received == Decimal("1500.00")
+        assert application.amount_credited == Decimal("1500.00")
+        assert application.invoice_amount_applied == Decimal("0.00")
+        assert application.prepaid_amount_applied == Decimal("1000.00")
+        assert application.unallocated_credit == Decimal("500.00")
 
         debit = db_session.get(LedgerEntry, settlement.prepaid_ledger_entry_id)
         assert debit.entry_type == LedgerEntryType.debit

@@ -29,6 +29,7 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
+from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.subscriber import SubscriberStatus
 from app.schemas.billing import InvoiceCreate, PaymentSyncRead
 from app.services.account_credit_deposits import (
@@ -213,6 +214,76 @@ def test_confirmed_deposit_skips_eligible_prepaid_renewal(db_session, subscriber
         .count()
         == 0
     )
+
+
+def test_confirmed_deposit_renews_due_suspended_service_before_restoration(
+    db_session, subscriber
+):
+    now = datetime.now(UTC)
+    subscriber.billing_mode = BillingMode.prepaid
+    subscriber.status = SubscriberStatus.suspended
+    offer = CatalogOffer(
+        name="Due Deposit Credit Prepaid Plan",
+        service_type=ServiceType.residential,
+        access_type=AccessType.fiber,
+        price_basis=PriceBasis.flat,
+        billing_mode=BillingMode.prepaid,
+        billing_cycle=BillingCycle.monthly,
+        status=OfferStatus.active,
+        is_active=True,
+    )
+    db_session.add(offer)
+    db_session.flush()
+    subscription = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=offer.id,
+        status=SubscriptionStatus.suspended,
+        billing_mode=BillingMode.prepaid,
+        billing_cycle=BillingCycle.monthly,
+        next_billing_at=now - timedelta(days=10),
+        unit_price=Decimal("1000.00"),
+    )
+    db_session.add_all(
+        [
+            subscription,
+            OfferPrice(
+                offer_id=offer.id,
+                price_type=PriceType.recurring,
+                amount=Decimal("1000.00"),
+                currency="NGN",
+                billing_cycle=BillingCycle.monthly,
+                is_active=True,
+            ),
+        ]
+    )
+    db_session.flush()
+    lock = EnforcementLock(
+        subscriber_id=subscriber.id,
+        subscription_id=subscription.id,
+        reason=EnforcementReason.prepaid,
+        source="pytest:prepaid-balance",
+        is_active=True,
+    )
+    db_session.add(lock)
+    db_session.commit()
+
+    provider = _provider(db_session)
+    intent = _intent(db_session, subscriber, provider, amount="1000.00")
+    result = AccountCreditDeposits.settle_verified(
+        db_session,
+        intent_id=intent.id,
+        transaction=_transaction(intent, external_id="gateway-due-prepaid-deposit"),
+    )
+
+    db_session.refresh(subscription)
+    db_session.refresh(lock)
+    assert result.payment.settlement is not None
+    assert result.payment.settlement.prepaid_amount == Decimal("0.00")
+    assert db_session.query(ServiceEntitlement).count() == 1
+    assert subscription.next_billing_at.replace(tzinfo=UTC) > now
+    assert subscription.status == SubscriptionStatus.active
+    assert lock.is_active is False
+    assert get_account_credit_balance(db_session, str(subscriber.id)) == Decimal("0.00")
 
 
 def test_invoice_created_during_checkout_consumes_confirmed_credit(

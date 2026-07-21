@@ -163,6 +163,24 @@ def test_payment_and_overdue_events_are_independent_fanout_consequences():
         assert all(step.dependencies == () for step in plan)
 
 
+def test_account_credit_chain_renews_before_access_recheck():
+    handlers = [
+        _handler("WebhookHandler"),
+        _handler("EnforcementHandler"),
+        _handler("PrepaidRenewalHandler"),
+    ]
+
+    plan = event_execution_plan(EventType.account_credit_deposited.value, handlers)
+    by_name = {step.handler_name: step for step in plan}
+
+    assert by_name["PrepaidRenewalHandler"].dependencies == ()
+    assert by_name["EnforcementHandler"].dependencies == ("PrepaidRenewalHandler",)
+    assert set(by_name["WebhookHandler"].dependencies) == {
+        "PrepaidRenewalHandler",
+        "EnforcementHandler",
+    }
+
+
 def test_activation_plan_keeps_state_peers_independent_and_stages_outputs():
     handlers = validate_and_order_handlers(
         [

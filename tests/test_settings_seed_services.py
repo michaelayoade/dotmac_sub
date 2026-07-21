@@ -318,6 +318,21 @@ class TestSeedNotificationTemplates:
         assert ("suspension_warning", NotificationChannel.sms) in codes
         assert ("subscription_suspended", NotificationChannel.sms) in codes
 
+    def test_seeds_prepaid_service_renewed_email(self, db_session):
+        settings_seed.seed_notification_templates(db_session)
+
+        template = (
+            db_session.query(NotificationTemplate)
+            .filter(
+                NotificationTemplate.code == "prepaid_service_renewed",
+                NotificationTemplate.channel == NotificationChannel.email,
+            )
+            .one()
+        )
+
+        assert "{renewed_through}" in template.body
+        assert template.is_active is True
+
 
 # =============================================================================
 # Collections Settings Tests

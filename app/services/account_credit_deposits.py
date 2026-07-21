@@ -517,6 +517,7 @@ class AccountCreditDeposits:
                 "currency": currency,
                 "applied_amount": str(application.applied),
                 "allocation_ids": application.allocation_ids,
+                "origin": "account_credit_deposit",
             },
             account_id=intent.account_id,
         )

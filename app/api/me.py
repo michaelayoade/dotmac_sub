@@ -806,9 +806,12 @@ def my_topup_verify(
         amount=Decimal(str(result.get("amount") or "0")),
         already_recorded=result.get("already_recorded", False),
         available_balance=result.get("available_balance"),
+        amount_credited=result.get("amount_credited"),
+        prepaid_amount_applied=result.get("prepaid_amount_applied", Decimal("0.00")),
         credit_added=result.get("credit_added"),
         allocated_total=result.get("allocated_total", Decimal("0.00")),
         allocated_to_invoices=result.get("allocated_to_invoices", []),
+        renewed_services=result.get("renewed_services", []),
         card_saved=card_saved,
         card_save_message=card_save_message,
     )

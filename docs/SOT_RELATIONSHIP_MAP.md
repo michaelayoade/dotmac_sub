@@ -606,13 +606,23 @@ detailed security and delivery boundary is
    After authority cutover, an affordable reconstructed service-cycle charge
    must have an active `ServiceEntitlement` for the same subscription and
    billing-period start, linked either to a paid `financial.invoices` line or
-   an exact customer-position wallet debit. Missing or amount-mismatched funding
+   an exact customer-position service debit. Missing or amount-mismatched funding
    evidence blocks reconstruction; the reconstruction owner never substitutes
    an undocumented charge.
-   `financial.prepaid_service_renewals` owns the non-payment-triggered case:
-   when reviewed funding already exists as a monthly period becomes due, it
-   previews against the verified position, posts one idempotent service debit,
-   links one active entitlement, and advances the exact subscription period.
+   `financial.prepaid_service_renewals` owns the scheduled or post-credit-
+   application case that was not already executed inside the payment owner's
+   settlement transaction. When reviewed funding already exists as a monthly
+   period becomes due, it previews against the verified position, posts one
+   idempotent service debit, links one active entitlement, and advances the
+   exact subscription period. A completed account-credit application invokes
+   it before access restoration; a lapsed service starts on the payment day and
+   missed inactive periods are not silently back-billed.
+   Every forward renewal also stages `prepaid_service.renewed` with the exact
+   entitlement, debit, period start, and renewed-through boundary in the same
+   transaction. Notifications and portal success views consume that outcome;
+   they do not derive expiry from a payment receipt. A trigger payment ID is
+   correlation only because account credit is pooled and does not assign a
+   particular renewal debit to one historical payment.
    It requires the positive contracted `Subscription.unit_price` and fails
    closed when that evidence is absent; current catalog price is not authority
    for an already-contracted prepaid service.
@@ -696,10 +706,13 @@ detailed security and delivery boundary is
    becomes payment-backed unallocated account credit and grants no prepaid
    duration. `financial.account_credit_applications` then owns deterministic
    oldest-debt consumption through `financial.payments` allocation preview and
-   confirmation. Customer routes, provider webhooks, payment-proof review,
-   invoice issuance/void, and reconcilers are adapters around those owners;
-   none may maintain a wallet counter, allocate rows directly, or restore
-   access merely because cash was deposited.
+   confirmation. Only after that debt application completes does the chained
+   `account_credit.deposited` consequence ask
+   `financial.prepaid_service_renewals` to fund a currently due prepaid period,
+   followed by canonical access reconciliation. Customer routes, provider
+   webhooks, payment-proof review, invoice issuance/void, and reconcilers are
+   adapters around those owners; none may maintain a wallet counter, allocate
+   rows directly, or restore access merely because cash was deposited.
 22. Every money-moving financial command is previewed by the same owner that executes it.
    Execution locks and recomputes the preview, rejects stale confirmation,
    records idempotency and actor audit evidence, and structurally links the
@@ -940,6 +953,12 @@ Payment creation, settlement, and allocation are one coherent owner contract:
   before invoice allocation is attempted. Invoice eligibility, prepaid funding
   projection, or other downstream consequence failures cannot roll back that
   confirmed cash evidence.
+- Receipt projection boundary: customer receipts and payment-success views use
+  the payment owner's application summary. They distinguish gross cash received
+  from net customer value credited after provider fees, invoice applications,
+  settlement-owned prepaid application, and remaining payment-backed credit.
+  Legacy payments without structural settlement evidence retain their bounded
+  amount-minus-allocation display and are marked unevidenced by the projection.
 - Allocation-exception boundary: applying the net unallocated credit to the
   checkout invoice remains owned by the normal preview/fingerprint-bound
   allocation service. Failure leaves the net credit untouched and writes one
