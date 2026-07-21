@@ -55,7 +55,8 @@
    SUBSCRIBER HERO — the record hero over the subscriber_summary
    projection. `caller()` supplies the action buttons.
    ============================================================ #}
-{% macro subscriber_hero(summary) %}
+{% macro subscriber_hero(summary, status_presentation=None) %}
+{% set hero_status = status_presentation or summary.status %}
 <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
     <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div class="flex items-start gap-4">
@@ -65,7 +66,7 @@
             <div class="min-w-0">
                 <div class="flex flex-wrap items-center gap-2.5">
                     <h1 class="font-display text-2xl font-bold tracking-tight text-slate-900 dark:text-white">{{ summary.name or "Unnamed subscriber" }}</h1>
-                    {% if summary.status %}{{ status_badge(summary.status.label, summary.status.tone, size="sm") }}{% endif %}
+                    {% if hero_status %}{{ status_badge(hero_status.label, hero_status.tone, size="sm") }}{% endif %}
                     {% if summary.connection %}{{ status_badge("Online" if summary.connection.online else "Offline", "positive" if summary.connection.online else "negative", size="sm") }}{% endif %}
                     <span class="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500 dark:bg-slate-800 dark:text-slate-400">{{ "Business" if summary.is_business else "Individual" }}</span>
                 </div>
@@ -83,7 +84,7 @@
 
     {# at-a-glance tiles — flat, semantic #}
     <div class="mt-4 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
-        {{ hero_stat("Account", summary.status.label if summary.status else "—", tone=(summary.status.tone if summary.status else "")) }}
+        {{ hero_stat("Account", hero_status.label if hero_status else "—", tone=(hero_status.tone if hero_status else "")) }}
         {% if summary.plan %}
             {{ hero_stat("Plan", summary.plan.name or "—", sub=("₦%s"|format("{:,.0f}".format(summary.plan.price)) if summary.plan.price is not none else "")) }}
         {% else %}

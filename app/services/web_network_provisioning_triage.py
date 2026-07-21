@@ -14,6 +14,8 @@ ledger. Phase mapping stays owner-side (control_plane_intent), not here.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlalchemy.orm import Session
 
 from app.schemas.status_presentation import StatusTone
@@ -51,7 +53,7 @@ def _rank(presentation) -> int:
     return _TONE_RANK.get(presentation.tone, 5)
 
 
-def _when(value: object) -> tuple:
+def _when(value: datetime | None) -> tuple[str, float]:
     # (display string, sort epoch) — pre-formatted so the template needs no filter
     if not value:
         return "—", 0.0

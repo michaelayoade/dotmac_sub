@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import select
@@ -174,6 +174,7 @@ def transition_service_order(
     actor_id: str,
     reason: str | None = None,
     event_evidence: Mapping[str, object] | None = None,
+    emit_subscription_activation: bool = True,
     commit: bool = True,
 ) -> ServiceOrder:
     order = _lock(db, service_order_id)
@@ -209,7 +210,11 @@ def transition_service_order(
                 "subscription_not_found", "Service order Subscription not found"
             )
         if subscription.status == SubscriptionStatus.pending:
-            activate_subscription(db, str(subscription.id))
+            activate_subscription(
+                db,
+                str(subscription.id),
+                emit=emit_subscription_activation,
+            )
         elif subscription.status != SubscriptionStatus.active:
             raise ServiceOrderLifecycleError(
                 "subscription_not_activatable",
@@ -302,9 +307,12 @@ def record_provisioning_result(
     *,
     service_order_id: UUID,
     succeeded: bool,
+    readiness_decision_id: UUID,
     actor_id: str,
     reason: str | None = None,
 ) -> ServiceOrder:
+    """Apply one provisioning-owner decision through the sole status writer."""
+
     return transition_service_order(
         db,
         service_order_id=service_order_id,
@@ -313,5 +321,7 @@ def record_provisioning_result(
         ),
         actor_id=actor_id,
         reason=reason,
+        event_evidence={"readiness_decision_id": str(readiness_decision_id)},
+        emit_subscription_activation=False,
         commit=False,
     )

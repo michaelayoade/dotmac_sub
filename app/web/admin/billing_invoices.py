@@ -10,13 +10,13 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import web_billing_customers as web_billing_customers_service
+from app.services import web_billing_documents as web_billing_documents_service
 from app.services import (
     web_billing_invoice_bulk_actions as web_billing_invoice_bulk_actions_service,
 )
 from app.services import web_billing_invoice_cache as web_billing_invoice_cache_service
 from app.services import web_billing_invoice_forms as web_billing_invoice_forms_service
 from app.services import web_billing_invoices as web_billing_invoices_service
-from app.services import web_billing_ledger as web_billing_ledger_service
 from app.services import web_billing_overview as web_billing_overview_service
 from app.services.auth_dependencies import require_permission
 from app.services.list_query import ListQuery
@@ -568,11 +568,15 @@ def invoice_filter(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get(
-    "/ledger",
+    "/documents",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:invoice:read"))],
+    dependencies=[
+        Depends(require_permission("billing:invoice:read")),
+        Depends(require_permission("billing:payment:read")),
+        Depends(require_permission("billing:credit_note:read")),
+    ],
 )
-def billing_ledger(
+def billing_documents(
     request: Request,
     facet: str = Query(default="invoices"),
     db: Session = Depends(get_db),
@@ -586,5 +590,5 @@ def billing_ledger(
         "current_user": get_current_user(request),
         "sidebar_stats": get_sidebar_stats(db),
     }
-    context.update(web_billing_ledger_service.billing_ledger_data(db, facet))
-    return templates.TemplateResponse("admin/billing/ledger.html", context)
+    context.update(web_billing_documents_service.billing_documents_data(db, facet))
+    return templates.TemplateResponse("admin/billing/documents.html", context)

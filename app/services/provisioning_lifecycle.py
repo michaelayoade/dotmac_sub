@@ -32,7 +32,7 @@ from app.models.provisioning import (
     ServiceOrderType,
 )
 from app.models.work_order import WorkOrder
-from app.services.account_lifecycle import activate_subscription
+from app.services import service_order_lifecycle
 from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
@@ -42,7 +42,6 @@ from app.services.owner_commands import (
     OwnerCommandDefinition,
     execute_owner_command,
 )
-from app.services import service_order_lifecycle
 
 OWNER = "operations.provisioning_lifecycle"
 
@@ -135,6 +134,25 @@ def _decision_for_command(
     )
 
 
+def _validate_replay_scope(
+    decision: ProvisioningReadinessDecision,
+    *,
+    service_order_id: UUID,
+    provisioning_run_id: UUID | None = None,
+) -> None:
+    """Fail closed when one idempotency key is reused for another command."""
+
+    if decision.service_order_id != service_order_id or (
+        provisioning_run_id is not None
+        and decision.provisioning_run_id != provisioning_run_id
+    ):
+        raise _error(
+            "command_replay_conflict",
+            "Command id was already used for a different provisioning scope.",
+            command_id=str(decision.command_id),
+        )
+
+
 def latest_readiness(
     db: Session, service_order_id: UUID
 ) -> ReadinessOutcome | None:
@@ -222,6 +240,7 @@ def _evaluate_facts(
     )
     task_valid = bool(
         task
+        and project is not None
         and task.is_active
         and project_valid
         and task.project_id == project.id
@@ -368,6 +387,11 @@ def evaluate_readiness(
     def operation() -> ReadinessOutcome:
         replay = _decision_for_command(db, command.context.command_id)
         if replay is not None:
+            _validate_replay_scope(
+                replay,
+                service_order_id=command.service_order_id,
+                provisioning_run_id=command.provisioning_run_id,
+            )
             return _to_outcome(replay)
         order = db.scalar(
             select(ServiceOrder)
@@ -408,6 +432,7 @@ def evaluate_readiness(
                 db,
                 service_order_id=order.id,
                 succeeded=False,
+                readiness_decision_id=decision.id,
                 actor_id=command.context.actor,
                 reason="provisioning_run_failed",
             )
@@ -457,9 +482,10 @@ def evaluate_readiness(
                 "subscription_scope_mismatch",
                 "Subscription does not belong to the service-order subscriber.",
             )
-        if subscription.status == SubscriptionStatus.pending:
-            activate_subscription(db, str(subscription.id), emit=False)
-        elif subscription.status != SubscriptionStatus.active:
+        if subscription.status not in {
+            SubscriptionStatus.pending,
+            SubscriptionStatus.active,
+        }:
             raise _error(
                 "subscription_not_activatable",
                 "Subscription is not pending or active.",
@@ -483,13 +509,12 @@ def evaluate_readiness(
         )
         emit_event(
             db,
-            EventType.subscription_activated,
+            EventType.service_order_activation_requested,
             {
                 "subscription_id": str(subscription.id),
                 "service_order_id": str(order.id),
                 "readiness_decision_id": str(decision.id),
-                "from_status": SubscriptionStatus.pending.value,
-                "to_status": SubscriptionStatus.active.value,
+                "subscription_status": subscription.status.value,
             },
             actor=command.context.actor,
             subscriber_id=order.subscriber_id,
@@ -514,6 +539,10 @@ def confirm_activation(
     def operation() -> ReadinessOutcome:
         replay = _decision_for_command(db, command.context.command_id)
         if replay is not None:
+            _validate_replay_scope(
+                replay,
+                service_order_id=command.service_order_id,
+            )
             return _to_outcome(replay)
         order = db.scalar(
             select(ServiceOrder)
@@ -544,7 +573,10 @@ def confirm_activation(
                 "No readiness decision requested this activation.",
             )
         subscription = db.get(Subscription, command.subscription_id)
-        if subscription is None or subscription.status != SubscriptionStatus.active:
+        if subscription is None or subscription.status not in {
+            SubscriptionStatus.pending,
+            SubscriptionStatus.active,
+        }:
             raise _error(
                 "activation_projection_incomplete",
                 "Subscription activation has not been persisted.",
@@ -580,14 +612,29 @@ def confirm_activation(
             reason_code="activation_projection_confirmed",
             checks=checks,
         )
-        service_order_lifecycle.transition_service_order(
+        service_order_lifecycle.record_provisioning_result(
             db,
             service_order_id=order.id,
-            target_status=ServiceOrderStatus.active,
+            succeeded=True,
+            readiness_decision_id=decision.id,
             actor_id=command.context.actor,
             reason="activation_projection_confirmed",
-            event_evidence={"readiness_decision_id": str(decision.id)},
-            commit=False,
+        )
+        emit_event(
+            db,
+            EventType.subscription_activated,
+            {
+                "subscription_id": str(subscription.id),
+                "service_order_id": str(order.id),
+                "readiness_decision_id": str(decision.id),
+                "projections_confirmed": True,
+                "from_status": SubscriptionStatus.pending.value,
+                "to_status": SubscriptionStatus.active.value,
+            },
+            actor=command.context.actor,
+            subscriber_id=order.subscriber_id,
+            subscription_id=subscription.id,
+            service_order_id=order.id,
         )
         return _to_outcome(decision)
 

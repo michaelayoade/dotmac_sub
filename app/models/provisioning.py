@@ -13,6 +13,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -542,3 +543,23 @@ class ProvisioningReadinessCheck(Base):
     )
 
     decision = relationship("ProvisioningReadinessDecision", back_populates="checks")
+
+
+class ProvisioningReadinessEvidenceImmutableError(RuntimeError):
+    """Raised when append-only provisioning decision evidence is mutated."""
+
+
+@event.listens_for(ProvisioningReadinessDecision, "before_update")
+@event.listens_for(ProvisioningReadinessCheck, "before_update")
+def _reject_provisioning_readiness_update(*_args: object) -> None:
+    raise ProvisioningReadinessEvidenceImmutableError(
+        "Provisioning readiness evidence is append-only"
+    )
+
+
+@event.listens_for(ProvisioningReadinessDecision, "before_delete")
+@event.listens_for(ProvisioningReadinessCheck, "before_delete")
+def _reject_provisioning_readiness_delete(*_args: object) -> None:
+    raise ProvisioningReadinessEvidenceImmutableError(
+        "Provisioning readiness evidence is append-only"
+    )

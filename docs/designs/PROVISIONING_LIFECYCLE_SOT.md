@@ -15,15 +15,17 @@ The lifecycle is deliberately two phase:
 1. A terminal `ProvisioningRun` event asks the owner to evaluate readiness.
 2. The owner locks the exact service order and run, records normalized checks,
    and either blocks, fails, or requests activation.
-3. A request transitions the pending subscription through the existing
-   subscription lifecycle owner and emits `subscription.activated` with the
-   exact `service_order_id` and `readiness_decision_id`.
+3. A ready decision emits `service_order.activation_requested` with the exact
+   `service_order_id` and `readiness_decision_id`; the subscription remains
+   pending.
 4. Existing IP, RADIUS, and NAS activation projections execute. A projection
-   failure fails event delivery and remains retryable.
+   failure fails event delivery and remains retryable without presenting the
+   subscription as active.
 5. Only after those projections succeed does the handler ask the readiness
    owner to confirm that exact service order. Confirmation records an
    `activated` decision and asks the service-order lifecycle owner to set the
-   order active and emit `service_order.completed`.
+   order active, activate the subscription, and emit `service_order.completed`
+   plus the canonical `subscription.activated` fact.
 
 Subscription-wide completion and direct admin activation are not fallback
 paths. They are removed.
@@ -53,7 +55,9 @@ complete a project task or activate service.
 ## Readiness facts and decisions
 
 `ProvisioningReadinessDecision` is append-only and idempotent on
-`CommandContext.command_id`. Each decision owns one row per named check in
+`CommandContext.command_id`. Reusing a command id for another service order or
+provisioning run fails closed with `command_replay_conflict`; it cannot return
+evidence from a different scope. Each decision owns one row per named check in
 `ProvisioningReadinessCheck`:
 
 - `provisioning_run`: the exact run succeeded or failed;

@@ -29,6 +29,7 @@ HANDLED_EVENT_TYPES = frozenset(
         EventType.subscription_activated,
         EventType.subscription_resumed,
         EventType.service_order_assigned,
+        EventType.service_order_activation_requested,
         EventType.provisioning_completed,
         EventType.provisioning_failed,
     }
@@ -45,6 +46,8 @@ class ProvisioningHandler:
             self._handle_subscription_resumed(db, event)
         elif event.event_type == EventType.service_order_assigned:
             self._handle_service_order_assigned(db, event)
+        elif event.event_type == EventType.service_order_activation_requested:
+            self._handle_service_order_activation_requested(db, event)
         elif event.event_type == EventType.provisioning_completed:
             self._evaluate_run_readiness(event)
         elif event.event_type == EventType.provisioning_failed:
@@ -146,6 +149,8 @@ class ProvisioningHandler:
             )
 
     def _handle_subscription_activated(self, db: Session, event: Event) -> None:
+        if event.payload.get("projections_confirmed") is True:
+            return
         subscription_id = event.subscription_id or event.payload.get("subscription_id")
         if not subscription_id:
             logger.debug(
@@ -162,7 +167,20 @@ class ProvisioningHandler:
         self._sync_radius_on_activation(db, str(subscription_id))
         # Step 3: Push NAS provisioning commands
         self._push_nas_provisioning(db, str(subscription_id))
-        # Step 4: Confirm only the service order named by the readiness event.
+
+    def _handle_service_order_activation_requested(
+        self, db: Session, event: Event
+    ) -> None:
+        """Project connectivity, then confirm the exact readiness decision."""
+
+        subscription_id = event.subscription_id or event.payload.get("subscription_id")
+        if not subscription_id:
+            raise ValueError("Activation request is missing subscription_id")
+        provisioning_service.ensure_ip_assignments_for_subscription(
+            db, str(subscription_id)
+        )
+        self._sync_radius_on_activation(db, str(subscription_id))
+        self._push_nas_provisioning(db, str(subscription_id))
         self._confirm_service_order_activation(event)
 
     def _sync_radius_on_activation(self, db: Session, subscription_id: str) -> None:

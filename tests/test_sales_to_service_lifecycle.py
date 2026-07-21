@@ -163,6 +163,7 @@ def test_verified_implementation_to_provisioning_to_cx_acceptance(
         db_session,
         service_order_id=service_order.id,
         succeeded=True,
+        readiness_decision_id=uuid4(),
         actor_id="pytest",
     )
     db_session.commit()
@@ -211,6 +212,7 @@ def test_cx_lifecycle_evidence_is_append_only(db_session, subscriber, catalog_of
         db_session,
         service_order_id=service_order.id,
         succeeded=True,
+        readiness_decision_id=uuid4(),
         actor_id="pytest",
     )
     db_session.commit()

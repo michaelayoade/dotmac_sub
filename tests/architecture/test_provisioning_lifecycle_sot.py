@@ -56,3 +56,15 @@ def test_provisioning_lifecycle_owner_is_transport_free() -> None:
 
     for prohibited in ("fastapi", "APIRouter", "celery", "DeviceProvisioner"):
         assert prohibited not in source
+
+
+def test_provisioning_owner_is_only_runtime_provisioning_result_caller() -> None:
+    callers = []
+    for path in (APP / "services").rglob("*.py"):
+        if path.name == "service_order_lifecycle.py":
+            continue
+        source = path.read_text(encoding="utf-8")
+        if "record_provisioning_result(" in source:
+            callers.append(path.relative_to(ROOT).as_posix())
+
+    assert callers == ["app/services/provisioning_lifecycle.py"]

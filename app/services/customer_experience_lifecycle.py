@@ -20,10 +20,10 @@ from app.models.work_order import WorkOrder
 from app.schemas.portal import (
     CustomerActionKey,
     CustomerExperienceState,
-    CustomerSelfCareAction,
     CustomerProvisioningCheck,
     CustomerProvisioningDecisionState,
     CustomerProvisioningReference,
+    CustomerSelfCareAction,
     CustomerTicketReference,
     CustomerWorkOrderReference,
     MyProjectsResponse,

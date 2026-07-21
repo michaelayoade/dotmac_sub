@@ -81,9 +81,10 @@ class EventType(enum.Enum):
     provisioning_completed = "provisioning.completed"
     provisioning_failed = "provisioning.failed"
 
-    # Operations - Service Order events (3)
+    # Operations - Service Order events (5)
     service_order_created = "service_order.created"
     service_order_assigned = "service_order.assigned"
+    service_order_activation_requested = "service_order.activation_requested"
     service_order_completed = "service_order.completed"
     service_order_recovered = "service_order.recovered"
 

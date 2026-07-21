@@ -5060,13 +5060,14 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     ),
                     events=EventContract(
                         event_types=(
+                            "service_order.activation_requested",
                             "subscription.activated",
                             "service_order.completed",
                         ),
                         schema_version=1,
                         delivery_owner="events.dispatcher",
                         compatibility=(
-                            "Existing event names remain; activation events carry the "
+                            "The request, completion, and subscription events carry the "
                             "exact service_order_id and readiness_decision_id."
                         ),
                         replay=(

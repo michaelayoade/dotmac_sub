@@ -67,7 +67,7 @@ async def receive_lead_capture(
         ) from None
 
     try:
-        receipt, _created = integration_inbox.receive_verified(
+        receipt, _should_process = integration_inbox.receive_and_claim_verified(
             db,
             capability_binding_id=context.binding.id,
             provider_event_id=provider_event_id,
@@ -76,20 +76,15 @@ async def receive_lead_capture(
             headers={"content-type": str(request.headers.get("content-type") or "")},
         )
     except integration_inbox.ProviderEventIdentityCollision as exc:
-        # Identity reuse is a security consequence, not a failed receipt write.
-        # Persist the quarantine staged by the inbox owner before returning 409.
-        db.commit()
         raise HTTPException(
             status_code=409,
             detail={"code": "lead_receipt_conflict", "message": str(exc)},
         ) from exc
     except integration_inbox.InboxError as exc:
-        db.rollback()
         raise HTTPException(
             status_code=409,
             detail={"code": "lead_receipt_conflict", "message": str(exc)},
         ) from exc
-    db.commit()
     try:
         result = capture.capture_verified_receipt(
             db,
@@ -98,15 +93,12 @@ async def receive_lead_capture(
             actor_id=f"integration:{context.binding.installation_id}",
         )
     except capture.LeadCaptureError as exc:
-        db.rollback()
-        failed = integration_inbox.get_receipt(db, receipt_id=receipt.id)
-        integration_inbox.claim_for_processing(failed)
-        integration_inbox.mark_failed(
-            failed,
+        integration_inbox.fail_consequence(
+            db,
+            receipt=receipt,
             error_code=exc.code,
             error_detail=str(exc),
         )
-        db.commit()
         raise HTTPException(
             status_code=422 if exc.kind == "invalid" else 409,
             detail={"code": exc.code, "message": str(exc)},

@@ -95,6 +95,7 @@ def test_raw_service_order_activation_is_rejected(
 ):
     import pytest
     from fastapi import HTTPException
+
     from app.models.catalog import SubscriptionStatus
 
     subscription.status = SubscriptionStatus.pending

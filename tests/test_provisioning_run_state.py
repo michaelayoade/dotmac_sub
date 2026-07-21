@@ -78,6 +78,81 @@ def test_terminal_run_event_delegates_to_lifecycle_owner(
     assert order.status == ServiceOrderStatus.provisioning
 
 
+def test_activation_request_projects_then_confirms_exact_order(
+    db_session, subscriber_account, subscription, monkeypatch
+):
+    order = _order(
+        db_session,
+        subscriber_account,
+        subscription,
+        ServiceOrderStatus.provisioning,
+    )
+    calls = []
+    handler = ProvisioningHandler()
+    monkeypatch.setattr(
+        "app.services.events.handlers.provisioning.provisioning_service."
+        "ensure_ip_assignments_for_subscription",
+        lambda db, subscription_id: calls.append(("ip", subscription_id)),
+    )
+    monkeypatch.setattr(
+        handler,
+        "_sync_radius_on_activation",
+        lambda db, subscription_id: calls.append(("radius", subscription_id)),
+    )
+    monkeypatch.setattr(
+        handler,
+        "_push_nas_provisioning",
+        lambda db, subscription_id: calls.append(("nas", subscription_id)),
+    )
+    monkeypatch.setattr(
+        handler,
+        "_confirm_service_order_activation",
+        lambda event: calls.append(("confirm", str(event.service_order_id))),
+    )
+    event = Event(
+        event_type=EventType.service_order_activation_requested,
+        payload={
+            "service_order_id": str(order.id),
+            "subscription_id": str(subscription.id),
+        },
+        service_order_id=order.id,
+        subscription_id=subscription.id,
+    )
+
+    handler.handle(db_session, event)
+
+    subscription_id = str(subscription.id)
+    assert calls == [
+        ("ip", subscription_id),
+        ("radius", subscription_id),
+        ("nas", subscription_id),
+        ("confirm", str(order.id)),
+    ]
+
+
+def test_confirmed_subscription_event_does_not_repeat_network_projection(
+    db_session, subscription, monkeypatch
+):
+    calls = []
+    monkeypatch.setattr(
+        "app.services.events.handlers.provisioning.provisioning_service."
+        "ensure_ip_assignments_for_subscription",
+        lambda *args: calls.append(args),
+    )
+    event = Event(
+        event_type=EventType.subscription_activated,
+        payload={
+            "subscription_id": str(subscription.id),
+            "projections_confirmed": True,
+        },
+        subscription_id=subscription.id,
+    )
+
+    ProvisioningHandler().handle(db_session, event)
+
+    assert calls == []
+
+
 def test_reaper_fails_stale_running_runs(db_session, subscriber_account, subscription):
     """A run stuck in 'running' past the timeout is reaped to failed (#8)."""
     from app.models.provisioning import ProvisioningWorkflow

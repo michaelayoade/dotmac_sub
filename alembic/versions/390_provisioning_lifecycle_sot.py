@@ -72,7 +72,7 @@ def upgrade() -> None:
                 """
                 WITH matches AS (
                     SELECT so.id AS service_order_id,
-                           min(project.id) AS project_id,
+                           min(project.id::text)::uuid AS project_id,
                            count(*) AS match_count
                       FROM service_orders AS so
                       JOIN projects AS project
@@ -96,7 +96,7 @@ def upgrade() -> None:
                 """
                 WITH matches AS (
                     SELECT so.id AS service_order_id,
-                           min(project.id) AS project_id,
+                           min(project.id::text)::uuid AS project_id,
                            count(*) AS match_count
                       FROM service_orders AS so
                       JOIN sales_orders AS sales_order ON sales_order.id = so.sales_order_id
@@ -121,7 +121,7 @@ def upgrade() -> None:
                 """
                 WITH matches AS (
                     SELECT so.id AS service_order_id,
-                           min(task.id) AS task_id,
+                           min(task.id::text)::uuid AS task_id,
                            count(*) AS match_count
                       FROM service_orders AS so
                       JOIN project_tasks AS task
