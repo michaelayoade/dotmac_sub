@@ -149,6 +149,42 @@ def test_recovery_ignores_non_placeholder_crm_updates(db_session):
     assert plan_recovery(db_session) == []
 
 
+def test_recovery_plan_includes_partial_placeholder_name_fields(db_session):
+    subscriber = Subscriber(
+        first_name="Existing",
+        last_name="Customer",
+        display_name="Existing Customer",
+        email="partial-placeholder@example.com",
+        subscriber_number="100000008",
+    )
+    db_session.add(subscriber)
+    db_session.flush()
+    db_session.add(
+        _incident_event(
+            subscriber,
+            {
+                "first_name": {"old": "Existing", "new": "Existing"},
+                "last_name": {"old": "Identity", "new": "Customer"},
+                "display_name": {
+                    "old": "Existing Identity",
+                    "new": "Existing Customer",
+                },
+            },
+        )
+    )
+    db_session.commit()
+
+    candidates = plan_recovery(db_session)
+
+    assert len(candidates) == 1
+    assert candidates[0].classification == "eligible"
+    assert candidates[0].already_restored_fields == ["first_name"]
+    assert candidates[0].restorations == {
+        "last_name": "Identity",
+        "display_name": "Existing Identity",
+    }
+
+
 def test_recovery_apply_is_guarded_audited_and_idempotent(db_session):
     subscriber = Subscriber(
         first_name="Customer",

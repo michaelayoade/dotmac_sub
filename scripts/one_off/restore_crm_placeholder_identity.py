@@ -88,28 +88,16 @@ def _audit_changes(event: AuditEvent) -> dict[str, dict[str, Any]]:
     return changes if isinstance(changes, dict) else {}
 
 
-def _proposed_display_name(event: AuditEvent) -> str:
-    changes = _audit_changes(event)
-    display_change = changes.get("display_name")
-    if isinstance(display_change, dict):
-        return str(display_change.get("new") or "").strip()
-    parts: list[str] = []
-    for field_name in ("first_name", "last_name"):
-        change = changes.get(field_name)
-        if isinstance(change, dict) and change.get("new") is not None:
-            parts.append(str(change["new"]).strip())
-    return " ".join(part for part in parts if part)
-
-
 def _is_placeholder_regression(event: AuditEvent) -> bool:
-    proposed = _proposed_display_name(event)
-    if not is_placeholder_customer_name(proposed):
-        return False
+    changes = _audit_changes(event)
     return any(
         isinstance(change, dict)
         and str(change.get("old") or "").strip() != str(change.get("new") or "").strip()
+        and is_placeholder_customer_name(
+            None if change.get("new") is None else str(change.get("new"))
+        )
         for field_name in IDENTITY_FIELDS
-        if (change := _audit_changes(event).get(field_name)) is not None
+        if (change := changes.get(field_name)) is not None
     )
 
 
