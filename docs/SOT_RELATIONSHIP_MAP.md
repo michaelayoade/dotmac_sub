@@ -92,7 +92,7 @@ be restated in durable domain language here or in the owning design document.
 
 Architecture liveness is checked in both directions. Every declared owner must
 have a real application/operator caller, and every new service module with a
-persistence-like mutation must name a declared owner. The 250 existing
+persistence-like mutation must name a declared owner. The 249 existing
 undeclared writer-like modules are an explicit shrink-only migration baseline,
 not approved parallel writers; resolving an owner or removing its write requires
 deleting the baseline entry. Adding an entry requires an explicit ownership
@@ -139,6 +139,7 @@ do not hand-edit these rows.
 
 | Service | Concern | Role | Authoritative inputs | Transaction | Migration | Steward | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| `customer.name_repairs` | evidence-bound legacy Subscriber name repair | `command_writer` | approved customer-name repair manifest ← `customer.name_repairs`<br>canonical legacy Subscriber name state ← `customer.accounts`<br>immutable CRM overwrite audit evidence ← `observability.audit_log`<br>canonical Party identity binding ← `party.registry` | `owner_managed` | `complete` | customer operations | `docs/PARTY_CUSTOMER_LIFECYCLE.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_restore_crm_placeholder_identity.py`<br>`tests/architecture/test_crm_customer_boundary.py` |
 | `customer.reseller_status_actions` | reseller-scoped account-action impact preview | `resolver` | canonical reseller account scope ← `customer.identity_scope`<br>canonical account and subscription lifecycle state ← `access.subscription_lifecycle`<br>reseller account-status action protocol ← `customer.reseller_status_actions` | `coordinator_managed` | `complete` | customer operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_reseller_gaps.py`<br>`tests/test_reseller_portal_services.py`<br>`tests/architecture/test_reseller_status_action_boundary.py` |
 | `customer.reseller_status_actions` | lock-aware account-action eligibility | `policy` | canonical account and subscription lifecycle state ← `access.subscription_lifecycle`<br>canonical enforcement lock and login-conflict state ← `access.subscription_lifecycle`<br>reseller account-status action protocol ← `customer.reseller_status_actions` | `coordinator_managed` | `complete` | customer operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_reseller_gaps.py`<br>`tests/test_reseller_portal_services.py`<br>`tests/architecture/test_reseller_status_action_boundary.py` |
 | `customer.reseller_status_actions` | account-action stale-preview fingerprint | `resolver` | canonical reseller account scope ← `customer.identity_scope`<br>canonical account and subscription lifecycle state ← `access.subscription_lifecycle`<br>canonical enforcement lock and login-conflict state ← `access.subscription_lifecycle`<br>reseller account-status action protocol ← `customer.reseller_status_actions` | `coordinator_managed` | `complete` | customer operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_reseller_gaps.py`<br>`tests/test_reseller_portal_services.py`<br>`tests/architecture/test_reseller_status_action_boundary.py` |
@@ -486,6 +487,20 @@ status are observed by the PII-free `customer.lifecycle_audit`, never decided
 or changed by it. CRM and `dotmac_mkt` have no runtime customer-lifecycle or
 person-level attribution authority. The complete boundary and cutover gates
 are `docs/PARTY_CUSTOMER_LIFECYCLE.md`.
+
+The signed CRM accepted-customer endpoint is observation-only through
+`integration.inbox`. It cannot create accounts or write Subscriber identity,
+contact, address, category, profile, Party, account, or lifecycle fields.
+Exact retained CRM person, sales-order, or quote provenance may report a
+read-only match; names, email addresses, and phone numbers cannot establish or
+merge identity. Unmatched and ambiguous observations remain Inbox evidence for
+review. This retires the former direct CRM customer writer and create fallback.
+The incident command at
+`scripts.one_off.restore_crm_placeholder_identity` is read-only by default.
+Its separately gated apply mode requires an exact plan digest and named target,
+then delegates legacy Subscriber corrections to `customer.name_repairs`.
+Party-bound rows fail closed pending the explicit Party name-projection
+cutover.
 
 Migration 356 applies that boundary to Refer & Earn. `referrals.program` owns
 capture policy, the canonical ReferralCode/Referral and exact-Party
@@ -1574,7 +1589,9 @@ network summary composition.
 5. `customer.profile_commands` owns admin customer profile edits and explicit
    person-to-business customer conversion. Normal person edit submission must
    not mutate account type; conversion is a dedicated command with its own
-   validation and audit trail.
+   validation and audit trail. `customer.name_repairs` separately owns exact,
+   audit-evidenced legacy Subscriber name remediation until Party name
+   projection cutover; no webhook, CLI, or generic profile helper writes it.
 6. `customer.service_status` owns customer-visible service health and action
    hints, including whether payment can restore every active service hold and
    the authoritative amount required by financial policy.

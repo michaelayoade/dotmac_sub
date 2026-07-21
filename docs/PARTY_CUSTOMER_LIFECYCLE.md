@@ -219,6 +219,21 @@ so new writes are protected without falsely claiming historical rows are clean.
 They are validated only after the audit and reviewed repair work reach zero
 unresolved violations.
 
+The signed CRM `customer.accepted` endpoint is now observation-only through
+`integration.inbox`. It cannot create a Subscriber or write any existing
+Subscriber name, email, phone, address, category, date of birth, gender,
+status, Party binding, or lifecycle state. Exact retained `crm_person_id`,
+`crm_sales_order_id`, or `crm_quote_id` provenance may report a read-only match;
+name and contact observations never establish identity. Unmatched and ambiguous
+observations remain in the Inbox for review instead of becoming accounts.
+The incident command at
+`scripts.one_off.restore_crm_placeholder_identity` is read-only by default.
+Its apply mode requires the exact digest from a fresh plan, an attributable
+actor and reason, and an explicitly named target. It locks and revalidates the
+complete candidate set, delegates legacy Subscriber corrections to
+`customer.name_repairs`, refuses Party-bound rows, and commits identity-index,
+per-account audit, batch audit, and `subscriber.updated` evidence atomically.
+
 Run the PII-free report in a read-only, repeatable-read transaction:
 
 ```bash
