@@ -78,6 +78,9 @@ def noc_queue_data(db: Session) -> dict:
                 "count_label": "affected",
                 "when": getattr(incident, "started_at", None),
                 "url": "/admin/network/outages",
+                "node_id": str(incident.root_node_id)
+                if getattr(incident, "root_node_id", None)
+                else None,
                 "_rank": _rank(presentation),
             }
         )

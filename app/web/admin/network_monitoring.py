@@ -1,5 +1,7 @@
 """Admin network monitoring and alarms web routes."""
 
+import uuid
+
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -10,6 +12,7 @@ from app.services import web_network_alarm_rules as web_network_alarm_rules_serv
 from app.services import web_network_core_runtime as web_network_core_runtime_service
 from app.services import web_network_monitoring as web_network_monitoring_service
 from app.services import web_network_noc as web_network_noc_service
+from app.services import web_network_noc_inspector as web_network_noc_inspector_service
 from app.services.auth_dependencies import require_permission
 from app.web.request_parsing import parse_form_data_sync
 
@@ -819,3 +822,15 @@ def noc_queue_page(
     context = _base_context(request, db, active_page="noc")
     context.update(web_network_noc_service.noc_queue_data(db))
     return templates.TemplateResponse("admin/network/noc/index.html", context)
+
+
+@router.get(
+    "/noc/inspect/{node_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
+def noc_inspect(request: Request, node_id: uuid.UUID, db: Session = Depends(get_db)):
+    context = {"request": request}
+    data = web_network_noc_inspector_service.noc_inspector_data(db, node_id)
+    context.update(data)
+    return templates.TemplateResponse("admin/network/noc/_inspector.html", context)
