@@ -8,12 +8,19 @@ from app.models.provisioning import (
     ProvisioningRun,
     ProvisioningRunStatus,
     ServiceOrder,
-    ServiceOrderStatus,
 )
 from app.schemas.provisioning import ProvisioningRunStart
 from app.services import provisioning as provisioning_service
 from app.services.common import coerce_uuid
+from app.services.db_session_adapter import db_session_adapter
 from app.services.events.types import Event, EventType
+from app.services.owner_commands import CommandContext
+from app.services.provisioning_lifecycle import (
+    ConfirmActivationCommand,
+    EvaluateReadinessCommand,
+    confirm_activation,
+    evaluate_readiness,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,54 +46,76 @@ class ProvisioningHandler:
         elif event.event_type == EventType.service_order_assigned:
             self._handle_service_order_assigned(db, event)
         elif event.event_type == EventType.provisioning_completed:
-            self._advance_order_on_run(db, event, ServiceOrderStatus.active)
+            self._evaluate_run_readiness(event)
         elif event.event_type == EventType.provisioning_failed:
-            self._advance_order_on_run(db, event, ServiceOrderStatus.failed)
+            self._evaluate_run_readiness(event)
 
-    def _advance_order_on_run(
-        self, db: Session, event: Event, target_status: "ServiceOrderStatus"
-    ) -> None:
-        """Advance the linked service order when its provisioning run finishes.
-
-        A successful ``ProvisioningRuns.run`` previously left the order stuck in
-        ``provisioning`` forever — the only thing that flipped it to ``active``
-        was the unrelated ``subscription_activated`` event. Now the run's own
-        completion/failure advances the order, so an order whose workflow runs
-        to success (or fails) reaches a terminal status instead of starving.
-        """
+    def _evaluate_run_readiness(self, event: Event) -> None:
+        """Delegate terminal run observations to the lifecycle decision owner."""
         service_order_id = event.service_order_id or event.payload.get(
             "service_order_id"
         )
-        if not service_order_id:
+        provisioning_run_id = event.payload.get("provisioning_run_id")
+        if not service_order_id or not provisioning_run_id:
             return
         try:
-            order = db.get(ServiceOrder, coerce_uuid(service_order_id))
-        except (TypeError, ValueError):
-            return
-        if not order:
-            return
-        from app.services import service_order_lifecycle
+            order_uuid = coerce_uuid(service_order_id)
+            run_uuid = coerce_uuid(provisioning_run_id)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Invalid provisioning lifecycle event scope") from exc
+        with db_session_adapter.owner_command_session() as owner_db:
+            outcome = evaluate_readiness(
+                owner_db,
+                EvaluateReadinessCommand(
+                    context=CommandContext.system(
+                        actor="system:provisioning_event",
+                        scope=str(order_uuid),
+                        reason=event.event_type.value,
+                        command_id=event.event_id,
+                        correlation_id=event.event_id,
+                        causation_id=event.event_id,
+                        idempotency_key=f"event:{event.event_id}",
+                    ),
+                    service_order_id=order_uuid,
+                    provisioning_run_id=run_uuid,
+                ),
+            )
+        logger.info(
+            "Provisioning readiness for service order %s decided %s",
+            order_uuid,
+            outcome.status.value,
+        )
 
+    def _confirm_service_order_activation(self, event: Event) -> None:
+        service_order_id = event.service_order_id or event.payload.get(
+            "service_order_id"
+        )
+        subscription_id = event.subscription_id or event.payload.get(
+            "subscription_id"
+        )
+        if not service_order_id or not subscription_id:
+            return
         try:
-            service_order_lifecycle.record_provisioning_result(
-                db,
-                service_order_id=order.id,
-                succeeded=target_status == ServiceOrderStatus.active,
-                actor_id="provisioning.event_handler",
-                reason=event.payload.get("error_message"),
-            )
-            logger.info(
-                "Service order %s advanced to %s on run %s",
-                service_order_id,
-                target_status.value,
-                event.payload.get("provisioning_run_id"),
-            )
-        except service_order_lifecycle.ServiceOrderLifecycleError as exc:
-            logger.warning(
-                "Service order %s rejected provisioning result %s: %s",
-                service_order_id,
-                target_status.value,
-                exc,
+            order_uuid = coerce_uuid(service_order_id)
+            subscription_uuid = coerce_uuid(subscription_id)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Invalid activation confirmation event scope") from exc
+        with db_session_adapter.owner_command_session() as owner_db:
+            confirm_activation(
+                owner_db,
+                ConfirmActivationCommand(
+                    context=CommandContext.system(
+                        actor="system:connectivity_projection",
+                        scope=str(order_uuid),
+                        reason="subscription activation projections succeeded",
+                        command_id=event.event_id,
+                        correlation_id=event.event_id,
+                        causation_id=event.event_id,
+                        idempotency_key=f"event:{event.event_id}",
+                    ),
+                    service_order_id=order_uuid,
+                    subscription_id=subscription_uuid,
+                ),
             )
 
     def _handle_subscription_resumed(self, db: Session, event: Event) -> None:
@@ -124,113 +153,78 @@ class ProvisioningHandler:
                 event.event_type.value if event.event_type else "unknown",
             )
             return
-        # Step 1: Allocate IP addresses
-        try:
-            provisioning_service.ensure_ip_assignments_for_subscription(
-                db, str(subscription_id)
-            )
-        except Exception as exc:
-            logger.warning(
-                "Auto IP allocation failed for subscription %s: %s",
-                subscription_id,
-                exc,
-            )
+        # Projection failures propagate so the event remains retryable and the
+        # exact service order cannot be confirmed prematurely.
+        provisioning_service.ensure_ip_assignments_for_subscription(
+            db, str(subscription_id)
+        )
         # Step 2: Sync RADIUS credentials so subscriber can authenticate
         self._sync_radius_on_activation(db, str(subscription_id))
         # Step 3: Push NAS provisioning commands
         self._push_nas_provisioning(db, str(subscription_id))
+        # Step 4: Confirm only the service order named by the readiness event.
+        self._confirm_service_order_activation(event)
 
     def _sync_radius_on_activation(self, db: Session, subscription_id: str) -> None:
         """Reconcile RADIUS state for the activated subscription."""
-        try:
-            from app.models.catalog import Subscription
-            from app.services.radius import (
-                reconcile_subscription_connectivity,
-                sync_account_credentials_to_radius,
-            )
+        from app.models.catalog import Subscription
+        from app.services.radius import (
+            reconcile_subscription_connectivity,
+            sync_account_credentials_to_radius,
+        )
 
-            subscription = db.get(Subscription, coerce_uuid(subscription_id))
-            if not subscription:
-                return
+        subscription = db.get(Subscription, coerce_uuid(subscription_id))
+        if not subscription:
+            raise ValueError(f"Subscription {subscription_id} not found")
 
-            sync_account_credentials_to_radius(db, str(subscription.subscriber_id))
-            result = reconcile_subscription_connectivity(db, subscription_id)
-            if result.get("ok"):
-                logger.info(
-                    "Reconciled RADIUS state for subscription %s: %s",
-                    subscription_id,
-                    result,
-                )
-        except Exception as exc:
-            logger.warning(
-                "RADIUS credential sync failed for subscription %s: %s",
-                subscription_id,
-                exc,
-            )
-
+        sync_account_credentials_to_radius(db, str(subscription.subscriber_id))
+        result = reconcile_subscription_connectivity(db, subscription_id)
+        if not result.get("ok"):
+            raise RuntimeError(f"RADIUS connectivity reconciliation failed: {result}")
+        logger.info(
+            "Reconciled RADIUS state for subscription %s: %s",
+            subscription_id,
+            result,
+        )
     def _push_nas_provisioning(self, db: Session, subscription_id: str) -> None:
         """Push NAS provisioning commands on subscription activation."""
-        try:
-            from app.models.catalog import NasDevice, ProvisioningAction, Subscription
-            from app.services.connection_type_provisioning import (
-                build_nas_provisioning_commands,
-            )
-            from app.services.enforcement import _resolve_effective_profile
-            from app.services.nas import DeviceProvisioner
+        from app.models.catalog import NasDevice, ProvisioningAction, Subscription
+        from app.services.connection_type_provisioning import (
+            build_nas_provisioning_commands,
+        )
+        from app.services.enforcement import _resolve_effective_profile
+        from app.services.nas import DeviceProvisioner
 
-            subscription = db.get(Subscription, coerce_uuid(subscription_id))
-            if not subscription or not subscription.provisioning_nas_device_id:
-                return
-            nas_device = db.get(NasDevice, subscription.provisioning_nas_device_id)
-            if not nas_device:
-                return
-            profile = _resolve_effective_profile(db, subscription)
-            commands = build_nas_provisioning_commands(
-                db,
-                subscription,
-                nas_device,
-                profile=profile,
-                action="create",
-            )
-            if not commands:
-                return
-            for cmd in commands:
-                try:
-                    DeviceProvisioner._execute_ssh(nas_device, cmd)
-                except Exception as cmd_exc:
-                    logger.warning(
-                        "NAS command failed for subscription %s: %s (cmd: %s)",
-                        subscription_id,
-                        cmd_exc,
-                        cmd,
-                    )
-            try:
-                DeviceProvisioner._handle_queue_mapping(
-                    db,
-                    nas_device,
-                    ProvisioningAction.create_user,
-                    {
-                        "subscription_id": str(subscription.id),
-                        "username": subscription.login or "",
-                    },
-                )
-            except Exception as mapping_exc:
-                logger.warning(
-                    "Queue mapping sync failed for subscription %s: %s",
-                    subscription_id,
-                    mapping_exc,
-                )
-            logger.info(
-                "Pushed %d NAS provisioning commands for subscription %s.",
-                len(commands),
-                subscription_id,
-            )
-        except Exception as exc:
-            logger.warning(
-                "NAS provisioning failed for subscription %s: %s",
-                subscription_id,
-                exc,
-            )
+        subscription = db.get(Subscription, coerce_uuid(subscription_id))
+        if not subscription or not subscription.provisioning_nas_device_id:
+            return
+        nas_device = db.get(NasDevice, subscription.provisioning_nas_device_id)
+        if not nas_device:
+            raise ValueError("Provisioning NAS device was not found")
+        profile = _resolve_effective_profile(db, subscription)
+        commands = build_nas_provisioning_commands(
+            db,
+            subscription,
+            nas_device,
+            profile=profile,
+            action="create",
+        )
+        for command in commands:
+            DeviceProvisioner._execute_ssh(nas_device, command)
+        DeviceProvisioner._handle_queue_mapping(
+            db,
+            nas_device,
+            ProvisioningAction.create_user,
+            {
+                "subscription_id": str(subscription.id),
+                "username": subscription.login or "",
+            },
+        )
+        logger.info(
+            "Pushed %d NAS provisioning commands for subscription %s.",
+            len(commands),
+            subscription_id,
+        )
 
     def _handle_service_order_assigned(self, db: Session, event: Event) -> None:
         service_order_id = event.service_order_id or event.payload.get(

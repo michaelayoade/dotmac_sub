@@ -45,6 +45,7 @@ from app.services.customer_portal_flow_common import (
 from app.services.network.radius_sessions import (
     latest_open_accounting_session_for_subscription,
 )
+from app.services.provisioning_lifecycle import latest_readiness
 from app.services.web_network_ont_actions import device_actions as ont_device_actions
 
 logger = logging.getLogger(__name__)
@@ -1441,6 +1442,7 @@ def get_service_order_detail(
 
     return {
         "service_order": service_order,
+        "readiness": latest_readiness(db, service_order.id),
         "appointments": appointments,
         "provisioning_tasks": provisioning_tasks,
     }

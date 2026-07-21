@@ -14,12 +14,16 @@ from uuid import UUID
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.project import Project, ProjectStatus, ProjectTask, ProjectTaskStatus
+from app.models.provisioning import ProvisioningReadinessDecision, ServiceOrder
 from app.models.support import Ticket, TicketStatus
 from app.models.work_order import WorkOrder
 from app.schemas.portal import (
     CustomerActionKey,
     CustomerExperienceState,
     CustomerSelfCareAction,
+    CustomerProvisioningCheck,
+    CustomerProvisioningDecisionState,
+    CustomerProvisioningReference,
     CustomerTicketReference,
     CustomerWorkOrderReference,
     MyProjectsResponse,
@@ -209,6 +213,7 @@ def _project_item(
     project: Project,
     *,
     work_orders: list[WorkOrder],
+    service_orders: list[ServiceOrder],
     tickets_by_id: dict[UUID, Ticket],
 ) -> ProjectItem:
     task_work_orders: dict[UUID, list[WorkOrder]] = defaultdict(list)
@@ -285,6 +290,40 @@ def _project_item(
         if ticket_id in tickets_by_id
     ]
     unscoped_work_orders = [row for row in work_orders if row.project_task_id is None]
+    provisioning = []
+    for order in service_orders:
+        latest = max(
+            order.readiness_decisions,
+            key=lambda item: (item.decided_at, item.created_at),
+            default=None,
+        )
+        provisioning.append(
+            CustomerProvisioningReference(
+                service_order_id=order.id,
+                subscription_id=order.subscription_id,
+                activation_task_id=order.activation_project_task_id,
+                order_status=order.status.value,
+                decision=(
+                    CustomerProvisioningDecisionState(latest.status.value)
+                    if latest is not None
+                    else CustomerProvisioningDecisionState.not_evaluated
+                ),
+                reason_code=latest.reason_code if latest else None,
+                checks=(
+                    [
+                        CustomerProvisioningCheck(
+                            kind=check.kind.value,
+                            result=check.result.value,
+                            reason_code=check.reason_code,
+                        )
+                        for check in latest.checks
+                    ]
+                    if latest
+                    else []
+                ),
+                decided_at=latest.decided_at if latest else None,
+            )
+        )
     return ProjectItem(
         id=project.id,
         name=project.name,
@@ -297,6 +336,7 @@ def _project_item(
         stages=stages,
         work_orders=[work_order_reference(row) for row in unscoped_work_orders],
         related_tickets=[ticket_reference(ticket) for ticket in related_tickets],
+        provisioning=provisioning,
         actions=_project_actions(project),
         customer_address=project.customer_address,
         region=project.region,
@@ -331,6 +371,23 @@ def projects_for_subscriber(db: Session, subscriber_id: str) -> MyProjectsRespon
     for row in work_orders:
         if row.project_id is not None:
             work_orders_by_project[row.project_id].append(row)
+    service_orders = (
+        db.query(ServiceOrder)
+        .options(
+            selectinload(ServiceOrder.readiness_decisions).selectinload(
+                ProvisioningReadinessDecision.checks
+            )
+        )
+        .filter(ServiceOrder.project_id.in_(project_ids))
+        .order_by(ServiceOrder.created_at.asc())
+        .all()
+        if project_ids
+        else []
+    )
+    service_orders_by_project: dict[UUID, list[ServiceOrder]] = defaultdict(list)
+    for order in service_orders:
+        if order.project_id is not None:
+            service_orders_by_project[order.project_id].append(order)
     ticket_ids = {
         task.ticket_id
         for project in projects
@@ -347,6 +404,7 @@ def projects_for_subscriber(db: Session, subscriber_id: str) -> MyProjectsRespon
         _project_item(
             project,
             work_orders=work_orders_by_project.get(project.id, []),
+            service_orders=service_orders_by_project.get(project.id, []),
             tickets_by_id=tickets_by_id,
         )
         for project in projects

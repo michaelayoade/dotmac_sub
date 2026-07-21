@@ -94,6 +94,20 @@ class ProjectStageState(StrEnum):
     canceled = "canceled"
 
 
+class CustomerProvisioningDecisionState(StrEnum):
+    not_evaluated = "not_evaluated"
+    blocked = "blocked"
+    activation_requested = "activation_requested"
+    activated = "activated"
+    failed = "failed"
+
+
+class CustomerProvisioningCheckResult(StrEnum):
+    passed = "passed"
+    failed = "failed"
+    not_applicable = "not_applicable"
+
+
 class CustomerActionKey(StrEnum):
     view_project = "view_project"
     view_work_order = "view_work_order"
@@ -156,6 +170,23 @@ class ProjectStage(BaseModel):
     work_orders: list[CustomerWorkOrderReference] = Field(default_factory=list)
 
 
+class CustomerProvisioningCheck(BaseModel):
+    kind: str
+    result: CustomerProvisioningCheckResult
+    reason_code: str
+
+
+class CustomerProvisioningReference(BaseModel):
+    service_order_id: UUID
+    subscription_id: UUID | None = None
+    activation_task_id: UUID | None = None
+    order_status: str
+    decision: CustomerProvisioningDecisionState
+    reason_code: str | None = None
+    checks: list[CustomerProvisioningCheck] = Field(default_factory=list)
+    decided_at: datetime | None = None
+
+
 class ProjectItem(BaseModel):
     id: UUID
     name: str
@@ -168,6 +199,7 @@ class ProjectItem(BaseModel):
     stages: list[ProjectStage] = Field(default_factory=list)
     work_orders: list[CustomerWorkOrderReference] = Field(default_factory=list)
     related_tickets: list[CustomerTicketReference] = Field(default_factory=list)
+    provisioning: list[CustomerProvisioningReference] = Field(default_factory=list)
     actions: list[CustomerSelfCareAction] = Field(default_factory=list)
     customer_address: str | None = None
     region: str | None = None

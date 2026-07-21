@@ -83,6 +83,10 @@ class ServiceOrders(CRUDManager[ServiceOrder]):
             str(payload.subscriber_id),
             str(payload.subscription_id) if payload.subscription_id else None,
             str(requested_by_contact_id) if requested_by_contact_id else None,
+            str(payload.project_id) if payload.project_id else None,
+            str(payload.activation_project_task_id)
+            if payload.activation_project_task_id
+            else None,
         )
         # The ServiceOrder model does not include requested_by_contact_id or project_type.
         data = payload.model_dump(exclude={"requested_by_contact_id", "project_type"})
@@ -298,10 +302,15 @@ class ServiceOrders(CRUDManager[ServiceOrder]):
         order = db.get(ServiceOrder, order_id)
         if not order:
             raise HTTPException(status_code=404, detail="Service order not found")
+        previous_status = order.status
         data = payload.model_dump(exclude_unset=True)
         target_status = data.pop("status", None)
         subscriber_id = str(data.get("subscriber_id", order.subscriber_id))
         subscription_id = data.get("subscription_id", order.subscription_id)
+        project_id = data.get("project_id", order.project_id)
+        activation_task_id = data.get(
+            "activation_project_task_id", order.activation_project_task_id
+        )
         # The ServiceOrder model does not include requested_by_contact_id.
         requested_by_contact_id = data.pop("requested_by_contact_id", None)
         # The ServiceOrder model does not include project_type.
@@ -311,7 +320,43 @@ class ServiceOrders(CRUDManager[ServiceOrder]):
             subscriber_id,
             str(subscription_id) if subscription_id else None,
             str(requested_by_contact_id) if requested_by_contact_id else None,
+            str(project_id) if project_id else None,
+            str(activation_task_id) if activation_task_id else None,
         )
+        if target_status is not None:
+            try:
+                normalized_target = (
+                    target_status
+                    if isinstance(target_status, ServiceOrderStatus)
+                    else ServiceOrderStatus(target_status)
+                )
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=400, detail="Invalid service order status"
+                ) from exc
+            if normalized_target in {
+                ServiceOrderStatus.active,
+                ServiceOrderStatus.failed,
+            }:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Active and failed states require a provisioning-readiness "
+                        "decision"
+                    ),
+                )
+            if previous_status in {
+                ServiceOrderStatus.canceled,
+                ServiceOrderStatus.active,
+                ServiceOrderStatus.failed,
+            } and normalized_target != previous_status:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Cannot change a {previous_status.value} service order "
+                        f"to {normalized_target.value}"
+                    ),
+                )
         for key, value in data.items():
             setattr(order, key, value)
         if target_status is not None:

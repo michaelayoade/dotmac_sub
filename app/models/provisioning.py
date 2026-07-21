@@ -146,6 +146,27 @@ class ServiceOrderType(enum.Enum):
     change_service = "change_service"
 
 
+class ProvisioningReadinessDecisionStatus(enum.Enum):
+    blocked = "blocked"
+    activation_requested = "activation_requested"
+    activated = "activated"
+    failed = "failed"
+
+
+class ProvisioningReadinessCheckKind(enum.Enum):
+    provisioning_run = "provisioning_run"
+    project_binding = "project_binding"
+    activation_task = "activation_task"
+    field_work = "field_work"
+    ip_assignment = "ip_assignment"
+
+
+class ProvisioningReadinessCheckResult(enum.Enum):
+    passed = "passed"
+    failed = "failed"
+    not_applicable = "not_applicable"
+
+
 class ServiceOrder(Base):
     __tablename__ = "service_orders"
     __table_args__ = (
@@ -198,6 +219,15 @@ class ServiceOrder(Base):
     implementation_verification_event_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True)
     )
+    activation_project_task_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "project_tasks.id",
+            name="fk_service_orders_activation_project_task_id",
+            ondelete="RESTRICT",
+        ),
+        index=True,
+    )
     status: Mapped[ServiceOrderStatus] = mapped_column(
         Enum(ServiceOrderStatus), default=ServiceOrderStatus.draft
     )
@@ -220,14 +250,20 @@ class ServiceOrder(Base):
     subscription = relationship("Subscription", back_populates="service_orders")
     sales_order = relationship("SalesOrder")
     sales_order_line = relationship("SalesOrderLine")
-    project = relationship("Project")
+    project = relationship("Project", foreign_keys=[project_id])
     installation_project = relationship("InstallationProject")
+    activation_project_task = relationship(
+        "ProjectTask", foreign_keys=[activation_project_task_id]
+    )
     appointments = relationship("InstallAppointment", back_populates="service_order")
     tasks = relationship("ProvisioningTask", back_populates="service_order")
     state_transitions = relationship(
         "ServiceStateTransition", back_populates="service_order"
     )
     provisioning_runs = relationship("ProvisioningRun", back_populates="service_order")
+    readiness_decisions = relationship(
+        "ProvisioningReadinessDecision", back_populates="service_order"
+    )
 
     @property
     def account_id(self) -> uuid.UUID:
@@ -410,3 +446,99 @@ class ProvisioningRun(Base):
     workflow = relationship("ProvisioningWorkflow", back_populates="runs")
     service_order = relationship("ServiceOrder", back_populates="provisioning_runs")
     subscription = relationship("Subscription")
+
+
+class ProvisioningReadinessDecision(Base):
+    """Append-only decision made from named provisioning facts."""
+
+    __tablename__ = "provisioning_readiness_decisions"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    service_order_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("service_orders.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    provisioning_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("provisioning_runs.id", ondelete="SET NULL"),
+        index=True,
+    )
+    command_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False, unique=True
+    )
+    correlation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False, index=True
+    )
+    status: Mapped[ProvisioningReadinessDecisionStatus] = mapped_column(
+        Enum(
+            ProvisioningReadinessDecisionStatus,
+            name="provisioning_readiness_decision_status",
+            values_callable=lambda values: [value.value for value in values],
+        ),
+        nullable=False,
+    )
+    reason_code: Mapped[str] = mapped_column(String(80), nullable=False)
+    actor: Mapped[str] = mapped_column(String(160), nullable=False)
+    decided_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+
+    service_order = relationship("ServiceOrder", back_populates="readiness_decisions")
+    provisioning_run = relationship("ProvisioningRun")
+    checks = relationship(
+        "ProvisioningReadinessCheck",
+        back_populates="decision",
+        order_by="ProvisioningReadinessCheck.kind",
+    )
+
+
+class ProvisioningReadinessCheck(Base):
+    """One normalized observation consumed by a readiness decision."""
+
+    __tablename__ = "provisioning_readiness_checks"
+    __table_args__ = (
+        UniqueConstraint(
+            "decision_id", "kind", name="uq_provisioning_readiness_check_kind"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    decision_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("provisioning_readiness_decisions.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    kind: Mapped[ProvisioningReadinessCheckKind] = mapped_column(
+        Enum(
+            ProvisioningReadinessCheckKind,
+            name="provisioning_readiness_check_kind",
+            values_callable=lambda values: [value.value for value in values],
+        ),
+        nullable=False,
+    )
+    result: Mapped[ProvisioningReadinessCheckResult] = mapped_column(
+        Enum(
+            ProvisioningReadinessCheckResult,
+            name="provisioning_readiness_check_result",
+            values_callable=lambda values: [value.value for value in values],
+        ),
+        nullable=False,
+    )
+    reason_code: Mapped[str] = mapped_column(String(80), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    source_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+
+    decision = relationship("ProvisioningReadinessDecision", back_populates="checks")

@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from uuid import uuid4
+
+import pytest
 
 from app.models.provisioning import (
     ProvisioningRun,
@@ -25,61 +30,52 @@ def _order(db, subscriber_account, subscription, status):
     return order
 
 
-def test_provisioning_completed_advances_order_to_active(
-    db_session, subscriber_account, subscription
+@pytest.mark.parametrize(
+    "event_type",
+    [EventType.provisioning_completed, EventType.provisioning_failed],
+)
+def test_terminal_run_event_delegates_to_lifecycle_owner(
+    db_session, subscriber_account, subscription, monkeypatch, event_type
 ):
-    """Run success advances a stuck 'provisioning' order to active (#7)."""
+    """Terminal runs are observations; the lifecycle owner decides the order state."""
     order = _order(
         db_session,
         subscriber_account,
         subscription,
         ServiceOrderStatus.provisioning,
     )
-    event = Event(
-        event_type=EventType.provisioning_completed,
-        payload={"service_order_id": str(order.id), "provisioning_run_id": "x"},
-        service_order_id=order.id,
+    run_id = uuid4()
+    owner_db = object()
+    captured = []
+
+    @contextmanager
+    def owner_command_session():
+        yield owner_db
+
+    monkeypatch.setattr(
+        "app.services.events.handlers.provisioning.db_session_adapter.owner_command_session",
+        owner_command_session,
     )
-    ProvisioningHandler().handle(db_session, event)
-    db_session.refresh(order)
-    assert order.status == ServiceOrderStatus.active
-
-
-def test_provisioning_failed_advances_order_to_failed(
-    db_session, subscriber_account, subscription
-):
-    """Run failure advances the order to failed, not stuck provisioning (#7)."""
-    order = _order(
-        db_session,
-        subscriber_account,
-        subscription,
-        ServiceOrderStatus.provisioning,
+    monkeypatch.setattr(
+        "app.services.events.handlers.provisioning.evaluate_readiness",
+        lambda db, command: captured.append((db, command))
+        or SimpleNamespace(status=SimpleNamespace(value="blocked")),
     )
     event = Event(
-        event_type=EventType.provisioning_failed,
-        payload={"service_order_id": str(order.id)},
+        event_type=event_type,
+        payload={
+            "service_order_id": str(order.id),
+            "provisioning_run_id": str(run_id),
+        },
         service_order_id=order.id,
     )
-    ProvisioningHandler().handle(db_session, event)
-    db_session.refresh(order)
-    assert order.status == ServiceOrderStatus.failed
 
-
-def test_run_advance_does_not_override_terminal_order(
-    db_session, subscriber_account, subscription
-):
-    """A completed run must not resurrect a canceled order (#7)."""
-    order = _order(
-        db_session, subscriber_account, subscription, ServiceOrderStatus.canceled
-    )
-    event = Event(
-        event_type=EventType.provisioning_completed,
-        payload={"service_order_id": str(order.id)},
-        service_order_id=order.id,
-    )
     ProvisioningHandler().handle(db_session, event)
-    db_session.refresh(order)
-    assert order.status == ServiceOrderStatus.canceled
+
+    assert captured[0][0] is owner_db
+    assert captured[0][1].service_order_id == order.id
+    assert captured[0][1].provisioning_run_id == run_id
+    assert order.status == ServiceOrderStatus.provisioning
 
 
 def test_reaper_fails_stale_running_runs(db_session, subscriber_account, subscription):

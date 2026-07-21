@@ -33,6 +33,7 @@ class ServiceOrderBase(BaseModel):
     project_id: UUID | None = None
     installation_project_id: UUID | None = None
     idempotency_key: str | None = Field(default=None, max_length=240)
+    activation_project_task_id: UUID | None = None
     requested_by_contact_id: UUID | None = None
     status: ServiceOrderStatus = ServiceOrderStatus.draft
     order_type: ServiceOrderType | None = None
@@ -56,6 +57,7 @@ class ServiceOrderUpdate(BaseModel):
     sales_order_line_id: UUID | None = None
     project_id: UUID | None = None
     installation_project_id: UUID | None = None
+    activation_project_task_id: UUID | None = None
     requested_by_contact_id: UUID | None = None
     status: ServiceOrderStatus | None = None
     order_type: ServiceOrderType | None = None

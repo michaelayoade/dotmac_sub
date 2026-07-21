@@ -123,6 +123,8 @@ FIBER_INSTALLATION_STAGE_TITLES: dict[str, str] = {
     "power_splicing_activation": "Power Direction, Splicing & Customer Activation",
 }
 
+FIBER_ACTIVATION_STAGE_KEY = FIBER_INSTALLATION_STAGE_ORDER[-1]
+
 FIBER_PROJECT_TASK_SLA_POLICY_NAME = "Fiber Project Task SLA"
 PROJECT_COMPLETION_SLA_POLICY_NAME = "Project Completion SLA"
 
@@ -835,6 +837,31 @@ def _seed_fiber_installation_tasks(db: Session, project: Project) -> None:
         db.add(task)
         db.flush()
         _sync_task_sla_clock(db, task)
+
+
+def resolve_activation_gate_task(db: Session, project_id: UUID) -> ProjectTask | None:
+    """Return the uniquely configured activation-stage task for a project.
+
+    The project domain owns the stage vocabulary. Callers persist the returned
+    task identity and never infer readiness from titles or duplicate stage keys.
+    """
+
+    tasks = (
+        db.query(ProjectTask)
+        .filter(
+            ProjectTask.project_id == project_id,
+            ProjectTask.is_active.is_(True),
+        )
+        .order_by(ProjectTask.created_at.asc(), ProjectTask.id.asc())
+        .all()
+    )
+    matches = [
+        task
+        for task in tasks
+        if isinstance(task.metadata_, dict)
+        and task.metadata_.get("fiber_stage_key") == FIBER_ACTIVATION_STAGE_KEY
+    ]
+    return matches[0] if len(matches) == 1 else None
 
 
 def prepare_sales_project(

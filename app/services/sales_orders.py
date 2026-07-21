@@ -49,7 +49,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.catalog import Subscription
-from app.models.project import Project
+from app.models.project import Project, ProjectTask
 from app.models.sales import (
     Quote,
     QuoteLineItem,
@@ -555,6 +555,17 @@ def _active_sales_order_lines(db: Session, sales_order_id) -> list[SalesOrderLin
     )
 
 
+def _resolve_activation_task_for_project(
+    db: Session, project: Project | None
+) -> ProjectTask | None:
+    """Resolve the single named activation gate from the native project graph."""
+    if project is None:
+        return None
+    from app.services import projects
+
+    return projects.resolve_activation_gate_task(db, project.id)
+
+
 def _ensure_provisioning_order_for_sales_line(
     db: Session,
     *,
@@ -583,6 +594,15 @@ def _ensure_provisioning_order_for_sales_line(
     )
     if persisted_subscription is None:
         return
+    from app.services import sales_fulfillment
+
+    scope = sales_fulfillment.ensure_implementation_scope(
+        db,
+        sales_order_id=sales_order.id,
+        actor_id="sales.orders",
+        commit=False,
+    )
+    activation_task = _resolve_activation_task_for_project(db, scope.project)
     idempotency_key = f"sales-order-line:{line.id}:new_install"
     existing = (
         db.query(ServiceOrder)
@@ -593,15 +613,17 @@ def _ensure_provisioning_order_for_sales_line(
         .first()
     )
     if existing is not None:
+        if existing.project_id is None:
+            existing.project_id = scope.project.id
+        if existing.installation_project_id is None:
+            existing.installation_project_id = scope.installation_project.id
+        if (
+            existing.activation_project_task_id is None
+            and activation_task is not None
+        ):
+            existing.activation_project_task_id = activation_task.id
+        db.flush()
         return
-    from app.services import sales_fulfillment
-
-    scope = sales_fulfillment.ensure_implementation_scope(
-        db,
-        sales_order_id=sales_order.id,
-        actor_id="sales.orders",
-        commit=False,
-    )
     execution_context = _build_staged_device_intent(
         db,
         sales_order=sales_order,
@@ -618,6 +640,9 @@ def _ensure_provisioning_order_for_sales_line(
             project_id=scope.project.id,
             installation_project_id=scope.installation_project.id,
             idempotency_key=idempotency_key,
+            activation_project_task_id=(
+                activation_task.id if activation_task is not None else None
+            ),
             # Sales-linked work cannot enter provisioning until implementation
             # verification releases it through service_order_lifecycle.
             status=ServiceOrderStatus.draft,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from collections.abc import Mapping
 from uuid import UUID
 
 from sqlalchemy import select
@@ -172,6 +173,7 @@ def transition_service_order(
     target_status: ServiceOrderStatus | str,
     actor_id: str,
     reason: str | None = None,
+    event_evidence: Mapping[str, object] | None = None,
     commit: bool = True,
 ) -> ServiceOrder:
     order = _lock(db, service_order_id)
@@ -229,6 +231,7 @@ def transition_service_order(
                 "from_status": previous.value,
                 "to_status": target.value,
                 "reason": reason,
+                "evidence": dict(event_evidence or {}),
                 "sales_order_id": str(order.sales_order_id)
                 if order.sales_order_id
                 else None,

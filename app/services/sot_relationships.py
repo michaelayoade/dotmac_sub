@@ -4886,6 +4886,247 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="operations.provisioning_lifecycle",
+                module="app.services.provisioning_lifecycle",
+                owns=(
+                    "provisioning readiness and activation request decisions",
+                    "service-order activation confirmation",
+                ),
+                depends_on=(
+                    "access.subscription_lifecycle",
+                    "events.dispatcher",
+                    "operations.project_lifecycle",
+                    "operations.provisioning_context",
+                    "operations.provisioning_workflow",
+                    "operations.service_order_lifecycle",
+                    "operations.work_orders",
+                ),
+                notes=(
+                    "Provisioning runs, project tasks, field work, and active IP "
+                    "assignments are facts. This coordinator persists the readiness "
+                    "decision and asks the service-order lifecycle owner to perform "
+                    "terminal status transitions. Connectivity systems remain "
+                    "projection transports."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name=(
+                                "provisioning readiness and activation request "
+                                "decisions"
+                            ),
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "canonical service-order state",
+                                "canonical provisioning-run outcome",
+                                "native project activation scope",
+                                "native field-work completion evidence",
+                                "active IP-assignment fact",
+                                "canonical subscription lifecycle state",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="service-order activation confirmation",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "canonical provisioning-readiness decision",
+                                "canonical subscription lifecycle state",
+                                "connectivity projection success observation",
+                                "service-order transition protocol",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical service-order state",
+                            owner="operations.service_order_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="locked ServiceOrder identity, scope, and status",
+                        ),
+                        AuthorityInput(
+                            name="canonical provisioning-run outcome",
+                            owner="operations.provisioning_workflow",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="terminal ProvisioningRun for the exact ServiceOrder",
+                        ),
+                        AuthorityInput(
+                            name="canonical provisioning-readiness decision",
+                            owner="operations.provisioning_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "append-only ProvisioningReadinessDecision and "
+                                "ProvisioningReadinessCheck rows"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="native project activation scope",
+                            owner="operations.project_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "ServiceOrder.project_id, activation_project_task_id, "
+                                "and completed ProjectTask state"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="native field-work completion evidence",
+                            owner="operations.work_orders",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "zero or many native WorkOrders linked through "
+                                "WorkOrder.project_task_id"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="active IP-assignment fact",
+                            owner="operations.provisioning_context",
+                            kind=AuthorityKind.OBSERVATION,
+                            source=(
+                                "active IPAssignment linked to the exact subscription; "
+                                "read only and not a connectivity authority cutover"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical subscription lifecycle state",
+                            owner="access.subscription_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Subscription pending or active lifecycle state",
+                        ),
+                        AuthorityInput(
+                            name="connectivity projection success observation",
+                            owner="operations.provisioning_context",
+                            kind=AuthorityKind.OBSERVATION,
+                            source=(
+                                "successful completion of the existing IP, RADIUS, "
+                                "and NAS activation event handler"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="service-order transition protocol",
+                            owner="operations.service_order_lifecycle",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "canonical ServiceOrderStatus graph and implementation "
+                                "readiness guard"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        boundary=(
+                            "Each public command enters execute_owner_command once on "
+                            "a transaction-free adapter session and atomically records "
+                            "one decision, owner transition request, and outbox event."
+                        ),
+                        locking=(
+                            "Readiness locks the exact service order and provisioning "
+                            "run; confirmation locks the exact service order."
+                        ),
+                        idempotency=(
+                            "CommandContext.command_id is unique on append-only decision "
+                            "evidence and equivalent event retries replay it."
+                        ),
+                        retries=(
+                            "Event delivery retries use the original event id; blocked "
+                            "facts require a new evaluation command after source repair."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "operations.provisioning_lifecycle.service_order_not_found",
+                            "operations.provisioning_lifecycle.run_scope_mismatch",
+                            "operations.provisioning_lifecycle.run_not_terminal",
+                            "operations.provisioning_lifecycle.invalid_order_state",
+                            "operations.provisioning_lifecycle.subscription_required",
+                            "operations.provisioning_lifecycle.subscription_scope_mismatch",
+                            "operations.provisioning_lifecycle.subscription_not_activatable",
+                            "operations.provisioning_lifecycle.activation_not_requested",
+                            "operations.provisioning_lifecycle.activation_projection_incomplete",
+                            "operations.provisioning_lifecycle.invalid_command_context",
+                            "operations.provisioning_lifecycle.command_contract_violation",
+                            "operations.provisioning_lifecycle.nested_owner_command",
+                            "operations.provisioning_lifecycle.active_caller_transaction",
+                            "operations.provisioning_lifecycle.nested_transaction_completion",
+                        ),
+                        mapping_owner="provisioning event and customer portal adapters",
+                        retryable_codes=(
+                            "operations.provisioning_lifecycle.activation_projection_incomplete",
+                        ),
+                        fail_closed_on=(
+                            "ambiguous or missing native project scope",
+                            "incomplete project task or field work",
+                            "missing active IP assignment",
+                            "mismatched run, subscription, or service-order scope",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "subscription.activated",
+                            "service_order.completed",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Existing event names remain; activation events carry the "
+                            "exact service_order_id and readiness_decision_id."
+                        ),
+                        replay=(
+                            "Append-only decisions plus current project, field, IP, and "
+                            "subscription facts rebuild customer readiness views."
+                        ),
+                    ),
+                    projections=(
+                        ProjectionContract(
+                            name="customer provisioning readiness view",
+                            input_names=(
+                                "canonical provisioning-readiness decision",
+                                "native project activation scope",
+                            ),
+                            writer="customer.experience_lifecycle",
+                            freshness="read through on each customer project request",
+                            stale_behavior="show the latest persisted decision and time",
+                            drift_signal=(
+                                "service order project/task scope does not resolve in the "
+                                "customer project graph"
+                            ),
+                            rebuild_operation=(
+                                "re-read append-only decisions and native project links"
+                            ),
+                            repair_owner="operations.provisioning_lifecycle",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        new_owner="operations.provisioning_lifecycle",
+                        old_owner=(
+                            "provisioning event handlers deriving readiness and writing "
+                            "terminal service-order state directly"
+                        ),
+                        verification=(
+                            "Architecture tests enforce one status writer and behavior "
+                            "tests cover blocked, requested, and confirmed states."
+                        ),
+                        cutover_gate=(
+                            "Migration 390 backfills only unambiguous project/task links; "
+                            "all unresolved new installs fail closed."
+                        ),
+                        fallback_retirement=(
+                            "Direct run-completion and subscription-wide service-order "
+                            "activation paths are removed."
+                        ),
+                    ),
+                    steward="service delivery and network operations",
+                    design_refs=(
+                        "docs/designs/PROVISIONING_LIFECYCLE_SOT.md",
+                        "docs/designs/CONNECTIVITY_STATE_MACHINE.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_provisioning_lifecycle.py",
+                        "tests/architecture/test_provisioning_lifecycle_sot.py",
+                    ),
+                ),
+            ),
+            SOTService(
                 name="operations.work_order_status",
                 module="app.services.field.work_order_status",
                 owns=(
