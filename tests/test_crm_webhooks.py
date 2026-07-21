@@ -19,6 +19,7 @@ from app.db import get_db
 from app.models.audit import AuditEvent
 from app.models.subscriber import Gender, Subscriber, UserType
 from app.schemas.subscriber import SubscriberRead
+from app.services.crm_customers import upsert_customer_from_payload
 from app.services.web_customer_details import build_customer_detail_snapshot
 from tests.integration_platform_helpers import enable_crm_inbound
 
@@ -445,6 +446,9 @@ def test_customer_webhook_missing_identity_fields_preserve_existing_values(db_se
 def test_customer_webhook_rejects_invalid_identity_values_without_overwrite(
     db_session, field, value
 ):
+    # Asserted at the consequence owner: the route wraps this in inbox-receipt
+    # bookkeeping whose fail path commits durably, which the outer-transaction
+    # test harness cannot represent.
     subscriber = Subscriber(
         first_name="Safe",
         last_name="Customer",
@@ -462,10 +466,12 @@ def test_customer_webhook_rejects_invalid_identity_values_without_overwrite(
         "email": "safe.identity@example.com",
         field: value,
     }
-    with _with_secret(SECRET):
-        response = _post_customer(db_session, body)
+    with pytest.raises(HTTPException) as exc_info:
+        upsert_customer_from_payload(db_session, body)
 
-    assert response.status_code == 422
+    assert exc_info.value.status_code == 422
+    # Validation fails before any mutation, so the session holds no pending
+    # writes; refresh proves the stored identity survived untouched.
     db_session.refresh(subscriber)
     assert str(subscriber.date_of_birth) == "1988-02-03"
     assert subscriber.gender == Gender.male
