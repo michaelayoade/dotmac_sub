@@ -400,6 +400,9 @@
                         <span class="font-medium text-slate-900 dark:text-white">{{ stats.access_points }}</span>
                     </div>
                     <div class="flex justify-between">
+                        <span class="text-slate-500 dark:text-slate-400">Support Structures</span>
+                        <span class="font-medium text-slate-900 dark:text-white">{{ stats.support_structures }}</span>
+                    <div class="flex justify-between">
                         <span class="text-slate-500 dark:text-slate-400">Fiber Segments</span>
                         <span class="font-medium text-slate-900 dark:text-white">{{ stats.fiber_segments }}</span>
                     </div>
@@ -598,6 +601,10 @@
                         <span class="text-sm text-slate-700 dark:text-slate-300">Access Points</span>
                     </label>
                     <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" id="layer-support-structures" checked class="h-4 w-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500">
+                        <span class="text-sm text-slate-700 dark:text-slate-300">Support Structures</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer">
                         <input type="checkbox" id="layer-network-devices" checked class="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500">
                         <span class="text-sm text-slate-700 dark:text-slate-300">Network Devices</span>
                     </label>
@@ -704,6 +711,7 @@
         fdh: L.layerGroup().addTo(map),
         closures: L.layerGroup().addTo(map),
         accessPoints: L.layerGroup().addTo(map),
+        supportStructures: L.layerGroup().addTo(map),
         networkDevices: L.layerGroup().addTo(map),
         onts: L.layerGroup().addTo(map),
         customers: L.layerGroup().addTo(map),
@@ -746,6 +754,13 @@
             iconSize: [20, 20],
             iconAnchor: [10, 10],
             popupAnchor: [0, -10]
+        }),
+        support_structure: L.divIcon({
+            html: '<div style="background:var(--color-data-2);width:18px;height:18px;border-radius:3px;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:10px;height:10px;color:white" fill="currentColor" viewBox="0 0 20 20"><path d="M9 2a1 1 0 012 0v16a1 1 0 01-2 0V2z"/><path d="M5 6l10 4-10 4V6z"/></svg></div>',
+            className: '',
+            iconSize: [18, 18],
+            iconAnchor: [9, 9],
+            popupAnchor: [0, -9]
         }),
         network_device_online: L.divIcon({
             html: '<div style="background:var(--color-semantic-positive-600);width:20px;height:20px;border-radius:4px;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:12px;height:12px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5 4a2 2 0 012-2h6a2 2 0 012 2v11l-4-2-4 2V4z" clip-rule="evenodd"/></svg></div>',
@@ -899,6 +914,11 @@
                 iconBg = themeColor('data-1');
                 iconSvg = '<svg class="h-5 w-5 text-white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" clip-rule="evenodd"/></svg>';
                 typeLabel = 'Access Point';
+                break;
+            case 'support_structure':
+                iconBg = themeColor('data-2');
+                iconSvg = '<svg class="h-5 w-5 text-white" fill="currentColor" viewBox="0 0 20 20"><path d="M9 2a1 1 0 012 0v16a1 1 0 01-2 0V2z"/><path d="M5 6l10 4-10 4V6z"/></svg>';
+                typeLabel = 'Support Structure';
                 break;
             case 'ont':
                 if (p.signal_quality === 'warning' || p.signal_quality === 'critical') {
@@ -1094,6 +1114,7 @@
                     case 'fdh_cabinet': layers.fdh.addLayer(marker); break;
                     case 'splice_closure': layers.closures.addLayer(marker); break;
                     case 'access_point': layers.accessPoints.addLayer(marker); break;
+                    case 'support_structure': layers.supportStructures.addLayer(marker); break;
                     case 'network_device': layers.networkDevices.addLayer(marker); break;
                     case 'ont': layers.onts.addLayer(marker); break;
                     case 'customer': layers.customers.addLayer(marker); break;
@@ -1145,6 +1166,7 @@
         'layer-fdh': 'fdh',
         'layer-closures': 'closures',
         'layer-access-points': 'accessPoints',
+        'layer-support-structures': 'supportStructures',
         'layer-network-devices': 'networkDevices',
         'layer-onts': 'onts',
         'layer-customers': 'customers',
