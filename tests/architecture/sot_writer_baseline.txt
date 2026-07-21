@@ -33,7 +33,6 @@ app.services.connectivity_reconciler
 app.services.connector
 app.services.contracts
 app.services.crm_api
-app.services.crm_customers
 app.services.crm_portal
 app.services.crm_ticket_pull
 app.services.cross_app_drift

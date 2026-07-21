@@ -1,82 +1,117 @@
-"""Regression tests for the CRM customer create-path serialization (I-1).
-
-Concurrent ``customer.accepted`` webhooks for one CRM person used to each see
-"not found" and both insert, producing two subscribers for one person. The fix
-takes a transaction-level advisory lock keyed on ``crm_person_id`` before the
-find-or-create, so the second webhook blocks until the first commits and then
-matches the existing row. These tests pin the lock's SQL and its guards (the
-lock is a no-op off PostgreSQL / when no person id is present, so the SQLite
-test harness can't exercise real serialization).
-"""
+"""Read-only CRM customer provenance resolution tests."""
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
-from app.services.crm_customers import _lock_crm_person
-
-
-def _fake_db(dialect: str) -> MagicMock:
-    db = MagicMock()
-    db.get_bind.return_value.dialect.name = dialect
-    return db
+from app.models.subscriber import Subscriber
+from app.services.crm_customers import (
+    CRMCustomerObservation,
+    CRMCustomerObservationStatus,
+    observe_customer,
+)
 
 
-def test_lock_issues_advisory_xact_lock_on_postgres() -> None:
-    db = _fake_db("postgresql")
+def test_person_provenance_takes_priority_over_other_identifiers(db_session) -> None:
+    person = Subscriber(
+        first_name="Person",
+        last_name="Match",
+        email="person@example.com",
+        metadata_={"crm_person_id": "person-1"},
+    )
+    order = Subscriber(
+        first_name="Order",
+        last_name="Match",
+        email="order@example.com",
+        metadata_={"crm_sales_order_id": "order-1"},
+    )
+    db_session.add_all([person, order])
+    db_session.commit()
 
-    _lock_crm_person(db, {"crm_person_id": "abc-123"})
+    outcome = observe_customer(
+        db_session,
+        CRMCustomerObservation(
+            crm_person_id="person-1",
+            crm_quote_id=None,
+            crm_sales_order_id="order-1",
+        ),
+    )
 
-    assert db.execute.call_count == 1
-    sql, params = db.execute.call_args.args
-    assert "pg_advisory_xact_lock" in str(sql)
-    assert params == {"key": "crm_customer:abc-123"}
-
-
-def test_lock_is_noop_off_postgres() -> None:
-    db = _fake_db("sqlite")
-
-    _lock_crm_person(db, {"crm_person_id": "abc-123"})
-
-    db.execute.assert_not_called()
+    assert outcome.status is CRMCustomerObservationStatus.MATCHED
+    assert outcome.subscriber_id == str(person.id)
+    assert outcome.matched_via == ("crm_person_id",)
 
 
-def test_lock_is_noop_without_person_id() -> None:
-    db = _fake_db("postgresql")
+def test_quote_and_order_must_resolve_to_one_account(db_session) -> None:
+    subscriber = Subscriber(
+        first_name="Exact",
+        last_name="Match",
+        email="exact@example.com",
+        metadata_={"crm_quote_id": "quote-1", "crm_sales_order_id": "order-1"},
+    )
+    db_session.add(subscriber)
+    db_session.commit()
 
-    # No crm_person_id — the sales-order/quote/fuzzy match paths aren't
-    # keyed on a single person, so we don't lock.
-    _lock_crm_person(db, {"crm_sales_order_id": "so-1"})
-    _lock_crm_person(db, {})
+    outcome = observe_customer(
+        db_session,
+        CRMCustomerObservation(
+            crm_person_id=None,
+            crm_quote_id="quote-1",
+            crm_sales_order_id="order-1",
+        ),
+    )
 
-    db.execute.assert_not_called()
-    db.get_bind.assert_not_called()
+    assert outcome.status is CRMCustomerObservationStatus.MATCHED
+    assert outcome.subscriber_id == str(subscriber.id)
+    assert outcome.matched_via == ("crm_sales_order_id", "crm_quote_id")
 
 
-def test_lock_runs_before_find(monkeypatch) -> None:
-    """The lock must be taken before the existence check, not after."""
-    from app.services import crm_customers
+def test_conflicting_quote_and_order_are_ambiguous(db_session) -> None:
+    db_session.add_all(
+        [
+            Subscriber(
+                first_name="Quote",
+                last_name="Account",
+                email="quote@example.com",
+                metadata_={"crm_quote_id": "quote-1"},
+            ),
+            Subscriber(
+                first_name="Order",
+                last_name="Account",
+                email="order@example.com",
+                metadata_={"crm_sales_order_id": "order-1"},
+            ),
+        ]
+    )
+    db_session.commit()
 
-    calls: list[str] = []
+    outcome = observe_customer(
+        db_session,
+        CRMCustomerObservation(
+            crm_person_id=None,
+            crm_quote_id="quote-1",
+            crm_sales_order_id="order-1",
+        ),
+    )
 
-    def _spy_lock(db, metadata):  # noqa: ANN001
-        calls.append("lock")
+    assert outcome.status is CRMCustomerObservationStatus.AMBIGUOUS
+    assert outcome.subscriber_id is None
 
-    def _spy_find(db, payload, metadata, display_name):  # noqa: ANN001
-        calls.append("find")
-        return MagicMock(), "crm_person_id"  # pretend an existing match
 
-    monkeypatch.setattr(crm_customers, "_lock_crm_person", _spy_lock)
-    monkeypatch.setattr(crm_customers, "_find_existing_customer", _spy_find)
+def test_observer_never_writes_or_commits(db_session, monkeypatch) -> None:
     monkeypatch.setattr(
-        crm_customers, "_update_existing_customer", lambda *a, **k: MagicMock()
-    )
-    monkeypatch.setattr(
-        crm_customers, "_customer_response", lambda subscriber: {"id": "x"}
-    )
-
-    crm_customers.upsert_customer_from_payload(
-        MagicMock(), {"crm_person_id": "p1", "display_name": "Test User"}
+        db_session,
+        "commit",
+        lambda: (_ for _ in ()).throw(AssertionError("observer committed")),
     )
 
-    assert calls == ["lock", "find"]
+    outcome = observe_customer(
+        db_session,
+        CRMCustomerObservation(
+            crm_person_id="missing",
+            crm_quote_id=None,
+            crm_sales_order_id=None,
+        ),
+    )
+
+    assert outcome.status is CRMCustomerObservationStatus.UNMATCHED
+    assert not db_session.new
+    assert not db_session.dirty

@@ -532,6 +532,12 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     )
     assert business_conversion is not None
     assert business_conversion.name == "customer.profile_commands"
+    name_remediation = sot_relationships.owning_service_for(
+        "evidence-bound legacy Subscriber name repair"
+    )
+    assert name_remediation is not None
+    assert name_remediation.name == "customer.name_repairs"
+    assert name_remediation.contract is not None
     assert sot_relationships.dependencies_for("customer.usage_summary") == (
         "sessions.radius_reconciliation",
     )
