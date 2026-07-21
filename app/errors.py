@@ -339,9 +339,17 @@ def register_error_handlers(app) -> None:
         return RedirectResponse(url=exc.redirect_url, status_code=303)
 
     async def _handle_http_exception(
-        request: Request, status_code: int, detail: object
+        request: Request,
+        status_code: int,
+        detail: object,
+        headers: dict[str, str] | None = None,
     ):
         if _is_html_request(request):
+            location = None
+            if headers:
+                location = headers.get("location") or headers.get("Location")
+            if status_code in {301, 302, 303, 307, 308} and location:
+                return RedirectResponse(url=location, status_code=status_code)
             if status_code == 401:
                 return RedirectResponse(
                     url=_login_redirect_for_path(request), status_code=303
@@ -396,7 +404,9 @@ def register_error_handlers(app) -> None:
 
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request: Request, exc: HTTPException):
-        return await _handle_http_exception(request, exc.status_code, exc.detail)
+        return await _handle_http_exception(
+            request, exc.status_code, exc.detail, getattr(exc, "headers", None)
+        )
 
     @app.exception_handler(StarletteHTTPException)
     async def starlette_http_exception_handler(
@@ -405,7 +415,9 @@ def register_error_handlers(app) -> None:
         detail = (
             exc.detail if getattr(exc, "detail", None) is not None else "Request failed"
         )
-        return await _handle_http_exception(request, exc.status_code, detail)
+        return await _handle_http_exception(
+            request, exc.status_code, detail, getattr(exc, "headers", None)
+        )
 
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(

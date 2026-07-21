@@ -73,3 +73,13 @@ def test_crm_customer_status_is_observed_not_authoritative():
     source = (APP / "services" / "crm_customers.py").read_text()
     assert 'merged["crm_reported_status"]' in source
     assert "subscriber.status = status_value" not in source
+
+
+def test_crm_customer_names_are_not_written_by_the_webhook_owner():
+    source = (APP / "services" / "crm_customers.py").read_text()
+    for forbidden in (
+        "subscriber.first_name =",
+        "subscriber.last_name =",
+        "subscriber.display_name =",
+    ):
+        assert forbidden not in source

@@ -22,7 +22,10 @@ from app.schemas.subscriber import SubscriberCreate, SubscriberUpdate
 from app.services import audit as audit_service
 from app.services import subscriber as subscriber_service
 from app.services.customer_identity_normalization import (
+    collapse_whitespace,
+    customer_name_signature,
     default_country_code,
+    is_placeholder_name,
     normalize_phone_identifier,
 )
 
@@ -35,13 +38,13 @@ def _text(value: Any) -> str:
 
 def _name_parts(payload: dict[str, Any]) -> tuple[str, str, str]:
     display_name = (
-        _text(payload.get("display_name"))
-        or _text(payload.get("name"))
-        or _text(payload.get("full_name"))
-        or _text(payload.get("customer_name"))
+        collapse_whitespace(payload.get("display_name"))
+        or collapse_whitespace(payload.get("name"))
+        or collapse_whitespace(payload.get("full_name"))
+        or collapse_whitespace(payload.get("customer_name"))
     )
-    first_name = _text(payload.get("first_name"))
-    last_name = _text(payload.get("last_name"))
+    first_name = collapse_whitespace(payload.get("first_name")) or ""
+    last_name = collapse_whitespace(payload.get("last_name")) or ""
     if not first_name and not last_name and display_name:
         parts = display_name.split()
         if len(parts) == 1:
@@ -51,6 +54,43 @@ def _name_parts(payload: dict[str, Any]) -> tuple[str, str, str]:
     if not display_name:
         display_name = " ".join(part for part in (first_name, last_name) if part)
     return first_name, last_name, display_name
+
+
+def _observed_name(payload: dict[str, Any]) -> dict[str, str | None]:
+    first_name, last_name, display_name = _name_parts(payload)
+    raw_display = (
+        collapse_whitespace(payload.get("display_name"))
+        or collapse_whitespace(payload.get("name"))
+        or collapse_whitespace(payload.get("full_name"))
+        or collapse_whitespace(payload.get("customer_name"))
+    )
+    raw_candidate = raw_display or " ".join(
+        part for part in (first_name, last_name) if part
+    )
+    return {
+        "first_name": first_name or None,
+        "last_name": last_name or None,
+        "display_name": display_name or None,
+        "raw": raw_candidate or None,
+        "normalized": customer_name_signature(first_name, last_name, display_name),
+    }
+
+
+def _subscriber_name(subscriber: Subscriber) -> dict[str, str | None]:
+    first_name = collapse_whitespace(subscriber.first_name)
+    last_name = collapse_whitespace(subscriber.last_name)
+    display_name = collapse_whitespace(subscriber.display_name)
+    normalized = customer_name_signature(first_name, last_name, display_name)
+    return {
+        "first_name": first_name,
+        "last_name": last_name,
+        "display_name": display_name,
+        "normalized": normalized,
+    }
+
+
+def _name_is_placeholder(value: str | None) -> bool:
+    return is_placeholder_name(value)
 
 
 def _address_fields(payload: dict[str, Any]) -> dict[str, Any]:
@@ -125,19 +165,6 @@ def _crm_metadata(payload: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def _normalized_name(subscriber: Subscriber) -> str:
-    value = (
-        _text(subscriber.display_name)
-        or _text(getattr(subscriber, "name", ""))
-        or " ".join(
-            part
-            for part in (_text(subscriber.first_name), _text(subscriber.last_name))
-            if part
-        )
-    )
-    return " ".join(value.lower().split())
-
-
 def _matching_metadata_clause(metadata: dict[str, Any]):
     # Match only on identifiers that are 1:1 with a single CRM customer:
     # the person, and the order/quote that belongs to one customer. crm_person_id
@@ -190,7 +217,7 @@ def _lock_crm_person(db: Session, metadata: dict[str, Any]) -> None:
 
 
 def _find_existing_customer(
-    db: Session, payload: dict[str, Any], metadata: dict[str, Any], display_name: str
+    db: Session, payload: dict[str, Any], metadata: dict[str, Any]
 ) -> tuple[Subscriber | None, str | None]:
     clause = _matching_metadata_clause(metadata)
     if clause is not None:
@@ -198,7 +225,6 @@ def _find_existing_customer(
         if existing is not None:
             return existing, _metadata_match_via(metadata)
 
-    expected_name = " ".join(display_name.lower().split())
     candidates = []
     email = _text(payload.get("email")).lower()
     phone = _text(payload.get("phone"))
@@ -226,10 +252,8 @@ def _find_existing_customer(
         if sid in seen:
             continue
         seen.add(sid)
-        if not expected_name or _normalized_name(subscriber) != expected_name:
-            continue
         if email and _text(subscriber.email).lower() == email:
-            return subscriber, "email_name"
+            return subscriber, "email"
         if (
             normalized_phone
             and normalize_phone_identifier(
@@ -238,7 +262,7 @@ def _find_existing_customer(
             )
             == normalized_phone
         ):
-            return subscriber, "phone_name"
+            return subscriber, "phone"
     return None, None
 
 
@@ -267,6 +291,36 @@ def _record_identity_overwrite_audit(
                 "crm_quote_id": metadata.get("crm_quote_id"),
                 "crm_sales_order_id": metadata.get("crm_sales_order_id"),
                 "changes": changes,
+            },
+        ),
+    )
+
+
+def _record_identity_observed_audit(
+    db: Session,
+    *,
+    subscriber: Subscriber,
+    metadata: dict[str, Any],
+    current_name: dict[str, str | None],
+    proposed_name: dict[str, str | None],
+) -> None:
+    audit_service.audit_events.create(
+        db=db,
+        payload=AuditEventCreate(
+            actor_type=AuditActorType.service,
+            actor_id="crm_webhook",
+            action="crm_customer_identity_observed",
+            entity_type="subscriber",
+            entity_id=str(subscriber.id),
+            status_code=200,
+            is_success=True,
+            metadata_={
+                "source": "crm_customer_webhook",
+                "crm_person_id": metadata.get("crm_person_id"),
+                "crm_quote_id": metadata.get("crm_quote_id"),
+                "crm_sales_order_id": metadata.get("crm_sales_order_id"),
+                "current_name": current_name,
+                "proposed_name": proposed_name,
             },
         ),
     )
@@ -323,16 +377,6 @@ def _update_existing_customer(
 ) -> Subscriber:
     changes: dict[str, dict[str, str | None]] = {}
     date_of_birth, gender = _crm_identity_fields(payload)
-    first_name, last_name, display_name = _name_parts(payload)
-    if first_name:
-        _track_change(changes, "first_name", subscriber.first_name, first_name)
-        subscriber.first_name = first_name
-    if last_name:
-        _track_change(changes, "last_name", subscriber.last_name, last_name)
-        subscriber.last_name = last_name
-    if display_name:
-        _track_change(changes, "display_name", subscriber.display_name, display_name)
-        subscriber.display_name = display_name
     if _text(payload.get("email")):
         email = _text(payload.get("email"))
         _track_change(changes, "email", subscriber.email, email)
@@ -390,12 +434,15 @@ def _update_existing_customer(
 def _create_customer_from_crm(
     db: Session, payload: dict[str, Any], metadata: dict[str, Any]
 ) -> Subscriber:
-    first_name, last_name, display_name = _name_parts(payload)
+    observed = _observed_name(payload)
+    first_name = observed["first_name"] or ""
+    last_name = observed["last_name"] or ""
+    display_name = observed["display_name"] or ""
     date_of_birth, gender = _crm_identity_fields(payload)
-    if not first_name or not last_name:
+    if not observed["raw"] or _name_is_placeholder(observed["raw"]):
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Customer name is required.",
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Customer name is missing or invalid.",
         )
     email = _text(payload.get("email"))
     if not email:
@@ -435,11 +482,13 @@ def upsert_customer_from_payload(
     db: Session, payload: dict[str, Any]
 ) -> dict[str, Any]:
     metadata = _crm_metadata(payload)
-    _, _, display_name = _name_parts(payload)
+    observed_name = _observed_name(payload)
     # Take the per-person lock BEFORE the find so a concurrent create for the
     # same CRM person can't slip between our find and insert (see _lock_crm_person).
     _lock_crm_person(db, metadata)
-    existing, matched_via = _find_existing_customer(db, payload, metadata, display_name)
+    existing, matched_via = _find_existing_customer(
+        db, payload, metadata
+    )
     logger.info(
         "crm_customer_match_decision action=%s matched_via=%s crm_person_id=%s crm_quote_id=%s crm_sales_order_id=%s subscriber_id=%s",
         "update" if existing is not None else "create",
@@ -449,9 +498,36 @@ def upsert_customer_from_payload(
         metadata.get("crm_sales_order_id"),
         existing.id if existing is not None else None,
     )
-    subscriber = (
-        _update_existing_customer(db, existing, payload, metadata)
-        if existing is not None
-        else _create_customer_from_crm(db, payload, metadata)
-    )
-    return _customer_response(subscriber)
+    if existing is not None:
+        current_name = _subscriber_name(existing)
+        name_disposition = (
+            "unchanged"
+            if current_name["normalized"] == observed_name["normalized"]
+            or not observed_name["normalized"]
+            else "observed"
+        )
+        subscriber = _update_existing_customer(
+            db,
+            existing,
+            payload,
+            metadata,
+        )
+        if name_disposition == "observed":
+            _record_identity_observed_audit(
+                db,
+                subscriber=subscriber,
+                metadata=metadata,
+                current_name=current_name,
+                proposed_name={
+                    "first_name": observed_name.get("first_name"),
+                    "last_name": observed_name.get("last_name"),
+                    "display_name": observed_name.get("display_name"),
+                    "normalized": observed_name.get("normalized"),
+                },
+            )
+    else:
+        subscriber = _create_customer_from_crm(db, payload, metadata)
+        name_disposition = "created"
+    response = _customer_response(subscriber)
+    response["name_disposition"] = name_disposition
+    return response

@@ -17,6 +17,7 @@ from fastapi import FastAPI, HTTPException
 from app.api.crm_webhooks import receive_crm_customer, receive_crm_event, router
 from app.db import get_db
 from app.models.audit import AuditEvent
+from app.models.integration_platform import IntegrationInbox
 from app.models.subscriber import Gender, Subscriber, UserType
 from app.schemas.subscriber import SubscriberRead
 from app.services.web_customer_details import build_customer_detail_snapshot
@@ -315,6 +316,7 @@ def test_customer_accepted_creates_subscriber_and_returns_readable_id(db_session
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "ok"
+    assert data["name_disposition"] == "created"
     assert data["id"]
     assert data["subscriber_id"] == data["subscriber_number"]
     assert data["subscriber_number"].startswith("SUB-")
@@ -354,13 +356,16 @@ def test_customer_accepted_retry_returns_existing_subscriber(db_session):
     assert first.status_code == 200
     assert second.status_code == 200
     assert second.json()["id"] == first.json()["id"]
+    assert second.json()["name_disposition"] == "unchanged"
     assert (
         db_session.query(Subscriber).filter(Subscriber.email == body["email"]).count()
         == 1
     )
 
 
-def test_customer_webhook_audits_identity_overwrite(db_session):
+def test_customer_webhook_observes_name_change_without_overwriting_stored_name(
+    db_session,
+):
     body = {
         "crm_person_id": "4cf4d62b-29a0-493e-8a0d-6409a18e8897",
         "name": "Original Customer",
@@ -386,28 +391,67 @@ def test_customer_webhook_audits_identity_overwrite(db_session):
     assert first.status_code == 200
     assert second.status_code == 200
     assert second.json()["id"] == first.json()["id"]
+    assert second.json()["name_disposition"] == "observed"
 
     event = (
         db_session.query(AuditEvent)
         .filter(AuditEvent.entity_type == "subscriber")
         .filter(AuditEvent.entity_id == first.json()["id"])
-        .filter(AuditEvent.action == "crm_customer_identity_update")
+        .filter(AuditEvent.action == "crm_customer_identity_observed")
         .one()
     )
-    changes = event.metadata_["changes"]
-    assert changes["display_name"] == {
-        "old": "Original Customer",
-        "new": "Changed Customer",
-    }
-    assert changes["email"] == {
-        "old": "original.customer@example.com",
-        "new": "changed.customer@example.com",
-    }
-    assert changes["phone"] == {"old": "+09000000003", "new": "+09000000004"}
-    assert changes["city"] == {"old": None, "new": "Lagos"}
-    assert changes["date_of_birth"] == {"old": None, "new": "1993-07-15"}
-    assert changes["gender"] == {"old": "unknown", "new": "female"}
+    assert event.metadata_["current_name"]["display_name"] == "Original Customer"
+    assert event.metadata_["proposed_name"]["display_name"] == "Changed Customer"
     assert event.metadata_["crm_person_id"] == body["crm_person_id"]
+
+    subscriber = db_session.get(Subscriber, first.json()["id"])
+    assert subscriber is not None
+    assert subscriber.first_name == "Original"
+    assert subscriber.last_name == "Customer"
+    assert subscriber.display_name == "Original Customer"
+    assert subscriber.email == "changed.customer@example.com"
+    assert subscriber.phone == "+09000000004"
+
+
+def test_customer_webhook_rejects_placeholder_names_for_new_subscribers(db_session):
+    body = {
+        "name": "Customer Unknown",
+        "email": "placeholder.customer@example.com",
+        "phone": "+09000000005",
+        "status": "new",
+    }
+    with _with_secret(SECRET):
+        response = _post_customer(db_session, body)
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Customer name is missing or invalid."
+    receipt = db_session.query(IntegrationInbox).one()
+    assert receipt.state == "retryable"
+    assert receipt.error_code == "crm_customer_name_rejected"
+    assert receipt.consequence_json["status"] == "rejected"
+
+
+def test_customer_webhook_rejected_names_require_new_delivery_id(db_session):
+    raw = json.dumps(
+        {
+            "name": "Unknown Customer",
+            "email": "new-delivery@example.com",
+            "status": "new",
+        }
+    ).encode()
+    headers = {
+        "X-Webhook-Event": "customer.accepted",
+        "X-Webhook-Signature-256": _sign(raw),
+        "Content-Type": "application/json",
+        "X-Webhook-Delivery-Id": "crm-delivery-1",
+    }
+    with _with_secret(SECRET):
+        first = _post_customer_raw(db_session, raw, headers)
+        second = _post_customer_raw(db_session, raw, headers)
+
+    assert first.status_code == 422
+    assert second.status_code == 200
+    assert second.json()["status"] == "rejected"
 
 
 def test_customer_webhook_missing_identity_fields_preserve_existing_values(db_session):
@@ -434,6 +478,7 @@ def test_customer_webhook_missing_identity_fields_preserve_existing_values(db_se
         response = _post_customer(db_session, body)
 
     assert response.status_code == 200
+    assert response.json()["name_disposition"] == "unchanged"
     db_session.refresh(subscriber)
     assert str(subscriber.date_of_birth) == "1988-02-03"
     assert subscriber.gender == Gender.male
@@ -530,6 +575,7 @@ def test_customer_webhook_matches_existing_customer_by_normalized_phone(db_sessi
 
     assert response.status_code == 200
     assert response.json()["id"] == str(subscriber.id)
+    assert response.json()["name_disposition"] == "unchanged"
     assert db_session.query(Subscriber).count() == 1
     db_session.refresh(subscriber)
     assert subscriber.email == "new.normalized@example.com"

@@ -117,6 +117,11 @@ def receive_verified(
 def claim_for_processing(receipt: IntegrationInbox) -> bool:
     if receipt.state == "processed":
         return False
+    if (
+        receipt.state == "retryable"
+        and receipt.error_code == "crm_customer_name_rejected"
+    ):
+        return False
     if receipt.state == "dead_letter":
         raise InboxError("dead-letter receipt requires authorized replay")
     receipt.state = "processing"

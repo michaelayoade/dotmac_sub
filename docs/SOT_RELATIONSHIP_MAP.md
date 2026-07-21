@@ -1190,14 +1190,18 @@ network summary composition.
 5. `customer.profile_commands` owns admin customer profile edits and explicit
    person-to-business customer conversion. Normal person edit submission must
    not mutate account type; conversion is a dedicated command with its own
-   validation and audit trail.
-6. `customer.service_status` owns customer-visible service health and action
+   validation and audit trail. Approved legacy Subscriber name corrections stay
+   here as an interim boundary until explicit Party cutover.
+6. `customer.name_remediation` owns the dry-run-first July 20 CRM name repair
+   manifest and exact, digest-pinned execution path. It applies only through
+   the profile-command owner and never writes Party rows.
+7. `customer.service_status` owns customer-visible service health and action
    hints, including whether payment can restore every active service hold and
    the authoritative amount required by financial policy.
-7. `customer.usage_summary` owns customer usage windows, headline totals, and
+8. `customer.usage_summary` owns customer usage windows, headline totals, and
    total provenance. An authoritative zero is a valid value, not a missing-data
    sentinel.
-8. `customer.reseller_status_actions` (`app/services/reseller_portal.py`) owns
+9. `customer.reseller_status_actions` (`app/services/reseller_portal.py`) owns
    the reseller-scoped impact preview for deactivate, restore, and disable. It
    evaluates current subscription state, active enforcement locks, duplicate-
    login restore conflicts, account overrides, and accounts with no services,

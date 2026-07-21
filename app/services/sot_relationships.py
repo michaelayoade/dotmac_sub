@@ -241,12 +241,27 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "admin customer profile edits",
                     "person-to-business customer conversion",
+                    "approved legacy Subscriber name corrections",
                 ),
                 depends_on=("customer.identity_scope",),
                 notes=(
                     "Business conversion is an explicit command. Generic "
                     "person edits and form category controls must not change "
-                    "the customer account type."
+                    "the customer account type. Approved legacy Subscriber "
+                    "name corrections remain here until explicit Party cutover."
+                ),
+            ),
+            SOTService(
+                name="customer.name_remediation",
+                module="app.services.crm_customer_name_repair",
+                owns=(
+                    "July 20 CRM name remediation manifest execution",
+                    "PII-free CRM name repair manifest generation",
+                ),
+                depends_on=("customer.profile_commands",),
+                notes=(
+                    "Historical repair is dry-run-first and applies only through "
+                    "the profile-command owner after exact digest confirmation."
                 ),
             ),
             SOTService(
