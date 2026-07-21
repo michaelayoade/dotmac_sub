@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.billing import (
@@ -48,34 +49,82 @@ def ensure_prepaid_entitlements_for_paid_invoice(
     )
     lines = _base_subscription_lines(lines)
     for line in lines:
-        starts_at, ends_at = _line_period(invoice, line)
-        if starts_at is None or ends_at is None:
-            continue
-        existing = (
-            db.query(ServiceEntitlement)
-            .filter(ServiceEntitlement.source_invoice_line_id == line.id)
-            .filter(ServiceEntitlement.status == ServiceEntitlementStatus.active)
-            .first()
+        existing = db.scalar(
+            select(ServiceEntitlement).where(
+                ServiceEntitlement.source_invoice_line_id == line.id,
+                ServiceEntitlement.status == ServiceEntitlementStatus.active,
+            )
         )
-        if existing is not None:
-            continue
-        entitlement = ServiceEntitlement(
-            account_id=invoice.account_id,
-            subscription_id=line.subscription_id,
-            source_invoice_id=invoice.id,
-            source_invoice_line_id=line.id,
-            starts_at=starts_at,
-            ends_at=ends_at,
-            amount_funded=round_money(to_decimal(line.amount)),
-            currency=invoice.currency or "NGN",
-            status=ServiceEntitlementStatus.active,
-            metadata_={"source": "paid_prepaid_invoice"},
+        entitlement = ensure_prepaid_entitlement_for_paid_invoice_line(
+            db,
+            invoice=invoice,
+            line=line,
         )
-        db.add(entitlement)
-        created.append(entitlement)
+        if entitlement is not None and existing is None:
+            created.append(entitlement)
     if created:
         db.flush()
     return created
+
+
+def ensure_prepaid_entitlement_for_paid_invoice_line(
+    db: Session,
+    *,
+    invoice: Invoice,
+    line: InvoiceLine,
+    reconciliation_fingerprint: str | None = None,
+) -> ServiceEntitlement | None:
+    """Stage one exact paid-line entitlement without completing a transaction."""
+    if (
+        not invoice.is_active
+        or invoice.status != InvoiceStatus.paid
+        or to_decimal(invoice.balance_due) > 0
+        or not line.is_active
+        or line.invoice_id != invoice.id
+        or line.subscription_id is None
+    ):
+        return None
+    subscription = db.get(Subscription, line.subscription_id)
+    if (
+        subscription is None
+        or subscription.subscriber_id != invoice.account_id
+        or subscription.billing_mode != BillingMode.prepaid
+    ):
+        return None
+    starts_at, ends_at = _line_period(invoice, line)
+    if starts_at is None or ends_at is None or ends_at <= starts_at:
+        return None
+    existing = db.scalar(
+        select(ServiceEntitlement).where(
+            ServiceEntitlement.source_invoice_line_id == line.id,
+            ServiceEntitlement.status == ServiceEntitlementStatus.active,
+        )
+    )
+    if existing is not None:
+        return existing
+    metadata: dict[str, str] = {"source": "paid_prepaid_invoice"}
+    if reconciliation_fingerprint:
+        metadata.update(
+            {
+                "reconciled_by": "financial.prepaid_service_coverage_reconciliation",
+                "reconciliation_fingerprint": reconciliation_fingerprint,
+            }
+        )
+    entitlement = ServiceEntitlement(
+        account_id=invoice.account_id,
+        subscription_id=line.subscription_id,
+        source_invoice_id=invoice.id,
+        source_invoice_line_id=line.id,
+        starts_at=starts_at,
+        ends_at=ends_at,
+        amount_funded=round_money(to_decimal(line.amount)),
+        currency=invoice.currency or "NGN",
+        status=ServiceEntitlementStatus.active,
+        metadata_=metadata,
+    )
+    db.add(entitlement)
+    db.flush()
+    return entitlement
 
 
 def revoke_prepaid_entitlements_for_unpaid_invoice(

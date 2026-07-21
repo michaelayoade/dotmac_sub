@@ -10,8 +10,8 @@ import logging
 import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
+from typing import NoReturn
 
-from fastapi import HTTPException
 from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.orm import Session, joinedload
 
@@ -27,6 +27,7 @@ from app.models.subscriber import Subscriber
 from app.services import settings_spec
 from app.services.common import coerce_uuid
 from app.services.customer_identity_resolution import resolve_customer_identity
+from app.services.domain_errors import DomainError
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,18 @@ APPLY_BATCH_SIZE = 500
 # Postgres int4 ceiling: digit strings above this are not legacy customer IDs.
 # (e.g. phone numbers) and would overflow the column comparison.
 _MAX_INT4 = 2_147_483_647
+
+
+class ServiceExtensionError(DomainError):
+    """Transport-neutral service-extension failure."""
+
+
+def _error(suffix: str, message: str, **details: object) -> NoReturn:
+    raise ServiceExtensionError(
+        code=f"access.service_extensions.{suffix}",
+        message=message,
+        details=details,
+    )
 
 
 def _parse_uuid(value: str) -> uuid.UUID | None:
@@ -72,7 +85,7 @@ def _unique_subscribers(rows: list[Subscriber]) -> list[Subscriber]:
 def _find_subscriber_by_identifier(db: Session, raw_identifier: str) -> Subscriber:
     identifier = str(raw_identifier or "").strip()
     if not identifier:
-        raise HTTPException(status_code=400, detail="Blank customer identifier")
+        _error("blank_customer_identifier", "Customer identifier cannot be blank.")
 
     ambiguous_detail = (
         f"Customer identifier is ambiguous: {identifier}. "
@@ -86,8 +99,10 @@ def _find_subscriber_by_identifier(db: Session, raw_identifier: str) -> Subscrib
         subscriber = db.get(Subscriber, parsed_uuid)
         if subscriber is not None:
             return subscriber
-        raise HTTPException(
-            status_code=400, detail=f"Could not find customer: {identifier}"
+        _error(
+            "customer_not_found",
+            "Customer was not found.",
+            identifier=identifier,
         )
 
     # 2. Exact account / subscriber number (case-insensitive).
@@ -110,7 +125,7 @@ def _find_subscriber_by_identifier(db: Session, raw_identifier: str) -> Subscrib
 
     matches = _unique_subscribers(matches)
     if len(matches) > 1:
-        raise HTTPException(status_code=400, detail=ambiguous_detail)
+        _error("ambiguous_customer_identifier", ambiguous_detail)
     if len(matches) == 1:
         return matches[0]
 
@@ -133,9 +148,11 @@ def _find_subscriber_by_identifier(db: Session, raw_identifier: str) -> Subscrib
     # No exact match: an email/phone that resolved to several customers is
     # ambiguous; anything else is simply unknown.
     if resolution.ambiguous:
-        raise HTTPException(status_code=400, detail=ambiguous_detail)
-    raise HTTPException(
-        status_code=400, detail=f"Could not find customer: {identifier}"
+        _error("ambiguous_customer_identifier", ambiguous_detail)
+    _error(
+        "customer_not_found",
+        "Customer was not found.",
+        identifier=identifier,
     )
 
 
@@ -161,8 +178,10 @@ def _coerce_resolved_subscriber_ids(
     for raw_id in subscriber_ids or []:
         subscriber_id = _parse_uuid(str(raw_id))
         if subscriber_id is None:
-            raise HTTPException(
-                status_code=400, detail=f"Invalid subscriber id in scope: {raw_id}"
+            _error(
+                "invalid_customer_identifier",
+                "A customer identifier in the extension scope is invalid.",
+                identifier=str(raw_id),
             )
         if subscriber_id in seen:
             continue
@@ -186,9 +205,10 @@ def _validate_resolved_subscriber_ids(
         if subscriber_id not in existing
     ]
     if missing:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Could not find customer: {missing[0]}",
+        _error(
+            "customer_not_found",
+            "A selected customer was not found.",
+            identifier=missing[0],
         )
     return resolved
 
@@ -226,11 +246,11 @@ def _scope_filters(
     ]
     if scope_type == ServiceExtensionScope.nas_device:
         if not scope_id:
-            raise HTTPException(status_code=400, detail="NAS device is required")
+            _error("missing_scope_id", "NAS device is required.")
         filters.append(Subscription.provisioning_nas_device_id == coerce_uuid(scope_id))
     elif scope_type == ServiceExtensionScope.pop_site:
         if not scope_id:
-            raise HTTPException(status_code=400, detail="POP site is required")
+            _error("missing_scope_id", "POP site is required.")
         filters.append(
             Subscription.provisioning_nas_device.has(
                 NasDevice.pop_site_id == coerce_uuid(scope_id)
@@ -245,8 +265,9 @@ def _scope_filters(
             )
         )
         if not ids:
-            raise HTTPException(
-                status_code=400, detail="At least one subscriber is required"
+            _error(
+                "empty_subscriber_scope",
+                "At least one customer is required.",
             )
         filters.append(Subscription.subscriber_id.in_(ids))
     return filters
@@ -372,9 +393,9 @@ def _iter_scope_subscriptions(
 def _validated_days(db: Session, days: int) -> int:
     max_days = _max_extension_days(db)
     if not MIN_EXTENSION_DAYS <= int(days) <= max_days:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Days must be between {MIN_EXTENSION_DAYS} and {max_days}",
+        _error(
+            "invalid_days",
+            f"Days must be between {MIN_EXTENSION_DAYS} and {max_days}.",
         )
     return int(days)
 
@@ -394,11 +415,9 @@ def create_extension(
 ) -> ServiceExtension:
     """Create a pending extension. Scope is validated but not applied yet."""
     if not str(reason or "").strip():
-        raise HTTPException(status_code=400, detail="Reason is required")
+        _error("missing_reason", "Reason is required.")
     if window_end <= window_start:
-        raise HTTPException(
-            status_code=400, detail="Outage end must be after its start"
-        )
+        _error("invalid_window", "Outage end must be after its start.")
     days = _validated_days(db, days)
     resolved_subscriber_ids = None
     if scope_type == ServiceExtensionScope.subscribers:
@@ -436,9 +455,13 @@ def create_extension(
 
 
 def get_extension(db: Session, extension_id: str) -> ServiceExtension:
-    extension = db.get(ServiceExtension, coerce_uuid(extension_id))
+    try:
+        resolved_id = coerce_uuid(extension_id)
+    except (TypeError, ValueError):
+        _error("invalid_extension_id", "Service extension identifier is invalid.")
+    extension = db.get(ServiceExtension, resolved_id)
     if not extension:
-        raise HTTPException(status_code=404, detail="Service extension not found")
+        _error("extension_not_found", "Service extension was not found.")
     return extension
 
 
@@ -480,8 +503,9 @@ def cancel_extension(
 ) -> ServiceExtension:
     extension = get_extension(db, extension_id)
     if extension.status != ServiceExtensionStatus.pending:
-        raise HTTPException(
-            status_code=409, detail="Only pending extensions can be canceled"
+        _error(
+            "invalid_transition",
+            "Only pending extensions can be canceled.",
         )
     extension.status = ServiceExtensionStatus.canceled
     extension.applied_by = actor_id
@@ -538,8 +562,9 @@ def apply_extension(
 
     extension = get_extension(db, extension_id)
     if extension.status != ServiceExtensionStatus.pending:
-        raise HTTPException(
-            status_code=409, detail="Extension has already been applied or canceled"
+        _error(
+            "invalid_transition",
+            "Extension has already been applied or canceled.",
         )
 
     now = datetime.now(UTC)

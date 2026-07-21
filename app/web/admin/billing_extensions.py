@@ -4,7 +4,7 @@ import logging
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Form, Query, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -14,10 +14,21 @@ from app.models.service_extension import ServiceExtensionScope
 from app.services import service_extensions as service_extensions_service
 from app.services import web_admin as web_admin_service
 from app.services.auth_dependencies import require_permission
+from app.services.domain_errors import DomainError
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/billing", tags=["web-admin-billing"])
 logger = logging.getLogger(__name__)
+
+
+def _extension_http_error(exc: DomainError) -> HTTPException:
+    if exc.code.endswith("extension_not_found"):
+        status_code = 404
+    elif exc.code.endswith("invalid_transition"):
+        status_code = 409
+    else:
+        status_code = 400
+    return HTTPException(status_code=status_code, detail=exc.message)
 
 
 def _context(request: Request, db: Session, extra: dict) -> dict:
@@ -237,7 +248,10 @@ def service_extension_create(
 def service_extension_detail(
     request: Request, extension_id: str, db: Session = Depends(get_db)
 ):
-    extension = service_extensions_service.get_extension(db, extension_id)
+    try:
+        extension = service_extensions_service.get_extension(db, extension_id)
+    except DomainError as exc:
+        raise _extension_http_error(exc) from exc
     preview = service_extensions_service.preview_extension(db, extension)
     return templates.TemplateResponse(
         "admin/billing/service_extension_detail.html",
@@ -260,9 +274,12 @@ def service_extension_detail(
 def service_extension_apply(
     request: Request, extension_id: str, db: Session = Depends(get_db)
 ):
-    service_extensions_service.apply_extension(
-        db, extension_id, actor_id=web_admin_service.get_actor_id(request)
-    )
+    try:
+        service_extensions_service.apply_extension(
+            db, extension_id, actor_id=web_admin_service.get_actor_id(request)
+        )
+    except DomainError as exc:
+        raise _extension_http_error(exc) from exc
     return RedirectResponse(
         url=f"/admin/billing/service-extensions/{extension_id}", status_code=303
     )
@@ -275,7 +292,10 @@ def service_extension_apply(
 def service_extension_cancel(
     request: Request, extension_id: str, db: Session = Depends(get_db)
 ):
-    service_extensions_service.cancel_extension(
-        db, extension_id, actor_id=web_admin_service.get_actor_id(request)
-    )
+    try:
+        service_extensions_service.cancel_extension(
+            db, extension_id, actor_id=web_admin_service.get_actor_id(request)
+        )
+    except DomainError as exc:
+        raise _extension_http_error(exc) from exc
     return RedirectResponse(url="/admin/billing/service-extensions", status_code=303)

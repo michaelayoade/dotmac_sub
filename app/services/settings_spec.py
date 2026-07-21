@@ -1019,14 +1019,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.collections,
-        key="prepaid_enforcement_activation_at",
-        env_var="PREPAID_ENFORCEMENT_ACTIVATION_AT",
-        value_type=SettingValueType.string,
-        default="",
-        label="Prepaid enforcement activation time (ISO 8601)",
-    ),
-    SettingSpec(
-        domain=SettingDomain.collections,
         key="prepaid_readiness_max_age_minutes",
         env_var="PREPAID_READINESS_MAX_AGE_MINUTES",
         value_type=SettingValueType.integer,
@@ -1794,22 +1786,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.boolean,
         default=True,
         label="Customer Balance Notifications Enabled",
-    ),
-    # Prepaid-monthly invoicing cutover flag. When ON, run_invoice_cycle can
-    # create advance invoice rows for prepaid subscriptions on MONTHLY-cycle
-    # offers, but runner-created prepaid rows stay draft until funded from the
-    # wallet. Daily/balance prepaid is never invoiced. Default OFF so deploying
-    # is inert. NOTE: this key is read by billing_automation and
-    # collections._core via resolve_value, which returns None for any key without
-    # a registered spec — so without this SettingSpec the flag was non-functional
-    # (could not be enabled at all).
-    SettingSpec(
-        domain=SettingDomain.billing,
-        key="prepaid_monthly_invoicing_enabled",
-        env_var="PREPAID_MONTHLY_INVOICING_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=False,
-        label="Enable Monthly Prepaid Invoicing",
     ),
     # Overdue detection (independent of billing cycle)
     SettingSpec(
@@ -4229,7 +4205,6 @@ _RETIRED_FEATURE_ALIAS_SPECS = frozenset(
         (SettingDomain.collections, "billing_notifications_hourly_enabled"),
         (SettingDomain.scheduler, "crm_ticket_pull_enabled"),
         (SettingDomain.radius, "coa_enabled"),
-        (SettingDomain.billing, "prepaid_monthly_invoicing_enabled"),
         (SettingDomain.billing, "overdue_check_enabled"),
         (SettingDomain.billing, "direct_bank_transfer_enabled"),
         (SettingDomain.catalog, "subscription_expiration_enabled"),

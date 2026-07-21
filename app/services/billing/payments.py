@@ -21,7 +21,6 @@ from app.models.billing import (
     Invoice,
     InvoiceLine,
     InvoiceStatus,
-    LedgerCategory,
     LedgerEntry,
     LedgerEntryType,
     LedgerSource,
@@ -32,7 +31,6 @@ from app.models.billing import (
     PaymentChannelAccount,
     PaymentMethod,
     PaymentMethodType,
-    PaymentPrepaidApplication,
     PaymentProviderEvent,
     PaymentProviderEventFinancialEffect,
     PaymentRefund,
@@ -42,13 +40,10 @@ from app.models.billing import (
     PaymentSettlement,
     PaymentSettlementOrigin,
     PaymentStatus,
-    ServiceEntitlement,
-    ServiceEntitlementStatus,
 )
 from app.models.catalog import (
     BillingCycle,
     BillingMode,
-    CatalogOffer,
     Subscription,
     SubscriptionStatus,
 )
@@ -111,7 +106,6 @@ from app.services.events.types import EventType
 from app.services.locking import lock_for_update
 from app.services.response import ListResponseMixin
 from app.services.service_entitlements import (
-    ensure_prepaid_entitlement_for_wallet_debit,
     ensure_prepaid_entitlements_for_paid_invoice,
     revoke_prepaid_entitlements_for_unpaid_invoice,
 )
@@ -129,7 +123,6 @@ _PAYMENT_ALLOCATION_IDEMPOTENCY_SCOPE = "payment_allocation"
 _PAYMENT_ALLOCATION_CONSUMPTION_MEMO_PREFIX = (
     "Payment allocation account-credit consumption:"
 )
-_PREPAID_LEGACY_REPAIR_KEY_RE = re.compile(r"^[A-Za-z0-9._~-]{16,80}$")
 
 
 @dataclass(frozen=True)
@@ -156,17 +149,6 @@ class PaymentCreationAllocationEffect:
 
 
 @dataclass(frozen=True)
-class PaymentPrepaidServiceEffect:
-    subscription_id: UUID
-    charge_amount: Decimal
-    period_start: datetime
-    period_end: datetime
-    ledger_entry_type: LedgerEntryType | None
-    ledger_source: LedgerSource | None
-    consequence: str
-
-
-@dataclass(frozen=True)
 class PaymentCreationPreview:
     account_id: UUID
     amount: Decimal
@@ -180,8 +162,6 @@ class PaymentCreationPreview:
     unallocated_amount: Decimal
     unallocated_ledger_entry_type: LedgerEntryType | None
     unallocated_ledger_source: LedgerSource | None
-    include_prepaid_service_effect: bool
-    prepaid_service_effect: PaymentPrepaidServiceEffect | None
     access_consequence: str
     fingerprint: str
 
@@ -251,39 +231,6 @@ class PaymentApplicationSummary:
     prepaid_amount_applied: Decimal
     unallocated_credit: Decimal
     settlement_evidenced: bool
-
-
-@dataclass(frozen=True)
-class PrepaidLegacyCycleRepairPreview:
-    account_id: UUID
-    subscription_id: UUID
-    historical_payment_id: UUID
-    historical_allocation_id: UUID
-    historical_invoice_id: UUID
-    historical_debit_ledger_entry_id: UUID
-    renewal_payment_id: UUID
-    renewal_settlement_id: UUID
-    renewal_credit_ledger_entry_id: UUID
-    draft_invoice_id: UUID
-    amount: Decimal
-    currency: str
-    historical_period_start: datetime
-    historical_period_end: datetime
-    renewal_period_start: datetime
-    renewal_period_end: datetime
-    account_credit_before: Decimal
-    account_credit_after_historical_repair: Decimal
-    account_credit_after_renewal: Decimal
-    draft_void_fingerprint: str
-    fingerprint: str
-
-
-@dataclass(frozen=True)
-class PrepaidLegacyCycleRepairResult:
-    historical_application: PaymentPrepaidApplication
-    renewal_application: PaymentPrepaidApplication
-    preview: PrepaidLegacyCycleRepairPreview | None
-    idempotent_replay: bool = False
 
 
 @dataclass(frozen=True)
@@ -949,222 +896,6 @@ def _record_unallocated_payment_credit(
     return entry
 
 
-def _open_invoice_balance_exists(db: Session, account_id, currency: str) -> bool:
-    return (
-        db.query(Invoice.id)
-        .filter(Invoice.account_id == account_id)
-        .filter(Invoice.is_active.is_(True))
-        .filter(
-            Invoice.status.in_(
-                [
-                    InvoiceStatus.issued,
-                    InvoiceStatus.partially_paid,
-                    InvoiceStatus.overdue,
-                ]
-            )
-        )
-        .filter(Invoice.currency == currency)
-        .filter(Invoice.balance_due > Decimal("0.00"))
-        .first()
-        is not None
-    )
-
-
-def _existing_prepaid_renewal_debit(
-    db: Session, payment: Payment
-) -> LedgerEntry | None:
-    return (
-        db.query(LedgerEntry)
-        .filter(LedgerEntry.payment_id == payment.id)
-        .filter(LedgerEntry.invoice_id.is_(None))
-        .filter(LedgerEntry.entry_type == LedgerEntryType.debit)
-        .filter(LedgerEntry.source == LedgerSource.invoice)
-        .filter(LedgerEntry.is_active.is_(True))
-        .first()
-    )
-
-
-def _active_prepaid_monthly_subscription(
-    db: Session,
-    account_id,
-) -> Subscription | None:
-    from app.services.prepaid_service_renewals import (
-        PREPAID_SERVICE_RENEWAL_ELIGIBLE_STATUSES,
-    )
-
-    rows = (
-        db.query(Subscription)
-        .join(CatalogOffer, CatalogOffer.id == Subscription.offer_id)
-        .filter(Subscription.subscriber_id == account_id)
-        .filter(Subscription.status.in_(PREPAID_SERVICE_RENEWAL_ELIGIBLE_STATUSES))
-        .filter(Subscription.billing_mode == BillingMode.prepaid)
-        .filter(CatalogOffer.billing_cycle == BillingCycle.monthly)
-        .filter(CatalogOffer.is_active.is_(True))
-        .order_by(Subscription.created_at.asc(), Subscription.id.asc())
-        .limit(2)
-        .all()
-    )
-    if len(rows) != 1:
-        return None
-    return rows[0]
-
-
-def _prepaid_monthly_charge_amount(
-    db: Session,
-    subscription: Subscription,
-    effective_at: datetime,
-) -> tuple[Decimal, str, BillingCycle] | None:
-    from app.services.prepaid_service_renewals import (
-        resolve_prepaid_monthly_charge,
-    )
-
-    return resolve_prepaid_monthly_charge(db, subscription, effective_at)
-
-
-def apply_prepaid_service_credit(
-    db: Session,
-    payment: Payment,
-) -> bool:
-    """Consume unallocated credit for one eligible prepaid monthly renewal.
-
-    This is intentionally narrow: it runs only for succeeded account-scoped
-    payments, only when no open invoice remains, and only when exactly one active
-    or financially suspended prepaid monthly service exists. It leaves ambiguous
-    account credit untouched.
-    """
-    if payment.account_id is None or payment.status != PaymentStatus.succeeded:
-        return False
-    if _existing_prepaid_renewal_debit(db, payment):
-        return False
-    currency = payment.currency or "NGN"
-    if _open_invoice_balance_exists(db, payment.account_id, currency):
-        return False
-    subscription = _active_prepaid_monthly_subscription(db, payment.account_id)
-    if subscription is None:
-        return False
-
-    effective_at = payment.paid_at or datetime.now(UTC)
-    charge = _prepaid_monthly_charge_amount(db, subscription, effective_at)
-    if charge is None:
-        return False
-    charge_amount, charge_currency, cycle = charge
-    if charge_currency != currency:
-        return False
-
-    from app.services.billing._common import get_account_credit_balance
-    from app.services.billing_automation import (
-        _as_utc,
-        _paid_coverage_end_for_subscription,
-        _period_end,
-    )
-
-    # effective_at is never None here (payment.paid_at or now()), so _as_utc is
-    # non-None — assert to narrow for the type checker.
-    effective_utc = _as_utc(effective_at)
-    assert effective_utc is not None
-    paid_at_day = effective_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-    next_billing = _as_utc(subscription.next_billing_at) or paid_at_day
-    period_start = max(next_billing, paid_at_day)
-    period_end = _period_end(period_start, cycle)
-    paid_through = _paid_coverage_end_for_subscription(
-        db,
-        subscription.id,
-        subscription.subscriber_id,
-        period_start,
-        period_end,
-    )
-    if paid_through and paid_through > period_start:
-        if subscription.next_billing_at is None or next_billing < paid_through:
-            subscription.next_billing_at = paid_through
-        return False
-
-    db.flush()
-    available = get_account_credit_balance(
-        db, str(payment.account_id), currency=currency
-    )
-    if round_money(available) < charge_amount:
-        return False
-
-    ledger_entry = LedgerEntry(
-        account_id=payment.account_id,
-        payment_id=payment.id,
-        entry_type=LedgerEntryType.debit,
-        source=LedgerSource.invoice,
-        category=LedgerCategory.internet_service,
-        amount=charge_amount,
-        currency=currency,
-        effective_date=effective_at,
-        memo=f"Prepaid service renewal {period_start.date()} - {period_end.date()}",
-    )
-    db.add(ledger_entry)
-    db.flush()
-    entitlement = ensure_prepaid_entitlement_for_wallet_debit(
-        db,
-        subscription=subscription,
-        ledger_entry=ledger_entry,
-        starts_at=period_start,
-        ends_at=period_end,
-    )
-    if entitlement is None:
-        raise HTTPException(
-            status_code=409,
-            detail="Prepaid service credit produced no entitlement evidence",
-        )
-    subscription.next_billing_at = period_end
-
-    from app.services.prepaid_service_renewals import (
-        PrepaidServiceRenewalSource,
-        stage_prepaid_service_renewed_outcome,
-    )
-
-    stage_prepaid_service_renewed_outcome(
-        db,
-        account_id=payment.account_id,
-        subscription_id=subscription.id,
-        entitlement_id=entitlement.id,
-        ledger_entry_id=ledger_entry.id,
-        period_start=period_start,
-        renewed_through=period_end,
-        amount=charge_amount,
-        currency=currency,
-        source=PrepaidServiceRenewalSource.direct_payment,
-        trigger_payment_id=payment.id,
-    )
-
-    from app.services.account_lifecycle import compute_account_status
-
-    compute_account_status(db, str(payment.account_id))
-    return True
-
-
-def _apply_previewed_prepaid_service_effect(
-    db: Session,
-    payment: Payment,
-    preview: PaymentCreationPreview,
-) -> LedgerEntry | None:
-    # Typed account-credit deposits fingerprint prepaid renewal as excluded.
-    # Execution must honor that owner decision instead of invoking the generic
-    # payment-triggered renewal path and manufacturing a consequence afterward.
-    if not preview.include_prepaid_service_effect:
-        return None
-    apply_prepaid_service_credit(db, payment)
-    entry = _existing_prepaid_renewal_debit(db, payment)
-    actual = (
-        round_money(to_decimal(entry.amount)) if entry is not None else Decimal("0.00")
-    )
-    expected = (
-        preview.prepaid_service_effect.charge_amount
-        if preview.prepaid_service_effect is not None
-        else Decimal("0.00")
-    )
-    if actual != expected:
-        raise HTTPException(
-            status_code=409,
-            detail="Prepaid service consequence no longer matches preview",
-        )
-    return entry
-
-
 def _latest_successful_invoice_payment(db: Session, invoice: Invoice) -> Payment | None:
     return (
         db.query(Payment)
@@ -1468,92 +1199,6 @@ def _creation_request_payload(
     )
 
 
-def _preview_prepaid_service_effect(
-    db: Session,
-    *,
-    payload: PaymentCreate,
-    effects: tuple[PaymentCreationAllocationEffect, ...],
-    account_credit_available: Decimal,
-) -> PaymentPrepaidServiceEffect | None:
-    if payload.account_id is None or payload.status != PaymentStatus.succeeded:
-        return None
-    currency = payload.currency.upper()
-    effect_balances = {effect.invoice_id: effect.receivable_after for effect in effects}
-    open_invoices = (
-        db.query(Invoice)
-        .filter(Invoice.account_id == payload.account_id)
-        .filter(Invoice.is_active.is_(True))
-        .filter(
-            Invoice.status.in_(
-                [
-                    InvoiceStatus.issued,
-                    InvoiceStatus.partially_paid,
-                    InvoiceStatus.overdue,
-                ]
-            )
-        )
-        .filter(Invoice.currency == currency)
-        .filter(Invoice.balance_due > Decimal("0.00"))
-        .all()
-    )
-    if any(
-        effect_balances.get(invoice.id, round_money(to_decimal(invoice.balance_due)))
-        > Decimal("0.00")
-        for invoice in open_invoices
-    ):
-        return None
-    subscription = _active_prepaid_monthly_subscription(db, payload.account_id)
-    if subscription is None:
-        return None
-    from app.services.billing_automation import (
-        _as_utc,
-        _paid_coverage_end_for_subscription,
-        _period_end,
-    )
-
-    effective_at = payload.paid_at or datetime.now(UTC)
-    effective_utc = _as_utc(effective_at)
-    assert effective_utc is not None
-    charge = _prepaid_monthly_charge_amount(db, subscription, effective_utc)
-    if charge is None:
-        return None
-    charge_amount, charge_currency, cycle = charge
-    if charge_currency != currency:
-        return None
-    paid_at_day = effective_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-    next_billing = _as_utc(subscription.next_billing_at) or paid_at_day
-    period_start = max(next_billing, paid_at_day)
-    period_end = _period_end(period_start, cycle)
-    paid_through = _paid_coverage_end_for_subscription(
-        db,
-        subscription.id,
-        subscription.subscriber_id,
-        period_start,
-        period_end,
-    )
-    if paid_through and paid_through > period_start:
-        return PaymentPrepaidServiceEffect(
-            subscription_id=subscription.id,
-            charge_amount=Decimal("0.00"),
-            period_start=period_start,
-            period_end=paid_through,
-            ledger_entry_type=None,
-            ledger_source=None,
-            consequence="advance_to_existing_paid_coverage",
-        )
-    if round_money(account_credit_available) < round_money(charge_amount):
-        return None
-    return PaymentPrepaidServiceEffect(
-        subscription_id=subscription.id,
-        charge_amount=round_money(charge_amount),
-        period_start=period_start,
-        period_end=period_end,
-        ledger_entry_type=LedgerEntryType.debit,
-        ledger_source=LedgerSource.invoice,
-        consequence="fund_prepaid_service_period",
-    )
-
-
 def _payment_creation_fingerprint(
     *,
     payload: PaymentCreate,
@@ -1562,8 +1207,6 @@ def _payment_creation_fingerprint(
     account_credit_before: Decimal,
     effects: tuple[PaymentCreationAllocationEffect, ...],
     unallocated_amount: Decimal,
-    prepaid_service_effect: PaymentPrepaidServiceEffect | None,
-    include_prepaid_service_effect: bool,
 ) -> str:
     encoded = json.dumps(
         {
@@ -1588,21 +1231,9 @@ def _payment_creation_fingerprint(
             "memo": payload.memo,
             "paid_at": payload.paid_at.isoformat() if payload.paid_at else None,
             "auto_allocate": auto_allocate,
-            "include_prepaid_service_effect": include_prepaid_service_effect,
             "prepaid_funding_before": f"{funding_before:.2f}",
             "account_credit_before": f"{account_credit_before:.2f}",
             "unallocated_amount": f"{unallocated_amount:.2f}",
-            "prepaid_service_effect": (
-                {
-                    "subscription_id": str(prepaid_service_effect.subscription_id),
-                    "charge_amount": f"{prepaid_service_effect.charge_amount:.2f}",
-                    "period_start": prepaid_service_effect.period_start.isoformat(),
-                    "period_end": prepaid_service_effect.period_end.isoformat(),
-                    "consequence": prepaid_service_effect.consequence,
-                }
-                if prepaid_service_effect
-                else None
-            ),
             "allocations": [
                 {
                     "invoice_id": str(effect.invoice_id),
@@ -1624,7 +1255,6 @@ def _build_payment_creation_preview(
     payload: PaymentCreate,
     *,
     auto_allocate: bool,
-    include_prepaid_service_effect: bool = True,
 ) -> PaymentCreationPreview:
     if payload.account_id is None:
         raise HTTPException(
@@ -1676,8 +1306,6 @@ def _build_payment_creation_preview(
             account_credit_before=account_credit_before,
             effects=(),
             unallocated_amount=Decimal("0.00"),
-            prepaid_service_effect=None,
-            include_prepaid_service_effect=include_prepaid_service_effect,
         )
         return PaymentCreationPreview(
             account_id=payload.account_id,
@@ -1692,8 +1320,6 @@ def _build_payment_creation_preview(
             unallocated_amount=Decimal("0.00"),
             unallocated_ledger_entry_type=None,
             unallocated_ledger_source=None,
-            include_prepaid_service_effect=include_prepaid_service_effect,
-            prepaid_service_effect=None,
             access_consequence="none_until_payment_settlement",
             fingerprint=fingerprint,
         )
@@ -1765,21 +1391,6 @@ def _build_payment_creation_preview(
         remaining = round_money(remaining - allocation_amount)
 
     effect_tuple = tuple(effects)
-    prepaid_service_effect = (
-        _preview_prepaid_service_effect(
-            db,
-            payload=payload,
-            effects=effect_tuple,
-            account_credit_available=round_money(account_credit_before + remaining),
-        )
-        if include_prepaid_service_effect
-        else None
-    )
-    prepaid_charge = (
-        prepaid_service_effect.charge_amount
-        if prepaid_service_effect is not None
-        else Decimal("0.00")
-    )
     fingerprint = _payment_creation_fingerprint(
         payload=payload,
         auto_allocate=auto_allocate,
@@ -1787,8 +1398,6 @@ def _build_payment_creation_preview(
         account_credit_before=account_credit_before,
         effects=effect_tuple,
         unallocated_amount=remaining,
-        prepaid_service_effect=prepaid_service_effect,
-        include_prepaid_service_effect=include_prepaid_service_effect,
     )
     return PaymentCreationPreview(
         account_id=payload.account_id,
@@ -1796,20 +1405,16 @@ def _build_payment_creation_preview(
         currency=currency,
         status=payload.status,
         prepaid_funding_before=funding_before,
-        prepaid_funding_after=round_money(funding_before + amount - prepaid_charge),
+        prepaid_funding_after=round_money(funding_before + amount),
         account_credit_before=account_credit_before,
-        account_credit_after=round_money(
-            account_credit_before + remaining - prepaid_charge
-        ),
+        account_credit_after=round_money(account_credit_before + remaining),
         allocation_effects=effect_tuple,
         unallocated_amount=remaining,
         unallocated_ledger_entry_type=(
             LedgerEntryType.credit if remaining > 0 else None
         ),
         unallocated_ledger_source=(LedgerSource.payment if remaining > 0 else None),
-        include_prepaid_service_effect=include_prepaid_service_effect,
-        prepaid_service_effect=prepaid_service_effect,
-        access_consequence="recheck_after_payment_settlement",
+        access_consequence="canonical_renewal_recheck_after_settlement",
         fingerprint=fingerprint,
     )
 
@@ -1920,7 +1525,6 @@ def _create_account_payment_from_preview(
         invoice = get_by_id(db, Invoice, allocation.invoice_id)
         if invoice:
             _finalize_invoice_payment_effects(db, invoice)
-    prepaid_entry = _apply_previewed_prepaid_service_effect(db, payment, preview)
     if not allocations:
         from app.services.account_lifecycle import compute_account_status
 
@@ -1930,16 +1534,10 @@ def _create_account_payment_from_preview(
         unallocated_ledger_entry_id=(
             unallocated_entry.id if unallocated_entry is not None else None
         ),
-        prepaid_ledger_entry_id=(
-            prepaid_entry.id if prepaid_entry is not None else None
-        ),
+        prepaid_ledger_entry_id=None,
         amount=preview.amount,
         unallocated_amount=preview.unallocated_amount,
-        prepaid_amount=(
-            round_money(to_decimal(prepaid_entry.amount))
-            if prepaid_entry is not None
-            else Decimal("0.00")
-        ),
+        prepaid_amount=Decimal("0.00"),
         currency=preview.currency,
         origin=origin,
         preview_fingerprint=preview.fingerprint,
@@ -1968,12 +1566,8 @@ def _create_account_payment_from_preview(
                 "unallocated_ledger_entry_id": (
                     str(unallocated_entry.id) if unallocated_entry else None
                 ),
-                "prepaid_ledger_entry_id": (
-                    str(prepaid_entry.id) if prepaid_entry else None
-                ),
-                "prepaid_amount": (
-                    str(prepaid_entry.amount) if prepaid_entry else "0.00"
-                ),
+                "prepaid_ledger_entry_id": None,
+                "prepaid_amount": "0.00",
                 "prepaid_funding_before": str(preview.prepaid_funding_before),
                 "prepaid_funding_after": str(preview.prepaid_funding_after),
                 "account_credit_before": str(preview.account_credit_before),
@@ -2097,7 +1691,6 @@ def _settle_existing_account_payment(
         invoice = get_by_id(db, Invoice, allocation.invoice_id)
         if invoice:
             _finalize_invoice_payment_effects(db, invoice)
-    prepaid_entry = _apply_previewed_prepaid_service_effect(db, payment, preview)
     if not allocations:
         from app.services.account_lifecycle import compute_account_status
 
@@ -2107,16 +1700,10 @@ def _settle_existing_account_payment(
         unallocated_ledger_entry_id=(
             unallocated_entry.id if unallocated_entry is not None else None
         ),
-        prepaid_ledger_entry_id=(
-            prepaid_entry.id if prepaid_entry is not None else None
-        ),
+        prepaid_ledger_entry_id=None,
         amount=preview.amount,
         unallocated_amount=preview.unallocated_amount,
-        prepaid_amount=(
-            round_money(to_decimal(prepaid_entry.amount))
-            if prepaid_entry is not None
-            else Decimal("0.00")
-        ),
+        prepaid_amount=Decimal("0.00"),
         currency=preview.currency,
         origin=origin,
         preview_fingerprint=preview.fingerprint,
@@ -2145,12 +1732,8 @@ def _settle_existing_account_payment(
                 "unallocated_ledger_entry_id": (
                     str(unallocated_entry.id) if unallocated_entry else None
                 ),
-                "prepaid_ledger_entry_id": (
-                    str(prepaid_entry.id) if prepaid_entry else None
-                ),
-                "prepaid_amount": (
-                    str(prepaid_entry.amount) if prepaid_entry else "0.00"
-                ),
+                "prepaid_ledger_entry_id": None,
+                "prepaid_amount": "0.00",
                 "access_consequence": preview.access_consequence,
             },
         ),
@@ -2181,352 +1764,6 @@ def _settle_existing_account_payment(
         payment=payment,
         settlement=settlement,
         preview=preview,
-    )
-
-
-def _normalize_prepaid_legacy_repair_key(value: str) -> str:
-    key = value.strip()
-    if not _PREPAID_LEGACY_REPAIR_KEY_RE.fullmatch(key):
-        raise HTTPException(
-            status_code=400,
-            detail="Repair idempotency key must be 16-80 safe characters",
-        )
-    return key
-
-
-def _prepaid_legacy_cycle_repair_preview(
-    db: Session,
-    *,
-    historical_payment_id: str,
-    historical_allocation_id: str,
-    historical_invoice_id: str,
-    historical_debit_ledger_entry_id: str,
-    renewal_payment_id: str,
-    draft_invoice_id: str,
-    subscription_id: str,
-) -> PrepaidLegacyCycleRepairPreview:
-    """Validate one explicit legacy-payment repair without selecting by similarity."""
-    historical_payment = get_by_id(db, Payment, historical_payment_id)
-    historical_allocation = get_by_id(db, PaymentAllocation, historical_allocation_id)
-    historical_invoice = get_by_id(db, Invoice, historical_invoice_id)
-    historical_debit = get_by_id(db, LedgerEntry, historical_debit_ledger_entry_id)
-    renewal_payment = get_by_id(db, Payment, renewal_payment_id)
-    draft_invoice = get_by_id(db, Invoice, draft_invoice_id)
-    subscription = get_by_id(db, Subscription, subscription_id)
-    if any(
-        value is None
-        for value in (
-            historical_payment,
-            historical_allocation,
-            historical_invoice,
-            historical_debit,
-            renewal_payment,
-            draft_invoice,
-            subscription,
-        )
-    ):
-        raise HTTPException(
-            status_code=404, detail="Selected repair evidence is missing"
-        )
-    assert historical_payment is not None
-    assert historical_allocation is not None
-    assert historical_invoice is not None
-    assert historical_debit is not None
-    assert renewal_payment is not None
-    assert draft_invoice is not None
-    assert subscription is not None
-
-    if historical_payment.account_id is None:
-        raise HTTPException(status_code=409, detail="Historical payment has no account")
-    account_id = historical_payment.account_id
-    selected_account_ids = {
-        historical_invoice.account_id,
-        historical_debit.account_id,
-        renewal_payment.account_id,
-        draft_invoice.account_id,
-        subscription.subscriber_id,
-    }
-    if selected_account_ids != {account_id}:
-        raise HTTPException(
-            status_code=409, detail="Selected evidence does not belong to one account"
-        )
-    if historical_payment.id == renewal_payment.id:
-        raise HTTPException(
-            status_code=409, detail="Historical and renewal payments must be distinct"
-        )
-    if any(
-        payment.status != PaymentStatus.succeeded or not payment.is_active
-        for payment in (historical_payment, renewal_payment)
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail="Both selected payments must be active and succeeded",
-        )
-    if historical_payment.settlement is not None:
-        raise HTTPException(
-            status_code=409, detail="Historical payment already has settlement evidence"
-        )
-    renewal_settlement = renewal_payment.settlement
-    if renewal_settlement is None:
-        raise HTTPException(
-            status_code=409, detail="Renewal payment has no settlement evidence"
-        )
-    if (
-        db.query(PaymentPrepaidApplication.id)
-        .filter(
-            PaymentPrepaidApplication.payment_id.in_(
-                [historical_payment.id, renewal_payment.id]
-            )
-        )
-        .first()
-    ):
-        raise HTTPException(
-            status_code=409, detail="A selected payment already funded a prepaid period"
-        )
-
-    amount = round_money(to_decimal(historical_payment.amount))
-    currency = historical_payment.currency or "NGN"
-    if amount <= Decimal("0.00") or any(
-        round_money(to_decimal(value)) != amount
-        for value in (
-            renewal_payment.amount,
-            historical_allocation.amount,
-            historical_debit.amount,
-            historical_invoice.total,
-            draft_invoice.total,
-        )
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail="Selected payment, invoice, and service amounts differ",
-        )
-    if any(
-        (value or "NGN") != currency
-        for value in (
-            renewal_payment.currency,
-            historical_invoice.currency,
-            historical_debit.currency,
-            draft_invoice.currency,
-            renewal_settlement.currency,
-        )
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail="Selected payment evidence uses different currencies",
-        )
-
-    if (
-        historical_allocation.payment_id != historical_payment.id
-        or historical_allocation.invoice_id != historical_invoice.id
-        or not historical_allocation.is_active
-        or historical_allocation.ledger_entry_id is not None
-        or historical_allocation.consumption_ledger_entry_id is not None
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail="Historical allocation is not the unsupported legacy link",
-        )
-    if historical_invoice.status != InvoiceStatus.paid or round_money(
-        to_decimal(historical_invoice.balance_due)
-    ) != Decimal("0.00"):
-        raise HTTPException(
-            status_code=409, detail="Historical invoice is not closed as paid"
-        )
-    if (
-        historical_debit.payment_id != historical_payment.id
-        or historical_debit.invoice_id is not None
-        or historical_debit.entry_type != LedgerEntryType.debit
-        or historical_debit.source != LedgerSource.invoice
-        or not historical_debit.is_active
-    ):
-        raise HTTPException(
-            status_code=409, detail="Historical service debit is not an exact match"
-        )
-    if (
-        db.query(ServiceEntitlement.id)
-        .filter(
-            ServiceEntitlement.source_ledger_entry_id == historical_debit.id,
-            ServiceEntitlement.status == ServiceEntitlementStatus.active,
-        )
-        .first()
-    ):
-        raise HTTPException(
-            status_code=409, detail="Historical service debit already has entitlement"
-        )
-
-    renewal_credit = renewal_settlement.unallocated_ledger_entry
-    if (
-        renewal_credit is None
-        or renewal_credit.payment_id != renewal_payment.id
-        or renewal_credit.account_id != account_id
-        or renewal_credit.invoice_id is not None
-        or renewal_credit.entry_type != LedgerEntryType.credit
-        or renewal_credit.source != LedgerSource.payment
-        or not renewal_credit.is_active
-        or round_money(to_decimal(renewal_credit.amount)) != amount
-        or round_money(to_decimal(renewal_settlement.unallocated_amount)) < amount
-        or round_money(to_decimal(renewal_settlement.prepaid_amount)) != Decimal("0.00")
-        or renewal_settlement.prepaid_ledger_entry_id is not None
-    ):
-        raise HTTPException(
-            status_code=409, detail="Renewal settlement credit is not fully available"
-        )
-    if _existing_prepaid_renewal_debit(db, renewal_payment) is not None:
-        raise HTTPException(
-            status_code=409, detail="Renewal payment already has a service debit"
-        )
-
-    if (
-        subscription.status != SubscriptionStatus.active
-        or subscription.billing_mode != BillingMode.prepaid
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail="Selected subscription is not active prepaid service",
-        )
-    if draft_invoice.status != InvoiceStatus.draft or not draft_invoice.is_active:
-        raise HTTPException(
-            status_code=409, detail="Replacement invoice is not an active draft"
-        )
-    draft_lines = (
-        db.query(InvoiceLine)
-        .filter(InvoiceLine.invoice_id == draft_invoice.id)
-        .filter(InvoiceLine.is_active.is_(True))
-        .filter(InvoiceLine.amount > Decimal("0.00"))
-        .all()
-    )
-    if not draft_lines or {line.subscription_id for line in draft_lines} != {
-        subscription.id
-    }:
-        raise HTTPException(
-            status_code=409, detail="Draft invoice does not contain only this service"
-        )
-    if (
-        db.query(PaymentAllocation.id)
-        .filter(
-            PaymentAllocation.invoice_id == draft_invoice.id,
-            PaymentAllocation.is_active.is_(True),
-        )
-        .first()
-        or db.query(LedgerEntry.id)
-        .filter(
-            LedgerEntry.invoice_id == draft_invoice.id,
-            LedgerEntry.is_active.is_(True),
-        )
-        .first()
-    ):
-        raise HTTPException(
-            status_code=409, detail="Draft invoice already has financial evidence"
-        )
-
-    from app.services.billing.invoices import Invoices
-    from app.services.billing_automation import _as_utc, _period_end
-
-    draft_void_preview = Invoices.preview_void(db, str(draft_invoice.id))
-    renewal_effective = _as_utc(renewal_payment.paid_at or renewal_payment.created_at)
-    historical_effective = _as_utc(
-        historical_debit.effective_date
-        or historical_payment.paid_at
-        or historical_payment.created_at
-    )
-    if renewal_effective is None or historical_effective is None:
-        raise HTTPException(status_code=409, detail="Payment dates are unavailable")
-    charge = _prepaid_monthly_charge_amount(db, subscription, renewal_effective)
-    if charge is None:
-        raise HTTPException(
-            status_code=409, detail="Subscription charge is unavailable"
-        )
-    charge_amount, charge_currency, cycle = charge
-    if round_money(charge_amount) != amount or charge_currency != currency:
-        raise HTTPException(
-            status_code=409, detail="Current subscription charge differs from payment"
-        )
-    historical_start = historical_effective.replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
-    historical_end = _period_end(historical_start, cycle)
-    next_billing = _as_utc(subscription.next_billing_at)
-    if next_billing != historical_end:
-        raise HTTPException(
-            status_code=409,
-            detail="Subscription billing date does not match historical service period",
-        )
-    historical_invoice_start = _as_utc(historical_invoice.billing_period_start)
-    historical_invoice_end = _as_utc(historical_invoice.billing_period_end)
-    accepted_historical_ends = {historical_end, historical_end - timedelta(days=1)}
-    if (
-        historical_invoice_start != historical_start
-        or historical_invoice_end not in accepted_historical_ends
-    ):
-        raise HTTPException(
-            status_code=409, detail="Historical invoice period does not match service"
-        )
-    if _as_utc(draft_invoice.billing_period_start) != next_billing:
-        raise HTTPException(
-            status_code=409, detail="Draft invoice is not the next service cycle"
-        )
-    paid_at_day = renewal_effective.replace(hour=0, minute=0, second=0, microsecond=0)
-    renewal_start = max(next_billing, paid_at_day)
-    renewal_end = _period_end(renewal_start, cycle)
-
-    account_credit_before = get_account_credit_balance(
-        db, str(account_id), currency=currency
-    )
-    after_historical = round_money(account_credit_before + amount)
-    after_renewal = round_money(after_historical - amount)
-    if after_historical < amount:
-        raise HTTPException(
-            status_code=409,
-            detail="Historical repair would not leave enough renewal credit",
-        )
-    fingerprint_payload = {
-        "kind": "prepaid_legacy_cycle_repair",
-        "account_id": str(account_id),
-        "subscription_id": str(subscription.id),
-        "historical_payment_id": str(historical_payment.id),
-        "historical_allocation_id": str(historical_allocation.id),
-        "historical_invoice_id": str(historical_invoice.id),
-        "historical_debit_ledger_entry_id": str(historical_debit.id),
-        "renewal_payment_id": str(renewal_payment.id),
-        "renewal_settlement_id": str(renewal_settlement.id),
-        "renewal_credit_ledger_entry_id": str(renewal_credit.id),
-        "draft_invoice_id": str(draft_invoice.id),
-        "amount": f"{amount:.2f}",
-        "currency": currency,
-        "historical_period_start": historical_start.isoformat(),
-        "historical_period_end": historical_end.isoformat(),
-        "renewal_period_start": renewal_start.isoformat(),
-        "renewal_period_end": renewal_end.isoformat(),
-        "account_credit_before": f"{account_credit_before:.2f}",
-        "draft_void_fingerprint": draft_void_preview.fingerprint,
-    }
-    fingerprint = hashlib.sha256(
-        json.dumps(fingerprint_payload, sort_keys=True, separators=(",", ":")).encode(
-            "utf-8"
-        )
-    ).hexdigest()
-    return PrepaidLegacyCycleRepairPreview(
-        account_id=account_id,
-        subscription_id=subscription.id,
-        historical_payment_id=historical_payment.id,
-        historical_allocation_id=historical_allocation.id,
-        historical_invoice_id=historical_invoice.id,
-        historical_debit_ledger_entry_id=historical_debit.id,
-        renewal_payment_id=renewal_payment.id,
-        renewal_settlement_id=renewal_settlement.id,
-        renewal_credit_ledger_entry_id=renewal_credit.id,
-        draft_invoice_id=draft_invoice.id,
-        amount=amount,
-        currency=currency,
-        historical_period_start=historical_start,
-        historical_period_end=historical_end,
-        renewal_period_start=renewal_start,
-        renewal_period_end=renewal_end,
-        account_credit_before=account_credit_before,
-        account_credit_after_historical_repair=after_historical,
-        account_credit_after_renewal=after_renewal,
-        draft_void_fingerprint=draft_void_preview.fingerprint,
-        fingerprint=fingerprint,
     )
 
 
@@ -2955,7 +2192,6 @@ class Payments(ListResponseMixin):
             db,
             payload,
             auto_allocate=False,
-            include_prepaid_service_effect=False,
         )
         replay = Payments._creation_replay(db, key=key, fingerprint=preview.fingerprint)
         if replay:
@@ -3349,341 +2585,6 @@ class Payments(ListResponseMixin):
         return settlement
 
     @staticmethod
-    def preview_prepaid_legacy_cycle_repair(
-        db: Session,
-        *,
-        historical_payment_id: str,
-        historical_allocation_id: str,
-        historical_invoice_id: str,
-        historical_debit_ledger_entry_id: str,
-        renewal_payment_id: str,
-        draft_invoice_id: str,
-        subscription_id: str,
-    ) -> PrepaidLegacyCycleRepairPreview:
-        return _prepaid_legacy_cycle_repair_preview(
-            db,
-            historical_payment_id=historical_payment_id,
-            historical_allocation_id=historical_allocation_id,
-            historical_invoice_id=historical_invoice_id,
-            historical_debit_ledger_entry_id=historical_debit_ledger_entry_id,
-            renewal_payment_id=renewal_payment_id,
-            draft_invoice_id=draft_invoice_id,
-            subscription_id=subscription_id,
-        )
-
-    @staticmethod
-    def confirm_prepaid_legacy_cycle_repair(
-        db: Session,
-        *,
-        historical_payment_id: str,
-        historical_allocation_id: str,
-        historical_invoice_id: str,
-        historical_debit_ledger_entry_id: str,
-        renewal_payment_id: str,
-        draft_invoice_id: str,
-        subscription_id: str,
-        preview_fingerprint: str,
-        idempotency_key: str,
-        reason: str,
-        commit: bool = True,
-    ) -> PrepaidLegacyCycleRepairResult:
-        """Repair one exact legacy cycle and fund the next cycle atomically."""
-        key = _normalize_prepaid_legacy_repair_key(idempotency_key)
-        historical_key = f"{key}.historical"
-        renewal_key = f"{key}.renewal"
-        historical_replay = db.scalar(
-            select(PaymentPrepaidApplication).where(
-                PaymentPrepaidApplication.idempotency_key == historical_key
-            )
-        )
-        renewal_replay = db.scalar(
-            select(PaymentPrepaidApplication).where(
-                PaymentPrepaidApplication.idempotency_key == renewal_key
-            )
-        )
-        if historical_replay is not None or renewal_replay is not None:
-            if historical_replay is None or renewal_replay is None:
-                raise HTTPException(
-                    status_code=409,
-                    detail="Prepaid cycle repair evidence is incomplete",
-                )
-            if (
-                str(historical_replay.payment_id) != historical_payment_id
-                or str(renewal_replay.payment_id) != renewal_payment_id
-                or historical_replay.preview_fingerprint != preview_fingerprint
-                or renewal_replay.preview_fingerprint != preview_fingerprint
-            ):
-                raise HTTPException(
-                    status_code=409,
-                    detail="Repair idempotency key belongs to different evidence",
-                )
-            return PrepaidLegacyCycleRepairResult(
-                historical_application=historical_replay,
-                renewal_application=renewal_replay,
-                preview=None,
-                idempotent_replay=True,
-            )
-
-        initial_payment = get_by_id(db, Payment, historical_payment_id)
-        if initial_payment is None or initial_payment.account_id is None:
-            raise HTTPException(status_code=404, detail="Historical payment not found")
-        lock_account(db, str(initial_payment.account_id))
-        for model, row_id in (
-            (Payment, historical_payment_id),
-            (PaymentAllocation, historical_allocation_id),
-            (Invoice, historical_invoice_id),
-            (LedgerEntry, historical_debit_ledger_entry_id),
-            (Payment, renewal_payment_id),
-            (Invoice, draft_invoice_id),
-            (Subscription, subscription_id),
-        ):
-            if lock_for_update(db, model, UUID(row_id)) is None:
-                raise HTTPException(
-                    status_code=409, detail="Selected repair evidence changed"
-                )
-        preview = _prepaid_legacy_cycle_repair_preview(
-            db,
-            historical_payment_id=historical_payment_id,
-            historical_allocation_id=historical_allocation_id,
-            historical_invoice_id=historical_invoice_id,
-            historical_debit_ledger_entry_id=historical_debit_ledger_entry_id,
-            renewal_payment_id=renewal_payment_id,
-            draft_invoice_id=draft_invoice_id,
-            subscription_id=subscription_id,
-        )
-        if preview.fingerprint != preview_fingerprint:
-            raise HTTPException(
-                status_code=409,
-                detail="Financial state changed after preview; preview again",
-            )
-        reason = reason.strip()
-        if len(reason) < 16:
-            raise HTTPException(
-                status_code=400,
-                detail="Repair reason must explain the reviewed evidence",
-            )
-
-        historical_payment = db.get(Payment, preview.historical_payment_id)
-        historical_allocation = db.get(
-            PaymentAllocation, preview.historical_allocation_id
-        )
-        historical_debit = db.get(LedgerEntry, preview.historical_debit_ledger_entry_id)
-        renewal_payment = db.get(Payment, preview.renewal_payment_id)
-        subscription = db.get(Subscription, preview.subscription_id)
-        assert historical_payment is not None
-        assert historical_allocation is not None
-        assert historical_debit is not None
-        assert renewal_payment is not None
-        assert renewal_payment.settlement is not None
-        assert renewal_payment.settlement.unallocated_ledger_entry is not None
-        assert subscription is not None
-
-        historical_credit = _record_unallocated_payment_credit(
-            db, historical_payment, preview.amount
-        )
-        if historical_credit is None:
-            raise HTTPException(
-                status_code=409, detail="Historical payment credit could not be created"
-            )
-        db.flush()
-        historical_allocation.is_active = False
-        historical_entitlement = ensure_prepaid_entitlement_for_wallet_debit(
-            db,
-            subscription=subscription,
-            ledger_entry=historical_debit,
-            starts_at=preview.historical_period_start,
-            ends_at=preview.historical_period_end,
-        )
-        if historical_entitlement is None:
-            raise HTTPException(
-                status_code=409,
-                detail="Historical service entitlement could not be created",
-            )
-        historical_settlement = PaymentSettlement(
-            payment_id=historical_payment.id,
-            unallocated_ledger_entry_id=historical_credit.id,
-            prepaid_ledger_entry_id=historical_debit.id,
-            amount=preview.amount,
-            unallocated_amount=preview.amount,
-            prepaid_amount=preview.amount,
-            currency=preview.currency,
-            origin=PaymentSettlementOrigin.system,
-            preview_fingerprint=preview.fingerprint,
-            idempotency_key=f"{key}.historical-settlement",
-        )
-        db.add(historical_settlement)
-        db.flush()
-        historical_application = PaymentPrepaidApplication(
-            payment_id=historical_payment.id,
-            settlement_id=historical_settlement.id,
-            account_id=preview.account_id,
-            subscription_id=preview.subscription_id,
-            credit_ledger_entry_id=historical_credit.id,
-            debit_ledger_entry_id=historical_debit.id,
-            entitlement_id=historical_entitlement.id,
-            retired_allocation_id=historical_allocation.id,
-            historical_invoice_id=preview.historical_invoice_id,
-            origin="historical_reconciliation",
-            amount=preview.amount,
-            currency=preview.currency,
-            period_start=preview.historical_period_start,
-            period_end=preview.historical_period_end,
-            reason=reason,
-            preview_fingerprint=preview.fingerprint,
-            idempotency_key=historical_key,
-            access_recheck_status="not_required",
-        )
-        db.add(historical_application)
-        db.flush()
-
-        if not apply_prepaid_service_credit(db, renewal_payment):
-            raise HTTPException(
-                status_code=409, detail="Renewal payment did not fund a service period"
-            )
-        renewal_debit = _existing_prepaid_renewal_debit(db, renewal_payment)
-        renewal_entitlement = (
-            db.query(ServiceEntitlement)
-            .filter(ServiceEntitlement.source_ledger_entry_id == renewal_debit.id)
-            .filter(ServiceEntitlement.status == ServiceEntitlementStatus.active)
-            .one_or_none()
-            if renewal_debit is not None
-            else None
-        )
-        if renewal_debit is None or renewal_entitlement is None:
-            raise HTTPException(
-                status_code=409, detail="Renewal service evidence is incomplete"
-            )
-        from app.services.billing_automation import _as_utc
-
-        if (
-            round_money(to_decimal(renewal_debit.amount)) != preview.amount
-            or _as_utc(renewal_entitlement.starts_at) != preview.renewal_period_start
-            or _as_utc(renewal_entitlement.ends_at) != preview.renewal_period_end
-        ):
-            raise HTTPException(
-                status_code=409, detail="Renewal service result differs from preview"
-            )
-
-        from app.services.billing.invoices import Invoices
-
-        closure_result = Invoices.void_system(
-            db,
-            draft_invoice_id,
-            reason=(
-                "Superseded by payment-backed prepaid renewal; no duplicate charge. "
-                f"Repair: {reason}"
-            ),
-            idempotency_key=f"{key}.draft-void",
-            commit=False,
-            reconcile_access=False,
-        )
-        renewal_application = PaymentPrepaidApplication(
-            payment_id=renewal_payment.id,
-            settlement_id=renewal_payment.settlement.id,
-            account_id=preview.account_id,
-            subscription_id=preview.subscription_id,
-            credit_ledger_entry_id=(
-                renewal_payment.settlement.unallocated_ledger_entry.id
-            ),
-            debit_ledger_entry_id=renewal_debit.id,
-            entitlement_id=renewal_entitlement.id,
-            invoice_closure_id=closure_result.closure.id,
-            origin="post_settlement",
-            amount=preview.amount,
-            currency=preview.currency,
-            period_start=preview.renewal_period_start,
-            period_end=preview.renewal_period_end,
-            reason=reason,
-            preview_fingerprint=preview.fingerprint,
-            idempotency_key=renewal_key,
-            access_recheck_status="pending",
-        )
-        db.add(renewal_application)
-        db.flush()
-        AuditEvents.stage(
-            db,
-            AuditEventCreate(
-                actor_type=AuditActorType.system,
-                action="confirm_prepaid_legacy_cycle_repair",
-                entity_type="payment_prepaid_application",
-                entity_id=str(renewal_application.id),
-                metadata_={
-                    "account_id": str(preview.account_id),
-                    "subscription_id": str(preview.subscription_id),
-                    "historical_application_id": str(historical_application.id),
-                    "renewal_application_id": str(renewal_application.id),
-                    "historical_payment_id": str(preview.historical_payment_id),
-                    "renewal_payment_id": str(preview.renewal_payment_id),
-                    "draft_invoice_id": str(preview.draft_invoice_id),
-                    "invoice_closure_id": str(closure_result.closure.id),
-                    "amount": str(preview.amount),
-                    "currency": preview.currency,
-                    "preview_fingerprint": preview.fingerprint,
-                    "reason": reason,
-                },
-            ),
-        )
-        if commit:
-            db.commit()
-            db.refresh(historical_application)
-            db.refresh(renewal_application)
-        else:
-            db.flush()
-        return PrepaidLegacyCycleRepairResult(
-            historical_application=historical_application,
-            renewal_application=renewal_application,
-            preview=preview,
-        )
-
-    @staticmethod
-    def recheck_prepaid_application_access(
-        db: Session,
-        application_id: str,
-        *,
-        commit: bool = True,
-    ) -> PaymentPrepaidApplication:
-        """Run access reconciliation after the financial repair has committed."""
-        application = get_by_id(db, PaymentPrepaidApplication, application_id)
-        if application is None:
-            raise HTTPException(status_code=404, detail="Prepaid application not found")
-        if application.origin != "post_settlement":
-            raise HTTPException(
-                status_code=409, detail="Historical application needs no access recheck"
-            )
-        try:
-            from app.services import collections as collections_service
-
-            with db.begin_nested():
-                collections_service.restore_account_services(
-                    db,
-                    str(application.account_id),
-                    idempotency_key=f"prepaid-application:{application.id}:access",
-                    resolved_by=f"payment_prepaid_application:{application.id}",
-                )
-            application.access_recheck_status = "completed"
-            application.access_recheck_error = None
-            application.access_rechecked_at = datetime.now(UTC)
-            if commit:
-                db.commit()
-                db.refresh(application)
-            else:
-                db.flush()
-            return application
-        except Exception as exc:
-            application = get_by_id(db, PaymentPrepaidApplication, application_id)
-            if application is None:
-                raise
-            application.access_recheck_status = "deferred"
-            application.access_recheck_error = type(exc).__name__[:120]
-            application.access_rechecked_at = datetime.now(UTC)
-            if commit:
-                db.commit()
-                db.refresh(application)
-            else:
-                db.flush()
-            return application
-
-    @staticmethod
     def edit_capability(db: Session, payment_id: str) -> PaymentEditCapability:
         payment = get_by_id(db, Payment, payment_id)
         if not payment:
@@ -3699,78 +2600,6 @@ class Payments(ListResponseMixin):
                 "Settled payment fields are immutable evidence",
             )
         return PaymentEditCapability(True, None)
-
-    @staticmethod
-    def _auto_allocate(db: Session, payment: Payment) -> list[PaymentAllocation]:
-        """Auto-allocate payment to oldest unpaid invoices.
-
-        For account-scoped payments, only the payer's own invoices are
-        candidates. For consolidated (billing-account-scoped) payments,
-        candidates span every subscriber under the billing account's reseller.
-
-        Returns:
-            List of created allocations
-        """
-        remaining = round_money(to_decimal(payment.amount))
-        if remaining <= 0:
-            return []
-        invoice_query = (
-            db.query(Invoice)
-            .filter(Invoice.is_active.is_(True))
-            .filter(
-                Invoice.status.in_(
-                    [
-                        InvoiceStatus.issued,
-                        InvoiceStatus.partially_paid,
-                        InvoiceStatus.overdue,
-                    ]
-                )
-            )
-            .filter(Invoice.balance_due > 0)
-        )
-        if payment.billing_account_id is not None:
-            from app.models.billing import BillingAccount
-            from app.models.subscriber import Subscriber
-
-            invoice_query = invoice_query.join(
-                Subscriber, Invoice.account_id == Subscriber.id
-            ).filter(
-                Subscriber.reseller_id
-                == db.query(BillingAccount.reseller_id)
-                .filter(BillingAccount.id == payment.billing_account_id)
-                .scalar_subquery()
-            )
-        else:
-            invoice_query = invoice_query.filter(
-                Invoice.account_id == payment.account_id
-            )
-        invoices = invoice_query.order_by(
-            Invoice.due_at.asc().nulls_last(), Invoice.created_at.asc()
-        ).all()
-        allocations: list[PaymentAllocation] = []
-        for invoice in invoices:
-            if invoice.currency != payment.currency:
-                continue
-            amount = min(remaining, round_money(to_decimal(invoice.balance_due)))
-            if amount <= 0:
-                continue
-
-            allocation, applied_amount = _apply_payment_allocation(
-                db,
-                payment,
-                invoice,
-                amount,
-            )
-            allocations.append(allocation)
-
-            remaining = round_money(remaining - applied_amount)
-            if remaining <= 0:
-                break
-
-        _record_unallocated_payment_credit(db, payment, remaining)
-        apply_prepaid_service_credit(db, payment)
-
-        return allocations
 
     @staticmethod
     def _create_allocations(
@@ -4678,14 +3507,39 @@ def _payment_unallocated_credit_remaining(
     ).filter(PaymentAllocation.payment_id == payment.id).filter(
         PaymentAllocation.is_active.is_(True)
     ).filter(LedgerEntry.is_active.is_(True)).scalar() or Decimal("0.00")
+    prepaid_consumed = _payment_prepaid_service_amount(db, payment)
     return max(
         Decimal("0.00"),
         round_money(
             to_decimal(settlement.unallocated_amount)
-            - to_decimal(settlement.prepaid_amount)
+            - prepaid_consumed
             - to_decimal(consumed)
         ),
     )
+
+
+def _payment_prepaid_service_amount(db: Session, payment: Payment) -> Decimal:
+    """Project service consumption from canonical outcomes with legacy fallback."""
+    from app.services.prepaid_service_renewals import renewal_outcomes_for_payment
+
+    outcome_amount = round_money(
+        sum(
+            (
+                outcome.amount
+                for outcome in renewal_outcomes_for_payment(db, payment.id)
+            ),
+            Decimal("0.00"),
+        )
+    )
+    settlement_amount = (
+        round_money(to_decimal(payment.settlement.prepaid_amount))
+        if payment.settlement is not None
+        else Decimal("0.00")
+    )
+    # Historical inline settlements recorded both settlement fields and a
+    # renewal outcome for the same debit. Taking the larger evidenced value
+    # avoids double counting while retaining immutable historical receipts.
+    return max(settlement_amount, outcome_amount)
 
 
 def payment_application_summary(
@@ -4726,7 +3580,7 @@ def payment_application_summary(
         amount_received=amount_received,
         amount_credited=round_money(to_decimal(settlement.amount)),
         invoice_amount_applied=invoice_amount_applied,
-        prepaid_amount_applied=round_money(to_decimal(settlement.prepaid_amount)),
+        prepaid_amount_applied=_payment_prepaid_service_amount(db, payment),
         unallocated_credit=_payment_unallocated_credit_remaining(db, payment),
         settlement_evidenced=True,
     )

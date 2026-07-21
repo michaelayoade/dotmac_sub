@@ -18,6 +18,8 @@ from app.models.subscriber import SubscriberStatus
 from app.services import control_registry
 from app.services.control_relationships import ControlRelationshipError
 from app.services.prepaid_enforcement_readiness import (
+    mark_prepaid_enforcement_activated,
+    prepaid_enforcement_enablement_block_reason,
     prepaid_enforcement_readiness_block_reason,
     record_prepaid_enforcement_readiness,
 )
@@ -28,6 +30,7 @@ from tests.prepaid_funding_helpers import (
 
 
 def _prepare(db, account, subscription):
+    _enable_renewals(db)
     account.status = SubscriberStatus.active
     account.is_active = True
     account.billing_enabled = True
@@ -37,24 +40,38 @@ def _prepare(db, account, subscription):
     account.deposit = None
     subscription.status = SubscriptionStatus.active
     subscription.billing_mode = BillingMode.prepaid
+    subscription.next_billing_at = None
     db.commit()
     materialize_test_prepaid_opening_balance(db, account.id, Decimal("0.00"))
 
 
-def _set_activation(db, activation_at):
-    db.add(
-        DomainSetting(
-            domain=SettingDomain.collections,
-            key="prepaid_enforcement_activation_at",
-            value_type=SettingValueType.string,
-            value_text=activation_at.isoformat(),
-            is_active=True,
-        )
+def _enable_renewals(db):
+    existing = (
+        db.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.modules)
+        .filter(DomainSetting.key == "billing_prepaid_service_renewals")
+        .one_or_none()
     )
+    if existing is None:
+        db.add(
+            DomainSetting(
+                domain=SettingDomain.modules,
+                key="billing_prepaid_service_renewals",
+                value_type=SettingValueType.boolean,
+                value_text="true",
+                value_json=True,
+                is_active=True,
+            )
+        )
+    else:
+        existing.value_text = "true"
+        existing.value_json = True
+        existing.is_active = True
     db.commit()
 
 
 def test_feature_control_rejects_enable_without_funding_readiness(db_session):
+    _enable_renewals(db_session)
     with pytest.raises(ControlRelationshipError, match="funding readiness"):
         control_registry.update_canonical_feature_controls(
             db_session,
@@ -68,8 +85,6 @@ def test_full_cohort_parity_record_allows_control_enable(
     _prepare(db_session, subscriber_account, subscription)
     captured_at = datetime.now(UTC)
     activation_at = captured_at + timedelta(minutes=10)
-    _set_activation(db_session, activation_at)
-
     record = record_prepaid_enforcement_readiness(
         db_session,
         activation_at=activation_at,
@@ -90,14 +105,43 @@ def test_full_cohort_parity_record_allows_control_enable(
     assert changes[0]["effective"]["to"] is True
 
 
+def test_enforcement_is_continuously_blocked_when_renewal_owner_is_disabled(
+    db_session,
+):
+    assert (
+        prepaid_enforcement_readiness_block_reason(db_session)
+        == "canonical_prepaid_renewals_disabled"
+    )
+
+
+def test_reenable_requires_a_fresh_readiness_generation(
+    db_session, subscriber_account, subscription
+):
+    _prepare(db_session, subscriber_account, subscription)
+    observed_at = datetime.now(UTC)
+    activation_at = observed_at + timedelta(minutes=10)
+    record_prepaid_enforcement_readiness(
+        db_session,
+        activation_at=activation_at,
+        evidence_ref="reconciliation-run:first-generation",
+        verified_by="billing-operations",
+        now=observed_at,
+    )
+    mark_prepaid_enforcement_activated(db_session, activated_at=activation_at)
+    db_session.commit()
+
+    assert (
+        prepaid_enforcement_enablement_block_reason(db_session)
+        == "prepaid_funding_readiness_rearm_required"
+    )
+
+
 def test_missing_materialized_authority_cannot_be_recorded_as_ready(
     db_session, subscriber_account, subscription
 ):
     _prepare(db_session, subscriber_account, subscription)
     captured_at = datetime.now(UTC)
     activation_at = captured_at + timedelta(minutes=10)
-    _set_activation(db_session, activation_at)
-
     db_session.query(PrepaidFundingBaseline).delete()
     db_session.query(PrepaidFundingReconstructionBatch).delete()
     db_session.commit()
@@ -120,8 +164,6 @@ def test_configured_activation_grace_limit_blocks_fresh_free_service(
     db_session.commit()
     captured_at = datetime.now(UTC)
     activation_at = captured_at + timedelta(minutes=10)
-    _set_activation(db_session, activation_at)
-
     with pytest.raises(ValueError, match="activation_grace_exceeds_configured_max"):
         record_prepaid_enforcement_readiness(
             db_session,
@@ -138,7 +180,6 @@ def test_unactivated_readiness_expires_from_snapshot_capture(
     _prepare(db_session, subscriber_account, subscription)
     captured_at = datetime.now(UTC)
     activation_at = captured_at + timedelta(minutes=10)
-    _set_activation(db_session, activation_at)
     record_prepaid_enforcement_readiness(
         db_session,
         activation_at=activation_at,
@@ -162,7 +203,6 @@ def test_cutover_config_change_invalidates_unactivated_readiness(
     _prepare(db_session, subscriber_account, subscription)
     captured_at = datetime.now(UTC)
     activation_at = captured_at + timedelta(minutes=10)
-    _set_activation(db_session, activation_at)
     record_prepaid_enforcement_readiness(
         db_session,
         activation_at=activation_at,
@@ -193,7 +233,6 @@ def test_live_funding_change_invalidates_unactivated_readiness(
     _prepare(db_session, subscriber_account, subscription)
     observed_at = datetime.now(UTC)
     activation_at = observed_at + timedelta(minutes=10)
-    _set_activation(db_session, activation_at)
     record_prepaid_enforcement_readiness(
         db_session,
         activation_at=activation_at,
@@ -229,7 +268,6 @@ def test_reconstruction_supersession_invalidates_unactivated_readiness(
     _prepare(db_session, subscriber_account, subscription)
     observed_at = datetime.now(UTC)
     activation_at = observed_at + timedelta(minutes=10)
-    _set_activation(db_session, activation_at)
     record = record_prepaid_enforcement_readiness(
         db_session,
         activation_at=activation_at,

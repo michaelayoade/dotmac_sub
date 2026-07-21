@@ -151,8 +151,11 @@ do not hand-edit these rows.
 | `financial.billing_profile` | prepaid/postpaid profile resolution | `resolver` | canonical account billing mode ← `customer.accounts`<br>canonical collectible subscription billing modes ← `access.subscription_lifecycle`<br>billing profile protocol ← `financial.billing_profile` | `read_only` | `complete` | finance operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/audits/BILLING_SOT_AUDIT_2026-07-12.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_billing_profile.py`<br>`tests/test_shared_policy_services.py`<br>`tests/test_billing_cleanup_remediation.py`<br>`tests/architecture/test_billing_profile_boundary.py` |
 | `financial.billing_profile` | billing-mode transition policy | `policy` | canonical account billing mode ← `customer.accounts`<br>canonical collectible subscription billing modes ← `access.subscription_lifecycle`<br>canonical offer billing mode ← `service_intent.catalog_policy`<br>billing profile protocol ← `financial.billing_profile` | `read_only` | `complete` | finance operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/audits/BILLING_SOT_AUDIT_2026-07-12.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_billing_profile.py`<br>`tests/test_shared_policy_services.py`<br>`tests/test_billing_cleanup_remediation.py`<br>`tests/architecture/test_billing_profile_boundary.py` |
 | `financial.prepaid_currency` | prepaid enforcement currency policy | `policy` | prepaid enforcement currency setting ← `control.settings_spec`<br>prepaid currency protocol ← `financial.prepaid_currency` | `read_only` | `complete` | billing operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/audits/BILLING_SOT_AUDIT_2026-07-12.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_access_resolution.py`<br>`tests/test_prepaid_threshold_resolver.py`<br>`tests/architecture/test_prepaid_threshold_boundary.py` |
+| `financial.prepaid_service_coverage` | current prepaid service coverage classification | `resolver` | canonical subscription projection ← `access.subscription_lifecycle`<br>funded service entitlement intervals ← `financial.prepaid_service_renewals`<br>explicit granted-service intervals ← `access.subscription_lifecycle` | `read_only` | `complete` | billing and network access | `docs/designs/PREPAID_SERVICE_COVERAGE.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_prepaid_service_coverage.py`<br>`tests/test_prepaid_threshold_resolver.py`<br>`tests/test_prepaid_balance_sweep.py` |
+| `financial.prepaid_service_coverage` | unresolved paid-through projection classification | `resolver` | canonical subscription projection ← `access.subscription_lifecycle`<br>funded service entitlement intervals ← `financial.prepaid_service_renewals`<br>explicit granted-service intervals ← `access.subscription_lifecycle` | `read_only` | `complete` | billing and network access | `docs/designs/PREPAID_SERVICE_COVERAGE.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_prepaid_service_coverage.py`<br>`tests/test_prepaid_threshold_resolver.py`<br>`tests/test_prepaid_balance_sweep.py` |
+| `financial.prepaid_service_coverage_reconciliation` | exact prepaid coverage evidence reconciliation | `reconciler` | canonical prepaid subscription and account state ← `access.subscription_lifecycle`<br>funded service entitlement intervals ← `financial.prepaid_service_renewals`<br>exact paid invoice line periods ← `financial.invoices`<br>exact prepaid renewal adjustments ← `financial.account_adjustments`<br>explicit granted-service intervals ← `access.subscription_lifecycle` | `owner_managed` | `complete` | billing operations | `docs/designs/PREPAID_SERVICE_COVERAGE.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_prepaid_coverage_reconciliation.py`<br>`tests/test_prepaid_enforcement_readiness.py`<br>`tests/architecture/test_prepaid_threshold_boundary.py` |
 | `financial.prepaid_threshold` | prepaid enforcement threshold | `resolver` | canonical account minimum balance ← `customer.accounts`<br>prepaid default minimum setting ← `control.settings_spec`<br>canonical prepaid currency ← `financial.prepaid_currency`<br>prepaid threshold protocol ← `financial.prepaid_threshold` | `read_only` | `complete` | billing operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/audits/BILLING_SOT_AUDIT_2026-07-12.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_prepaid_threshold_resolver.py`<br>`tests/test_access_resolution.py`<br>`tests/architecture/test_prepaid_threshold_boundary.py` |
-| `financial.prepaid_threshold` | unfunded prepaid renewal requirement | `resolver` | canonical collectible prepaid subscriptions ← `access.subscription_lifecycle`<br>canonical paid entitlement coverage ← `financial.prepaid_service_renewals`<br>bounded legacy paid invoice coverage ← `financial.invoices`<br>canonical recurring catalog prices ← `service_intent.catalog_policy`<br>canonical prepaid currency ← `financial.prepaid_currency`<br>prepaid threshold protocol ← `financial.prepaid_threshold` | `read_only` | `complete` | billing operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/audits/BILLING_SOT_AUDIT_2026-07-12.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_prepaid_threshold_resolver.py`<br>`tests/test_access_resolution.py`<br>`tests/architecture/test_prepaid_threshold_boundary.py` |
+| `financial.prepaid_threshold` | unfunded prepaid renewal requirement | `resolver` | canonical collectible prepaid subscriptions ← `access.subscription_lifecycle`<br>canonical current service coverage ← `financial.prepaid_service_coverage`<br>canonical recurring catalog prices ← `service_intent.catalog_policy`<br>canonical prepaid currency ← `financial.prepaid_currency`<br>prepaid threshold protocol ← `financial.prepaid_threshold` | `read_only` | `complete` | billing operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/audits/BILLING_SOT_AUDIT_2026-07-12.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_prepaid_threshold_resolver.py`<br>`tests/test_access_resolution.py`<br>`tests/architecture/test_prepaid_threshold_boundary.py` |
 | `financial.grace_policy` | account/policy/billing-default grace precedence | `policy` | canonical billing profile ← `financial.billing_profile`<br>canonical account grace configuration ← `customer.accounts`<br>canonical reseller policy assignment ← `customer.identity_scope`<br>canonical service policy assignments ← `access.subscription_lifecycle`<br>canonical policy-set configuration ← `service_intent.catalog_policy`<br>canonical grace settings ← `control.settings_spec`<br>grace policy protocol ← `financial.grace_policy` | `read_only` | `complete` | collections operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/audits/BILLING_SOT_AUDIT_2026-07-12.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_grace_policy_sot.py`<br>`tests/test_prepaid_balance_sweep.py`<br>`tests/test_service_status.py`<br>`tests/architecture/test_grace_policy_boundary.py` |
 | `financial.grace_policy` | grace provenance and deadline | `resolver` | canonical billing profile ← `financial.billing_profile`<br>canonical account grace configuration ← `customer.accounts`<br>canonical reseller policy assignment ← `customer.identity_scope`<br>canonical service policy assignments ← `access.subscription_lifecycle`<br>canonical policy-set configuration ← `service_intent.catalog_policy`<br>canonical grace settings ← `control.settings_spec`<br>grace policy protocol ← `financial.grace_policy`<br>evaluation time ← `external:system_clock` | `read_only` | `complete` | collections operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/audits/BILLING_SOT_AUDIT_2026-07-12.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_grace_policy_sot.py`<br>`tests/test_prepaid_balance_sweep.py`<br>`tests/test_service_status.py`<br>`tests/architecture/test_grace_policy_boundary.py` |
 | `financial.grace_policy` | post-grace elapsed-day decision | `policy` | grace policy protocol ← `financial.grace_policy`<br>evaluation time ← `external:system_clock` | `read_only` | `complete` | collections operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/audits/BILLING_SOT_AUDIT_2026-07-12.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_grace_policy_sot.py`<br>`tests/test_prepaid_balance_sweep.py`<br>`tests/test_service_status.py`<br>`tests/architecture/test_grace_policy_boundary.py` |
@@ -956,7 +959,10 @@ Payment creation, settlement, and allocation are one coherent owner contract:
 - Receipt projection boundary: customer receipts and payment-success views use
   the payment owner's application summary. They distinguish gross cash received
   from net customer value credited after provider fees, invoice applications,
-  settlement-owned prepaid application, and remaining payment-backed credit.
+  canonical prepaid-renewal outcomes, and remaining payment-backed credit.
+  New settlements never write service debits or entitlements. Historical inline
+  settlement fields remain immutable evidence and are projected as a fallback;
+  a matching canonical outcome is not double counted.
   Legacy payments without structural settlement evidence retain their bounded
   amount-minus-allocation display and are marked unevidenced by the projection.
 - Allocation-exception boundary: applying the net unallocated credit to the
@@ -974,23 +980,24 @@ Payment creation, settlement, and allocation are one coherent owner contract:
   requires an operator-selected exact ledger row for every active allocation,
   remainder, and prepaid debit, verifies the complete payment partition, links
   evidence, records audit, and posts no new money.
-- Legacy prepaid-cycle repair is a preview-confirm exception owned by
-  `financial.payments`, not a generic allocation shortcut. It requires explicit
-  payment, allocation, invoice, debit, subscription, and replacement-payment
-  identifiers; retires only an unevidenced legacy allocation; reconstructs the
-  missing payment credit, settlement, and entitlement; and records the exact
-  credit-to-debit use in `PaymentPrepaidApplication`. A settled payment consumed
-  after its cash confirmation keeps its immutable `PaymentSettlement` snapshot;
-  the application row is the later-use evidence. The invoice owner alone voids
-  an unpaid superseded draft. Access reconciliation runs only after the financial
-  transaction commits, and an unavailable prepaid baseline is recorded as a
-  deferred recheck instead of rolling back money or granting access.
+- Prepaid renewal boundary: `financial.payments` ends after confirmed cash,
+  invoice allocation, and unallocated-credit evidence are committed. The durable
+  `payment.received` event invokes `financial.prepaid_service_renewals`, which is
+  the sole writer of prepaid service debits, entitlements, billing-anchor
+  advancement, and `prepaid_service.renewed` outcomes. Access enforcement runs
+  after that owner in the event chain. The former inline payment renewal,
+  operator-selected legacy cycle repair, and plan-driven gap reconciler are
+  retired; historical gaps use only
+  `financial.prepaid_service_coverage_reconciliation`, which creates missing
+  entitlement evidence from an exact existing debit or paid invoice line and
+  quarantines ambiguity without posting money.
 - Cutover gate: pending/no-money tests, stale-preview rejection, idempotent
   creation/settlement/allocation replay, exact settlement/allocation/prepaid
-  links, provider replay, explicit historical reconciliation, legacy-cycle
-  repair replay and stale-preview tests, owner-writer architecture tests, and
-  admin/API preview-confirm boundaries must remain green. Generic succeeded
-  status edits and direct settled-allocation commands remain gated.
+  links, provider replay, explicit historical reconciliation, canonical renewal
+  event ordering and idempotency tests, exact coverage-reconciliation tests,
+  owner-writer architecture tests, and admin/API preview-confirm boundaries must
+  remain green. Generic succeeded status edits and direct settled-allocation
+  commands remain gated.
 
 Consolidated payment settlement has a separate scoped owner contract:
 

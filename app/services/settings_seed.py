@@ -1192,12 +1192,6 @@ def seed_collections_settings(db: Session) -> None:
     )
     collections_settings.ensure_by_key(
         db,
-        key="prepaid_enforcement_activation_at",
-        value_type=SettingValueType.string,
-        value_text=os.getenv("PREPAID_ENFORCEMENT_ACTIVATION_AT", ""),
-    )
-    collections_settings.ensure_by_key(
-        db,
         key="prepaid_readiness_max_age_minutes",
         value_type=SettingValueType.integer,
         value_text=os.getenv("PREPAID_READINESS_MAX_AGE_MINUTES", "60"),

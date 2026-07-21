@@ -38,6 +38,7 @@ def _prepare(db, account, subscription) -> None:
     account.billing_enabled = True
     subscription.billing_mode = BillingMode.prepaid
     subscription.status = SubscriptionStatus.active
+    subscription.next_billing_at = None
     db.commit()
     materialize_test_prepaid_opening_balance(db, account.id, Decimal("0.00"))
 
@@ -55,10 +56,11 @@ def _enable(db) -> None:
                 is_active=True,
             ),
             DomainSetting(
-                domain=SettingDomain.collections,
-                key="prepaid_enforcement_activation_at",
-                value_type=SettingValueType.string,
-                value_text=activation_at.isoformat(),
+                domain=SettingDomain.modules,
+                key="billing_prepaid_service_renewals",
+                value_type=SettingValueType.boolean,
+                value_text="true",
+                value_json=True,
                 is_active=True,
             ),
             PrepaidEnforcementReadiness(
@@ -102,7 +104,7 @@ def test_disabled_control_reports_configured_zero_grace_without_writes(
     assert plan.control_enabled is False
     assert "deactivation_days" not in plan.policy.report_values()
     assert plan.policy.activation_error == (
-        "prepaid_enforcement_activation_at_not_configured"
+        "prepaid_enforcement_readiness_not_recorded"
     )
     assert plan.action_counts == {"suspend": 1}
     assert plan.items[0].available_balance == Decimal("0.00")
@@ -189,6 +191,25 @@ def test_plan_reports_parent_status_drift_and_distinct_suspend_action(
     assert item.account_status is SubscriberStatus.new
     assert item.derived_account_status is SubscriberStatus.active
     assert item.account_status_drift is True
+
+
+def test_future_anchor_without_coverage_blocks_adverse_action(
+    db_session, subscriber_account, subscription
+):
+    _prepare(db_session, subscriber_account, subscription)
+    subscription.next_billing_at = _MONDAY_NOON + timedelta(days=20)
+    subscriber_account.prepaid_low_balance_at = _MONDAY_NOON - timedelta(days=4)
+    db_session.commit()
+
+    item = plan_prepaid_enforcement(
+        db_session,
+        now=_MONDAY_NOON,
+        account_ids=[subscriber_account.id],
+    ).items[0]
+
+    assert item.action == PrepaidEnforcementAction.coverage_unresolved
+    assert item.reason_source is PrepaidEnforcementReasonSource.COVERAGE
+    assert item.unresolved_projection_subscription_ids == (subscription.id,)
 
 
 def test_plan_classifies_financial_shield_without_mutation(

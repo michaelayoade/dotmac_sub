@@ -59,7 +59,6 @@ from app.models.billing import (  # noqa: F401
     PaymentAllocationReconciliationException,
     PaymentMethod,
     PaymentMethodType,
-    PaymentPrepaidApplication,
     PaymentProvider,
     PaymentProviderEvent,
     PaymentProviderEventStatus,
@@ -605,6 +604,10 @@ from app.models.portal_message import (  # noqa: F401
     PortalMessage,
     PortalMessageStatus,
     PortalMessageType,
+)
+from app.models.prepaid_coverage import (  # noqa: F401
+    PrepaidCoverageReconciliationItem,
+    PrepaidCoverageReconciliationRun,
 )
 from app.models.prepaid_enforcement import PrepaidEnforcementReadiness  # noqa: F401
 from app.models.prepaid_funding import (  # noqa: F401

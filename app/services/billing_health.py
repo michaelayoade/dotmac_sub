@@ -38,6 +38,7 @@ from app.models.catalog import (
     Subscription,
 )
 from app.models.domain_settings import SettingDomain
+from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.scheduler import ScheduledTask
 from app.models.subscriber import Subscriber
 from app.services import control_registry, settings_spec
@@ -160,6 +161,9 @@ class BillingHealthSnapshot:
     billing_profile_mismatch_count: int = 0
     billing_profile_mixed_count: int = 0
     account_credit_invariant_count: int = 0
+    prepaid_coverage_unresolved_count: int = 0
+    prepaid_coverage_repairable_count: int = 0
+    prepaid_coverage_quarantined_count: int = 0
     scan_min_ratio: float = SCAN_MIN_RATIO
     payment_volume_min_ratio: float = PAYMENT_VOLUME_MIN_RATIO
     payment_baseline_min_daily: float = PAYMENT_BASELINE_MIN_DAILY
@@ -193,6 +197,12 @@ class BillingHealthSnapshot:
             out.append("billing_profile_mixed_modes")
         if self.account_credit_invariant_count > 0:
             out.append("account_credit_invariant_violations")
+        if self.prepaid_coverage_unresolved_count > 0:
+            out.append("prepaid_coverage_unresolved")
+        if self.prepaid_coverage_repairable_count > 0:
+            out.append("prepaid_coverage_repair_required")
+        if self.prepaid_coverage_quarantined_count > 0:
+            out.append("prepaid_coverage_quarantined")
         return out
 
 
@@ -239,6 +249,21 @@ def billing_health_observations(snapshot: BillingHealthSnapshot):  # noqa: ANN20
             "prepaid_balance_sweep_enabled",
             "all",
             1.0 if snapshot.prepaid_balance_sweep_enabled else 0.0,
+        ),
+        (
+            "prepaid_coverage_unresolved",
+            "all",
+            snapshot.prepaid_coverage_unresolved_count,
+        ),
+        (
+            "prepaid_coverage_repair_required",
+            "all",
+            snapshot.prepaid_coverage_repairable_count,
+        ),
+        (
+            "prepaid_coverage_quarantined",
+            "all",
+            snapshot.prepaid_coverage_quarantined_count,
         ),
         (
             "billing_profile_mismatch_accounts",
@@ -483,52 +508,82 @@ def _default_currency(db: Session) -> str:
 
 
 def covered_but_locked(db: Session) -> int:
-    """§6.6 drift: accounts still under a billing lock (overdue/prepaid) whose
-    local ledger available balance is >= 0 — i.e. covered yet suspended
-    (wrongful-suspension drift). Mirrors get_available_balance for the default
-    currency: unallocated credit - unallocated debit - open invoice balance.
-    """
-    sql = text(
-        """
-        WITH locked AS (
-            SELECT DISTINCT s.subscriber_id AS acct
-            FROM enforcement_locks el
-            JOIN subscriptions s ON s.id = el.subscription_id
-            WHERE el.is_active AND el.reason IN ('overdue', 'prepaid')
-        )
-        SELECT count(*) FROM locked WHERE (
-            COALESCE((SELECT sum(le.amount) FROM ledger_entries le
-                WHERE le.account_id = acct AND le.invoice_id IS NULL
-                  AND le.entry_type = 'credit' AND le.is_active
-                  AND le.currency = :currency), 0)
-          - COALESCE((SELECT sum(le.amount) FROM ledger_entries le
-                WHERE le.account_id = acct AND le.invoice_id IS NULL
-                  AND le.entry_type = 'debit' AND le.is_active
-                  AND le.currency = :currency), 0)
-          - COALESCE((SELECT sum(i.balance_due) FROM invoices i
-                WHERE i.account_id = acct AND i.balance_due > 0
-                  AND i.status IN ('issued', 'partially_paid', 'overdue')
-                  AND i.currency = :currency), 0)
-        ) >= 0
-        """
+    """Accounts with an active prepaid lock on exactly covered service."""
+    from app.services.prepaid_service_coverage import (
+        PrepaidCoverageStatus,
+        resolve_prepaid_service_coverage,
     )
-    return int(db.execute(sql, {"currency": _default_currency(db)}).scalar() or 0)
+
+    subscriptions = list(
+        db.scalars(
+            select(Subscription)
+            .join(
+                EnforcementLock,
+                EnforcementLock.subscription_id == Subscription.id,
+            )
+            .where(
+                EnforcementLock.is_active.is_(True),
+                EnforcementLock.reason == EnforcementReason.prepaid,
+            )
+            .distinct()
+        ).all()
+    )
+    decisions = resolve_prepaid_service_coverage(db, subscriptions)
+    return len(
+        {
+            subscription.subscriber_id
+            for subscription in subscriptions
+            if decisions[subscription.id].status == PrepaidCoverageStatus.covered
+        }
+    )
 
 
-def _prepaid_monthly_enabled(db: Session) -> bool:
-    """Same resolution as billing_automation's invoice cycle."""
-    return control_registry.is_enabled(db, "billing.prepaid_monthly_invoicing")
+def prepaid_coverage_unresolved(db: Session) -> int:
+    """Count collectible services with a future anchor but no coverage evidence."""
+    from app.services.prepaid_service_coverage import (
+        PrepaidCoverageStatus,
+        resolve_prepaid_service_coverage,
+    )
+
+    subscriptions = list(
+        db.scalars(
+            select(Subscription).where(
+                Subscription.billing_mode == BillingMode.prepaid,
+                Subscription.status.in_(COLLECTIBLE_SERVICE_STATUSES),
+            )
+        ).all()
+    )
+    decisions = resolve_prepaid_service_coverage(db, subscriptions)
+    return sum(
+        1
+        for decision in decisions.values()
+        if decision.status == PrepaidCoverageStatus.unresolved_projection
+    )
+
+
+def prepaid_coverage_reconciliation_counts(db: Session) -> tuple[int, int]:
+    """Count exact backfills and evidence gaps blocking adverse enforcement."""
+    from app.services.prepaid_coverage_reconciliation import (
+        preview_prepaid_coverage_reconciliation,
+    )
+
+    preview = preview_prepaid_coverage_reconciliation(db)
+    return preview.repairable_count, preview.quarantined_count
+
+
+def _prepaid_renewals_enabled(db: Session) -> bool:
+    """Whether the sole prepaid service-period writer is active."""
+    return control_registry.is_enabled(db, "billing.prepaid_service_renewals")
 
 
 def billing_path_coverage(db: Session) -> tuple[int, int]:
     """§6.1: (unbilled_no_path, active_subs_on_terminal_account).
 
     Mirrors run_invoice_cycle's invoice-row selection. A billable-account active
-    sub is covered iff it is postpaid, or (prepaid_monthly enabled AND its offer
-    is a monthly cycle). Prepaid coverage means draft-until-funded accounting
-    rows, not AR/dunning. ``unbilled_no_path`` is the scalable billing-visibility
-    gap — a prepaid cohort that no enabled path records (flag off, or a
-    non-monthly prepaid offer). ``active_subs_on_terminal_account`` is an active
+    sub is covered iff it is postpaid or the canonical prepaid renewal owner is
+    enabled. ``unbilled_no_path`` is the scalable billing-visibility gap when
+    prepaid renewal ownership is disabled. ``active_subs_on_terminal_account``
+    is an active
     sub whose account is non-billable, so the cycle never touches it (lifecycle
     drift, low volume).
     """
@@ -549,23 +604,15 @@ def billing_path_coverage(db: Session) -> tuple[int, int]:
         or 0
     )
 
-    if _prepaid_monthly_enabled(db):
-        no_path_sql = """
-            SELECT count(*) FROM subscriptions sub
-            JOIN subscribers s ON s.id = sub.subscriber_id
-            JOIN catalog_offers o ON o.id = sub.offer_id
-            WHERE sub.status = 'active'
-              AND s.status IN :billable_statuses
-              AND sub.billing_mode = 'prepaid' AND o.billing_cycle <> 'monthly'
-        """
-    else:
-        no_path_sql = """
-            SELECT count(*) FROM subscriptions sub
-            JOIN subscribers s ON s.id = sub.subscriber_id
-            WHERE sub.status = 'active'
-              AND s.status IN :billable_statuses
-              AND sub.billing_mode = 'prepaid'
-        """
+    if _prepaid_renewals_enabled(db):
+        return 0, int(terminal)
+    no_path_sql = """
+        SELECT count(*) FROM subscriptions sub
+        JOIN subscribers s ON s.id = sub.subscriber_id
+        WHERE sub.status = 'active'
+          AND s.status IN :billable_statuses
+          AND sub.billing_mode = 'prepaid'
+    """
     no_path = (
         db.execute(
             text(no_path_sql).bindparams(
@@ -668,6 +715,9 @@ def billing_health_snapshot(
     account_credit_invariant_count = len(
         AccountCreditApplications.inspect_invariants(db)
     )
+    coverage_repairable_count, coverage_quarantined_count = (
+        prepaid_coverage_reconciliation_counts(db)
+    )
     return BillingHealthSnapshot(
         paid_with_balance_count=pwb_count,
         paid_with_balance_total=pwb_total,
@@ -680,6 +730,9 @@ def billing_health_snapshot(
         payment_volume_collapsed=collapsed,
         runners=tuple(runner_heartbeats(db, now=now)),
         covered_but_locked=covered_but_locked(db),
+        prepaid_coverage_unresolved_count=prepaid_coverage_unresolved(db),
+        prepaid_coverage_repairable_count=coverage_repairable_count,
+        prepaid_coverage_quarantined_count=coverage_quarantined_count,
         unbilled_no_path=no_path,
         active_subs_on_terminal_account=terminal,
         negative_prepaid_balance_count=negative_prepaid_count,

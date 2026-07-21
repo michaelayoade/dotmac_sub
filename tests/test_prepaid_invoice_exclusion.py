@@ -79,7 +79,7 @@ def test_invoice_cycle_skips_prepaid(db_session, subscription, subscriber_accoun
     assert summary["prepaid_skipped"] >= 1
 
 
-def test_invoice_cycle_prepaid_skipped_excludes_enabled_monthly_prepaid(
+def test_retired_prepaid_monthly_control_row_cannot_reactivate_invoice_owner(
     db_session, subscription, subscriber_account, catalog_offer
 ):
     from app.models.domain_settings import DomainSetting, SettingDomain
@@ -102,8 +102,8 @@ def test_invoice_cycle_prepaid_skipped_excludes_enabled_monthly_prepaid(
 
     summary = billing_automation.run_invoice_cycle(db_session, run_at=now_naive)
 
-    assert summary["invoices_created"] == 1
-    assert summary["prepaid_skipped"] == 0
+    assert summary["invoices_created"] == 0
+    assert summary["prepaid_skipped"] == 1
 
 
 def test_renewal_owner_suppresses_legacy_prepaid_invoice_path_even_in_dry_run(
@@ -119,13 +119,6 @@ def test_renewal_owner_suppresses_legacy_prepaid_invoice_path_even_in_dry_run(
     subscription.unit_price = Decimal("100.00")
     db_session.add_all(
         [
-            DomainSetting(
-                domain=SettingDomain.modules,
-                key="billing_prepaid_monthly_invoicing",
-                value_text="true",
-                value_json=True,
-                is_active=True,
-            ),
             DomainSetting(
                 domain=SettingDomain.modules,
                 key="billing_prepaid_service_renewals",
@@ -150,7 +143,7 @@ def test_renewal_owner_suppresses_legacy_prepaid_invoice_path_even_in_dry_run(
     )
 
     assert summary["prepaid_renewals_funded"] == 1
-    assert summary["prepaid_invoice_path_suppressed"] is True
+    assert summary["prepaid_legacy_invoice_path_retired"] is True
     assert summary["invoices_created"] == 0
     assert db_session.query(Invoice).count() == 0
 
@@ -158,8 +151,6 @@ def test_renewal_owner_suppresses_legacy_prepaid_invoice_path_even_in_dry_run(
 def test_invoice_cycle_keeps_prepaid_and_postpaid_invoices_separate(
     db_session, subscription, subscriber_account, catalog_offer
 ):
-    from app.models.domain_settings import DomainSetting, SettingDomain
-
     run_at = _activate(
         db_session, subscription, subscriber_account, BillingMode.prepaid
     )
@@ -176,20 +167,13 @@ def test_invoice_cycle_keeps_prepaid_and_postpaid_invoices_separate(
     db_session.add_all(
         [
             postpaid_subscription,
-            DomainSetting(
-                domain=SettingDomain.modules,
-                key="billing_prepaid_monthly_invoicing",
-                value_text="true",
-                value_json=True,
-                is_active=True,
-            ),
         ]
     )
     db_session.commit()
 
     summary = billing_automation.run_invoice_cycle(db_session, run_at=run_at)
 
-    assert summary["invoices_created"] == 2
+    assert summary["invoices_created"] == 1
     rows = (
         db_session.query(Subscription.billing_mode, Invoice.status)
         .join(InvoiceLine, InvoiceLine.subscription_id == Subscription.id)
@@ -197,10 +181,7 @@ def test_invoice_cycle_keeps_prepaid_and_postpaid_invoices_separate(
         .filter(Invoice.account_id == subscriber_account.id)
         .all()
     )
-    assert set(rows) == {
-        (BillingMode.prepaid, InvoiceStatus.draft),
-        (BillingMode.postpaid, InvoiceStatus.issued),
-    }
+    assert set(rows) == {(BillingMode.postpaid, InvoiceStatus.issued)}
 
 
 def test_overdue_runner_ignores_prepaid_subscription_invoice(

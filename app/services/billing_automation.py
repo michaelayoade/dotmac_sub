@@ -6,7 +6,6 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import ObjectDeletedError
 
@@ -1066,36 +1065,10 @@ def run_invoice_cycle(
     # Query billable active subscriptions. Network/account enforcement states
     # like blocked/suspended must not suppress invoicing: those accounts still
     # owe for active service periods and may need the invoice to clear the block.
-    # Postpaid subscriptions are always invoiced. ``prepaid_monthly`` accounts
-    # (prepaid billing_mode on a MONTHLY-cycle offer) can create advance invoice
-    # rows only when the cutover flag is enabled; those rows stay non-collectible
-    # drafts until funded from the wallet. Default OFF keeps the scheduled cycle
-    # postpaid-only.
-    # Genuine daily/balance prepaid stays off-invoice regardless.
-    prepaid_monthly_invoicing_requested = control_registry.is_enabled(
-        db, "billing.prepaid_monthly_invoicing"
-    )
-    # These are alternative owners for the same prepaid service period. Once
-    # the canonical renewal owner is enabled, the older draft-invoice path must
-    # not run in parallel—even in dry-run—because its credit pool and lifecycle
-    # are not the verified prepaid-funding contract.
-    include_prepaid_monthly = (
-        prepaid_monthly_invoicing_requested and not prepaid_renewals_enabled
-    )
-    # Deposit-is-truth: prepaid advance invoices created by the scheduled runner
-    # are DRAFT (not AR, never overdue, never dunned) until the wallet fully
-    # funds them. Prepaid service enforcement is owned by the balance sweep, so
-    # runner-created prepaid invoices must never behave like postpaid AR.
-    prepaid_runner_draft_until_funded = True
+    # Postpaid subscriptions are invoiced here. The retired prepaid monthly
+    # draft path was a competing owner for the same service period; all prepaid
+    # periods now belong exclusively to ``financial.prepaid_service_renewals``.
     mode_filter = Subscription.billing_mode != BillingMode.prepaid
-    if include_prepaid_monthly:
-        monthly_offer_ids = select(CatalogOffer.id).where(
-            CatalogOffer.billing_cycle == BillingCycle.monthly
-        )
-        mode_filter = or_(
-            Subscription.billing_mode != BillingMode.prepaid,
-            Subscription.offer_id.in_(monthly_offer_ids),
-        )
 
     active_subscriptions = (
         db.query(Subscription)
@@ -1125,26 +1098,12 @@ def run_invoice_cycle(
         .filter(Subscriber.status.in_(BILLABLE_SUBSCRIBER_STATUSES))
         .filter(Subscription.billing_mode == BillingMode.prepaid)
     )
-    if include_prepaid_monthly:
-        prepaid_skipped_query = prepaid_skipped_query.outerjoin(
-            CatalogOffer, CatalogOffer.id == Subscription.offer_id
-        ).filter(
-            or_(
-                CatalogOffer.id.is_(None),
-                CatalogOffer.billing_cycle != BillingCycle.monthly,
-            )
-        )
     prepaid_skipped = prepaid_skipped_query.count()
     if prepaid_skipped:
-        reason = (
-            "non-monthly prepaid offer"
-            if include_prepaid_monthly
-            else "prepaid opt-in disabled"
-        )
         logger.info(
             "Invoice cycle skipped %d prepaid subscription(s) (%s)",
             prepaid_skipped,
-            reason,
+            "owned by canonical prepaid renewals",
         )
 
     subscriptions = active_subscriptions + pending_subscriptions
@@ -1166,9 +1125,7 @@ def run_invoice_cycle(
         "credit_settled_invoices": 0,
         "accounts_restored": 0,
         "zero_amount_advanced": 0,
-        "prepaid_invoice_path_suppressed": (
-            prepaid_monthly_invoicing_requested and prepaid_renewals_enabled
-        ),
+        "prepaid_legacy_invoice_path_retired": True,
         **prepaid_renewal_summary,
     }
 
@@ -1347,12 +1304,7 @@ def run_invoice_cycle(
                 .filter(Invoice.billing_period_end == period_end)
                 .filter(Invoice.is_active.is_(True))
             )
-            if subscription.billing_mode == BillingMode.prepaid:
-                invoice_query = invoice_query.filter(
-                    Invoice.id.in_(prepaid_non_ar_invoice_ids())
-                )
-            else:
-                invoice_query = invoice_query.filter(collectible_ar_invoice_filter())
+            invoice_query = invoice_query.filter(collectible_ar_invoice_filter())
             invoice = invoice_query.first()
             if invoice:
                 invoices[invoice_key] = invoice
@@ -1364,32 +1316,17 @@ def run_invoice_cycle(
                 if account
                 else global_due_days
             )
-            if subscription.billing_mode == BillingMode.prepaid:
-                due_days = 0
-            # Deposit-is-truth: a prepaid advance invoice starts DRAFT with no due
-            # date — it only becomes issued/paid once the wallet funds it in the
-            # finalize pass below. Draft is excluded from AR / overdue-marking /
-            # dunning / available-balance by contract, so an unfunded renewal
-            # never becomes a phantom receivable.
-            prepaid_draft = (
-                prepaid_runner_draft_until_funded
-                and subscription.billing_mode == BillingMode.prepaid
-            )
             invoice = Invoices.stage_system_invoice(
                 db,
                 InvoiceCreate(
                     account_id=subscription.subscriber_id,
                     invoice_number=next_invoice_number(db),
-                    status=(
-                        InvoiceStatus.draft if prepaid_draft else InvoiceStatus.issued
-                    ),
+                    status=InvoiceStatus.issued,
                     currency=currency or "NGN",
                     billing_period_start=period_start,
                     billing_period_end=period_end,
-                    issued_at=None if prepaid_draft else run_at,
-                    due_at=(
-                        None if prepaid_draft else run_at + timedelta(days=due_days)
-                    ),
+                    issued_at=run_at,
+                    due_at=run_at + timedelta(days=due_days),
                 ),
                 reason="scheduled_billing_run",
             )
@@ -1501,72 +1438,6 @@ def run_invoice_cycle(
         # Recalc writes balance_due/status onto the invoice objects; flush so the
         # credit settlement below sees the open balance via its query.
         db.flush()
-
-        # Prepaid draft-until-funded: each freshly-created prepaid DRAFT is either
-        # fully funded from the wallet now (→ issued + paid, one drawdown) or left
-        # as a draft (no AR, no overdue, no dunning). All-or-nothing via
-        # settle_single_invoice_from_credit(only_if_full=True), which is targeted
-        # to the one invoice (safe against migrated historical rows, unlike the
-        # account-wide settle below). See PREPAID_INVOICE_DEPOSIT_ALIGNMENT.md.
-        if prepaid_runner_draft_until_funded and newly_created_invoices:
-            from app.services.billing.reconcile_unposted import (
-                settle_single_invoice_from_credit,
-            )
-
-            for invoice in newly_created_invoices:
-                if invoice.status != InvoiceStatus.draft:
-                    continue
-                if (invoice.total or Decimal("0.00")) <= Decimal("0.00"):
-                    continue  # nothing to fund; leave draft
-                # Optimistically issue so a fully-funded settle lands a proper
-                # issued→paid invoice; revert to draft if the wallet can't cover.
-                Invoices.issue_draft_system(
-                    db,
-                    str(invoice.id),
-                    issued_at=run_at,
-                    due_at=run_at,
-                    reason="prepaid_funding_attempt",
-                    apply_available_credit=False,
-                )
-                settle_single_invoice_from_credit(db, invoice, only_if_full=True)
-                db.flush()
-                _recalculate_invoice_totals(db, invoice)
-                if invoice.status != InvoiceStatus.paid:
-                    # Underfunded — no allocation was made (all-or-nothing); return
-                    # it to a pure draft so it never becomes a phantom receivable.
-                    Invoices.return_unfunded_prepaid_to_draft_system(
-                        db,
-                        str(invoice.id),
-                        reason="prepaid_funding_attempt_underfunded",
-                    )
-                    summary["prepaid_invoices_left_draft"] = (
-                        summary.get("prepaid_invoices_left_draft", 0) + 1
-                    )
-                else:
-                    summary["prepaid_invoices_funded"] = (
-                        summary.get("prepaid_invoices_funded", 0) + 1
-                    )
-                    for entitlement in ensure_prepaid_entitlements_for_paid_invoice(
-                        db, invoice
-                    ):
-                        funded_subscription = db.get(
-                            Subscription, entitlement.subscription_id
-                        )
-                        entitlement_end = _as_utc(entitlement.ends_at)
-                        current_next_billing = (
-                            _as_utc(funded_subscription.next_billing_at)
-                            if funded_subscription is not None
-                            else None
-                        )
-                        if funded_subscription is not None and (
-                            entitlement_end is not None
-                            and (
-                                current_next_billing is None
-                                or current_next_billing < entitlement_end
-                            )
-                        ):
-                            funded_subscription.next_billing_at = entitlement.ends_at
-            db.flush()
 
         # Inline credit settlement is DISABLED by default. It was found to be
         # unsafe on the migrated dataset: per-invoice balance_due/allocations are

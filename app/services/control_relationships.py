@@ -124,11 +124,13 @@ CONTROL_RELATIONSHIPS: tuple[ControlRelationship, ...] = (
         mode=RelationshipMode.chain,
         members=(
             "financial.prepaid_funding_reconciliation",
+            "billing.prepaid_service_renewals",
             "collections.prepaid_balance_enforcement",
         ),
         rule=(
             "A fresh exact-cohort funding reconciliation, including any signed "
-            "quarantine, must be recorded before prepaid enforcement is enabled."
+            "quarantine, and the canonical renewal writer must be active before "
+            "prepaid enforcement is enabled. Every re-enable needs new evidence."
         ),
     ),
     ControlRelationship(
@@ -245,6 +247,7 @@ RELATIONSHIP_SETTING_KEYS = {
 
 CHAINED_EVENT_TYPES = {
     "account_credit.deposited",
+    "payment.received",
     "subscription.activated",
     "subscription.suspended",
     "subscription.resumed",
@@ -262,6 +265,9 @@ CHAINED_EVENT_TYPES = {
 # automatically for chained events.
 EVENT_HANDLER_DEPENDENCIES: dict[str, dict[str, tuple[str, ...]]] = {
     "account_credit.deposited": {
+        "EnforcementHandler": ("PrepaidRenewalHandler",),
+    },
+    "payment.received": {
         "EnforcementHandler": ("PrepaidRenewalHandler",),
     },
     "subscription.activated": {
@@ -666,12 +672,25 @@ def audit_feature_control_relationships(
                 members=("quotes.native_write", "quotes.native_read"),
             )
         )
-    if enabled("collections.prepaid_balance_enforcement"):
+    enforcement_enabled = enabled("collections.prepaid_balance_enforcement")
+    if enforcement_enabled:
         from app.services.prepaid_enforcement_readiness import (
+            prepaid_enforcement_enablement_block_reason,
             prepaid_enforcement_readiness_block_reason,
         )
 
-        reason = prepaid_enforcement_readiness_block_reason(db)
+        currently_enabled = control_registry.resolve_control(
+            db, "collections.prepaid_balance_enforcement"
+        ).own_enabled
+        turning_on = (
+            "collections.prepaid_balance_enforcement" in requested
+            and not currently_enabled
+        )
+        reason = (
+            prepaid_enforcement_enablement_block_reason(db)
+            if turning_on
+            else prepaid_enforcement_readiness_block_reason(db)
+        )
         if reason:
             findings.append(
                 ControlFinding(
@@ -683,6 +702,7 @@ def audit_feature_control_relationships(
                     ),
                     members=(
                         "financial.prepaid_funding_reconciliation",
+                        "billing.prepaid_service_renewals",
                         "collections.prepaid_balance_enforcement",
                     ),
                 )

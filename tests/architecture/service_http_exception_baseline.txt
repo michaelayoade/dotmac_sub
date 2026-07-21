@@ -132,7 +132,6 @@ app/services/notification.py
 app/services/payment_arrangements.py
 app/services/payment_proofs.py
 app/services/portal_session.py
-app/services/prepaid_service_renewals.py
 app/services/projects.py
 app/services/provider_payment_settlements.py
 app/services/provisioning_helpers.py
@@ -153,7 +152,6 @@ app/services/sales/service.py
 app/services/sales_orders.py
 app/services/scheduler.py
 app/services/secrets.py
-app/services/service_extensions.py
 app/services/session_manager.py
 app/services/settings_api_custom.py
 app/services/settings_spec.py

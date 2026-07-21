@@ -1,15 +1,10 @@
 """Fail-closed acceptance check for the prepaid renewal deployment.
 
-This command composes existing owners; it does not derive balances, choose an
-enforcement consequence, or write evidence. It verifies that the expected app
-revision and database head are running, the materialized funding authority and
-readiness gate remain intact, enforcement is enabled, and the exact reviewed
-service-cycle plan still previews ready through
-``financial.prepaid_service_renewals``.
-
-Only aggregate state is emitted. The reviewed plan may contain UUIDs, but this
-command never prints its entries. PostgreSQL sessions are read-only, primary
-execution requires ``--allow-primary``, and the session is always rolled back.
+This command composes canonical owners and performs no writes. It verifies the
+running revision, database head, materialized funding authority, readiness and
+enforcement controls, then fingerprints the complete exact-evidence service
+coverage cohort. PostgreSQL sessions are read-only, primary execution requires
+``--allow-primary``, and the session is always rolled back.
 """
 
 from __future__ import annotations
@@ -18,8 +13,7 @@ import argparse
 import json
 import os
 from dataclasses import asdict, dataclass
-from decimal import Decimal
-from pathlib import Path
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import func, select, text
@@ -32,6 +26,9 @@ from app.models.prepaid_funding import (
     PrepaidFundingReconstructionBatch,
 )
 from app.services import control_registry
+from app.services.prepaid_coverage_reconciliation import (
+    preview_prepaid_coverage_reconciliation,
+)
 from app.services.prepaid_enforcement_planner import (
     prepaid_balance_enforcement_enabled,
     resolve_prepaid_enforcement_policy,
@@ -40,13 +37,6 @@ from app.services.prepaid_enforcement_readiness import (
     prepaid_enforcement_readiness_block_reason,
 )
 from scripts.one_off.billing_alignment_audit import _configure_read_only_session
-from scripts.one_off.reconcile_prepaid_service_cycle_gaps import (
-    ServiceCyclePlan,
-    _money,
-    _read_json,
-    parse_reconciliation_plan,
-    preview_reconciliation,
-)
 
 
 @dataclass(frozen=True)
@@ -54,10 +44,8 @@ class AcceptanceExpectation:
     git_sha: str
     alembic_head: str
     minimum_active_baselines: int
-    plan_sha256: str
-    plan_entry_count: int
-    plan_total_amount: str
-    plan_already_reconciled: int
+    coverage_fingerprint: str
+    coverage_subscription_count: int
     renewal_control_enabled: bool
 
 
@@ -73,22 +61,30 @@ class AcceptanceObservation:
     activation_at: str | None
     activation_error: str | None
     readiness_block_reason: str | None
-    plan_sha256: str
-    plan_entries: int
-    plan_total_amount: str
-    plan_accounts: int
-    plan_blocked_accounts: int
-    plan_already_reconciled: int
-    plan_ready: bool
+    coverage_fingerprint: str
+    coverage_subscription_count: int
+    coverage_repairable_count: int
+    coverage_quarantined_count: int
+    coverage_blocker_count: int
 
 
 def _runtime_git_sha() -> str | None:
     return os.getenv("GIT_SHA") or os.getenv("COMMIT_SHA")
 
 
-def _collect_observation(db: Session, plan: ServiceCyclePlan) -> AcceptanceObservation:
+def _timestamp(value: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("timestamp must be ISO 8601") from exc
+    if parsed.tzinfo is None:
+        raise argparse.ArgumentTypeError("timestamp must include a timezone offset")
+    return parsed
+
+
+def _collect_observation(db: Session, *, as_of: datetime) -> AcceptanceObservation:
     policy = resolve_prepaid_enforcement_policy(db)
-    preview = preview_reconciliation(db, plan)
+    coverage = preview_prepaid_coverage_reconciliation(db, as_of=as_of)
     alembic_heads = tuple(
         sorted(
             str(value)
@@ -133,13 +129,11 @@ def _collect_observation(db: Session, plan: ServiceCyclePlan) -> AcceptanceObser
         ),
         activation_error=policy.activation_error,
         readiness_block_reason=prepaid_enforcement_readiness_block_reason(db),
-        plan_sha256=str(preview["plan_sha256"]),
-        plan_entries=int(str(preview["entries"])),
-        plan_total_amount=str(preview["total_amount"]),
-        plan_accounts=int(str(preview["accounts"])),
-        plan_blocked_accounts=int(str(preview["blocked_accounts"])),
-        plan_already_reconciled=int(str(preview["already_reconciled"])),
-        plan_ready=bool(preview["ready"]),
+        coverage_fingerprint=coverage.fingerprint,
+        coverage_subscription_count=len(coverage.subscription_ids),
+        coverage_repairable_count=coverage.repairable_count,
+        coverage_quarantined_count=coverage.quarantined_count,
+        coverage_blocker_count=coverage.blocker_count,
     )
 
 
@@ -164,18 +158,16 @@ def evaluate_acceptance(
             and observation.activation_error is None
         ),
         "readiness_unblocked": observation.readiness_block_reason is None,
-        "plan_sha256": observation.plan_sha256 == expectation.plan_sha256,
-        "plan_entry_count": (observation.plan_entries == expectation.plan_entry_count),
-        "plan_total_amount": (
-            _money(observation.plan_total_amount)
-            == _money(expectation.plan_total_amount)
+        "coverage_fingerprint": (
+            observation.coverage_fingerprint == expectation.coverage_fingerprint
         ),
-        "plan_unblocked": (
-            observation.plan_ready and observation.plan_blocked_accounts == 0
+        "coverage_subscription_count": (
+            observation.coverage_subscription_count
+            == expectation.coverage_subscription_count
         ),
-        "plan_reconciliation_state": (
-            observation.plan_already_reconciled == expectation.plan_already_reconciled
-        ),
+        "coverage_repair_complete": observation.coverage_repairable_count == 0,
+        "coverage_quarantine_empty": observation.coverage_quarantined_count == 0,
+        "coverage_unblocked": observation.coverage_blocker_count == 0,
     }
     return {
         "ready": all(checks.values()),
@@ -188,34 +180,29 @@ def evaluate_acceptance(
 def _expectation(args: argparse.Namespace) -> AcceptanceExpectation:
     if args.minimum_active_baselines < 1:
         raise ValueError("minimum active baselines must be positive")
-    if args.expected_entry_count < 1:
-        raise ValueError("expected entry count must be positive")
-    if not 0 <= args.expected_already_reconciled <= args.expected_entry_count:
-        raise ValueError("expected already-reconciled count must be within the plan")
-    if len(args.expected_plan_sha256) != 64:
-        raise ValueError("expected plan SHA-256 must contain 64 characters")
+    if args.expected_subscription_count < 1:
+        raise ValueError("expected subscription count must be positive")
+    fingerprint = args.expected_coverage_fingerprint.strip()
+    if len(fingerprint) != 64:
+        raise ValueError("expected coverage fingerprint must contain 64 characters")
     return AcceptanceExpectation(
         git_sha=args.expected_git_sha.strip(),
         alembic_head=args.expected_alembic_head.strip(),
         minimum_active_baselines=args.minimum_active_baselines,
-        plan_sha256=args.expected_plan_sha256.strip(),
-        plan_entry_count=args.expected_entry_count,
-        plan_total_amount=f"{_money(args.expected_total_amount):.2f}",
-        plan_already_reconciled=args.expected_already_reconciled,
+        coverage_fingerprint=fingerprint,
+        coverage_subscription_count=args.expected_subscription_count,
         renewal_control_enabled=args.expected_renewal_control == "enabled",
     )
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--plan", type=Path, required=True)
+    parser.add_argument("--as-of", type=_timestamp, required=True)
     parser.add_argument("--expected-git-sha", required=True)
     parser.add_argument("--expected-alembic-head", required=True)
     parser.add_argument("--minimum-active-baselines", type=int, required=True)
-    parser.add_argument("--expected-plan-sha256", required=True)
-    parser.add_argument("--expected-entry-count", type=int, required=True)
-    parser.add_argument("--expected-total-amount", type=Decimal, required=True)
-    parser.add_argument("--expected-already-reconciled", type=int, default=0)
+    parser.add_argument("--expected-coverage-fingerprint", required=True)
+    parser.add_argument("--expected-subscription-count", type=int, required=True)
     parser.add_argument(
         "--expected-renewal-control",
         choices=("enabled", "disabled"),
@@ -226,7 +213,6 @@ def main() -> int:
     args = parser.parse_args()
 
     expectation = _expectation(args)
-    plan = parse_reconciliation_plan(_read_json(args.plan))
     db = SessionLocal()
     try:
         _configure_read_only_session(
@@ -234,7 +220,7 @@ def main() -> int:
             statement_timeout_ms=args.statement_timeout_ms,
             allow_primary=args.allow_primary,
         )
-        observation = _collect_observation(db, plan)
+        observation = _collect_observation(db, as_of=args.as_of)
         report = evaluate_acceptance(observation, expectation)
         db.rollback()
         print(json.dumps(report, indent=2, sort_keys=True))

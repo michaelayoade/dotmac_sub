@@ -275,8 +275,25 @@ def _process_account(
                 available_balance=decision.available_balance,
                 required_balance=decision.required_balance,
                 currency=decision.currency,
+                covered_subscription_ids=decision.covered_subscription_ids,
+                actionable_uncovered_subscription_ids=(
+                    decision.actionable_uncovered_subscription_ids
+                ),
+                unresolved_projection_subscription_ids=(
+                    decision.unresolved_projection_subscription_ids
+                ),
             ),
         )
+    if decision.action == PrepaidEnforcementAction.coverage_unresolved:
+        logger.error(
+            "prepaid_balance_sweep blocked adverse action for account %s: %s (%s)",
+            account.id,
+            decision.reason,
+            ",".join(
+                str(value) for value in decision.unresolved_projection_subscription_ids
+            ),
+        )
+        return "coverage_unresolved"
     if decision.action == PrepaidEnforcementAction.deferred:
         return "deferred"
     if decision.action == PrepaidEnforcementAction.shielded:
@@ -370,6 +387,7 @@ def run_prepaid_balance_sweep(
         "activation_blocked": 0,
         "readiness_blocked": 0,
         "billing_profile_invalid": 0,
+        "coverage_unresolved": 0,
         "funding_quarantined": 0,
         "notice_blocked": 0,
         "state_drift": 0,

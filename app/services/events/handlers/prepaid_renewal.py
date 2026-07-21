@@ -1,4 +1,4 @@
-"""Request the canonical prepaid service consequence after credit application."""
+"""Request the canonical prepaid service consequence after confirmed funding."""
 
 from __future__ import annotations
 
@@ -15,7 +15,9 @@ from app.services.prepaid_service_renewals import (
 
 logger = logging.getLogger(__name__)
 
-HANDLED_EVENT_TYPES = frozenset({EventType.account_credit_deposited})
+HANDLED_EVENT_TYPES = frozenset(
+    {EventType.account_credit_deposited, EventType.payment_received}
+)
 
 
 class PrepaidRenewalHandler:
@@ -44,7 +46,7 @@ class PrepaidRenewalHandler:
             account_id=event.account_id,
             effective_at=effective_at,
             funding_currency=payment.currency,
-            evidence_ref=f"account-credit-event:{event.event_id}",
+            evidence_ref=f"{event.event_type.value}:{event.event_id}",
             trigger_payment_id=payment.id,
         )
         logger.info(

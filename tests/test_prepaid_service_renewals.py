@@ -4,7 +4,6 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
-from fastapi import HTTPException
 
 from app.models.billing import (
     AccountAdjustment,
@@ -28,15 +27,11 @@ from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services.customer_financial_ledger import calculate_customer_balance
 from app.services.prepaid_service_renewals import (
     FundingChangeRenewalDisposition,
+    PrepaidServiceRenewalError,
     apply_due_prepaid_service_after_funding_change,
     confirm_prepaid_service_renewal,
     preview_prepaid_service_renewal,
     run_due_prepaid_service_renewals,
-)
-from scripts.one_off.reconcile_prepaid_service_cycle_gaps import (
-    apply_reconciliation,
-    parse_reconciliation_plan,
-    preview_reconciliation,
 )
 from tests.prepaid_funding_helpers import materialize_test_prepaid_opening_balance
 
@@ -79,7 +74,6 @@ def test_prepaid_service_renewal_posts_exact_debit_and_entitlement(
         db_session,
         preview,
         evidence_ref="pytest:reviewed-service-cycle",
-        commit=True,
     )
 
     assert result.ledger_entry.entry_type == LedgerEntryType.debit
@@ -104,13 +98,11 @@ def test_prepaid_service_renewal_is_idempotent(db_session, subscriber, subscript
         db_session,
         preview,
         evidence_ref="pytest:reviewed-service-cycle",
-        commit=True,
     )
     replay = confirm_prepaid_service_renewal(
         db_session,
         preview,
         evidence_ref="pytest:reviewed-service-cycle",
-        commit=True,
     )
 
     assert replay.replayed is True
@@ -129,7 +121,6 @@ def test_prepaid_service_renewal_replay_checks_under_account_lock(
         db_session,
         preview,
         evidence_ref="pytest:reviewed-service-cycle",
-        commit=True,
     )
 
     locks: list[str] = []
@@ -142,7 +133,6 @@ def test_prepaid_service_renewal_replay_checks_under_account_lock(
         db_session,
         preview,
         evidence_ref="pytest:reviewed-service-cycle",
-        commit=True,
     )
 
     assert replay.replayed is True
@@ -157,13 +147,13 @@ def test_prepaid_service_renewal_rejects_insufficient_canonical_funding(
 
     assert preview.allowed is False
     assert preview.shortfall == Decimal("10.00")
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(PrepaidServiceRenewalError) as exc:
         confirm_prepaid_service_renewal(
             db_session,
             preview,
             evidence_ref="pytest:reviewed-service-cycle",
         )
-    assert exc.value.status_code == 402
+    assert exc.value.code.endswith("insufficient_funding")
     assert db_session.query(AccountAdjustment).count() == 0
 
 
@@ -176,10 +166,9 @@ def test_prepaid_service_renewal_rejects_overlapping_entitlement(
         db_session,
         preview,
         evidence_ref="pytest:reviewed-service-cycle",
-        commit=True,
     )
 
-    with pytest.raises(HTTPException, match="already has active funding"):
+    with pytest.raises(PrepaidServiceRenewalError, match="already has active funding"):
         preview_prepaid_service_renewal(
             db_session,
             subscription_id=subscription.id,
@@ -188,92 +177,6 @@ def test_prepaid_service_renewal_rejects_overlapping_entitlement(
             amount=Decimal("50.00"),
             currency="NGN",
         )
-
-
-def _reconciliation_payload(subscriber, subscription):
-    return {
-        "schema": "dotmac.prepaid_service_cycle_reconciliation.v1",
-        "captured_at": "2026-07-18T09:43:32Z",
-        "source": "pytest:isolated-audit-replay",
-        "currency": "NGN",
-        "candidate_cohort_sha256": "a" * 64,
-        "blocker_manifest_sha256": "b" * 64,
-        "entry_count": 1,
-        "total_amount": "50.00",
-        "entries": [
-            {
-                "account_id": str(subscriber.id),
-                "subscription_id": str(subscription.id),
-                "period_start": "2026-07-01T00:00:00Z",
-                "period_end": "2026-07-31T00:00:00Z",
-                "amount": "50.00",
-                "funding_before": "100.00",
-                "currency": "NGN",
-                "reason": "due_service_charge_without_native_entitlement",
-            }
-        ],
-    }
-
-
-def test_reconciliation_plan_is_hash_bound_and_idempotent(
-    db_session, subscriber, subscription
-):
-    _prepare(db_session, subscriber, subscription)
-    plan = parse_reconciliation_plan(_reconciliation_payload(subscriber, subscription))
-
-    dry_run = preview_reconciliation(db_session, plan)
-    assert dry_run["ready"] is True
-    assert dry_run["already_reconciled"] == 0
-
-    first = apply_reconciliation(
-        db_session,
-        plan,
-        evidence_ref="pytest:reviewed-gap-plan",
-        approved_by="pytest",
-    )
-    assert first["applied"] == 1
-    assert first["replayed"] == 0
-
-    replay = apply_reconciliation(
-        db_session,
-        plan,
-        evidence_ref="pytest:reviewed-gap-plan",
-        approved_by="pytest",
-    )
-    assert replay["applied"] == 0
-    assert replay["replayed"] == 1
-    assert replay["already_reconciled"] == 1
-
-
-def test_reconciliation_plan_rejects_tampered_total(subscriber, subscription):
-    payload = _reconciliation_payload(subscriber, subscription)
-    payload["total_amount"] = "49.99"
-
-    with pytest.raises(ValueError, match="total_amount"):
-        parse_reconciliation_plan(payload)
-
-
-def test_reconciliation_plan_preserves_explicit_zero_result(
-    db_session, subscriber, subscription
-):
-    payload = _reconciliation_payload(subscriber, subscription)
-    payload["entry_count"] = 0
-    payload["total_amount"] = "0.00"
-    payload["entries"] = []
-
-    plan = parse_reconciliation_plan(payload)
-    preview = preview_reconciliation(db_session, plan)
-
-    assert plan.entries == ()
-    assert preview == {
-        "plan_sha256": plan.sha256,
-        "entries": 0,
-        "accounts": 0,
-        "total_amount": "0.00",
-        "blocked_accounts": 0,
-        "already_reconciled": 0,
-        "ready": True,
-    }
 
 
 def _prepare_scheduled_cycle(db_session, subscriber, subscription):

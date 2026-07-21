@@ -452,10 +452,13 @@ def test_current_prepaid_invoice_payment_keeps_existing_period_anchor(db_session
         SubscriptionStatus.suspended,
     ],
 )
-def test_direct_prepaid_credit_renewal_creates_entitlement(
+def test_canonical_prepaid_funding_renewal_creates_entitlement(
     db_session, subscription_status
 ):
-    from app.services.billing.payments import apply_prepaid_service_credit
+    from app.services.prepaid_service_renewals import (
+        FundingChangeRenewalDisposition,
+        apply_due_prepaid_service_after_funding_change,
+    )
 
     subscriber = _make_subscriber(db_session, status=SubscriberStatus.active)
     paid_at = datetime(2026, 8, 5, 14, 30, tzinfo=UTC)
@@ -500,7 +503,15 @@ def test_direct_prepaid_credit_renewal_creates_entitlement(
     )
     db_session.commit()
 
-    assert apply_prepaid_service_credit(db_session, payment) is True
+    result = apply_due_prepaid_service_after_funding_change(
+        db_session,
+        account_id=subscriber.id,
+        effective_at=paid_at,
+        funding_currency="NGN",
+        evidence_ref=f"pytest:payment:{payment.id}",
+        trigger_payment_id=payment.id,
+    )
+    assert result.disposition == FundingChangeRenewalDisposition.funded
     db_session.flush()
 
     db_session.refresh(subscription)
@@ -520,7 +531,7 @@ def test_direct_prepaid_credit_renewal_creates_entitlement(
         )
         .one()
     )
-    assert event.payload["source"] == "direct_payment"
+    assert event.payload["source"] == "account_credit"
     assert event.payload["trigger_payment_id"] == str(payment.id)
     assert (
         event.payload["renewed_through"] == datetime(2026, 9, 5, tzinfo=UTC).isoformat()
