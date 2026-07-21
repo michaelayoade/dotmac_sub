@@ -849,3 +849,27 @@ def fiber_support_lifecycle_presentation(status: object | None) -> StatusPresent
 def fiber_support_inspection_presentation(status: object | None) -> StatusPresentation:
     """Server-owned presentation for a FiberSupportStructure.inspection_status."""
     return _presentation(_status_value(status), _FIBER_SUPPORT_INSPECTION_PRESENTATIONS)
+
+
+# --- Monitoring alarm presentations (Alert enums have no projector) ---
+_ALARM_SEVERITY_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    "info": ("Info", StatusTone.info, StatusIcon.info),
+    "warning": ("Warning", StatusTone.warning, StatusIcon.alert),
+    "critical": ("Critical", StatusTone.negative, StatusIcon.alert),
+}
+
+_ALARM_STATUS_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    "open": ("Open", StatusTone.warning, StatusIcon.alert),
+    "acknowledged": ("Acknowledged", StatusTone.info, StatusIcon.clock),
+    "resolved": ("Resolved", StatusTone.positive, StatusIcon.check),
+}
+
+
+def alarm_severity_presentation(severity: object | None) -> StatusPresentation:
+    """Server-owned presentation for a monitoring Alert.severity."""
+    return _presentation(_status_value(severity), _ALARM_SEVERITY_PRESENTATIONS)
+
+
+def alarm_status_presentation(status: object | None) -> StatusPresentation:
+    """Server-owned presentation for a monitoring Alert.status."""
+    return _presentation(_status_value(status), _ALARM_STATUS_PRESENTATIONS)

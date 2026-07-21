@@ -9,6 +9,7 @@ from app.db import get_db
 from app.services import web_network_alarm_rules as web_network_alarm_rules_service
 from app.services import web_network_core_runtime as web_network_core_runtime_service
 from app.services import web_network_monitoring as web_network_monitoring_service
+from app.services import web_network_noc as web_network_noc_service
 from app.services.auth_dependencies import require_permission
 from app.web.request_parsing import parse_form_data_sync
 
@@ -804,3 +805,17 @@ def monitoring_device_bulk_action(
     return HTMLResponse(
         web_network_monitoring_service.render_bulk_result(stats, action)
     )
+
+
+@router.get(
+    "/noc",
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
+def noc_queue_page(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Unified NOC triage queue, projected from the monitoring owners."""
+    context = _base_context(request, db, active_page="noc")
+    context.update(web_network_noc_service.noc_queue_data(db))
+    return templates.TemplateResponse("admin/network/noc/index.html", context)
