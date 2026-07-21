@@ -174,8 +174,12 @@ def upgrade() -> None:
         op.create_table(
             "provisioning_readiness_decisions",
             sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
-            sa.Column("service_order_id", postgresql.UUID(as_uuid=True), nullable=False),
-            sa.Column("provisioning_run_id", postgresql.UUID(as_uuid=True), nullable=True),
+            sa.Column(
+                "service_order_id", postgresql.UUID(as_uuid=True), nullable=False
+            ),
+            sa.Column(
+                "provisioning_run_id", postgresql.UUID(as_uuid=True), nullable=True
+            ),
             sa.Column("command_id", postgresql.UUID(as_uuid=True), nullable=False),
             sa.Column("correlation_id", postgresql.UUID(as_uuid=True), nullable=False),
             sa.Column(
