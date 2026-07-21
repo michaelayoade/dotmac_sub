@@ -68,8 +68,10 @@ def test_retired_prepaid_payment_application_runtime_stays_removed() -> None:
 
     retirement = _read("alembic/versions/394_retire_payment_prepaid_applications.py")
     assert 'down_revision = "393_prepaid_coverage_reconciliation"' in retirement
-    assert 'op.drop_table("payment_prepaid_applications")' in retirement
-    assert "contains evidence" in retirement
+    assert "op.rename_table(_LEGACY_TABLE, _ARCHIVE_TABLE)" in retirement
+    assert '_ARCHIVE_TABLE = "payment_prepaid_applications_archive"' in retirement
+    assert "op.drop_table" not in retirement
+    assert "both " in retirement and " exist" in retirement
 
 
 def test_superseded_prepaid_gap_tools_stay_removed() -> None:
