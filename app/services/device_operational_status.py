@@ -219,6 +219,50 @@ def derive_ont_operational_status(ont, *, now: datetime | None = None):
 _LIFECYCLE_OVERRIDE = {"maintenance", "decommissioned", "retired"}
 
 
+_ROUTER_STATE_MAP = {
+    "online": UP,
+    "degraded": DEGRADED,
+    "offline": DOWN,
+    "unreachable": DOWN,
+    "maintenance": MAINTENANCE,
+}
+
+
+def derive_nas_operational_status(
+    nas, *, linked_device=None, warm_stale: bool = False
+) -> OperationalStatus:
+    """Derive a NAS/BNG operational status into the shared 4-bucket vocabulary.
+
+    Ownership: when the NAS links a monitored ``NetworkDevice`` (``network_device_id``),
+    that device's real liveness is authoritative and we delegate to
+    ``derive_operational_status``. Otherwise the NAS admin lifecycle + health
+    fields are the only signal. One owner per derived field (SoT).
+    """
+    if linked_device is not None:
+        return derive_operational_status(linked_device, warm_stale=warm_stale)
+    admin = _enum_value(getattr(nas, "status", None))
+    if admin in ("maintenance", "decommissioned"):
+        return OperationalStatus(MAINTENANCE, f"admin_{admin}", admin, False, None)
+    if admin == "offline":
+        return OperationalStatus(DOWN, "admin_offline", admin, False, None)
+    health = _enum_value(getattr(nas, "health_status", None))
+    if health == "unhealthy":
+        return OperationalStatus(DOWN, "health_unhealthy", admin, False, None)
+    if health == "degraded":
+        return OperationalStatus(DEGRADED, "health_degraded", admin, False, None)
+    if admin == "active":
+        return OperationalStatus(UP, "admin_active", admin, False, None)
+    return OperationalStatus(DOWN, "nas_status_unknown", admin, False, None)
+
+
+def derive_router_operational_status(router) -> OperationalStatus:
+    """Derive a MikroTik router status from the synced ``RouterStatus`` field."""
+    admin = _enum_value(getattr(router, "status", None))
+    state = _ROUTER_STATE_MAP.get(admin or "", DOWN)
+    reason = f"router_{admin}" if admin else "router_status_unknown"
+    return OperationalStatus(state, reason, admin, False, None)
+
+
 def derive_operational_status(
     device, *, warm_stale: bool, coverage=None
 ) -> OperationalStatus:

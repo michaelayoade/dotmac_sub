@@ -1103,11 +1103,13 @@ def _create_service_order_for_subscription(db: Session, subscription: Subscripti
     requested_by_contact_id = None
 
     try:
+        idempotency_key = f"subscription:{subscription.id}:new_install"
         payload = ServiceOrderCreate(
             account_id=subscription.subscriber_id,
             subscription_id=subscription.id,
             requested_by_contact_id=requested_by_contact_id,
             status=ServiceOrderStatus.submitted,
+            idempotency_key=idempotency_key,
             notes=f"Auto-created for subscription: {subscription.offer.name if subscription.offer else subscription.id}",
         )
         provisioning_service.service_orders.create(db, payload)
@@ -1169,7 +1171,12 @@ class Subscriptions(ListResponseMixin):
         return subscription
 
     @staticmethod
-    def create(db: Session, payload: SubscriptionCreate):
+    def create(
+        db: Session,
+        payload: SubscriptionCreate,
+        *,
+        create_service_order: bool = True,
+    ):
         catalog_validators.validate_subscription_links(
             db,
             str(payload.subscriber_id),
@@ -1325,7 +1332,7 @@ class Subscriptions(ListResponseMixin):
         db.refresh(subscription)
 
         # Auto-create Service Order for pending subscriptions that need provisioning
-        if subscription.status == SubscriptionStatus.pending:
+        if create_service_order and subscription.status == SubscriptionStatus.pending:
             _create_service_order_for_subscription(db, subscription)
 
         # Emit subscription.created event

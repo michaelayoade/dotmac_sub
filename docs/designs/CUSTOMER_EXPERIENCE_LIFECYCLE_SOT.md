@@ -1,5 +1,11 @@
 # Customer Experience Lifecycle Source of Truth
 
+Provisioning now joins this graph through native `ServiceOrder.project_id` and
+`ServiceOrder.activation_project_task_id`. The customer project projection
+includes the latest persisted provisioning readiness decision and named checks;
+it never re-evaluates activation policy. See
+`docs/designs/PROVISIONING_LIFECYCLE_SOT.md`.
+
 Status: implemented by migration `386_customer_experience_lifecycle_sot`.
 
 ## Scope

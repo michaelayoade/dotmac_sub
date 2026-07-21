@@ -1,0 +1,167 @@
+{#
+  Triage workspace spine (archetype A) — dotmac_sub admin.
+  Spec: docs/design/ADMIN_UI_ARCHETYPES.md
+
+  Pure projection: these macros render server-owned fields and link to the
+  owning service's endpoints. They never decide state, tone, or color. Status
+  tone comes from the shared semantic renderer (status_badge / status-tone-*);
+  brand color comes from tokens; there are NO hardcoded status colors here.
+#}
+{% from "components/ui/macros.html" import status_badge, status_presentation_badge %}
+
+{# Compact timestamp formatter (no backend filter dependency). Accepts a
+   datetime or None; renders empty for None. #}
+{% macro ts(dt) %}{% if dt %}{{ dt.strftime('%b %d, %H:%M') }}{% endif %}{% endmacro %}
+
+{# ============================================================
+   TRIAGE SHELL — three-pane full-height layout.
+   list · thread · context. Panes scroll independently; the page
+   itself does not scroll. Context hides < xl, list hides on mobile
+   when a conversation is open (data-triage-mode="detail").
+   Use inside a full-bleed page that overrides admin.html main_body.
+   ============================================================ #}
+{% macro triage_shell(mode="list") %}
+<div class="flex h-full min-h-0 w-full overflow-hidden bg-slate-100 dark:bg-slate-950"
+     data-triage-shell data-triage-mode="{{ mode }}">
+    {{ caller() }}
+</div>
+{% endmacro %}
+
+{% macro triage_list() %}
+<section class="flex w-full min-w-0 shrink-0 flex-col border-r border-slate-200 bg-white md:w-[21rem] lg:w-[23rem] dark:border-slate-800 dark:bg-slate-900 [[data-triage-mode=detail]_&]:hidden md:[[data-triage-mode=detail]_&]:flex"
+         data-triage-pane="list" aria-label="Conversation queue">
+    {{ caller() }}
+</section>
+{% endmacro %}
+
+{% macro triage_thread() %}
+<section class="flex min-w-0 flex-1 flex-col bg-slate-50 dark:bg-slate-950" data-triage-pane="thread">
+    {{ caller() }}
+</section>
+{% endmacro %}
+
+{% macro triage_context() %}
+<aside class="hidden w-[20rem] shrink-0 flex-col overflow-y-auto border-l border-slate-200 bg-white xl:flex dark:border-slate-800 dark:bg-slate-900"
+       data-triage-pane="context" aria-label="Conversation context">
+    {{ caller() }}
+</aside>
+{% endmacro %}
+
+{# Compact sticky column header, flat. #}
+{% macro pane_header(title, subtitle="") %}
+<header class="flex min-h-[3.25rem] items-center justify-between gap-3 border-b border-slate-200 px-4 py-2.5 dark:border-slate-800">
+    <div class="min-w-0">
+        <h2 class="truncate font-display text-sm font-semibold text-slate-900 dark:text-white">{{ title }}</h2>
+        {% if subtitle %}<p class="truncate text-[11px] text-slate-500 dark:text-slate-400">{{ subtitle }}</p>{% endif %}
+    </div>
+    {% if caller %}<div class="flex shrink-0 items-center gap-1.5">{{ caller() }}</div>{% endif %}
+</header>
+{% endmacro %}
+
+{# Rail section wrapper. #}
+{% macro ctx_section(label) %}
+<div class="border-b border-slate-100 px-4 py-3.5 dark:border-slate-800/70">
+    <p class="mb-2 text-[10.5px] font-semibold uppercase tracking-[0.12em] text-slate-400 dark:text-slate-500">{{ label }}</p>
+    {{ caller() }}
+</div>
+{% endmacro %}
+
+{# ============================================================
+   CONVERSATION LIST ITEM
+   Consumes an InboxConversationListRow. Every field is real.
+   Loads the detail into #triage-detail via HTMX; falls back to a
+   normal link (which the server redirects to the workspace).
+   ============================================================ #}
+{% macro conversation_list_item(row, active_id="") %}
+{% set is_active = (row.id | string) == (active_id | string) %}
+<a href="/admin/inbox/{{ row.id }}"
+   hx-get="/admin/inbox/{{ row.id }}"
+   hx-target="#triage-detail"
+   hx-swap="innerHTML"
+   hx-push-url="true"
+   class="conversation-item block border-b border-slate-100 px-4 py-3 transition-colors dark:border-slate-800/70
+          {% if is_active %}bg-accent-50 dark:bg-accent-900/20{% else %}hover:bg-slate-50 dark:hover:bg-slate-800/50{% endif %}"
+   {% if is_active %}aria-current="true"{% endif %}
+   data-conversation-id="{{ row.id }}">
+    <div class="flex items-start gap-2.5">
+        <span class="mt-1.5 h-2 w-2 shrink-0 rounded-full {% if row.needs_response %}status-tone-dot status-tone-dot-warning{% else %}bg-slate-300 dark:bg-slate-600{% endif %}"
+              {% if row.needs_response %}title="Needs response"{% endif %} aria-hidden="true"></span>
+        <div class="min-w-0 flex-1">
+            <div class="flex items-baseline justify-between gap-2">
+                <p class="truncate text-[13px] font-semibold text-slate-900 dark:text-white">{{ row.contact_address or "(unknown contact)" }}</p>
+                <time class="shrink-0 text-[11px] tabular-nums text-slate-400 dark:text-slate-500">{{ ts(row.latest_message_at or row.last_message_at) }}</time>
+            </div>
+            <p class="truncate text-xs text-slate-600 dark:text-slate-300">{{ row.subject or "(no subject)" }}</p>
+            <p class="mt-0.5 line-clamp-1 text-xs text-slate-500 dark:text-slate-400">
+                {%- if row.latest_message_direction == 'outbound' %}<span class="text-slate-400 dark:text-slate-500">You: </span>{% endif -%}
+                {{ row.latest_message_body or "—" }}
+            </p>
+            <div class="mt-1.5 flex flex-wrap items-center gap-1.5">
+                {{ status_badge(row.status | replace('_', ' ') | title, row.status, size="sm", show_icon=False) }}
+                {% if row.latest_delivery_status == 'failed' %}{{ status_badge("Send failed", "negative", size="sm") }}{% endif %}
+                {% if row.is_snoozed %}{{ status_badge("Snoozed", "snoozed", size="sm", show_icon=False) }}{% endif %}
+                {% if row.is_muted %}{{ status_badge("Muted", "neutral", size="sm", show_icon=False) }}{% endif %}
+                <span class="ml-auto truncate text-[11px] text-slate-400 dark:text-slate-500">{{ row.primary_service_team_name or "Unrouted" }}</span>
+            </div>
+        </div>
+    </div>
+</a>
+{% endmacro %}
+
+{# ============================================================
+   MESSAGE BUBBLE
+   Consumes an InboxTimelineMessage. `direction` is a plain string
+   ('inbound' | 'outbound' | 'internal'). Internal notes render as a
+   full-width warning-tinted note, not a bubble. Delivery status and
+   error live in message.metadata.
+   ============================================================ #}
+{% macro message_bubble(message) %}
+{% set dir = message.direction %}
+{% if dir == 'internal' %}
+<div class="mx-auto w-full max-w-2xl rounded-lg border border-amber-200/70 bg-amber-50/70 px-3.5 py-2.5 dark:border-amber-700/40 dark:bg-amber-900/15">
+    <div class="mb-1 flex items-center gap-2">
+        {{ status_badge("Internal note", "warning", size="sm") }}
+        <time class="text-[11px] tabular-nums text-slate-400 dark:text-slate-500">{{ ts(message.created_at) }}</time>
+    </div>
+    <p class="whitespace-pre-wrap text-[13px] leading-relaxed text-slate-700 dark:text-slate-200">{{ message.body or "—" }}</p>
+</div>
+{% else %}
+{% set outbound = dir == 'outbound' %}
+<div class="flex {% if outbound %}justify-end{% endif %}">
+    <div class="max-w-[80%] min-w-0">
+        <div class="mb-1 flex items-center gap-2 {% if outbound %}justify-end{% endif %}">
+            {{ status_badge(dir | title, ("positive" if outbound else "info"), size="sm", show_icon=False) }}
+            <time class="text-[11px] tabular-nums text-slate-400 dark:text-slate-500">{{ ts(message.sent_at or message.received_at or message.created_at) }}</time>
+        </div>
+        <div class="rounded-2xl px-3.5 py-2.5 text-[13px] leading-relaxed
+                    {% if outbound %}rounded-br-md bg-accent-600 text-white dark:bg-accent-600{% else %}rounded-bl-md border border-slate-200 bg-white text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100{% endif %}">
+            <p class="whitespace-pre-wrap break-words">{{ message.body or "—" }}</p>
+            {% if message.attachments %}
+            <div class="mt-2 flex flex-wrap gap-1.5">
+                {% for att in message.attachments %}
+                <a href="{{ att.url or att.source_url or att.storage_url or '#' }}" target="_blank" rel="noopener"
+                   class="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-medium
+                          {% if outbound %}bg-white/20 text-white hover:bg-white/30{% else %}bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-200{% endif %}">
+                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/></svg>
+                    {{ att.filename or att.file_name or att.type or "Attachment" }}
+                </a>
+                {% endfor %}
+            </div>
+            {% endif %}
+        </div>
+        {% if not outbound and message.from_address %}
+        <p class="mt-1 text-[11px] text-slate-400 dark:text-slate-500">from {{ message.from_address }}</p>
+        {% endif %}
+        {% if message.metadata and message.metadata.get('delivery_status') == 'failed' %}
+        <div class="mt-1.5 flex items-center justify-end gap-2">
+            {{ status_badge("Delivery failed", "negative", size="sm") }}
+            {% if message.metadata.get('send_error') %}<span class="text-[11px] text-slate-500 dark:text-slate-400">{{ message.metadata.get('send_error') }}</span>{% endif %}
+            <form method="post" action="/admin/inbox/messages/{{ message.id }}/retry">
+                <button type="submit" class="rounded-md border border-slate-300 px-2 py-0.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">Retry</button>
+            </form>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+{% endmacro %}

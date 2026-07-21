@@ -143,7 +143,12 @@ def _build_snapshot(db: Session, subscriber_id: UUID) -> dict[str, Any]:
     }
 
 
-def _apply_soft_delete_cascade(db: Session, subscriber_id: UUID) -> dict[str, int]:
+def _apply_soft_delete_cascade(
+    db: Session,
+    subscriber_id: UUID,
+    *,
+    actor_id: str,
+) -> dict[str, int]:
     touched = {
         "subscriptions": 0,
         "invoices": 0,
@@ -196,8 +201,16 @@ def _apply_soft_delete_cascade(db: Session, subscriber_id: UUID) -> dict[str, in
     ).all()
     for service_order in service_orders:
         if service_order.status != ServiceOrderStatus.canceled:
-            service_order.status = ServiceOrderStatus.canceled
-            touched["service_orders"] += 1
+            from app.services import service_order_lifecycle
+
+            changed = service_order_lifecycle.restore_recorded_status(
+                db,
+                service_order_id=service_order.id,
+                target_status=ServiceOrderStatus.canceled,
+                actor_id=actor_id,
+                reason="Subscriber recovery soft-delete cascade",
+            )
+            touched["service_orders"] += int(changed)
 
     credentials = db.scalars(
         select(access_credential_service.model).where(
@@ -274,7 +287,11 @@ def mark_subscriber_deleted(
             _now() + timedelta(days=get_retention_days(db))
         ).isoformat()
 
-    touched = _apply_soft_delete_cascade(db, subscriber.id)
+    touched = _apply_soft_delete_cascade(
+        db,
+        subscriber.id,
+        actor_id=str(actor_id or "system_restore_tool"),
+    )
     subscriber.metadata_ = metadata
 
     db.commit()
@@ -400,8 +417,16 @@ def restore_subscriber(
         else:
             order_status = ServiceOrderStatus.draft
         if service_order.status != order_status:
-            service_order.status = order_status
-            touched["service_orders"] += 1
+            from app.services import service_order_lifecycle
+
+            changed = service_order_lifecycle.restore_recorded_status(
+                db,
+                service_order_id=service_order.id,
+                target_status=order_status,
+                actor_id=str(actor_id or "system_restore_tool"),
+                reason="Restore service-order state from subscriber recovery snapshot",
+            )
+            touched["service_orders"] += int(changed)
 
     credentials = db.scalars(
         select(access_credential_service.model).where(

@@ -185,6 +185,39 @@ def test_project_task_binding_rejects_explicit_project_mismatch(db_session):
     assert mismatch.value.code == "project_task_project_mismatch"
 
 
+def test_project_task_can_own_multiple_field_visits(db_session):
+    subscriber = _subscriber(db_session)
+    project = Project(name="Multi-visit installation", subscriber_id=subscriber.id)
+    db_session.add(project)
+    db_session.flush()
+    task = ProjectTask(project_id=project.id, title="Install and verify drop")
+    db_session.add(task)
+    db_session.flush()
+
+    first = work_order_commands.create(
+        db_session,
+        WorkOrderHeaderCreate(
+            subscriber_id=subscriber.id,
+            project_task_id=task.id,
+            title="Initial installation visit",
+        ),
+    )
+    second = work_order_commands.create(
+        db_session,
+        WorkOrderHeaderCreate(
+            subscriber_id=subscriber.id,
+            project_task_id=task.id,
+            title="Follow-up verification visit",
+        ),
+    )
+
+    assert first.project_id == project.id
+    assert second.project_id == project.id
+    assert first.project_task_id == task.id
+    assert second.project_task_id == task.id
+    assert {row.id for row in task.work_orders} == {first.id, second.id}
+
+
 def test_assignment_preview_is_read_only_and_assignment_is_atomic_replay(
     db_session,
 ):

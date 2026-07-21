@@ -3519,6 +3519,20 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "GET /api/v1/customer-experience/handoffs": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "query:limit",
+    "query:offset",
+    "query:status"
+   ],
+   "request": null,
+   "responses": {
+    "200": "9a65be7a0753",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "GET /api/v1/customers/search": {
    "params": [
     "header:authorization",
@@ -13528,6 +13542,41 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "POST /api/v1/crm/leads/capture": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key"
+   ],
+   "request": "ab5739c32607",
+   "responses": {
+    "201": "8b47da13fbb9",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/crm/leads/capture/integration/{receipt_id}": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:receipt_id!"
+   ],
+   "request": "ab5739c32607",
+   "responses": {
+    "200": "8b47da13fbb9",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/crm/leads/{lead_id}/account": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:lead_id!"
+   ],
+   "request": "f157e7c5889b",
+   "responses": {
+    "200": "80b62a411af7",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "POST /api/v1/crm/payments": {
    "params": [
     "header:X-Api-Key"
@@ -13662,6 +13711,30 @@
    "request": "21b645b80194",
    "responses": {
     "201": "66af0bd8b641",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/customer-experience/handoffs/{handoff_id}/accept": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:handoff_id!"
+   ],
+   "request": "aa4323a5c2e4",
+   "responses": {
+    "200": "c29cbf850a49",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/customer-experience/handoffs/{handoff_id}/needs-attention": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:handoff_id!"
+   ],
+   "request": "63ae593fc5c3",
+   "responses": {
+    "200": "c29cbf850a49",
     "422": "a11c9d9b2af8"
    }
   },
@@ -17646,6 +17719,16 @@
     "200": "35ca38bd28f3"
    }
   },
+  "POST /api/v1/webhooks/lead-capture/{capability_binding_id}": {
+   "params": [
+    "path:capability_binding_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "8b47da13fbb9",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "POST /api/v1/webhooks/meta": {
    "params": [],
    "request": null,
@@ -18272,6 +18355,9 @@
   "CurrencySettingsResponse": "914ef6200eb8",
   "CustomerActionKey": "173053403c88",
   "CustomerDefaultsResponse": "c0892eba5f8c",
+  "CustomerExperienceAcceptRequest": "0e8608e2743a",
+  "CustomerExperienceAttentionRequest": "870e7a93b7e7",
+  "CustomerExperienceHandoffRead": "ad4250a7fc1d",
   "CustomerExperienceState": "10146f9b7d77",
   "CustomerInboxNotificationRead": "0e5649997c2b",
   "CustomerNotificationCreate": "21bc85ef2bf2",
@@ -18280,6 +18366,10 @@
   "CustomerNotificationReadResponse": "4d6ff87383ec",
   "CustomerNotificationStatus": "d95a7a3b41c9",
   "CustomerNotificationUpdate": "5682c94387d4",
+  "CustomerProvisioningCheck": "5b5271289697",
+  "CustomerProvisioningCheckResult": "318b7acb6583",
+  "CustomerProvisioningDecisionState": "5b27c07f1af8",
+  "CustomerProvisioningReference": "af0a9d585b7d",
   "CustomerSearchItem": "4c18d2fd0e9a",
   "CustomerSelfCareAction": "e02758717c77",
   "CustomerTicketReference": "81fc82df5eef",
@@ -18558,9 +18648,15 @@
   "KPIConfigUpdate": "78c9b3f57ffa",
   "KPIReadout": "81d296f6bb27",
   "KanbanMoveRequest": "ba9dd0df6436",
+  "LeadAccountConversionRead": "94d5d95d495f",
+  "LeadAccountConversionRequest": "292359031b02",
   "LeadCaptureMethod": "aa5c3ee7ce72",
+  "LeadCapturePartyCreate": "439ed8f1b382",
+  "LeadCaptureRead": "f7cb35f6879c",
+  "LeadCaptureRequest": "0e43ea04d29f",
+  "LeadContactObservation": "34f2f70bfd96",
   "LeadCreate": "e98ecdbf9149",
-  "LeadOriginCaptureCreate": "041d2ee94250",
+  "LeadOriginCaptureCreate": "fb7c102c0ee8",
   "LeadRead": "5f8c6005881e",
   "LeadSourcePlatform": "6d39bc0d1aae",
   "LeadStatus": "f464ba265ee4",
@@ -18891,6 +18987,8 @@
   "OnuTypeCreate": "3a340e3e4f2c",
   "OnuTypeRead": "aa310e845438",
   "OnuTypeUpdate": "cae1d2793701",
+  "PartyContactPointType": "1379947b2155",
+  "PartyType": "59772d177dc7",
   "PasswordChangeRequest": "5ba9a185f0ca",
   "PasswordChangeResponse": "17414c83f867",
   "PayIntentRequest": "ccdcb7e4d7c7",
@@ -18995,7 +19093,7 @@
   "PriceUnit": "8587e7348110",
   "ProjectCreate": "d3f9bf5d5ed7",
   "ProjectGanttUpdate": "38b022ae411d",
-  "ProjectItem": "bbda331b3a9b",
+  "ProjectItem": "df3035be834b",
   "ProjectKanbanMove": "7578fb10fb86",
   "ProjectPriority": "81159a031246",
   "ProjectRead": "c3e170fcab3e",
@@ -19125,11 +19223,11 @@
   "ScheduledTaskCreate": "c2447ba32ccf",
   "ScheduledTaskRead": "56b8c0be8019",
   "ScheduledTaskUpdate": "8b3f05042775",
-  "ServiceOrderCreate": "4e7174bd0454",
-  "ServiceOrderRead": "5ebb8e96d2d6",
+  "ServiceOrderCreate": "995a484dafee",
+  "ServiceOrderRead": "a38ef1cbbf41",
   "ServiceOrderStatus": "e5e20d64713c",
   "ServiceOrderType": "e15dbe951a64",
-  "ServiceOrderUpdate": "4e882d8ab728",
+  "ServiceOrderUpdate": "33c6de11a040",
   "ServiceQualificationRead": "d37809c76348",
   "ServiceQualificationRequest": "80672e742fbe",
   "ServiceRequestCreate": "0fdc40f240eb",

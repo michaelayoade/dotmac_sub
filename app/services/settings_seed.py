@@ -2273,6 +2273,20 @@ def seed_projects_settings(db: Session) -> None:
         value_type=SettingValueType.string,
         value_text=os.getenv("PROJECTS_DEFAULT_PROJECT_STATUS", "active"),
     )
+    projects_settings.ensure_by_key(
+        db,
+        key="default_project_priority",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("PROJECTS_DEFAULT_PROJECT_PRIORITY", "normal"),
+    )
+    projects_settings.ensure_by_key(
+        db,
+        key="default_sales_project_type",
+        value_type=SettingValueType.string,
+        value_text=os.getenv(
+            "PROJECTS_DEFAULT_SALES_PROJECT_TYPE", "fiber_optics_installation"
+        ),
+    )
 
 
 def seed_inventory_settings(db: Session) -> None:

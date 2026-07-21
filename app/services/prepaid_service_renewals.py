@@ -454,11 +454,17 @@ def run_due_prepaid_service_renewals(
 
     The daily billing runner calls this only behind the canonical control. A
     stale anchor older than two days is reported for reviewed reconciliation,
-    never silently back-billed. Missing authority fails closed through the
-    canonical funding resolver used by the preview.
+    never silently back-billed. Global missing authority fails closed for the
+    pass. Accounts excluded from the materialized authority cohort and an
+    unexpected account-level missing baseline are reported and skipped so one
+    unavailable position cannot block unrelated verified renewals.
     """
     from app.services.billing_automation import _period_end
-    from app.services.prepaid_funding_reconstruction import authority_cutover_batch
+    from app.services.prepaid_funding_reconstruction import (
+        PrepaidFundingBaselineMissingError,
+        authority_cutover_batch,
+        prepaid_funding_quarantined_account_ids,
+    )
 
     effective_at = _utc(run_at or datetime.now(UTC))
     authority = authority_cutover_batch(db)
@@ -470,6 +476,8 @@ def run_due_prepaid_service_renewals(
             "prepaid_renewals_already_covered": 0,
             "prepaid_renewals_stale_anchor": 0,
             "prepaid_renewals_missing_price": 0,
+            "prepaid_renewals_quarantined": 0,
+            "prepaid_renewals_missing_baseline": 0,
             "prepaid_renewals_restored": 0,
             "prepaid_renewals_skipped": "authority_not_materialized",
         }
@@ -496,10 +504,21 @@ def run_due_prepaid_service_renewals(
         "prepaid_renewals_already_covered": 0,
         "prepaid_renewals_stale_anchor": 0,
         "prepaid_renewals_missing_price": 0,
+        "prepaid_renewals_quarantined": 0,
+        "prepaid_renewals_missing_baseline": 0,
         "prepaid_renewals_restored": 0,
     }
+    quarantined_account_ids = prepaid_funding_quarantined_account_ids(
+        db,
+        {subscription.subscriber_id for subscription in subscriptions},
+    )
     authority_at = _utc(authority.position_at)
     for subscription in subscriptions:
+        if subscription.subscriber_id in quarantined_account_ids:
+            summary["prepaid_renewals_quarantined"] = (
+                int(summary["prepaid_renewals_quarantined"]) + 1
+            )
+            continue
         next_billing_at = subscription.next_billing_at
         if next_billing_at is None:
             continue
@@ -532,14 +551,23 @@ def run_due_prepaid_service_renewals(
                 int(summary["prepaid_renewals_already_covered"]) + 1
             )
             continue
-        preview = preview_prepaid_service_renewal(
-            db,
-            subscription_id=subscription.id,
-            starts_at=period_start,
-            ends_at=period_end,
-            amount=amount,
-            currency=currency,
-        )
+        try:
+            preview = preview_prepaid_service_renewal(
+                db,
+                subscription_id=subscription.id,
+                starts_at=period_start,
+                ends_at=period_end,
+                amount=amount,
+                currency=currency,
+            )
+        except PrepaidFundingBaselineMissingError:
+            # A baseline may become unavailable after the quarantine snapshot
+            # above. Preview is read-only, so isolating this account cannot
+            # retain a partial renewal write.
+            summary["prepaid_renewals_missing_baseline"] = (
+                int(summary["prepaid_renewals_missing_baseline"]) + 1
+            )
+            continue
         if not preview.allowed:
             summary["prepaid_renewals_unfunded"] = (
                 int(summary["prepaid_renewals_unfunded"]) + 1

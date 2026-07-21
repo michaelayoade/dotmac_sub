@@ -39,7 +39,7 @@ import enum as enum_module
 import html
 import logging
 from datetime import UTC, date, datetime, time, timedelta
-from typing import Any, ClassVar
+from typing import Any, ClassVar, TypeVar
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -103,6 +103,8 @@ from app.services.staff_notifications import queue_staff_email, queue_staff_push
 
 logger = logging.getLogger(__name__)
 
+_EnumT = TypeVar("_EnumT", bound=enum_module.Enum)
+
 FIBER_INSTALLATION_STAGE_ORDER: tuple[str, ...] = (
     "project_plan",
     "project_survey",
@@ -121,6 +123,8 @@ FIBER_INSTALLATION_STAGE_TITLES: dict[str, str] = {
     "power_splicing_activation": "Power Direction, Splicing & Customer Activation",
 }
 
+FIBER_ACTIVATION_STAGE_KEY = FIBER_INSTALLATION_STAGE_ORDER[-1]
+
 FIBER_PROJECT_TASK_SLA_POLICY_NAME = "Fiber Project Task SLA"
 PROJECT_COMPLETION_SLA_POLICY_NAME = "Project Completion SLA"
 
@@ -134,6 +138,24 @@ _PROJECT_TERMINAL_STATUSES = {
     ProjectStatus.completed.value,
     ProjectStatus.canceled.value,
 }
+
+
+class SalesProjectLifecycleError(ValueError):
+    """Transport-neutral error raised by the sales implementation seam."""
+
+    def __init__(self, code: str, message: str, *, kind: str = "conflict") -> None:
+        super().__init__(message)
+        self.code = code
+        self.kind = kind
+
+
+def _sales_project_enum(value: str, enum_cls: type[_EnumT], label: str) -> _EnumT:
+    try:
+        return enum_cls(value)
+    except ValueError as exc:
+        raise SalesProjectLifecycleError(
+            f"invalid_{label}", f"Invalid {label}", kind="invalid"
+        ) from exc
 
 
 def _model_data(data: dict[str, Any]) -> dict[str, Any]:
@@ -815,6 +837,173 @@ def _seed_fiber_installation_tasks(db: Session, project: Project) -> None:
         db.add(task)
         db.flush()
         _sync_task_sla_clock(db, task)
+
+
+def resolve_activation_gate_task(db: Session, project_id: UUID) -> ProjectTask | None:
+    """Return the uniquely configured activation-stage task for a project.
+
+    The project domain owns the stage vocabulary. Callers persist the returned
+    task identity and never infer readiness from titles or duplicate stage keys.
+    """
+
+    tasks = (
+        db.query(ProjectTask)
+        .filter(
+            ProjectTask.project_id == project_id,
+            ProjectTask.is_active.is_(True),
+        )
+        .order_by(ProjectTask.created_at.asc(), ProjectTask.id.asc())
+        .all()
+    )
+    matches = [
+        task
+        for task in tasks
+        if isinstance(task.metadata_, dict)
+        and task.metadata_.get("fiber_stage_key") == FIBER_ACTIVATION_STAGE_KEY
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def prepare_sales_project(
+    db: Session,
+    *,
+    sales_order_id: UUID,
+    quote_id: UUID | None,
+    subscriber_id: UUID,
+    lead_id: UUID | None,
+    name: str,
+    project_type: str,
+    customer_address: str | None,
+    region: str | None,
+    actor_id: str,
+) -> Project:
+    """Create the native project root for one exact SalesOrder, without commit."""
+
+    existing = (
+        db.query(Project).filter(Project.sales_order_id == sales_order_id).one_or_none()
+    )
+    if existing is not None:
+        if (
+            existing.subscriber_id != subscriber_id
+            or existing.quote_id != quote_id
+            or existing.lead_id != lead_id
+        ):
+            raise SalesProjectLifecycleError(
+                "project_binding_conflict",
+                "SalesOrder project binding conflicts with canonical state",
+            )
+        return existing
+    normalized_type = _sales_project_enum(
+        project_type, ProjectType, "project_type"
+    ).value
+    configured_status = _read_text_setting(
+        db, SettingDomain.projects, "default_project_status"
+    )
+    configured_priority = _read_text_setting(
+        db, SettingDomain.projects, "default_project_priority"
+    )
+    project_status = _sales_project_enum(
+        configured_status or ProjectStatus.open.value,
+        ProjectStatus,
+        "default_project_status",
+    ).value
+    project_priority = _sales_project_enum(
+        configured_priority or ProjectPriority.normal.value,
+        ProjectPriority,
+        "default_project_priority",
+    ).value
+    number = generate_number(
+        db=db,
+        domain=SettingDomain.projects,
+        sequence_key="project_number",
+        enabled_key="project_number_enabled",
+        prefix_key="project_number_prefix",
+        padding_key="project_number_padding",
+        start_key="project_number_start",
+    )
+    now = datetime.now(UTC)
+    duration_days = Projects._duration_days_for_type(normalized_type)
+    project = Project(
+        name=str(name).strip()[:160],
+        number=number,
+        description="Implementation scope created from an accepted sales order",
+        customer_address=(customer_address or "").strip() or None,
+        project_type=normalized_type,
+        status=project_status,
+        priority=project_priority,
+        subscriber_id=subscriber_id,
+        lead_id=lead_id,
+        quote_id=quote_id,
+        sales_order_id=sales_order_id,
+        start_at=now,
+        due_at=now + timedelta(days=duration_days) if duration_days else None,
+        region=(region or "").strip() or None,
+        metadata_={"fulfillment_contract_version": 1},
+    )
+    db.add(project)
+    db.flush()
+    _sync_project_sla_clock(db, project)
+    _seed_fiber_installation_tasks(db, project)
+    emit_event(
+        db,
+        EventType.project_created,
+        {
+            "project_id": str(project.id),
+            "sales_order_id": str(sales_order_id),
+            "quote_id": str(quote_id) if quote_id else None,
+            "subscriber_id": str(subscriber_id),
+            "project_type": normalized_type,
+        },
+        actor=actor_id,
+        subscriber_id=subscriber_id,
+    )
+    return project
+
+
+def complete_from_verified_installation(
+    db: Session,
+    *,
+    project_id: UUID,
+    actor_id: str,
+    verification_event_id: UUID,
+) -> Project:
+    """Apply verified implementation evidence to the native project root."""
+
+    project = db.scalars(
+        select(Project).where(Project.id == project_id).with_for_update()
+    ).one_or_none()
+    if project is None:
+        raise SalesProjectLifecycleError(
+            "project_not_found", "Project not found", kind="not_found"
+        )
+    if project.status == ProjectStatus.completed.value:
+        return project
+    if project.status == ProjectStatus.canceled.value:
+        raise SalesProjectLifecycleError(
+            "project_canceled",
+            "Canceled project cannot receive implementation verification",
+        )
+    project.status = ProjectStatus.completed.value
+    project.completed_at = datetime.now(UTC)
+    metadata = dict(project.metadata_ or {})
+    metadata["implementation_verification_event_id"] = str(verification_event_id)
+    project.metadata_ = metadata
+    _sync_project_sla_clock(db, project)
+    _emit_project_event(
+        db,
+        "project.completed",
+        project,
+        {
+            "project_id": str(project.id),
+            "sales_order_id": str(project.sales_order_id)
+            if project.sales_order_id
+            else None,
+            "verification_event_id": str(verification_event_id),
+            "actor_id": actor_id,
+        },
+    )
+    db.flush()
+    return project
 
 
 def _notify_project_roles_created_in_app(db: Session, project: Project) -> None:

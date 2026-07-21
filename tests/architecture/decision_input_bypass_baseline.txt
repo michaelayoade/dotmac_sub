@@ -44,7 +44,6 @@ env 2 app/services/support.py
 env 5 app/services/uisp.py
 env 2 app/services/usage.py
 env 2 app/services/vpn_routing.py
-env 2 app/services/web_admin_dashboard.py
 env 1 app/services/web_network_core_runtime.py
 env 1 app/services/web_network_monitoring.py
 env 1 app/services/web_network_olt_profiles.py

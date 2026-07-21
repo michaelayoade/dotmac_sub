@@ -19,6 +19,8 @@ sub conventions applied:
   translates legacy ticket identifiers at the boundary.
 * Field execution belongs to the work-order root. ``work_order.project_task_id``
   is the native optional FK, so one project task can require multiple visits.
+  Migration 386 cuts over imported task-side links before removing the legacy
+  UUID column.
 * Both comment tables gain a ``metadata`` JSON column for import provenance
   because CRM has no metadata column there.
 
@@ -142,6 +144,8 @@ class Project(Base):
             "external_reference",
             name="uq_projects_external_system_reference",
         ),
+        UniqueConstraint("quote_id", name="uq_projects_quote_id"),
+        UniqueConstraint("sales_order_id", name="uq_projects_sales_order_id"),
         # Native /me/projects (+ reseller subtree) subscriber scan — partial on
         # is_active (see migration 251). The functional index backs the H1
         # quote→project lookup; its expression matches SQLAlchemy's
@@ -187,6 +191,18 @@ class Project(Base):
     lead_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("leads.id")
     )
+    quote_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("quotes.id", name="fk_projects_quote_id", ondelete="RESTRICT"),
+    )
+    sales_order_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "sales_orders.id",
+            name="fk_projects_sales_order_id",
+            ondelete="RESTRICT",
+        ),
+    )
     # Staff UUIDs have no local FK; the staff map owns display resolution.
     # assistant_manager_person_id is the Site Project Coordinator.
     created_by_person_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
@@ -223,6 +239,10 @@ class Project(Base):
 
     subscriber = relationship("Subscriber", foreign_keys=[subscriber_id])
     lead = relationship("Lead", foreign_keys=[lead_id])
+    quote = relationship("Quote", back_populates="project", foreign_keys=[quote_id])
+    sales_order = relationship(
+        "SalesOrder", back_populates="project", foreign_keys=[sales_order_id]
+    )
     service_team = relationship("ServiceTeam", foreign_keys=[service_team_id])
     project_template = relationship("ProjectTemplate")
     tasks = relationship("ProjectTask", back_populates="project")

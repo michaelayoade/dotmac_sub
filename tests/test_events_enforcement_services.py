@@ -1948,9 +1948,11 @@ class TestProvisioningHandler:
             **kwargs,
         )
 
+    @patch.object(ProvisioningHandler, "_push_nas_provisioning")
+    @patch.object(ProvisioningHandler, "_sync_radius_on_activation")
     @patch("app.services.events.handlers.provisioning.provisioning_service")
     def test_subscription_activated_triggers_ip_allocation(
-        self, mock_prov_svc, db_session
+        self, mock_prov_svc, _mock_radius, _mock_nas, db_session
     ):
         handler = ProvisioningHandler()
         sub_id = uuid.uuid4()
@@ -1963,9 +1965,11 @@ class TestProvisioningHandler:
             db_session, str(sub_id)
         )
 
+    @patch.object(ProvisioningHandler, "_push_nas_provisioning")
+    @patch.object(ProvisioningHandler, "_sync_radius_on_activation")
     @patch("app.services.events.handlers.provisioning.provisioning_service")
     def test_subscription_activated_uses_payload_fallback(
-        self, mock_prov_svc, db_session
+        self, mock_prov_svc, _mock_radius, _mock_nas, db_session
     ):
         handler = ProvisioningHandler()
         sub_id = uuid.uuid4()
@@ -1998,8 +2002,10 @@ class TestProvisioningHandler:
             EventType.subscription_activated,
             subscription_id=sub_id,
         )
-        # Should not raise
-        handler.handle(db_session, event)
+        # Projection failures propagate so the event stays retryable and the
+        # service order is never confirmed on a failed projection.
+        with pytest.raises(RuntimeError, match="IP pool exhausted"):
+            handler.handle(db_session, event)
 
     def test_provisioning_handler_ignores_unrelated_events(self, db_session):
         handler = ProvisioningHandler()

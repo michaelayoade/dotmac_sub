@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.network import OLTDevice
-from app.models.network_monitoring import DeviceInterface, NetworkDevice
+from app.models.network_monitoring import DeviceInterface, NetworkDevice, PopSite
 from app.schemas.status_presentation import StatusTone
 from app.services import device_projection_views
 from app.services import network as network_service
@@ -21,8 +21,10 @@ from app.services.device_operational_status import (
     DOWN,
     UP,
     annotate_operational_status,
+    derive_nas_operational_status,
     derive_olt_operational_status,
     derive_ont_operational_status,
+    derive_router_operational_status,
     warmer_is_stale,
 )
 from app.services.list_query import (
@@ -30,8 +32,10 @@ from app.services.list_query import (
     ListFieldDefinition,
     ListQuery,
 )
+from app.services.nas import NasDevices
 from app.services.network import cpe as cpe_service
 from app.services.network.imported_service_ports import imported_service_port_summary
+from app.services.router_management.inventory import RouterInventory
 from app.services.status_presentation import device_operational_status_presentation
 from app.services.ui_contracts import Action, Kpi, StateValue
 
@@ -255,6 +259,11 @@ def collect_devices(db: Session) -> list[dict]:
     by_mgmt_ip = {d.mgmt_ip: d for d in monitoring_devices if d.mgmt_ip}
     by_hostname = {d.hostname: d for d in monitoring_devices if d.hostname}
     by_name = {d.name: d for d in monitoring_devices if d.name}
+    by_device_id = {str(d.id): d for d in monitoring_devices}
+    site_name_by_id = {
+        str(site_id): site_name
+        for site_id, site_name in db.execute(select(PopSite.id, PopSite.name)).all()
+    }
     warm_stale = warmer_is_stale()
 
     def _linked_monitoring(device: object) -> NetworkDevice | None:
@@ -275,6 +284,15 @@ def collect_devices(db: Session) -> list[dict]:
     def _seen(kind: str, value: object | None) -> bool:
         text = str(value or "").strip().lower()
         return bool(text and (kind, text) in seen_keys)
+
+    def _enum(value: object) -> object:
+        return getattr(value, "value", value)
+
+    def _dedup_linked(linked: NetworkDevice | None) -> None:
+        if linked is not None:
+            _add_seen("mgmt_ip", getattr(linked, "mgmt_ip", None))
+            _add_seen("hostname", getattr(linked, "hostname", None))
+            _add_seen("name", getattr(linked, "name", None))
 
     olts = network_service.olt_devices.list(
         db=db, is_active=True, order_by="name", order_dir="asc", limit=500, offset=0
@@ -302,12 +320,92 @@ def collect_devices(db: Session) -> list[dict]:
                 "status_presentation": operational.presentation,
                 "last_seen": getattr(olt, "last_seen", None),
                 "subscriber": None,
+                "class_facts": {
+                    "software_version": getattr(olt, "software_version", None),
+                    "firmware_version": getattr(olt, "firmware_version", None),
+                    "pon_types": getattr(olt, "supported_pon_types", None),
+                },
             }
         )
         _add_seen("id", olt.id)
         _add_seen("mgmt_ip", getattr(olt, "mgmt_ip", None))
         _add_seen("hostname", getattr(olt, "hostname", None))
         _add_seen("name", getattr(olt, "name", None))
+
+    nas_devices = NasDevices.list(db, is_active=True, limit=1000)
+    for nas in nas_devices:
+        if _seen("mgmt_ip", getattr(nas, "management_ip", None)) or _seen(
+            "name", getattr(nas, "name", None)
+        ):
+            continue
+        nas_link_id = getattr(nas, "network_device_id", None)
+        linked = by_device_id.get(str(nas_link_id)) if nas_link_id else None
+        operational = derive_nas_operational_status(
+            nas, linked_device=linked, warm_stale=warm_stale
+        )
+        devices.append(
+            {
+                "id": str(nas.id),
+                "name": nas.name,
+                "type": "nas",
+                "serial_number": getattr(nas, "serial_number", None),
+                "ip_address": getattr(nas, "management_ip", None),
+                "vendor": _enum(getattr(nas, "vendor", None)),
+                "model": getattr(nas, "model", None),
+                "status": operational.status,
+                "operational_reason": operational.reason,
+                "status_presentation": operational.presentation,
+                "last_seen": getattr(nas, "last_seen_at", None),
+                "subscriber": None,
+                "class_facts": {
+                    "health_status": _enum(getattr(nas, "health_status", None)),
+                    "site_name": site_name_by_id.get(
+                        str(getattr(nas, "pop_site_id", None))
+                    ),
+                },
+            }
+        )
+        _add_seen("id", nas.id)
+        _add_seen("mgmt_ip", getattr(nas, "management_ip", None))
+        _add_seen("name", nas.name)
+        _dedup_linked(linked)
+
+    routers = RouterInventory.list(db, limit=1000)
+    for router in routers:
+        if (
+            _seen("mgmt_ip", getattr(router, "management_ip", None))
+            or _seen("hostname", getattr(router, "hostname", None))
+            or _seen("name", getattr(router, "name", None))
+            or _seen("id", getattr(router, "nas_device_id", None))
+        ):
+            continue
+        operational = derive_router_operational_status(router)
+        devices.append(
+            {
+                "id": str(router.id),
+                "name": router.name,
+                "type": "router",
+                "serial_number": getattr(router, "serial_number", None),
+                "ip_address": getattr(router, "management_ip", None),
+                "vendor": "mikrotik",
+                "model": getattr(router, "board_name", None),
+                "status": operational.status,
+                "operational_reason": operational.reason,
+                "status_presentation": operational.presentation,
+                "last_seen": getattr(router, "last_seen_at", None),
+                "subscriber": None,
+                "class_facts": {
+                    "routeros_version": getattr(router, "routeros_version", None),
+                    "location": getattr(router, "location", None),
+                },
+            }
+        )
+        _add_seen("id", router.id)
+        _add_seen("mgmt_ip", getattr(router, "management_ip", None))
+        _add_seen("hostname", getattr(router, "hostname", None))
+        _add_seen("name", router.name)
+        router_link_id = getattr(router, "network_device_id", None)
+        _dedup_linked(by_device_id.get(str(router_link_id)) if router_link_id else None)
 
     core_devices = [device for device in monitoring_devices if device.is_active]
     annotate_operational_status(core_devices)
@@ -335,6 +433,12 @@ def collect_devices(db: Session) -> list[dict]:
                 "status_presentation": operational.presentation,
                 "last_seen": device.last_ping_at or device.last_snmp_at,
                 "subscriber": None,
+                "class_facts": {
+                    "role": _enum(getattr(device, "role", None)),
+                    "site_name": site_name_by_id.get(
+                        str(getattr(device, "pop_site_id", None))
+                    ),
+                },
             }
         )
         _add_seen("id", device.id)
@@ -352,6 +456,7 @@ def collect_devices(db: Session) -> list[dict]:
     )
     for ont in onts:
         operational = derive_ont_operational_status(ont)
+        ont_signal_at = getattr(ont, "signal_updated_at", None)
         devices.append(
             {
                 "id": str(ont.id),
@@ -366,6 +471,14 @@ def collect_devices(db: Session) -> list[dict]:
                 "status_presentation": operational.presentation,
                 "last_seen": getattr(ont, "last_seen", None),
                 "subscriber": None,
+                "class_facts": {
+                    "onu_rx_dbm": getattr(ont, "onu_rx_signal_dbm", None),
+                    "olt_rx_dbm": getattr(ont, "olt_rx_signal_dbm", None),
+                    "onu_tx_dbm": getattr(ont, "onu_tx_signal_dbm", None),
+                    "signal_updated_at": ont_signal_at.isoformat()
+                    if ont_signal_at
+                    else None,
+                },
             }
         )
 
@@ -402,6 +515,10 @@ def collect_devices(db: Session) -> list[dict]:
                 ),
                 "last_seen": getattr(cpe, "last_seen", None),
                 "subscriber": None,
+                "class_facts": {
+                    "firmware_version": getattr(cpe, "firmware_version", None),
+                    "mac_address": getattr(cpe, "mac_address", None),
+                },
             }
         )
 

@@ -82,6 +82,7 @@ def _row_to_dict(row: DeviceProjection) -> dict:
         ),
         "last_seen": row.last_seen,
         "subscriber": row.subscriber_id,
+        "class_facts": row.class_facts,
     }
 
 
@@ -145,6 +146,8 @@ def device_projection_stats(
         "olt": 0,
         "ont": 0,
         "cpe": 0,
+        "nas": 0,
+        "router": 0,
         "up": 0,
         "down": 0,
         "degraded": 0,

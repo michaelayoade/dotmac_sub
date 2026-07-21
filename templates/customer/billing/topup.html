@@ -83,10 +83,10 @@
                         x-model="customAmount"
                         @input="syncCustomAmount()"
                         type="number"
-                        inputmode="numeric"
+                        inputmode="decimal"
                         min="{{ min_amount }}"
                         max="{{ max_amount }}"
-                        step="100"
+                        step="0.01"
                         placeholder="Enter amount"
                         class="w-full border-0 bg-transparent p-0 text-lg font-semibold text-stone-900 placeholder:text-stone-400 focus:outline-none focus:ring-0 dark:text-white"
                     >
@@ -271,8 +271,8 @@ function topupPage() {
         selectedPaymentChoice: 'provider:{{ provider_type }}',
         idempotencyKey: null,
         currentCredit: {% if account_credit is not none %}Number('{{ account_credit }}'){% else %}null{% endif %},
-        minAmount: {{ min_amount | int }},
-        maxAmount: {{ max_amount | int }},
+        minAmount: {{ min_amount }},
+        maxAmount: {{ max_amount }},
         formatNaira(value) {
             return new Intl.NumberFormat('en-NG', {
                 style: 'currency',
@@ -301,12 +301,17 @@ function topupPage() {
             this.providerErrors = {};
         },
         currentAmount() {
-            const parsed = parseInt(this.customAmount, 10);
+            const parsed = parseFloat(this.customAmount);
             return Number.isFinite(parsed) ? parsed : null;
+        },
+        hasValidPrecision() {
+            // Kobo is the smallest unit: reject more than two decimal places.
+            const raw = String(this.customAmount).trim();
+            return raw === '' || /^\d+(\.\d{1,2})?$/.test(raw);
         },
         canPay() {
             const amount = this.currentAmount();
-            if (!amount) {
+            if (!amount || !this.hasValidPrecision()) {
                 return false;
             }
             return amount >= this.minAmount && amount <= this.maxAmount;
@@ -318,6 +323,9 @@ function topupPage() {
             const amount = this.currentAmount();
             if (!amount) {
                 return 'Choose a preset amount or enter a custom amount.';
+            }
+            if (!this.hasValidPrecision()) {
+                return 'Enter an amount with at most two decimal places (kobo).';
             }
             if (amount < this.minAmount) {
                 return 'Amount must be at least ' + this.formatCurrency(this.minAmount) + '.';
@@ -361,6 +369,10 @@ function topupPage() {
                 this.validationError = 'Enter a valid amount before continuing.';
                 return;
             }
+            if (!this.hasValidPrecision()) {
+                this.validationError = 'Enter an amount with at most two decimal places (kobo).';
+                return;
+            }
             if (amount < this.minAmount) {
                 this.validationError = 'Amount must be at least ' + this.formatCurrency(this.minAmount) + '.';
                 return;
@@ -394,7 +406,7 @@ function topupPage() {
                     refreshCsrf: () => self.refreshCsrf(),
                     idempotencyKey: this.idempotencyKey,
                     body: {
-                        amount: amount,
+                        amount: amount.toFixed(2),
                         provider: requestProvider,
                         payment_method_id: selectedPaymentMethodId,
                     },
@@ -429,7 +441,7 @@ function topupPage() {
                 const handler = PaystackPop.setup({
                     key: intent.provider_public_key,
                     email: '{{ customer_email }}',
-                    amount: amount * 100,
+                    amount: Math.round(amount * 100),
                     currency: intent.currency || 'NGN',
                     ref: intent.reference,
                     metadata: intent.checkout_metadata || {},

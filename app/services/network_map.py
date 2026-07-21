@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription
 from app.models.domain_settings import SettingDomain
+from app.models.fiber_support import FiberSupportStructure
 from app.models.network import (
     FdhCabinet,
     FiberAccessPoint,
@@ -198,6 +199,33 @@ def build_network_map_context(db: Session) -> dict:
                     "code": ap.code,
                     "ap_type": ap.access_point_type,
                     "placement": ap.placement,
+                },
+            }
+        )
+
+    # Fiber Support Structures (poles / ducts) with coordinates
+    support_structures = (
+        db.query(FiberSupportStructure)
+        .filter(FiberSupportStructure.latitude.isnot(None))
+        .filter(FiberSupportStructure.longitude.isnot(None))
+        .all()
+    )
+    for ss in support_structures:
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": [ss.longitude, ss.latitude],
+                },
+                "properties": {
+                    "id": str(ss.id),
+                    "type": "support_structure",
+                    "name": ss.name,
+                    "code": ss.code,
+                    "support_type": ss.support_type,
+                    "lifecycle_status": ss.lifecycle_status,
+                    "inspection_status": ss.inspection_status,
                 },
             }
         )
@@ -423,6 +451,8 @@ def build_network_map_context(db: Session) -> dict:
         "access_points": db.query(func.count(FiberAccessPoint.id))
         .filter(FiberAccessPoint.is_active.is_(True))
         .scalar()
+        or 0,
+        "support_structures": db.query(func.count(FiberSupportStructure.id)).scalar()
         or 0,
         "fiber_segments": len(segments),
         "customers": customer_total,

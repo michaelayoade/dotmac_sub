@@ -17,10 +17,11 @@ from app.models.catalog import (
     BillingMode,
     OfferPrice,
     PriceType,
+    Subscription,
     SubscriptionStatus,
 )
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
-from app.models.subscriber import SubscriberStatus
+from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services.customer_financial_ledger import calculate_customer_balance
 from app.services.prepaid_service_renewals import (
     confirm_prepaid_service_renewal,
@@ -288,6 +289,32 @@ def _prepare_scheduled_cycle(db_session, subscriber, subscription):
     db_session.commit()
 
 
+def _add_due_account_without_baseline(db_session, subscriber, subscription):
+    account = Subscriber(
+        first_name="Missing",
+        last_name="Baseline",
+        email="missing-baseline@example.invalid",
+        billing_mode=BillingMode.prepaid,
+        reseller_id=subscriber.reseller_id,
+        created_at=datetime(2026, 6, 29, tzinfo=UTC),
+    )
+    db_session.add(account)
+    db_session.flush()
+    due_subscription = Subscription(
+        subscriber_id=account.id,
+        offer_id=subscription.offer_id,
+        status=SubscriptionStatus.active,
+        billing_mode=BillingMode.prepaid,
+        billing_cycle=BillingCycle.monthly,
+        start_at=datetime(2026, 6, 1, tzinfo=UTC),
+        next_billing_at=datetime(2026, 7, 1, tzinfo=UTC),
+        unit_price=Decimal("50.00"),
+    )
+    db_session.add(due_subscription)
+    db_session.commit()
+    return account, due_subscription
+
+
 def test_scheduled_owner_funds_current_due_cycle(db_session, subscriber, subscription):
     _prepare_scheduled_cycle(db_session, subscriber, subscription)
 
@@ -317,6 +344,59 @@ def test_scheduled_owner_dry_run_writes_nothing(db_session, subscriber, subscrip
     assert db_session.query(AccountAdjustment).count() == 0
     assert db_session.query(ServiceEntitlement).count() == 0
     assert calculate_customer_balance(db_session, subscriber.id) == Decimal("100.00")
+
+
+def test_scheduled_owner_skips_quarantine_and_funds_verified_account(
+    db_session, subscriber, subscription
+):
+    _prepare_scheduled_cycle(db_session, subscriber, subscription)
+    subscription.next_billing_at = datetime(2026, 7, 1, 1, tzinfo=UTC)
+    _account, excluded_subscription = _add_due_account_without_baseline(
+        db_session, subscriber, subscription
+    )
+
+    summary = run_due_prepaid_service_renewals(
+        db_session,
+        run_at=datetime(2026, 7, 1, 12, tzinfo=UTC),
+    )
+    db_session.commit()
+
+    assert summary["prepaid_renewals_scanned"] == 2
+    assert summary["prepaid_renewals_quarantined"] == 1
+    assert summary["prepaid_renewals_missing_baseline"] == 0
+    assert summary["prepaid_renewals_funded"] == 1
+    assert db_session.query(AccountAdjustment).count() == 1
+    assert db_session.query(ServiceEntitlement).count() == 1
+    db_session.refresh(excluded_subscription)
+    assert excluded_subscription.next_billing_at.replace(tzinfo=UTC) == datetime(
+        2026, 7, 1, tzinfo=UTC
+    )
+
+
+def test_scheduled_owner_isolates_unexpected_missing_baseline(
+    db_session, subscriber, subscription, monkeypatch
+):
+    _prepare_scheduled_cycle(db_session, subscriber, subscription)
+    subscription.next_billing_at = datetime(2026, 7, 1, 1, tzinfo=UTC)
+    _add_due_account_without_baseline(db_session, subscriber, subscription)
+    monkeypatch.setattr(
+        "app.services.prepaid_funding_reconstruction."
+        "prepaid_funding_quarantined_account_ids",
+        lambda _db, _account_ids: set(),
+    )
+
+    summary = run_due_prepaid_service_renewals(
+        db_session,
+        run_at=datetime(2026, 7, 1, 12, tzinfo=UTC),
+        dry_run=True,
+    )
+
+    assert summary["prepaid_renewals_scanned"] == 2
+    assert summary["prepaid_renewals_quarantined"] == 0
+    assert summary["prepaid_renewals_missing_baseline"] == 1
+    assert summary["prepaid_renewals_funded"] == 1
+    assert db_session.query(AccountAdjustment).count() == 0
+    assert db_session.query(ServiceEntitlement).count() == 0
 
 
 def test_scheduled_owner_refuses_catalog_fallback_without_contract_price(

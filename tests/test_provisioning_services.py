@@ -90,9 +90,12 @@ def test_update_service_order_status(db_session, subscriber_account, subscriptio
     assert updated.status == ServiceOrderStatus.submitted
 
 
-def test_completing_service_order_activates_pending_subscription(
+def test_raw_service_order_activation_is_rejected(
     db_session, subscriber_account, subscription
 ):
+    import pytest
+    from fastapi import HTTPException
+
     from app.models.catalog import SubscriptionStatus
 
     subscription.status = SubscriptionStatus.pending
@@ -106,14 +109,16 @@ def test_completing_service_order_activates_pending_subscription(
         ),
     )
 
-    provisioning_service.service_orders.update(
-        db_session,
-        str(order.id),
-        ServiceOrderUpdate(status=ServiceOrderStatus.active),
-    )
+    with pytest.raises(HTTPException) as exc:
+        provisioning_service.service_orders.update(
+            db_session,
+            str(order.id),
+            ServiceOrderUpdate(status=ServiceOrderStatus.active),
+        )
 
     db_session.refresh(subscription)
-    assert subscription.status == SubscriptionStatus.active
+    assert exc.value.status_code == 409
+    assert subscription.status == SubscriptionStatus.pending
 
 
 def test_canceled_service_order_cannot_be_revived(

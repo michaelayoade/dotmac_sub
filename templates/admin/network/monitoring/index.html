@@ -4,7 +4,6 @@
 {% block title %}Network Monitoring - Admin{% endblock %}
 
 {% block content %}
-{{ ambient_background("blue", "indigo") }}
 
 <div class="relative space-y-8" id="monitoring-content">
     {% set offline_devices = stats.devices_offline if stats and stats.devices_offline is defined else 0 %}

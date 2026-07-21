@@ -93,6 +93,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     assert sot_relationships.dependencies_for("sales.orders") == (
         "sales.service",
         "sales.lead_lifecycle",
+        "sales.fulfillment",
     )
     assert sot_relationships.dependencies_for("customer.lifecycle_audit") == (
         "party.registry",
@@ -100,6 +101,9 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "sales.lead_lifecycle",
         "sales.service",
         "sales.orders",
+        "sales.fulfillment",
+        "operations.service_order_lifecycle",
+        "customer.experience_handoff",
         "access.subscription_lifecycle",
         "support.ticket_lifecycle",
     )

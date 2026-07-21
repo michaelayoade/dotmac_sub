@@ -1,9 +1,9 @@
 # Party Customer Lifecycle and Attribution
 
-**Status:** Approved architecture; additive lifecycle foundation implemented locally  
-**Decision owner:** Michael  
-**System of record:** Sub  
-**Schema revision:** 345
+**Status:** Approved; end-to-end native lifecycle implemented through revision 389
+**Decision owner:** Michael
+**System of record:** Sub
+**Schema revision:** 389
 
 ## Decision
 
@@ -20,16 +20,25 @@ interaction observation
 reviewed Party identity --> Lead + immutable origin
                               |
                               v
+                  exact Subscriber account conversion
+                              |
+                              v
                             Quote
                               |
                               v
                          Sales Order
+                         /         \
+                        v           v
+          Project / implementation  pending Subscription
+                        \           /
+                         v         v
+                    Service Order / provision
                               |
                               v
-                    Subscriber account
+                     active Subscription
                               |
                               v
-                         Subscription
+                    Customer Experience handoff
                               |
                               v
                     Ticket / support history
@@ -51,6 +60,9 @@ person or organization is; each named domain owner keeps its own lifecycle.
 | Referral account orchestration | `referrals.account_conversion` | Exact Referral/Party/Lead context into atomic account creation or reviewed attachment |
 | Pipeline and Quote | `sales.service` | Opportunity progress and account-specific commercial offer |
 | Sales Order | `sales.orders` | Accepted/manual order and fulfilment handoff |
+| Sales implementation coordination | `sales.fulfillment` | Structural Project/InstallationProject creation and verified release coordination |
+| Service Order lifecycle | `operations.service_order_lifecycle` | Implementation gate, provisioning outcome, and activation consequence |
+| Customer Experience handoff | `customer.experience_handoff` | Readiness, attention, acceptance, and durable actor/time/event evidence |
 | Subscriber account | `customer.accounts` | Billing and service account owned by a Party |
 | Customer credential enrollment | `auth.customer_credential_enrollment` | Purpose-bound local credential creation and Subscriber-email verification; no Party activation |
 | Subscription state | `access.subscription_lifecycle` and catalog/subscription owners | Service lifecycle and access projection |
@@ -112,10 +124,12 @@ Approved capture methods are:
 - referral; and
 - reviewed legacy import.
 
-Every adapter calls `sales.lead_lifecycle`; it does not write attribution
-columns independently. Planned capture adapters are the Meta/Google lead-form
-webhooks, public landing forms, portal/self-serve requests, Inbox campaign
-responses, and the agent-reviewed Lead form.
+Every adapter calls `sales.capture`, which delegates immutable attribution to
+`sales.lead_lifecycle`; it does not write Party, Lead, or attribution columns
+independently. Revision 383 provides a signed provider-neutral webhook
+capability and an authenticated staff capture command. Provider-specific raw
+payload mapping remains connector configuration/code at the edge and submits
+the canonical capture contract; it is not embedded in the lifecycle owner.
 
 Revision 356 activates the referral adapter contract. Referral capture creates
 a quarantined Party and unverified Party contact points, then delegates Lead
@@ -221,6 +235,8 @@ The report contains aggregate counts only for:
 - Quote-to-Lead and Order-to-Quote alignment;
 - Subscriber-to-Sales-Order and Subscription coverage; and
 - Ticket-to-Lead/account alignment.
+- SalesOrder-to-Project/InstallationProject/ServiceOrder convergence and CX
+  handoff coverage.
 
 It never binds a Party/account, infers attribution, changes a lifecycle state,
 or prints identity values.

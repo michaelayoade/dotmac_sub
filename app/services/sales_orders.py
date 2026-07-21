@@ -42,13 +42,14 @@ import logging
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
+from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.catalog import Subscription
-from app.models.project import Project
+from app.models.project import Project, ProjectTask
 from app.models.sales import (
     Quote,
     QuoteLineItem,
@@ -77,6 +78,69 @@ _PAID = SalesOrderPaymentStatus.paid.value
 _PARTIAL = SalesOrderPaymentStatus.partial.value
 _PENDING = SalesOrderPaymentStatus.pending.value
 _WAIVED = SalesOrderPaymentStatus.waived.value
+
+
+class SalesOrderLifecycleError(ValueError):
+    def __init__(self, code: str, message: str, *, kind: str = "conflict") -> None:
+        super().__init__(message)
+        self.code = code
+        self.kind = kind
+
+
+def fulfill_from_customer_experience(
+    db: Session,
+    *,
+    sales_order_id: UUID,
+    handoff_id: UUID,
+    actor_id: str,
+) -> bool:
+    """Apply accepted CX evidence through the SalesOrder lifecycle owner."""
+
+    actor = str(actor_id or "").strip()
+    if not actor:
+        raise SalesOrderLifecycleError(
+            "actor_required", "Sales-order fulfilment actor is required", kind="invalid"
+        )
+    order = db.scalars(
+        select(SalesOrder)
+        .where(SalesOrder.id == coerce_uuid(sales_order_id))
+        .with_for_update()
+    ).one_or_none()
+    if order is None or not order.is_active:
+        raise SalesOrderLifecycleError(
+            "sales_order_not_found", "Sales order not found", kind="not_found"
+        )
+    metadata = dict(order.metadata_ or {})
+    recorded_handoff_id = metadata.get("cx_handoff_id")
+    if order.status == SalesOrderStatus.fulfilled.value:
+        if recorded_handoff_id not in {None, str(handoff_id)}:
+            raise SalesOrderLifecycleError(
+                "handoff_evidence_conflict",
+                "Sales order was fulfilled by different CX evidence",
+            )
+        return False
+    if order.status != SalesOrderStatus.paid.value:
+        raise SalesOrderLifecycleError(
+            "sales_order_not_paid",
+            "Only a fully paid sales order can be fulfilled",
+        )
+    order.status = SalesOrderStatus.fulfilled.value
+    metadata["cx_handoff_id"] = str(handoff_id)
+    order.metadata_ = metadata
+    emit_event(
+        db,
+        EventType.sales_order_fulfilled,
+        {
+            "sales_order_id": str(order.id),
+            "cx_handoff_id": str(handoff_id),
+            "from_status": SalesOrderStatus.paid.value,
+            "to_status": SalesOrderStatus.fulfilled.value,
+        },
+        actor=actor,
+        subscriber_id=order.subscriber_id,
+    )
+    db.flush()
+    return True
 
 
 def _enum_str(value, enum_cls, label: str) -> str | None:
@@ -170,10 +234,21 @@ def _generate_order_number(db: Session) -> str:
 
 
 def _resolve_project_for_sales_order(db: Session, sales_order_id: object):
-    """The active project a sales order spawned (metadata.sales_order_id).
-    Shared by the installation-invoice and payment paths."""
+    """The active project a sales order spawned.
+
+    The structural foreign key is authoritative.  Metadata lookup remains a
+    bounded compatibility fallback for rows predating migration 389.
+    """
     if not sales_order_id:
         return None
+    existing = (
+        db.query(Project)
+        .filter(Project.sales_order_id == coerce_uuid(str(sales_order_id)))
+        .filter(Project.is_active.is_(True))
+        .one_or_none()
+    )
+    if existing:
+        return existing
     existing = (
         db.query(Project)
         .filter(Project.is_active.is_(True))
@@ -328,10 +403,14 @@ def _installation_amount_from_quote(db: Session, quote_id) -> Decimal:
 
 def _resolve_installation_amount(db: Session, project: Project) -> Decimal:
     metadata = project.metadata_ if isinstance(project.metadata_, dict) else {}
-    amount = _installation_amount_from_sales_order(db, metadata.get("sales_order_id"))
+    amount = _installation_amount_from_sales_order(
+        db, project.sales_order_id or metadata.get("sales_order_id")
+    )
     if amount > 0:
         return amount
-    return _installation_amount_from_quote(db, metadata.get("quote_id"))
+    return _installation_amount_from_quote(
+        db, project.quote_id or metadata.get("quote_id")
+    )
 
 
 def ensure_installation_invoice_for_sales_order(db: Session, sales_order_id) -> None:
@@ -476,6 +555,17 @@ def _active_sales_order_lines(db: Session, sales_order_id) -> list[SalesOrderLin
     )
 
 
+def _resolve_activation_task_for_project(
+    db: Session, project: Project | None
+) -> ProjectTask | None:
+    """Resolve the single named activation gate from the native project graph."""
+    if project is None:
+        return None
+    from app.services import projects
+
+    return projects.resolve_activation_gate_task(db, project.id)
+
+
 def _ensure_provisioning_order_for_sales_line(
     db: Session,
     *,
@@ -504,12 +594,32 @@ def _ensure_provisioning_order_for_sales_line(
     )
     if persisted_subscription is None:
         return
+    from app.services import sales_fulfillment
+
+    scope = sales_fulfillment.ensure_implementation_scope(
+        db,
+        sales_order_id=sales_order.id,
+        actor_id="sales.orders",
+        commit=False,
+    )
+    activation_task = _resolve_activation_task_for_project(db, scope.project)
+    idempotency_key = f"sales-order-line:{line.id}:new_install"
     existing = (
         db.query(ServiceOrder)
-        .filter(ServiceOrder.sales_order_line_id == line.id)
+        .filter(
+            (ServiceOrder.sales_order_line_id == line.id)
+            | (ServiceOrder.idempotency_key == idempotency_key)
+        )
         .first()
     )
     if existing is not None:
+        if existing.project_id is None:
+            existing.project_id = scope.project.id
+        if existing.installation_project_id is None:
+            existing.installation_project_id = scope.installation_project.id
+        if existing.activation_project_task_id is None and activation_task is not None:
+            existing.activation_project_task_id = activation_task.id
+        db.flush()
         return
     execution_context = _build_staged_device_intent(
         db,
@@ -524,17 +634,27 @@ def _ensure_provisioning_order_for_sales_line(
             subscription_id=persisted_subscription.id,
             sales_order_id=sales_order.id,
             sales_order_line_id=line.id,
-            status=ServiceOrderStatus.submitted,
+            project_id=scope.project.id,
+            installation_project_id=scope.installation_project.id,
+            idempotency_key=idempotency_key,
+            activation_project_task_id=(
+                activation_task.id if activation_task is not None else None
+            ),
+            # Sales-linked work cannot enter provisioning until implementation
+            # verification releases it through service_order_lifecycle.
+            status=ServiceOrderStatus.draft,
             order_type=ServiceOrderType.new_install,
             notes=f"Provisioning for {sales_order.order_number or sales_order.id}",
             execution_context=execution_context,
         ),
+        actor_id="sales.orders",
+        commit=False,
     )
     metadata = dict(line.metadata_ or {})
     metadata["service_order_id"] = str(order.id)
     line.metadata_ = metadata
     db.add(line)
-    db.commit()
+    db.flush()
 
 
 def _build_staged_device_intent(
@@ -920,10 +1040,10 @@ def _sync_sales_order_financials(db: Session, sales_order: SalesOrder) -> None:
     """
     if sales_order.payment_status not in {_PAID, _PARTIAL}:
         return
-    # Create the subscription (and its first invoice) BEFORE recording the
-    # payment, so the account-level payment can settle both the installation
-    # and subscription invoices in one go.
-    _push_sales_order_subscriptions(db, sales_order)
+    # A partial receipt is financial evidence only.  It must not create a
+    # service contract or provisioning order before the sale is fully funded.
+    if sales_order.payment_status == _PAID:
+        _push_sales_order_subscriptions(db, sales_order)
     _record_sales_order_payment(db, sales_order)
 
 
@@ -1000,9 +1120,20 @@ def _recalculate_order_totals(db: Session, sales_order_id: str) -> None:
 
 
 def _ensure_fulfillment(db: Session, sales_order: SalesOrder) -> None:
-    """Placeholder for fulfillment actions once implemented (stays a
-    no-op through the port)."""
-    return None
+    """Ensure one structural implementation scope for the SalesOrder."""
+    if (
+        not sales_order.is_active
+        or sales_order.status == SalesOrderStatus.cancelled.value
+    ):
+        return
+    from app.services import sales_fulfillment
+
+    sales_fulfillment.ensure_implementation_scope(
+        db,
+        sales_order_id=sales_order.id,
+        actor_id="sales.orders",
+        commit=False,
+    )
 
 
 def _accrue_reseller_commission(db: Session, sales_order: SalesOrder | None) -> None:
@@ -1020,22 +1151,11 @@ def _accrue_reseller_commission(db: Session, sales_order: SalesOrder | None) -> 
 
 
 def _ensure_project_for_manual_sales_order(db: Session, sales_order: SalesOrder):
-    """Compatibility hook for native project creation from a manual order.
-
-    The CRM creates an install project for manual (quote-less) sales orders
-    (idempotent on ``Project.metadata_["sales_order_id"]``, template by
-    ``metadata.project_type``). Sub's projects service has not been ported
-    yet — the native projects owner must replace this placeholder.
-    """
+    """Compatibility wrapper around the canonical fulfillment coordinator."""
     if sales_order.quote_id:
-        # Quote-driven flow already creates projects on quote acceptance.
-        return None
-    logger.info(
-        "sales_order_project_deferred sales_order_id=%s "
-        "(projects service port pending)",
-        sales_order.id,
-    )
-    return None
+        return sales_order.project
+    _ensure_fulfillment(db, sales_order)
+    return sales_order.project
 
 
 class SalesOrders(ListResponseMixin):
@@ -1094,7 +1214,9 @@ class SalesOrders(ListResponseMixin):
         return sales_order
 
     @staticmethod
-    def create_from_quote(db: Session, quote_id: str) -> SalesOrder:
+    def create_from_quote(
+        db: Session, quote_id: str, *, commit: bool = True
+    ) -> SalesOrder:
         quote = db.get(
             Quote,
             coerce_uuid(quote_id),
@@ -1143,8 +1265,9 @@ class SalesOrders(ListResponseMixin):
             )
             db.add(line)
 
-        db.commit()
-        db.refresh(sales_order)
+        if commit:
+            db.commit()
+            db.refresh(sales_order)
         return sales_order
 
     @staticmethod

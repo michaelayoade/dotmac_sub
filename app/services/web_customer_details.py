@@ -64,6 +64,7 @@ from app.services import catalog as catalog_service
 from app.services import geocoding as geocoding_service
 from app.services import notification as notification_service
 from app.services import subscriber as subscriber_service
+from app.services import subscriber_summary as subscriber_summary_service
 from app.services import web_customer_user_access as web_customer_user_access_service
 from app.services.audit_helpers import (
     extract_changes,
@@ -1868,6 +1869,9 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
             subscriptions,
         ),
         "pending_location_request": pending_location_request,
+        "subscriber_summary": subscriber_summary_service.subscriber_summary(
+            db, customer_id
+        ),
         **relationship_data,
     }
 

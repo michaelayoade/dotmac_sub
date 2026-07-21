@@ -4,7 +4,6 @@
 {% block title %}{{ 'Edit' if image else 'Add' }} Firmware Image - Admin{% endblock %}
 
 {% block content %}
-{{ ambient_background("emerald", "blue") }}
 {% set editing = image is not none %}
 {% set locked = usage.used %}
 {% set blocked = usage.active %}

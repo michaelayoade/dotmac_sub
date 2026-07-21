@@ -12,14 +12,16 @@ from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.models.party import PartyContactPointType, PartyType
 from app.models.sales import (
     LeadCaptureMethod,
     LeadSourcePlatform,
     LeadStatus,
     QuoteStatus,
 )
+from app.schemas.subscriber import SubscriberCreate
 
 
 class PipelineBase(BaseModel):
@@ -103,6 +105,8 @@ class LeadBase(BaseModel):
 class LeadOriginCaptureCreate(BaseModel):
     capture_method: LeadCaptureMethod
     source_platform: LeadSourcePlatform
+    integration_inbox_id: UUID | None = None
+    source_interaction_id: str | None = Field(default=None, max_length=240)
     campaign_id: UUID | None = None
     campaign_recipient_id: UUID | None = None
     external_campaign_id: str | None = Field(default=None, max_length=200)
@@ -119,6 +123,67 @@ class LeadOriginCaptureCreate(BaseModel):
     captured_at: datetime | None = None
     capture_source: str = Field(min_length=1, max_length=80)
     capture_reason: str = Field(min_length=1)
+
+
+class LeadContactObservation(BaseModel):
+    channel_type: PartyContactPointType
+    value: str = Field(min_length=1, max_length=320)
+    display_value: str | None = Field(default=None, max_length=320)
+    provider: str | None = Field(default=None, max_length=80)
+    provider_account_id: str | None = Field(default=None, max_length=160)
+    external_subject_id: str | None = Field(default=None, max_length=240)
+    is_primary: bool = False
+
+
+class LeadCapturePartyCreate(BaseModel):
+    party_type: PartyType = PartyType.person
+    display_name: str = Field(min_length=1, max_length=200)
+    contacts: list[LeadContactObservation] = Field(default_factory=list, max_length=10)
+
+
+class LeadCaptureRequest(BaseModel):
+    party_id: UUID | None = None
+    party: LeadCapturePartyCreate | None = None
+    title: str = Field(min_length=1, max_length=200)
+    lead_source: str = Field(min_length=1, max_length=40)
+    origin: LeadOriginCaptureCreate
+    region: str | None = Field(default=None, max_length=80)
+    address: str | None = None
+    notes: str | None = None
+
+    @model_validator(mode="after")
+    def _one_party_source_and_interaction(self) -> LeadCaptureRequest:
+        if (self.party_id is None) == (self.party is None):
+            raise ValueError("Supply exactly one of party_id or party")
+        if not str(self.origin.source_interaction_id or "").strip():
+            raise ValueError("origin.source_interaction_id is required")
+        return self
+
+
+class LeadCaptureRead(BaseModel):
+    lead_id: UUID
+    party_id: UUID
+    origin_capture_id: UUID
+    replayed: bool
+
+
+class LeadAccountConversionRequest(BaseModel):
+    party_id: UUID
+    subscriber_id: UUID | None = None
+    new_account: SubscriberCreate | None = None
+
+    @model_validator(mode="after")
+    def _one_account_target(self) -> LeadAccountConversionRequest:
+        if (self.subscriber_id is None) == (self.new_account is None):
+            raise ValueError("Supply exactly one of subscriber_id or new_account")
+        return self
+
+
+class LeadAccountConversionRead(BaseModel):
+    lead_id: UUID
+    party_id: UUID
+    subscriber_id: UUID
+    outcome: str
 
 
 class LeadCreate(LeadBase):

@@ -202,6 +202,14 @@ dry-run. The two paths are alternative owners for the same service period and
 must never run in parallel. Payment-triggered renewals continue through the
 payment owner and the same canonical price resolver.
 
+The scheduled renewal pass excludes accounts quarantined by the reconstruction
+owner and reports them as `prepaid_renewals_quarantined`. An unexpected
+account-level missing baseline is reported as
+`prepaid_renewals_missing_baseline` and that subscription is left untouched.
+Either condition is isolated to the affected subscription: it cannot abort or
+roll back unrelated renewals whose verified funding is available. A missing
+global authority cutover still fails closed for the complete pass.
+
 For `canonical_payment_required`, the reviewed row also supplies amount,
 currency, timezone-aware `occurred_at`, and
 `"definitive_attribution": true`, plus the SHA-256 of the reviewed external

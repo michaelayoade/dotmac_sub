@@ -28,6 +28,27 @@ class Settings:
     # serve (default AnyIO limit is 40). Applied in the API
     # lifespan only; Celery sets its own concurrency.
     web_threadpool_limit: int = int(os.getenv("WEB_THREADPOOL_LIMIT", "6"))
+    # Admin overview runtime policy. Defaults preserve the existing production
+    # behavior; non-production deployments may opt into prewarming and
+    # stale-while-revalidate without introducing parallel environment readers.
+    dashboard_prewarm_enabled: bool = os.getenv(
+        "DASHBOARD_PREWARM_ENABLED", "false"
+    ).lower() in ("true", "1", "yes", "on")
+    dashboard_global_cache_ttl_seconds: float = float(
+        os.getenv("DASHBOARD_GLOBAL_CACHE_TTL_SECONDS", "60")
+    )
+    dashboard_global_stale_while_revalidate: bool = os.getenv(
+        "DASHBOARD_GLOBAL_STALE_WHILE_REVALIDATE", "false"
+    ).lower() in ("true", "1", "yes", "on")
+    dashboard_global_max_stale_seconds: float = float(
+        os.getenv("DASHBOARD_GLOBAL_MAX_STALE_SECONDS", "900")
+    )
+    dashboard_infrastructure_cache_ttl_seconds: float = float(
+        os.getenv("DASHBOARD_INFRASTRUCTURE_CACHE_TTL_SECONDS", "60")
+    )
+    infrastructure_health_skip_checks: str = os.getenv(
+        "INFRASTRUCTURE_HEALTH_SKIP_CHECKS", ""
+    )
     db_pool_timeout: int = int(os.getenv("DB_POOL_TIMEOUT", "20"))
     db_pool_recycle: int = int(os.getenv("DB_POOL_RECYCLE", "1800"))
     db_statement_timeout_ms: int = int(os.getenv("DB_STATEMENT_TIMEOUT_MS", "120000"))

@@ -37,7 +37,7 @@
             </div>
             <div class="flex flex-col gap-3">
                 {% if not balance_unavailable and outstanding_balance > 0 %}
-                <a href="/portal/billing/topup?amount={{ outstanding_balance | int }}"
+                <a href="/portal/billing/topup?amount={{ "%.2f"|format(outstanding_balance | float) }}"
                    class="inline-flex items-center justify-center gap-2 rounded-xl bg-white px-6 py-3 text-sm font-semibold text-rose-900 shadow-lg transition hover:bg-rose-50">
                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8V7m0 10v-1"/>
@@ -155,7 +155,7 @@
             </p>
             <div class="space-y-3">
                 {% if not balance_unavailable and outstanding_balance > 0 %}
-                <a href="/portal/billing/topup?amount={{ outstanding_balance | int }}"
+                <a href="/portal/billing/topup?amount={{ "%.2f"|format(outstanding_balance | float) }}"
                    class="flex w-full items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300 dark:hover:bg-emerald-900/50">
                     Pay Now
                 </a>

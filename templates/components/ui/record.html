@@ -1,0 +1,110 @@
+{#
+  Record / 360 spine (archetype B) — dotmac_sub admin.
+  Spec: docs/design/ADMIN_UI_ARCHETYPES.md
+
+  Context is promoted to a flat header hero + a tab bar; there is NO permanent
+  side rail. Pure projection: renders server-owned fields, decides no state or
+  tone. Status tone comes from the server (status_badge); brand color from
+  tokens. Flat — no gradients/glass/ambient.
+
+  Reusable across record types (subscriber, reseller, vendor). `subscriber_hero`
+  is the subscriber specialisation over the subscriber_summary projection; the
+  layout primitives (hero_stat, record_tabs) are type-agnostic.
+#}
+{% from "components/ui/macros.html" import status_badge %}
+
+{# Compact timestamp (no backend filter dependency). #}
+{% macro rts(dt) %}{% if dt %}{{ dt.strftime('%b %d, %Y') }}{% endif %}{% endmacro %}
+
+{# ============================================================
+   HERO STAT — a flat at-a-glance tile. tone (optional) colors the
+   value via the semantic renderer; never a hardcoded color.
+   ============================================================ #}
+{% macro hero_stat(label, value, sub="", tone="") %}
+<div class="rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 dark:border-slate-700 dark:bg-slate-800">
+    <p class="text-[10.5px] font-semibold uppercase tracking-[0.1em] text-slate-400 dark:text-slate-500">{{ label }}</p>
+    <p class="mt-1 text-lg font-bold leading-tight tabular-nums {% if tone %}status-foreground status-tone-{{ tone }}{% else %}text-slate-900 dark:text-white{% endif %}">{{ value }}</p>
+    {% if sub %}<p class="mt-0.5 truncate text-[11px] text-slate-500 dark:text-slate-400">{{ sub }}</p>{% endif %}
+</div>
+{% endmacro %}
+
+{# ============================================================
+   RECORD TABS — flat underline tab bar bound to an Alpine state
+   var. items: [{key, label, count?}]. `state` is the x-data var.
+   ============================================================ #}
+{% macro record_tabs(items, state="tab") %}
+<div class="sticky top-0 z-10 -mx-4 mb-6 border-b border-slate-200 bg-slate-100/95 px-4 backdrop-blur dark:border-slate-800 dark:bg-slate-950/95 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
+    <nav class="flex gap-6 overflow-x-auto" role="tablist" aria-label="Sections">
+        {% for item in items %}
+        <button type="button" role="tab"
+                @click="{{ state }} = '{{ item.key }}'"
+                :aria-selected="{{ state }} === '{{ item.key }}'"
+                :class="{{ state }} === '{{ item.key }}' ? 'border-accent-500 text-accent-700 dark:text-accent-300' : 'border-transparent text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100'"
+                class="-mb-px flex items-center gap-2 whitespace-nowrap border-b-2 py-3 text-sm font-semibold transition-colors">
+            {{ item.label }}
+            {% if item.count is defined and item.count %}
+            <span class="rounded-full bg-slate-200 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ item.count }}</span>
+            {% endif %}
+        </button>
+        {% endfor %}
+    </nav>
+</div>
+{% endmacro %}
+
+{# ============================================================
+   SUBSCRIBER HERO — the record hero over the subscriber_summary
+   projection. `caller()` supplies the action buttons.
+   ============================================================ #}
+{% macro subscriber_hero(summary, status_presentation=None) %}
+{% set hero_status = status_presentation or summary.status %}
+<div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div class="flex items-start gap-4">
+            <div class="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-accent-100 text-xl font-bold text-accent-700 dark:bg-accent-900/40 dark:text-accent-300">
+                {%- if summary.avatar_url %}<img src="{{ summary.avatar_url }}" alt="" class="h-full w-full object-cover">{% else %}{{ (summary.name or '?')[:2] | upper }}{% endif -%}
+            </div>
+            <div class="min-w-0">
+                <div class="flex flex-wrap items-center gap-2.5">
+                    <h1 class="font-display text-2xl font-bold tracking-tight text-slate-900 dark:text-white">{{ summary.name or "Unnamed subscriber" }}</h1>
+                    {% if hero_status %}{{ status_badge(hero_status.label, hero_status.tone, size="sm") }}{% endif %}
+                    {% if summary.connection %}{{ status_badge("Online" if summary.connection.online else "Offline", "positive" if summary.connection.online else "negative", size="sm") }}{% endif %}
+                    <span class="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500 dark:bg-slate-800 dark:text-slate-400">{{ "Business" if summary.is_business else "Individual" }}</span>
+                </div>
+                <div class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px] text-slate-500 dark:text-slate-400">
+                    {% if summary.account_number %}<span class="font-mono">{{ summary.account_number }}</span>{% endif %}
+                    {% if summary.subscriber_number %}<span>·</span><span class="font-mono">{{ summary.subscriber_number }}</span>{% endif %}
+                    {% if summary.since %}<span>·</span><span>Since {{ rts(summary.since) }}</span>{% endif %}
+                    {% if summary.email %}<span>·</span><span class="truncate">{{ summary.email }}</span>{% endif %}
+                    {% if summary.phone %}<span>·</span><span>{{ summary.phone }}</span>{% endif %}
+                </div>
+            </div>
+        </div>
+        {% if caller %}<div class="flex flex-wrap items-center gap-2">{{ caller() }}</div>{% endif %}
+    </div>
+
+    {# at-a-glance tiles — flat, semantic #}
+    <div class="mt-4 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+        {{ hero_stat("Account", hero_status.label if hero_status else "—", tone=(hero_status.tone if hero_status else "")) }}
+        {% if summary.plan %}
+            {{ hero_stat("Plan", summary.plan.name or "—", sub=("₦%s"|format("{:,.0f}".format(summary.plan.price)) if summary.plan.price is not none else "")) }}
+        {% else %}
+            {{ hero_stat("Plan", "No active plan") }}
+        {% endif %}
+        {% if summary.balance %}
+            {% set _b = summary.balance %}
+            {{ hero_stat("Balance", (_b.currency ~ " " ~ "{:,.2f}".format(_b.outstanding or 0)),
+                sub=((_b.overdue_count ~ " overdue") if (_b.overdue and _b.overdue > 0) else "Paid up"),
+                tone=("negative" if (_b.overdue and _b.overdue > 0) else "warning" if (_b.outstanding and _b.outstanding > 0) else "positive")) }}
+        {% else %}
+            {{ hero_stat("Balance", "—") }}
+        {% endif %}
+        {% if summary.connection %}
+            {{ hero_stat("Connection", "Online" if summary.connection.online else "Offline",
+                sub=(("last seen " ~ rts(summary.connection.last_seen_at)) if summary.connection.last_seen_at else ""),
+                tone=("positive" if summary.connection.online else "negative")) }}
+        {% else %}
+            {{ hero_stat("Connection", "—") }}
+        {% endif %}
+    </div>
+</div>
+{% endmacro %}

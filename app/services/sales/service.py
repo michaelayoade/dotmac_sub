@@ -497,31 +497,39 @@ def _assert_quote_is_sendable(db: Session, quote: Quote, status: str | None) -> 
         )
 
 
-def _upgrade_party_status_to_customer(subscriber: Subscriber | None) -> None:
+def _upgrade_party_status_to_customer(
+    db: Session, subscriber: Subscriber | None
+) -> None:
     """Won lead / accepted quote converts a prospect into a customer."""
     if subscriber is None:
         return
+    if subscriber.party_id is not None:
+        from app.models.party import PartyRoleStatus, PartyRoleType
+        from app.services import party as party_service
+
+        party_service.ensure_role(
+            db,
+            party_id=subscriber.party_id,
+            role_type=PartyRoleType.customer,
+            status=PartyRoleStatus.active,
+            source="sales.service",
+        )
     if subscriber.party_status in (PartyStatus.lead.value, PartyStatus.contact.value):
         subscriber.party_status = PartyStatus.customer.value
 
 
 def _ensure_project_from_quote(db: Session, quote: Quote, sales_order_id: str | None):
-    """Deferred to the projects service port.
+    """Create the structural implementation scope for an accepted Quote."""
+    if sales_order_id is None:
+        raise ValueError("Accepted quote requires a SalesOrder")
+    from app.services import sales_fulfillment
 
-    The CRM pipeline creates an install project when a quote is accepted
-    (template by ``metadata.project_type``, status active, idempotent on
-    ``Project.metadata_["quote_id"]``). Sub's projects *service* (template
-    instantiation, fiber-stage engine) has not been ported yet — the projects
-    PR rewires this hook onto it. Until then accepted quotes create only the
-    sales order.
-    """
-    _logger.info(
-        "sales_project_from_quote_deferred quote_id=%s sales_order_id=%s "
-        "(projects service port pending)",
-        quote.id,
-        sales_order_id,
-    )
-    return None
+    return sales_fulfillment.ensure_implementation_scope(
+        db,
+        sales_order_id=coerce_uuid(sales_order_id),
+        actor_id="sales.quote_acceptance",
+        commit=False,
+    ).project
 
 
 def _emit_lead_created(db: Session, lead: Lead) -> None:
@@ -561,17 +569,17 @@ def _emit_quote_accepted(db: Session, quote: Quote, sales_order_id) -> None:
 
 
 def _handle_quote_accepted(db: Session, quote: Quote) -> None:
-    """The unchanged sales-service pipeline: accepted quote →
-    sales order (idempotent on quote_id) → install project (PR 6 stub)."""
+    """Accepted quote → order → native implementation scope, atomically."""
     from app.services import sales_orders as sales_order_service
 
-    _upgrade_party_status_to_customer(quote.subscriber)
-    db.commit()
-    db.refresh(quote)
-
-    sales_order = sales_order_service.sales_orders.create_from_quote(db, str(quote.id))
+    _upgrade_party_status_to_customer(db, quote.subscriber)
+    sales_order = sales_order_service.sales_orders.create_from_quote(
+        db, str(quote.id), commit=False
+    )
     _ensure_project_from_quote(db, quote, str(sales_order.id) if sales_order else None)
     _emit_quote_accepted(db, quote, sales_order.id if sales_order else None)
+    db.commit()
+    db.refresh(quote)
 
 
 class Pipelines(ListResponseMixin):
@@ -870,6 +878,7 @@ class Leads(ListResponseMixin):
                     lead_source=data["lead_source"],
                     capture=origin_capture,
                 )
+            _emit_lead_created(db, lead)
             db.commit()
         except lead_lifecycle.LeadLifecycleError as exc:
             db.rollback()
@@ -896,7 +905,6 @@ class Leads(ListResponseMixin):
                     return existing
             raise
         db.refresh(lead)
-        _emit_lead_created(db, lead)
         return lead
 
     @staticmethod
@@ -1035,7 +1043,7 @@ class Leads(ListResponseMixin):
 
         # When the lead is won, upgrade the party to customer.
         if data.get("status") == LeadStatus.won.value:
-            _upgrade_party_status_to_customer(lead.subscriber)
+            _upgrade_party_status_to_customer(db, lead.subscriber)
         if "status" in data:
             if lead.owner_agent_id is None and lead.status in _CLOSED_LEAD_STATUSES:
                 lead.owner_agent_id = _resolve_owner_agent_id(db, lead.subscriber_id)
@@ -1408,7 +1416,7 @@ class Quotes(ListResponseMixin):
 
         # When the quote is accepted, upgrade the party to customer.
         if data.get("status") == QuoteStatus.accepted.value:
-            _upgrade_party_status_to_customer(quote.subscriber)
+            _upgrade_party_status_to_customer(db, quote.subscriber)
 
         db.commit()
         db.refresh(quote)

@@ -63,7 +63,11 @@ class WorkOrder(Base):
     # this root FK is written only by operations.work_order_commands.
     project_task_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("project_tasks.id", ondelete="RESTRICT"),
+        ForeignKey(
+            "project_tasks.id",
+            name="fk_work_order_project_task_id_project_tasks",
+            ondelete="RESTRICT",
+        ),
         nullable=True,
         index=True,
     )

@@ -36,6 +36,46 @@ class ConnectorRegistryEntry:
 
 _DEFINITIONS: tuple[ConnectorManifest, ...] = (
     ConnectorManifest(
+        key="lead.capture.http",
+        name="Lead Capture Webhook",
+        version="1.0.0",
+        connector_type="sales",
+        description=(
+            "Provider-neutral signed ingress for canonical lead-capture payloads."
+        ),
+        runtime=RuntimeManifest(
+            type=ConnectorRuntimeType.builtin_worker,
+            module="app.services.integrations.connectors.lead_capture_http",
+        ),
+        capabilities=(
+            CapabilityManifest(
+                id="sales.lead_capture.v1",
+                modes=(CapabilityMode.inbound,),
+            ),
+        ),
+        config_schema={
+            "type": "object",
+            "properties": {
+                "signature_header": {"type": "string", "minLength": 1},
+                "delivery_id_header": {"type": "string", "minLength": 1},
+                "signature_prefix": {"type": "string"},
+            },
+            "required": [
+                "signature_header",
+                "delivery_id_header",
+                "signature_prefix",
+            ],
+            "additionalProperties": False,
+        },
+        secrets=(SecretBindingManifest(name="webhook_signing_secret"),),
+        data_access=DataAccessManifest(
+            emits=("sales.lead_capture_observation",),
+            classifications=("customer_contact", "marketing_attribution"),
+        ),
+        egress=EgressManifest(),
+        health=HealthManifest(operation="connection.validate.v1"),
+    ),
+    ConnectorManifest(
         key="webhook.http",
         name="HTTP Webhook",
         version="1.0.0",

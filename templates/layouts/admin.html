@@ -737,7 +737,8 @@
         </header>
 
         <!-- Page Content -->
-        <main class="relative flex-1 overflow-y-auto bg-slate-100 dark:bg-slate-950 bg-noise bg-mesh">
+        <main class="relative flex-1 {% block main_class %}overflow-y-auto bg-slate-100 dark:bg-slate-950 bg-noise bg-mesh{% endblock %}">
+            {% block main_body %}
             <div class="pointer-events-none absolute inset-0 overflow-hidden">
                 <div class="absolute -top-24 right-0 h-[420px] w-[420px] rounded-full bg-gradient-to-br from-amber-400/5 to-orange-500/5 blur-3xl dark:from-amber-500/5 dark:to-orange-500/5"></div>
                 <div class="absolute bottom-0 left-0 h-[360px] w-[360px] rounded-full bg-gradient-to-tr from-indigo-400/5 to-cyan-400/5 blur-3xl dark:from-indigo-500/5 dark:to-cyan-500/5"></div>
@@ -746,6 +747,7 @@
                 {% block page_header %}{% endblock %}
                 {% block content %}{% endblock %}
             </div>
+            {% endblock %}
         </main>
     </div>
 </div>

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import web_billing_customers as web_billing_customers_service
+from app.services import web_billing_documents as web_billing_documents_service
 from app.services import (
     web_billing_invoice_bulk_actions as web_billing_invoice_bulk_actions_service,
 )
@@ -564,3 +565,30 @@ def invoice_search(request: Request, db: Session = Depends(get_db)):
 )
 def invoice_filter(request: Request, db: Session = Depends(get_db)):
     return HTMLResponse("")
+
+
+@router.get(
+    "/documents",
+    response_class=HTMLResponse,
+    dependencies=[
+        Depends(require_permission("billing:invoice:read")),
+        Depends(require_permission("billing:payment:read")),
+        Depends(require_permission("billing:credit_note:read")),
+    ],
+)
+def billing_documents(
+    request: Request,
+    facet: str = Query(default="invoices"),
+    db: Session = Depends(get_db),
+):
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    context = {
+        "request": request,
+        "active_page": "billing",
+        "active_menu": "billing",
+        "current_user": get_current_user(request),
+        "sidebar_stats": get_sidebar_stats(db),
+    }
+    context.update(web_billing_documents_service.billing_documents_data(db, facet))
+    return templates.TemplateResponse("admin/billing/documents.html", context)

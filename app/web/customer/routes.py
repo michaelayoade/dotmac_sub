@@ -3,6 +3,7 @@
 import logging
 from dataclasses import replace
 from datetime import UTC, datetime
+from decimal import Decimal
 from urllib.parse import quote_plus
 from uuid import UUID
 
@@ -2172,7 +2173,7 @@ def customer_billing_topup(
     autopay_success: str | None = Query(None),
     transfer_success: str | None = Query(None),
     add_card: bool = Query(False),
-    amount: int | None = Query(None, ge=0),
+    amount: Decimal | None = Query(None, ge=0),
     db: Session = Depends(get_db),
 ) -> Response:
     """Show Deposit Account Credit for a customer account."""

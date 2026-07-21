@@ -531,6 +531,29 @@ def test_create_topup_intent_persists_server_owned_reference(
     assert intent.allocation_policy == "credit_only"
 
 
+def test_create_topup_intent_preserves_kobo_decimals(
+    monkeypatch, db_session, subscriber
+):
+    # Regression: the portal used parseInt(...) and |int filters, truncating
+    # 18812.50 -> 18812 before it reached the money owner. The owner keeps two
+    # decimals, so the fixed frontend must send the exact decimal string.
+    _patch_topup_settings(monkeypatch)
+    payload = _create_intent(
+        monkeypatch,
+        db_session,
+        subscriber,
+        amount="18812.50",
+        reference="topup-intent-kobo",
+    )
+
+    intent = (
+        db_session.query(TopupIntent).filter_by(reference="topup-intent-kobo").one()
+    )
+
+    assert payload["reference"] == "topup-intent-kobo"
+    assert intent.requested_amount == Decimal("18812.50")
+
+
 def test_create_topup_intent_records_selected_payment_method(
     monkeypatch, db_session, subscriber
 ):

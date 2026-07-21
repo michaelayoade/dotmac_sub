@@ -177,6 +177,11 @@ from app.models.cross_app_drift import (  # noqa: F401
     CrossAppDriftRun,
     CrossAppDriftWaiver,
 )
+from app.models.customer_experience import (  # noqa: F401
+    CustomerExperienceHandoff,
+    CustomerExperienceHandoffEvent,
+    CustomerExperienceHandoffStatus,
+)
 from app.models.customer_identity import CustomerIdentityIndex  # noqa: F401
 from app.models.cutover import CutoverBalanceVariance  # noqa: F401
 from app.models.device_token import DeviceToken  # noqa: F401
@@ -625,6 +630,11 @@ from app.models.project import (  # noqa: F401
 )
 from app.models.provisioning import (  # noqa: F401
     AppointmentStatus,
+    ProvisioningReadinessCheck,
+    ProvisioningReadinessCheckKind,
+    ProvisioningReadinessCheckResult,
+    ProvisioningReadinessDecision,
+    ProvisioningReadinessDecisionStatus,
     ProvisioningRun,
     ProvisioningRunStatus,
     ProvisioningStep,

@@ -16,6 +16,9 @@ from app.models.team_inbox import (
     InboxConversationStatus,
 )
 from app.services import (
+    subscriber_summary as subscriber_summary_service,
+)
+from app.services import (
     team_inbox_commands,
     team_inbox_contact_links,
     team_inbox_metrics,
@@ -108,6 +111,7 @@ def team_inbox_queue(
     sort_dir: str | None = Query(default=None, alias="dir"),
     page: int = Query(default=1),
     per_page: int = Query(default=25),
+    c: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
     # FastAPI resolves Query defaults before normal route execution, but focused
@@ -142,6 +146,7 @@ def team_inbox_queue(
     per_page = (
         per_page if isinstance(per_page, int) and not isinstance(per_page, bool) else 25
     )
+    c = c if isinstance(c, str) else None
     requested_status = status
     requested_channel_type = channel_type
     requested_service_team_id = service_team_id
@@ -303,6 +308,17 @@ def team_inbox_queue(
             ),
         }
     )
+    selected_view = None
+    if c:
+        try:
+            selected_view = _conversation_view(db, request, UUID(c))
+        except (ValueError, TypeError):
+            selected_view = None
+    if selected_view is not None:
+        context["selected"] = selected_view["timeline"]
+        context.update(selected_view)
+    else:
+        context["selected"] = None
     return templates.TemplateResponse("admin/inbox/index.html", context)
 
 
@@ -314,7 +330,7 @@ def _detail_redirect(
 ) -> RedirectResponse:
     return RedirectResponse(
         url=(
-            f"/admin/inbox/{conversation_id}?status={quote_plus(status)}"
+            f"/admin/inbox?c={conversation_id}&status={quote_plus(status)}"
             f"&message={quote_plus(message)}"
         ),
         status_code=303,
@@ -355,6 +371,36 @@ def _contact_link_candidates(
     )
 
 
+def _subscriber_summary(db: Session, subscriber_id: str | None) -> dict | None:
+    """Thin adapter over the shared subscriber-summary read-owner."""
+    return subscriber_summary_service.subscriber_summary(db, subscriber_id)
+
+
+def _conversation_view(
+    db: Session, request: Request, conversation_id: UUID
+) -> dict | None:
+    """Full conversation projection shared by the workspace page and the HTMX
+    detail partial. Returns None when the conversation does not exist."""
+    timeline = team_inbox_read.get_conversation_timeline(db, conversation_id)
+    if timeline is None:
+        return None
+    return {
+        "timeline": timeline,
+        "subscriber_summary": _subscriber_summary(db, timeline.subscriber_id),
+        "contact_link_candidates": _contact_link_candidates(db, timeline),
+        "label_options": team_inbox_operations.list_labels(db),
+        "conversation_labels": team_inbox_operations.conversation_labels(
+            db, conversation_id
+        ),
+        "macro_options": team_inbox_operations.list_macros(
+            db, person_id=_actor_id_from_request(request)
+        ),
+        "template_options": team_inbox_operations.list_templates(
+            db, channel_type=timeline.channel_type
+        ),
+    }
+
+
 @router.get(
     "/{conversation_id}",
     response_class=HTMLResponse,
@@ -365,30 +411,19 @@ def team_inbox_detail(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    timeline = team_inbox_read.get_conversation_timeline(db, conversation_id)
-    if timeline is None:
+    view = _conversation_view(db, request, conversation_id)
+    if view is None:
         return RedirectResponse(
             url="/admin/inbox?status=error&message=Conversation%20not%20found",
             status_code=303,
         )
-    context = _ctx(request, db)
-    context.update(
-        {
-            "timeline": timeline,
-            "contact_link_candidates": _contact_link_candidates(db, timeline),
-            "label_options": team_inbox_operations.list_labels(db),
-            "conversation_labels": team_inbox_operations.conversation_labels(
-                db, conversation_id
-            ),
-            "macro_options": team_inbox_operations.list_macros(
-                db, person_id=_actor_id_from_request(request)
-            ),
-            "template_options": team_inbox_operations.list_templates(
-                db, channel_type=timeline.channel_type
-            ),
-        }
-    )
-    return templates.TemplateResponse("admin/inbox/detail.html", context)
+    # HTMX list clicks swap the thread+context partial into #triage-detail;
+    # a full navigation lands in the workspace with the conversation preselected.
+    if request.headers.get("hx-request"):
+        context = _ctx(request, db)
+        context.update(view)
+        return templates.TemplateResponse("admin/inbox/_conversation.html", context)
+    return RedirectResponse(url=f"/admin/inbox?c={conversation_id}", status_code=303)
 
 
 def _actor_id_from_request(request: Request) -> str | None:
