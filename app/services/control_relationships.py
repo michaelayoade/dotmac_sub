@@ -124,11 +124,13 @@ CONTROL_RELATIONSHIPS: tuple[ControlRelationship, ...] = (
         mode=RelationshipMode.chain,
         members=(
             "financial.prepaid_funding_reconciliation",
+            "billing.prepaid_service_renewals",
             "collections.prepaid_balance_enforcement",
         ),
         rule=(
             "A fresh exact-cohort funding reconciliation, including any signed "
-            "quarantine, must be recorded before prepaid enforcement is enabled."
+            "quarantine, and the canonical renewal writer must be active before "
+            "prepaid enforcement is enabled. Every re-enable needs new evidence."
         ),
     ),
     ControlRelationship(
@@ -264,6 +266,9 @@ EVENT_HANDLER_DEPENDENCIES: dict[str, dict[str, tuple[str, ...]]] = {
     "account_credit.deposited": {
         "EnforcementHandler": ("PrepaidRenewalHandler",),
     },
+    "payment.received": {
+        "EnforcementHandler": ("PrepaidRenewalHandler",),
+    },
     "subscription.activated": {
         "EnforcementHandler": ("ProvisioningHandler",),
     },
@@ -392,6 +397,20 @@ def event_execution_plan(
                     for candidate in applicable
                 )
             )
+        elif all_declared and control is not None:
+            # Targeted ordering without chaining the whole event: an explicit
+            # dependency gates only its own step, so independent customer and
+            # external outputs cannot be suppressed by a money-handler failure.
+            dependencies.extend(
+                dependency
+                for dependency in EVENT_HANDLER_DEPENDENCIES.get(event_type, {}).get(
+                    name, ()
+                )
+                if any(
+                    candidate.__class__.__name__ == dependency
+                    for candidate in applicable
+                )
+            )
         elif chained:
             # Preserve deterministic behavior for extensions/tests that have not
             # entered the production control registry yet.
@@ -429,14 +448,34 @@ def validate_event_execution_policy(handlers: Iterable[Any]) -> None:
                 f"Event handler {name} declares unknown event types: {', '.join(unknown)}"
             )
 
-    non_chained_dependencies = sorted(
-        set(EVENT_HANDLER_DEPENDENCIES) - CHAINED_EVENT_TYPES
+    unknown_dependency_events = sorted(
+        set(EVENT_HANDLER_DEPENDENCIES) - valid_event_types
     )
-    if non_chained_dependencies:
+    if unknown_dependency_events:
         raise ControlRelationshipError(
-            "Event dependencies declared for non-chained events: "
-            + ", ".join(non_chained_dependencies)
+            "Event dependencies declared for unknown event types: "
+            + ", ".join(unknown_dependency_events)
         )
+
+    for event_type in sorted(set(EVENT_HANDLER_DEPENDENCIES) - CHAINED_EVENT_TYPES):
+        # A non-chained event may declare targeted gates (a step waits on a
+        # named prerequisite) without chaining independent outputs behind it.
+        plan = event_execution_plan(event_type, resolved)
+        plan_names = {step.handler_name for step in plan}
+        for handler_name, dependencies in EVENT_HANDLER_DEPENDENCIES[
+            event_type
+        ].items():
+            if handler_name not in plan_names:
+                raise ControlRelationshipError(
+                    f"Targeted dependency for {event_type} names handler "
+                    f"{handler_name} that is not subscribed to the event"
+                )
+            missing = sorted(set(dependencies) - plan_names)
+            if missing:
+                raise ControlRelationshipError(
+                    f"Targeted dependency for {event_type}/{handler_name} names "
+                    "unsubscribed prerequisites: " + ", ".join(missing)
+                )
 
     for event_type in CHAINED_EVENT_TYPES:
         dependencies_by_handler = EVENT_HANDLER_DEPENDENCIES.get(event_type, {})
@@ -666,12 +705,25 @@ def audit_feature_control_relationships(
                 members=("quotes.native_write", "quotes.native_read"),
             )
         )
-    if enabled("collections.prepaid_balance_enforcement"):
+    enforcement_enabled = enabled("collections.prepaid_balance_enforcement")
+    if enforcement_enabled:
         from app.services.prepaid_enforcement_readiness import (
+            prepaid_enforcement_enablement_block_reason,
             prepaid_enforcement_readiness_block_reason,
         )
 
-        reason = prepaid_enforcement_readiness_block_reason(db)
+        currently_enabled = control_registry.resolve_control(
+            db, "collections.prepaid_balance_enforcement"
+        ).own_enabled
+        turning_on = (
+            "collections.prepaid_balance_enforcement" in requested
+            and not currently_enabled
+        )
+        reason = (
+            prepaid_enforcement_enablement_block_reason(db)
+            if turning_on
+            else prepaid_enforcement_readiness_block_reason(db)
+        )
         if reason:
             findings.append(
                 ControlFinding(
@@ -683,6 +735,7 @@ def audit_feature_control_relationships(
                     ),
                     members=(
                         "financial.prepaid_funding_reconciliation",
+                        "billing.prepaid_service_renewals",
                         "collections.prepaid_balance_enforcement",
                     ),
                 )

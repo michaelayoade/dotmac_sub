@@ -121,6 +121,7 @@ def _subscription(
     discount: bool = False,
     discount_value: str | None = None,
     discount_type: str | None = None,
+    next_billing_at: datetime | None = None,
 ) -> Subscription:
     kwargs = {}
     if discount:
@@ -135,6 +136,7 @@ def _subscription(
         status=status,
         billing_mode=billing_mode,
         unit_price=Decimal(unit_price) if unit_price is not None else None,
+        next_billing_at=next_billing_at,
         **kwargs,
     )
     db.add(sub)
@@ -157,8 +159,7 @@ def _fund_with_entitlement(db, account, subscription, *, days: int = 30) -> None
     db.commit()
 
 
-def _fund_with_paid_invoice(db, account, subscription) -> None:
-    """The legacy coverage fallback: a paid invoice spanning `now`."""
+def _paid_invoice_without_entitlement(db, account, subscription) -> None:
     invoice = Invoice(
         account_id=account.id,
         invoice_number=f"INV-{subscription.id}",
@@ -197,7 +198,7 @@ def _both(db, account) -> tuple[Decimal, Decimal]:
 def test_account_override_beats_the_default(db_session):
     account = _account(db_session, min_balance="5000.00")
     scalar, batch = _both(db_session, account)
-    assert scalar == batch == Decimal("5000.00")
+    assert scalar == batch == Decimal("0.00")
 
 
 def test_default_setting_used_when_no_override(db_session):
@@ -213,18 +214,35 @@ def test_paid_entitlement_means_no_renewal_requirement(db_session):
     _fund_with_entitlement(db_session, account, subscription)
 
     scalar, batch = _both(db_session, account)
-    # Funded, so the threshold falls back to the configured minimum.
-    assert scalar == batch == Decimal("1000.00")
+    # Current service is already paid; reserve is advisory until renewal is due.
+    assert scalar == batch == Decimal("0.00")
 
 
-def test_invoice_fallback_counts_as_paid_coverage(db_session):
+def test_paid_invoice_without_entitlement_is_not_coverage(db_session):
     account = _account(db_session, min_balance="1000.00")
     offer = _offer(db_session, "17500.00")
     subscription = _subscription(db_session, account, offer)
-    _fund_with_paid_invoice(db_session, account, subscription)
+    _paid_invoice_without_entitlement(db_session, account, subscription)
 
     scalar, batch = _both(db_session, account)
-    assert scalar == batch == Decimal("1000.00")
+    assert scalar == batch == Decimal("17500.00")
+
+
+def test_future_anchor_without_coverage_is_unresolved_not_funded(db_session):
+    account = _account(db_session, min_balance="1000.00")
+    offer = _offer(db_session, "17500.00")
+    subscription = _subscription(
+        db_session,
+        account,
+        offer,
+        next_billing_at=NOW + timedelta(days=20),
+    )
+
+    decision = resolve_prepaid_threshold_decision(db_session, account, now=NOW)
+
+    assert decision.threshold == Decimal("0.00")
+    assert decision.actionable_uncovered_subscription_ids == ()
+    assert decision.unresolved_projection_subscription_ids == (subscription.id,)
 
 
 def test_unfunded_single_subscription_requires_its_price(db_session):
@@ -248,6 +266,7 @@ def test_threshold_decision_exposes_minimum_and_renewal_provenance(db_session):
     assert decision.unfunded_renewal_requirement == Decimal("17500.00")
     assert decision.threshold == Decimal("17500.00")
     assert decision.currency == "NGN"
+    assert decision.actionable_uncovered_subscription_ids
 
 
 def test_missing_unfunded_subscription_price_fails_closed(db_session):
@@ -319,7 +338,7 @@ def test_terminal_subscriptions_are_excluded(db_session, status):
     _subscription(db_session, account, offer, status=status)
 
     scalar, batch = _both(db_session, account)
-    assert scalar == batch == Decimal("1000.00")
+    assert scalar == batch == Decimal("0.00")
 
 
 def test_postpaid_subscriptions_are_excluded(db_session):
@@ -328,7 +347,7 @@ def test_postpaid_subscriptions_are_excluded(db_session):
     _subscription(db_session, account, offer, billing_mode=BillingMode.postpaid)
 
     scalar, batch = _both(db_session, account)
-    assert scalar == batch == Decimal("1000.00")
+    assert scalar == batch == Decimal("0.00")
 
 
 # --- the owner boundary -----------------------------------------------------

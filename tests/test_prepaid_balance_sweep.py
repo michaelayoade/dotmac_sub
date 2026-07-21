@@ -24,6 +24,9 @@ from app.models.prepaid_enforcement import PrepaidEnforcementReadiness
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services.account_lifecycle import suspend_subscription
 from app.services.collections.prepaid_balance_sweep import run_prepaid_balance_sweep
+from app.services.service_entitlements import (
+    ensure_prepaid_entitlements_for_paid_invoice,
+)
 from tests.prepaid_funding_helpers import (
     TEST_PREPAID_POSITION_AT,
     materialize_test_prepaid_opening_balance,
@@ -52,18 +55,17 @@ def _enable_control(
             value_text="true" if enabled else "false",
             value_json=enabled,
             is_active=True,
-        )
+        ),
+        DomainSetting(
+            domain=SettingDomain.modules,
+            key="billing_prepaid_service_renewals",
+            value_type=SettingValueType.boolean,
+            value_text="true",
+            value_json=True,
+            is_active=True,
+        ),
     ]
     if activation_at is not None:
-        settings.append(
-            DomainSetting(
-                domain=SettingDomain.collections,
-                key="prepaid_enforcement_activation_at",
-                value_type=SettingValueType.string,
-                value_text=activation_at.isoformat(),
-                is_active=True,
-            )
-        )
         settings.append(
             PrepaidEnforcementReadiness(
                 intended_activation_at=activation_at,
@@ -452,6 +454,8 @@ def test_low_wallet_does_not_warn_when_prepaid_period_is_already_funded(
         )
     )
     db_session.commit()
+    ensure_prepaid_entitlements_for_paid_invoice(db_session, invoice)
+    db_session.commit()
 
     result = run_prepaid_balance_sweep(db_session, now=_MONDAY_NOON)
 
@@ -461,6 +465,31 @@ def test_low_wallet_does_not_warn_when_prepaid_period_is_already_funded(
     assert result["warned"] == 0
     assert subscriber_account.prepaid_low_balance_at is None
     assert subscription.status == SubscriptionStatus.active
+
+
+def test_future_anchor_without_coverage_is_never_suspended(
+    db_session, subscriber_account, subscription
+):
+    _enable_control(db_session)
+    _make_prepaid(
+        db_session,
+        subscriber_account,
+        subscription,
+        credit=Decimal("0.00"),
+        min_balance="100.00",
+    )
+    subscription.unit_price = Decimal("17500.00")
+    subscription.next_billing_at = _MONDAY_NOON + timedelta(days=20)
+    subscriber_account.prepaid_low_balance_at = _MONDAY_NOON - timedelta(days=5)
+    db_session.commit()
+
+    result = run_prepaid_balance_sweep(db_session, now=_MONDAY_NOON)
+
+    db_session.refresh(subscription)
+    assert result["coverage_unresolved"] == 1
+    assert result["suspended"] == 0
+    assert subscription.status == SubscriptionStatus.active
+    assert _prepaid_locks(db_session, subscription) == []
 
 
 def test_prepaid_legacy_invoice_ar_does_not_reduce_wallet_balance(

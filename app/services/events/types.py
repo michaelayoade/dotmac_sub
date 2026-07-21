@@ -64,6 +64,7 @@ class EventType(enum.Enum):
 
     # Prepaid enforcement control-state evidence
     prepaid_enforcement_timer_changed = "prepaid_enforcement.timer_changed"
+    prepaid_coverage_reconciled = "prepaid_coverage.reconciled"
 
     # Billing - Outage compensation (1)
     service_extended = "billing.service_extended"

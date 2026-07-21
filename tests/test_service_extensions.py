@@ -7,7 +7,6 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
 
 from app.models.catalog import NasVendor, SubscriptionStatus
 from app.models.domain_settings import DomainSetting, SettingDomain
@@ -22,6 +21,7 @@ from app.schemas.catalog import NasDeviceCreate, SubscriptionCreate
 from app.services import catalog as catalog_service
 from app.services import nas as nas_service
 from app.services import service_extensions as svc
+from app.services.service_extensions import ServiceExtensionError
 from app.services.settings_cache import SettingsCache
 from app.services.settings_spec import get_spec
 from app.web.admin.billing_extensions import (
@@ -62,7 +62,7 @@ def _sub(db_session, subscriber, catalog_offer, *, nas_id=None, next_billing_at=
 
 def test_create_requires_valid_window_and_days(db_session, subscriber, catalog_offer):
     _sub(db_session, subscriber, catalog_offer)
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ServiceExtensionError) as exc:
         svc.create_extension(
             db_session,
             reason="x",
@@ -71,9 +71,9 @@ def test_create_requires_valid_window_and_days(db_session, subscriber, catalog_o
             days=2,
             scope_type=ServiceExtensionScope.network,
         )
-    assert exc.value.status_code == 400
+    assert exc.value.code.endswith("invalid_window")
 
-    with pytest.raises(HTTPException):
+    with pytest.raises(ServiceExtensionError):
         svc.create_extension(
             db_session,
             reason="x",
@@ -105,7 +105,7 @@ def test_service_extension_max_days_setting(db_session, subscriber, catalog_offe
     _sub(db_session, subscriber, catalog_offer)
 
     assert svc.scope_options(db_session)["max_days"] == 3
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ServiceExtensionError) as exc:
         svc.create_extension(
             db_session,
             reason="x",
@@ -115,8 +115,8 @@ def test_service_extension_max_days_setting(db_session, subscriber, catalog_offe
             scope_type=ServiceExtensionScope.network,
         )
 
-    assert exc.value.status_code == 400
-    assert "between 1 and 3" in exc.value.detail
+    assert exc.value.code.endswith("invalid_days")
+    assert "between 1 and 3" in exc.value.message
 
 
 def test_apply_network_scope_extends_all_active(db_session, subscriber, catalog_offer):
@@ -170,9 +170,9 @@ def test_apply_is_idempotent(db_session, subscriber, catalog_offer):
         scope_type=ServiceExtensionScope.network,
     )
     svc.apply_extension(db_session, str(ext.id))
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ServiceExtensionError) as exc:
         svc.apply_extension(db_session, str(ext.id))
-    assert exc.value.status_code == 409
+    assert exc.value.code.endswith("invalid_transition")
 
 
 def test_nas_scope_only_extends_matching(db_session, subscriber, catalog_offer):
@@ -248,13 +248,13 @@ def test_cancel_pending_extension(db_session, subscriber, catalog_offer):
     svc.cancel_extension(db_session, str(ext.id), actor_id="admin-1")
     db_session.refresh(ext)
     assert ext.status == ServiceExtensionStatus.canceled
-    with pytest.raises(HTTPException):
+    with pytest.raises(ServiceExtensionError):
         svc.apply_extension(db_session, str(ext.id))
 
 
 def test_subscribers_scope_requires_ids(db_session, subscriber, catalog_offer):
     _sub(db_session, subscriber, catalog_offer)
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ServiceExtensionError) as exc:
         svc.create_extension(
             db_session,
             reason="outage",
@@ -264,7 +264,7 @@ def test_subscribers_scope_requires_ids(db_session, subscriber, catalog_offer):
             scope_type=ServiceExtensionScope.subscribers,
             subscriber_ids=[],
         )
-    assert exc.value.status_code == 400
+    assert exc.value.code.endswith("empty_subscriber_scope")
 
 
 def test_subscriber_scope_inputs_prefers_selected_uuid_and_keeps_legacy_textarea():
@@ -397,7 +397,7 @@ def test_resolved_subscriber_scope_rejects_missing_uuid(
     _sub(db_session, subscriber, catalog_offer)
     missing = uuid4()
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ServiceExtensionError) as exc:
         svc.create_extension(
             db_session,
             reason="outage",
@@ -409,8 +409,8 @@ def test_resolved_subscriber_scope_rejects_missing_uuid(
             subscriber_ids_resolved=True,
         )
 
-    assert exc.value.status_code == 400
-    assert exc.value.detail == f"Could not find customer: {missing}"
+    assert exc.value.code.endswith("customer_not_found")
+    assert exc.value.details["identifier"] == str(missing)
 
 
 def test_subscribers_scope_reports_unknown_customer(
@@ -418,7 +418,7 @@ def test_subscribers_scope_reports_unknown_customer(
 ):
     _sub(db_session, subscriber, catalog_offer)
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ServiceExtensionError) as exc:
         svc.create_extension(
             db_session,
             reason="outage",
@@ -429,8 +429,8 @@ def test_subscribers_scope_reports_unknown_customer(
             subscriber_ids=["not-a-customer"],
         )
 
-    assert exc.value.status_code == 400
-    assert exc.value.detail == "Could not find customer: not-a-customer"
+    assert exc.value.code.endswith("customer_not_found")
+    assert exc.value.details["identifier"] == "not-a-customer"
 
 
 def test_shared_contact_email_is_ambiguous(db_session):
@@ -442,20 +442,20 @@ def test_shared_contact_email_is_ambiguous(db_session):
     db_session.add_all([a, b])
     db_session.commit()
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ServiceExtensionError) as exc:
         svc._find_subscriber_by_identifier(db_session, "shared@ext.example")
-    assert exc.value.status_code == 400
-    assert "ambiguous" in exc.value.detail.lower()
+    assert exc.value.code.endswith("ambiguous_customer_identifier")
+    assert "ambiguous" in exc.value.message.lower()
 
 
 def test_long_digit_identifier_not_treated_as_splynx_id(db_session):
     # An 11-digit string exceeds int4; it must NOT hit the imported customer id
     # branch (which would overflow the int4 column on Postgres → 500). With no
     # phone match it is simply "not found".
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ServiceExtensionError) as exc:
         svc._find_subscriber_by_identifier(db_session, "99999999999")
-    assert exc.value.status_code == 400
-    assert "could not find" in exc.value.detail.lower()
+    assert exc.value.code.endswith("customer_not_found")
+    assert "not found" in exc.value.message.lower()
 
 
 def _suspend(db_session, subscription, reason):

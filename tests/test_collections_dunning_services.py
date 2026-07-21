@@ -963,7 +963,6 @@ def test_prepaid_invoice_rows_do_not_create_dunning_case(
         BillingMode,
         SubscriptionStatus,
     )
-    from app.models.domain_settings import DomainSetting, SettingDomain
     from app.schemas.collections import DunningRunRequest
 
     subscriber.billing_mode = BillingMode.prepaid
@@ -975,15 +974,6 @@ def test_prepaid_invoice_rows_do_not_create_dunning_case(
     subscription.status = SubscriptionStatus.active
     catalog_offer.billing_cycle = BillingCycle.monthly
 
-    db_session.add(
-        DomainSetting(
-            domain=SettingDomain.modules,
-            key="billing_prepaid_monthly_invoicing",
-            value_text="true",
-            value_json=True,
-            is_active=True,
-        )
-    )
     invoice = Invoice(
         account_id=subscriber.id,
         invoice_number="INV-PREPAID-DUN-RUN-1",
@@ -1093,13 +1083,6 @@ def test_prepaid_monthly_dunning_does_not_suspend_service(
     catalog_offer.billing_cycle = BillingCycle.monthly
     db_session.add_all(
         [
-            DomainSetting(
-                domain=SettingDomain.modules,
-                key="billing_prepaid_monthly_invoicing",
-                value_text="true",
-                value_json=True,
-                is_active=True,
-            ),
             DomainSetting(
                 domain=SettingDomain.collections,
                 key="billing_enforcement_min_enforcing_day_offset",

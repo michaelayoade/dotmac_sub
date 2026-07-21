@@ -99,6 +99,18 @@ def test_anomalies_for_new_signals():
     assert "runner_heartbeat_stale" in _snap(runners=(stale_rh,)).anomalies
     assert _snap(runners=(stale_rh,)).stale_runners == [ENF]
     assert "enforcement_covered_but_locked" in _snap(covered_but_locked=2).anomalies
+    assert (
+        "prepaid_coverage_unresolved"
+        in _snap(prepaid_coverage_unresolved_count=2).anomalies
+    )
+    assert (
+        "prepaid_coverage_repair_required"
+        in _snap(prepaid_coverage_repairable_count=1).anomalies
+    )
+    assert (
+        "prepaid_coverage_quarantined"
+        in _snap(prepaid_coverage_quarantined_count=1).anomalies
+    )
     assert _snap().anomalies == []  # healthy default
 
 

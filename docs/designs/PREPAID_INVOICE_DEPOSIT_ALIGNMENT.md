@@ -95,17 +95,21 @@ phantom-ledger cleanups). Separate one-off script, run after Item 1 lands.
 
 ## Rollout
 
-1. Keep `prepaid_monthly_invoicing_enabled` off unless prepaid advance invoice
-   rows are required. If enabled, runner-created prepaid rows stay draft until
-   funded.
+1. The monthly-prepaid draft-invoice owner and its control are retired.
+   `financial.prepaid_service_renewals` is the only writer for new funded
+   prepaid periods; it writes the debit, entitlement, and anchor atomically.
 2. Keep `collections.prepaid_balance_enforcement` as the customer-impacting
    suspension gate; cleanup scripts must not be used as the suspension signal.
-   Enabling it is a three-part launch operation: set
-   `collections.prepaid_enforcement_activation_at` to the reviewed ISO-8601
-   launch time, record a full-cohort independent-funding reconciliation, and
-   then enable the control. Adverse actions fail closed when readiness or the
-   activation time is missing/invalid/not reached, while funded restoration
-   remains available. Grace is configuration-owned (account, policy set, then
+   Enabling it requires two reviewed records: first reconcile the complete
+   prepaid coverage cohort to zero repairable/quarantined items, then record a
+   full-cohort independent-funding readiness generation whose
+   `intended_activation_at` is the reviewed launch time and enable the control.
+   The standalone activation setting is retired. Every later OFF-to-ON
+   transition requires a fresh readiness generation, and canonical renewals
+   must remain enabled. Adverse actions fail closed when readiness, renewal
+   ownership, current coverage, or the readiness-owned activation time is
+   missing/invalid/not reached, while restoration from exact coverage remains
+   available. Grace is configuration-owned (account, policy set, then
    billing-mode default). The approved cutover policy is zero default prepaid
    grace, so an unfunded account with no override is suspended on its first
    eligible sweep. Activation does not reset an older low-balance timer.

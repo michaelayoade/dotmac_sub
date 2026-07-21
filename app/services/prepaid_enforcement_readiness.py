@@ -46,6 +46,8 @@ class PrepaidReadinessComparison:
     configuration_hash: str
     funding_decisions_hash: str
     reconstruction_evidence_sha256: str
+    coverage_evidence_sha256: str
+    coverage_blocker_count: int
     source: str
     observed_at: datetime
     currency: str
@@ -77,6 +79,28 @@ def _candidate_hash(account_ids: list[str]) -> str:
     return _hash(sorted(account_ids))
 
 
+def _coverage_evidence(
+    db: Session, *, observed_at: datetime
+) -> tuple[str, int, int, int]:
+    from app.services.prepaid_coverage_reconciliation import (
+        preview_prepaid_coverage_reconciliation,
+    )
+
+    preview = preview_prepaid_coverage_reconciliation(db, as_of=observed_at)
+    evidence_hash = _hash(
+        {
+            "subscription_ids": [str(value) for value in preview.subscription_ids],
+            "item_evidence": [item.evidence_fingerprint for item in preview.items],
+        }
+    )
+    return (
+        evidence_hash,
+        preview.blocker_count,
+        preview.repairable_count,
+        preview.quarantined_count,
+    )
+
+
 def _configuration_hash(db: Session, plan: PrepaidEnforcementPlan) -> str:
     """Hash config-resolved policy, excluding mutable financial observations."""
     return _hash(
@@ -97,6 +121,17 @@ def _configuration_hash(db: Session, plan: PrepaidEnforcementPlan) -> str:
                     "grace_source": item.grace_source.value,
                     "grace_policy_set_id": item.grace_policy_set_id,
                     "required_balance": item.required_balance,
+                    "covered_subscription_ids": [
+                        str(value) for value in item.covered_subscription_ids
+                    ],
+                    "actionable_uncovered_subscription_ids": [
+                        str(value)
+                        for value in item.actionable_uncovered_subscription_ids
+                    ],
+                    "unresolved_projection_subscription_ids": [
+                        str(value)
+                        for value in item.unresolved_projection_subscription_ids
+                    ],
                 }
                 for item in plan.items
             ],
@@ -112,6 +147,15 @@ def _funding_hash(plan: PrepaidEnforcementPlan) -> str:
                 "currency": item.currency,
                 "available_balance": item.available_balance,
                 "required_balance": item.required_balance,
+                "covered_subscription_ids": [
+                    str(value) for value in item.covered_subscription_ids
+                ],
+                "actionable_uncovered_subscription_ids": [
+                    str(value) for value in item.actionable_uncovered_subscription_ids
+                ],
+                "unresolved_projection_subscription_ids": [
+                    str(value) for value in item.unresolved_projection_subscription_ids
+                ],
             }
             for item in sorted(plan.items, key=lambda value: value.account_id)
         ]
@@ -245,6 +289,10 @@ def evaluate_prepaid_enforcement_readiness(
         account_id for account_id in account_ids if account_id not in quarantined_ids
     ]
     blockers: list[str] = []
+    from app.services import control_registry
+
+    if not control_registry.is_enabled(db, "billing.prepaid_service_renewals"):
+        blockers.append("canonical_prepaid_renewals_disabled")
     if authority_cutover_batch(db) is None:
         return PrepaidReadinessComparison(
             candidate_account_count=len(account_ids),
@@ -252,6 +300,8 @@ def evaluate_prepaid_enforcement_readiness(
             configuration_hash="0" * 64,
             funding_decisions_hash="0" * 64,
             reconstruction_evidence_sha256="0" * 64,
+            coverage_evidence_sha256="0" * 64,
+            coverage_blocker_count=len(account_ids),
             source="",
             observed_at=observed_at,
             currency=configured_currency,
@@ -276,11 +326,23 @@ def evaluate_prepaid_enforcement_readiness(
         account_ids=account_ids,
         currency=configured_currency,
     )
+    (
+        coverage_hash,
+        coverage_blocker_count,
+        coverage_repairable_count,
+        coverage_quarantined_count,
+    ) = _coverage_evidence(db, observed_at=observed_at)
+    if coverage_repairable_count:
+        blockers.append(f"prepaid_coverage_repair_required:{coverage_repairable_count}")
+    if coverage_quarantined_count:
+        blockers.append(f"prepaid_coverage_quarantined:{coverage_quarantined_count}")
     max_activation_grace_days = _max_activation_grace_days(db)
     for local in local_plan.items:
         account_id = local.account_id
         if local.currency != configured_currency:
             blockers.append(f"currency_mismatch:{account_id}")
+        if local.action == PrepaidEnforcementAction.coverage_unresolved:
+            blockers.append(f"prepaid_coverage_unresolved:{account_id}")
         if (
             local.available_balance < local.required_balance
             and local.action
@@ -295,6 +357,8 @@ def evaluate_prepaid_enforcement_readiness(
         configuration_hash=_configuration_hash(db, local_plan),
         funding_decisions_hash=_funding_hash(local_plan),
         reconstruction_evidence_sha256=reconstruction_hash,
+        coverage_evidence_sha256=coverage_hash,
+        coverage_blocker_count=coverage_blocker_count,
         source=source,
         observed_at=observed_at,
         currency=configured_currency,
@@ -344,6 +408,8 @@ def record_prepaid_enforcement_readiness(
         configuration_hash=comparison.configuration_hash,
         funding_decisions_hash=comparison.funding_decisions_hash,
         reconstruction_evidence_sha256=(comparison.reconstruction_evidence_sha256),
+        coverage_evidence_sha256=comparison.coverage_evidence_sha256,
+        coverage_blocker_count=comparison.coverage_blocker_count,
         blocker_count=comparison.quarantined_account_count,
         verified_by=actor,
         is_active=True,
@@ -368,6 +434,21 @@ def prepaid_enforcement_readiness_block_reason(
     db: Session, *, now: datetime | None = None
 ) -> str | None:
     """Return why the configured feature must remain fail-closed, if any."""
+    from app.services import control_registry
+
+    # This is a continuous architecture gate, not part of the one-time funding
+    # attestation. Without the canonical renewal writer, access enforcement can
+    # only drift farther from paid service coverage.
+    if not control_registry.is_enabled(db, "billing.prepaid_service_renewals"):
+        return "canonical_prepaid_renewals_disabled"
+    (
+        coverage_hash,
+        coverage_blocker_count,
+        _coverage_repairable_count,
+        _coverage_quarantined_count,
+    ) = _coverage_evidence(db, observed_at=_as_utc(now or datetime.now(UTC)))
+    if coverage_blocker_count:
+        return "prepaid_coverage_reconciliation_required"
     record = active_prepaid_enforcement_readiness(db)
     if record is None:
         return "prepaid_funding_readiness_missing"
@@ -419,6 +500,11 @@ def prepaid_enforcement_readiness_block_reason(
         or source != record.source
     ):
         return "prepaid_funding_readiness_reconstruction_changed"
+    if (
+        coverage_hash != record.coverage_evidence_sha256
+        or record.coverage_blocker_count != 0
+    ):
+        return "prepaid_coverage_readiness_changed"
     current_plan = plan_prepaid_enforcement(
         db,
         now=effective_now,
@@ -430,6 +516,16 @@ def prepaid_enforcement_readiness_block_reason(
     if _funding_hash(current_plan) != record.funding_decisions_hash:
         return "prepaid_funding_readiness_funding_changed"
     return None
+
+
+def prepaid_enforcement_enablement_block_reason(
+    db: Session, *, now: datetime | None = None
+) -> str | None:
+    """Require a newly recorded readiness generation for every OFF→ON cutover."""
+    record = active_prepaid_enforcement_readiness(db)
+    if record is not None and record.activated_at is not None:
+        return "prepaid_funding_readiness_rearm_required"
+    return prepaid_enforcement_readiness_block_reason(db, now=now)
 
 
 def mark_prepaid_enforcement_activated(

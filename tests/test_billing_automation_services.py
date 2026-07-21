@@ -888,7 +888,7 @@ class TestRunInvoiceCycle:
             billing_automation._period_end(period_start, BillingCycle.monthly)
         )
 
-    def test_skips_prepaid_invoice_when_paid_coverage_overlaps(
+    def test_scheduled_invoice_cycle_does_not_touch_prepaid_paid_coverage(
         self, db_session, subscription, subscriber_account
     ):
         from app.models.billing import Invoice, InvoiceLine, InvoiceStatus
@@ -899,7 +899,6 @@ class TestRunInvoiceCycle:
             PriceType,
             SubscriptionStatus,
         )
-        from app.models.domain_settings import DomainSetting, SettingDomain
         from app.models.subscriber import AccountStatus
 
         run_at = datetime(2026, 6, 28, tzinfo=UTC).replace(tzinfo=None)
@@ -913,11 +912,6 @@ class TestRunInvoiceCycle:
         subscriber_account.status = AccountStatus.active
         db_session.add_all(
             [
-                DomainSetting(
-                    domain=SettingDomain.modules,
-                    key="billing_prepaid_monthly_invoicing",
-                    value_text="true",
-                ),
                 OfferPrice(
                     offer_id=subscription.offer_id,
                     price_type=PriceType.recurring,
@@ -969,9 +963,10 @@ class TestRunInvoiceCycle:
         )
         assert len(invoices) == 1
         assert summary["invoices_created"] == 0
-        assert summary["skipped"] == 1
+        assert summary["skipped"] == 0
+        assert summary["prepaid_skipped"] == 1
         db_session.refresh(subscription)
-        assert subscription.next_billing_at == paid_until
+        assert subscription.next_billing_at == run_at
 
     def test_applies_existing_credit_to_new_invoice(
         self, db_session, subscription, subscriber_account
@@ -2840,11 +2835,12 @@ class TestProratedInvoiceIdempotency:
         assert len(lines) == 1
 
 
-class TestPrepaidDraftUntilFunded:
-    """Item 1 of PREPAID_INVOICE_DEPOSIT_ALIGNMENT: prepaid advance invoices stay
-    DRAFT (not AR) until the deposit funds them. This is now the only scheduled
-    runner behavior for prepaid monthly invoices; postpaid AR logic must not be
-    reused for prepaid renewals."""
+class RetiredPrepaidDraftUntilFunded:
+    """Historical tests retained as non-collected migration evidence.
+
+    This draft-invoice implementation is retired by migration 392 and must not
+    be collected or re-enabled. New prepaid periods belong exclusively to the
+    debit + entitlement renewal owner."""
 
     def _setup_prepaid_monthly(self, db_session, subscription, subscriber_account):
         from app.models.catalog import (

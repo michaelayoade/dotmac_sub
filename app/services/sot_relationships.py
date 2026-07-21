@@ -1200,7 +1200,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "confirmed payment settlement preview and evidence",
                     "payment creation and settlement idempotency and audit",
                     "exact settlement allocation and unallocated-credit links",
-                    "previewed prepaid renewal consequence and exact debit link",
+                    "confirmed payment funding-change outbox event",
                     "settled account-credit allocation preview and confirmation",
                     "exact invoice-credit and account-credit-consumption links",
                     "native unallocated-credit reconciliation transactions",
@@ -1222,7 +1222,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "historical payment reversal evidence reconciliation",
                     "payment reversal access-reconciliation handoff",
                 ),
-                depends_on=("financial.ledger", "financial.billing_accounts"),
+                depends_on=(
+                    "financial.ledger",
+                    "financial.billing_accounts",
+                    "events.dispatcher",
+                ),
             ),
             SOTService(
                 name="financial.import_payment_batch_reversals",
@@ -1578,6 +1582,331 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="financial.prepaid_service_coverage",
+                module="app.services.prepaid_service_coverage",
+                owns=(
+                    "current prepaid service coverage classification",
+                    "unresolved paid-through projection classification",
+                ),
+                depends_on=(
+                    "access.subscription_lifecycle",
+                    "financial.prepaid_service_renewals",
+                ),
+                notes=(
+                    "Exact entitlement and granted-service intervals are positive "
+                    "coverage evidence. A future next_billing_at without evidence "
+                    "is a reconciliation blocker, never restoration or suspension "
+                    "authority. Paid invoices must first be projected into exact "
+                    "entitlements by the reconciliation owner."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="current prepaid service coverage classification",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical subscription projection",
+                                "funded service entitlement intervals",
+                                "explicit granted-service intervals",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="unresolved paid-through projection classification",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical subscription projection",
+                                "funded service entitlement intervals",
+                                "explicit granted-service intervals",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical subscription projection",
+                            owner="access.subscription_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "Subscription identity, account, lifecycle, and "
+                                "diagnostic next_billing_at projection"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="funded service entitlement intervals",
+                            owner="financial.prepaid_service_renewals",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active ServiceEntitlement interval for the exact "
+                                "subscription"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="explicit granted-service intervals",
+                            owner="access.subscription_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "applied ServiceExtensionEntry exact previous and new "
+                                "billing-anchor interval"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary=(
+                            "Caller owns the session; the bounded batch resolver reads "
+                            "coverage evidence without writes or transaction completion."
+                        ),
+                        locking=(
+                            "No read lock. State-changing access commands re-resolve "
+                            "coverage after taking their canonical account lock."
+                        ),
+                        idempotency=(
+                            "The same subscription cohort, as-of time, and visible "
+                            "evidence produce identical typed classifications."
+                        ),
+                        retries=(
+                            "Transient reads may be retried; missing evidence remains a "
+                            "deterministic unresolved or uncovered classification."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(),
+                        mapping_owner=(
+                            "threshold, access, enforcement, reconciliation, and "
+                            "reporting adapters"
+                        ),
+                        fail_closed_on=(
+                            "future paid-through projection without current evidence",
+                            "missing or contradictory coverage evidence",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "prepaid threshold direct entitlement/invoice lookups and "
+                            "future billing-anchor operational inference"
+                        ),
+                        new_owner="financial.prepaid_service_coverage",
+                        verification=(
+                            "Coverage precedence, extension interval, unresolved anchor, "
+                            "threshold, access, enforcement, and architecture tests."
+                        ),
+                        cutover_gate=(
+                            "Every prepaid threshold and access consequence consumes the "
+                            "typed coverage decision."
+                        ),
+                        fallback_retirement=(
+                            "Direct caller coverage queries and the paid-invoice read-time "
+                            "fallback are removed."
+                        ),
+                    ),
+                    steward="billing and network access",
+                    design_refs=(
+                        "docs/designs/PREPAID_SERVICE_COVERAGE.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_prepaid_service_coverage.py",
+                        "tests/test_prepaid_threshold_resolver.py",
+                        "tests/test_prepaid_balance_sweep.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="financial.prepaid_service_coverage_reconciliation",
+                module="app.services.prepaid_coverage_reconciliation",
+                owns=("exact prepaid coverage evidence reconciliation",),
+                depends_on=(
+                    "access.subscription_lifecycle",
+                    "financial.account_adjustments",
+                    "financial.invoices",
+                    "financial.prepaid_service_coverage",
+                    "financial.prepaid_service_renewals",
+                ),
+                notes=(
+                    "A preview classifies the complete or selected prepaid cohort from "
+                    "structural evidence. The owner locks and rechecks the preview, "
+                    "creates only missing exact entitlements, and persists append-only "
+                    "run/item evidence; ambiguity remains quarantined."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="exact prepaid coverage evidence reconciliation",
+                            role=OwnerRole.RECONCILER,
+                            input_names=(
+                                "canonical prepaid subscription and account state",
+                                "funded service entitlement intervals",
+                                "exact paid invoice line periods",
+                                "exact prepaid renewal adjustments",
+                                "explicit granted-service intervals",
+                            ),
+                            canonical_writer=(
+                                "financial.prepaid_service_coverage_reconciliation"
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical prepaid subscription and account state",
+                            owner="access.subscription_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "collectible prepaid Subscription identity, account, "
+                                "lifecycle, and diagnostic paid-through projection"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="funded service entitlement intervals",
+                            owner="financial.prepaid_service_renewals",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="active ServiceEntitlement rows and exact source links",
+                        ),
+                        AuthorityInput(
+                            name="exact paid invoice line periods",
+                            owner="financial.invoices",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active fully paid invoice, positive subscription line, "
+                                "currency, and ordered billing period"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="exact prepaid renewal adjustments",
+                            owner="financial.account_adjustments",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "unreversed prepaid_service_renewal adjustment, linked "
+                                "active debit, and structured origin period"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="explicit granted-service intervals",
+                            owner="access.subscription_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="applied ServiceExtensionEntry exact added interval",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "The public reconciliation command enters the owner executor "
+                            "once; preview remains read-only and adapters own only the "
+                            "session lifecycle."
+                        ),
+                        locking=(
+                            "Accounts, subscriptions, invoice lines/invoices, and "
+                            "adjustments/ledger rows lock in deterministic identifier order "
+                            "before the final fingerprint check."
+                        ),
+                        idempotency=(
+                            "A unique operator idempotency key replays the immutable run "
+                            "only when its preview fingerprint matches; source constraints "
+                            "prevent duplicate active entitlements."
+                        ),
+                        retries=(
+                            "Serialization and deadlock failures may be retried with the "
+                            "same key; stale or ambiguous evidence requires a new preview."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "financial.prepaid_service_coverage_reconciliation.active_caller_transaction",
+                            "financial.prepaid_service_coverage_reconciliation.command_contract_violation",
+                            "financial.prepaid_service_coverage_reconciliation.idempotency_conflict",
+                            "financial.prepaid_service_coverage_reconciliation.incomplete_repair",
+                            "financial.prepaid_service_coverage_reconciliation.invalid_command_context",
+                            "financial.prepaid_service_coverage_reconciliation.invalid_reason",
+                            "financial.prepaid_service_coverage_reconciliation.missing_idempotency_key",
+                            "financial.prepaid_service_coverage_reconciliation.nested_owner_command",
+                            "financial.prepaid_service_coverage_reconciliation.nested_transaction_completion",
+                            "financial.prepaid_service_coverage_reconciliation.source_changed",
+                            "financial.prepaid_service_coverage_reconciliation.stale_preview",
+                            "financial.prepaid_service_coverage_reconciliation.subscription_not_found",
+                        ),
+                        mapping_owner="operator CLI and future admin adapters",
+                        retryable_codes=(),
+                        fail_closed_on=(
+                            "missing, malformed, duplicate, or contradictory evidence",
+                            "preview drift or idempotency-key reuse with new evidence",
+                            "failure to create the exact reviewed entitlement",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("prepaid_coverage.reconciled",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility="Additive payload evolution within schema version 1.",
+                        replay=(
+                            "Consumers deduplicate by event id and the immutable run id."
+                        ),
+                    ),
+                    projections=(
+                        ProjectionContract(
+                            name="prepaid coverage reconciliation evidence",
+                            input_names=(
+                                "canonical prepaid subscription and account state",
+                                "funded service entitlement intervals",
+                                "exact paid invoice line periods",
+                                "exact prepaid renewal adjustments",
+                                "explicit granted-service intervals",
+                            ),
+                            writer=(
+                                "financial.prepaid_service_coverage_reconciliation"
+                            ),
+                            freshness=(
+                                "On-demand before repair and continuously re-evaluated by "
+                                "the prepaid enforcement readiness gate."
+                            ),
+                            stale_behavior=(
+                                "A stale fingerprint rejects confirmation; any current "
+                                "repairable or quarantined item blocks adverse enforcement."
+                            ),
+                            drift_signal=(
+                                "The full-cohort preview reports repairable and quarantined "
+                                "counts plus a deterministic evidence hash."
+                            ),
+                            rebuild_operation=(
+                                "preview_prepaid_coverage_reconciliation followed by the "
+                                "fingerprint-bound reconcile_prepaid_service_coverage command"
+                            ),
+                            repair_owner=(
+                                "financial.prepaid_service_coverage_reconciliation"
+                            ),
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "manual SQL/one-off entitlement repair and paid-invoice "
+                            "read-time coverage fallback"
+                        ),
+                        new_owner=("financial.prepaid_service_coverage_reconciliation"),
+                        verification=(
+                            "Exact-source, ambiguity, stale preview, idempotency, event, "
+                            "readiness, and architecture tests."
+                        ),
+                        cutover_gate=(
+                            "Prepaid adverse enforcement continuously requires zero "
+                            "repairable or quarantined coverage items."
+                        ),
+                        fallback_retirement=(
+                            "Paid invoice rows are no longer treated as coverage at read "
+                            "time; the activation timestamp setting is retired."
+                        ),
+                    ),
+                    steward="billing operations",
+                    design_refs=(
+                        "docs/designs/PREPAID_SERVICE_COVERAGE.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_prepaid_coverage_reconciliation.py",
+                        "tests/test_prepaid_enforcement_readiness.py",
+                        "tests/architecture/test_prepaid_threshold_boundary.py",
+                    ),
+                ),
+            ),
+            SOTService(
                 name="financial.prepaid_threshold",
                 module="app.services.prepaid_threshold",
                 owns=(
@@ -1588,9 +1917,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "access.subscription_lifecycle",
                     "control.settings_spec",
                     "customer.accounts",
-                    "financial.invoices",
                     "financial.prepaid_currency",
-                    "financial.prepaid_service_renewals",
+                    "financial.prepaid_service_coverage",
                     "service_intent.catalog_policy",
                 ),
                 notes=(
@@ -1615,8 +1943,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             role=OwnerRole.RESOLVER,
                             input_names=(
                                 "canonical collectible prepaid subscriptions",
-                                "canonical paid entitlement coverage",
-                                "bounded legacy paid invoice coverage",
+                                "canonical current service coverage",
                                 "canonical recurring catalog prices",
                                 "canonical prepaid currency",
                                 "prepaid threshold protocol",
@@ -1646,21 +1973,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             ),
                         ),
                         AuthorityInput(
-                            name="canonical paid entitlement coverage",
-                            owner="financial.prepaid_service_renewals",
-                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            name="canonical current service coverage",
+                            owner="financial.prepaid_service_coverage",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
                             source=(
-                                "active ServiceEntitlement interval for the exact account "
-                                "and subscription"
-                            ),
-                        ),
-                        AuthorityInput(
-                            name="bounded legacy paid invoice coverage",
-                            owner="financial.invoices",
-                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                            source=(
-                                "active paid invoice line and billing interval used only "
-                                "when no entitlement covers the subscription"
+                                "typed covered, due-uncovered, or unresolved-projection "
+                                "decision for each collectible prepaid subscription"
                             ),
                         ),
                         AuthorityInput(
@@ -1683,7 +2001,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             kind=AuthorityKind.CONTROL_INPUT,
                             source=(
                                 "collectible status set, coverage precedence, newest-price "
-                                "ordering, discount semantics, and max(minimum, renewal) rule"
+                                "ordering, discount semantics, current-coverage precedence, "
+                                "and due-only max(minimum, renewal) rule"
                             ),
                         ),
                     ),

@@ -1,11 +1,10 @@
 """Owner for funding one due prepaid service period from customer position.
 
-Payment settlement remains the owner when a new top-up immediately renews a
-service. This owner covers the other legitimate case: funding already exists in
-the reviewed opening position or earlier native facts when the next service
-cycle becomes due. It posts one preview-bound account adjustment, links one
-active service entitlement to that exact debit, and advances the subscription
-anchor in the caller's transaction.
+Payment settlement records confirmed money and emits a funding-change event;
+it never creates service debit or entitlement evidence. This owner handles both
+payment-triggered and scheduled renewal decisions. It posts one preview-bound
+account adjustment, links one active service entitlement to that exact debit,
+and advances the subscription anchor in the caller's transaction.
 """
 
 from __future__ import annotations
@@ -15,9 +14,9 @@ import hashlib
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import NoReturn
 from uuid import UUID
 
-from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -49,6 +48,7 @@ from app.services.billing.adjustments import (
     stage_system_account_adjustment,
 )
 from app.services.common import coerce_uuid, round_money
+from app.services.domain_errors import DomainError
 from app.services.owner_commands import CommandContext
 from app.services.service_entitlements import (
     ensure_prepaid_entitlement_for_wallet_debit,
@@ -66,17 +66,24 @@ PREPAID_SERVICE_RENEWAL_ELIGIBLE_STATUSES = frozenset(
 _MAX_AUTOMATIC_LAG = timedelta(days=2)
 
 
-def _adjustment_http_error(exc: AccountAdjustmentError) -> HTTPException:
-    status_code = {
-        "financial.account_adjustments.account_not_found": 404,
-        "financial.account_adjustments.invalid_configuration": 503,
-        "financial.account_adjustments.insufficient_funding": 402,
-        "financial.account_adjustments.stale_preview": 409,
-        "financial.account_adjustments.idempotency_conflict": 409,
-        "financial.account_adjustments.incomplete_evidence": 409,
-        "financial.account_adjustments.write_conflict": 409,
-    }.get(exc.code, 400)
-    return HTTPException(status_code=status_code, detail=exc.message)
+class PrepaidServiceRenewalError(DomainError):
+    """Transport-neutral renewal failure."""
+
+
+def _error(suffix: str, message: str, **details: object) -> NoReturn:
+    raise PrepaidServiceRenewalError(
+        code=f"financial.prepaid_service_renewals.{suffix}",
+        message=message,
+        details=details,
+    )
+
+
+def _adjustment_error(exc: AccountAdjustmentError) -> NoReturn:
+    _error(
+        "adjustment_rejected",
+        exc.message,
+        account_adjustment_code=exc.code,
+    )
 
 
 def _utc(value: datetime) -> datetime:
@@ -218,18 +225,16 @@ def _subscription_for_request(
 ) -> Subscription:
     subscription = db.get(Subscription, coerce_uuid(subscription_id))
     if subscription is None:
-        raise HTTPException(status_code=404, detail="Subscription not found")
+        _error("subscription_not_found", "Subscription was not found.")
     if subscription.billing_mode != BillingMode.prepaid:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "Only a prepaid subscription can receive an account-credit-funded cycle"
-            ),
+        _error(
+            "ineligible_billing_mode",
+            "Only a prepaid subscription can receive a funded service cycle.",
         )
     if subscription.status not in PREPAID_SERVICE_RENEWAL_ELIGIBLE_STATUSES:
-        raise HTTPException(
-            status_code=409,
-            detail="Subscription is not eligible for prepaid service renewal",
+        _error(
+            "ineligible_status",
+            "Subscription is not eligible for prepaid service renewal.",
         )
     return subscription
 
@@ -264,13 +269,13 @@ def preview_prepaid_service_renewal(
     period_start = _utc(starts_at)
     period_end = _utc(ends_at)
     if period_end <= period_start:
-        raise HTTPException(status_code=400, detail="Renewal period must be positive")
+        _error("invalid_period", "Renewal period must be positive.")
     charge = round_money(amount)
     if charge <= Decimal("0.00"):
-        raise HTTPException(status_code=400, detail="Renewal amount must be positive")
+        _error("invalid_amount", "Renewal amount must be positive.")
     unit = str(currency).strip().upper()
     if len(unit) != 3:
-        raise HTTPException(status_code=400, detail="Renewal currency is invalid")
+        _error("invalid_currency", "Renewal currency is invalid.")
 
     origin_ref = _origin_ref(subscription.id, period_start, period_end)
     idempotency_key = _idempotency_key(origin_ref)
@@ -312,9 +317,9 @@ def preview_prepaid_service_renewal(
                 origin_ref=origin_ref,
                 replayed=True,
             )
-        raise HTTPException(
-            status_code=409,
-            detail="Prepaid service period already has active funding evidence",
+        _error(
+            "period_already_funded",
+            "Prepaid service period already has active funding evidence.",
         )
 
     try:
@@ -337,7 +342,7 @@ def preview_prepaid_service_renewal(
             ),
         )
     except AccountAdjustmentError as exc:
-        raise _adjustment_http_error(exc) from exc
+        _adjustment_error(exc)
     return PrepaidServiceRenewalPreview(
         account_id=subscription.subscriber_id,
         subscription_id=subscription.id,
@@ -360,12 +365,11 @@ def confirm_prepaid_service_renewal(
     preview: PrepaidServiceRenewalPreview,
     *,
     evidence_ref: str,
-    commit: bool = False,
 ) -> PrepaidServiceRenewalResult:
     """Lock, re-preview, and atomically stage debit + entitlement + anchor."""
     evidence = evidence_ref.strip()
     if not evidence:
-        raise HTTPException(status_code=400, detail="evidence_ref is required")
+        _error("missing_evidence_ref", "An evidence reference is required.")
 
     # Serialize the idempotency lookup with the funding re-preview and write.
     # Looking up the adjustment before this lock let two concurrent callers
@@ -397,9 +401,9 @@ def confirm_prepaid_service_renewal(
             or round_money(entitlement.amount_funded) != preview.amount
             or entitlement.currency != preview.currency
         ):
-            raise HTTPException(
-                status_code=409,
-                detail="Prepaid renewal idempotency evidence does not match request",
+            _error(
+                "idempotency_conflict",
+                "Prepaid renewal idempotency evidence does not match the request.",
             )
         return PrepaidServiceRenewalResult(
             preview=preview,
@@ -420,14 +424,14 @@ def confirm_prepaid_service_renewal(
         currency=preview.currency,
     )
     if current.fingerprint != preview.fingerprint:
-        raise HTTPException(
-            status_code=409,
-            detail="Prepaid funding changed after preview; preview again",
+        _error(
+            "stale_preview",
+            "Prepaid funding changed after preview; preview again.",
         )
     if not current.allowed:
-        raise HTTPException(
-            status_code=402,
-            detail="Insufficient prepaid funding for service renewal",
+        _error(
+            "insufficient_funding",
+            "Insufficient prepaid funding for service renewal.",
         )
 
     try:
@@ -458,7 +462,7 @@ def confirm_prepaid_service_renewal(
             ),
         )
     except AccountAdjustmentError as exc:
-        raise _adjustment_http_error(exc) from exc
+        _adjustment_error(exc)
     entitlement = ensure_prepaid_entitlement_for_wallet_debit(
         db,
         subscription=subscription,
@@ -467,7 +471,10 @@ def confirm_prepaid_service_renewal(
         ends_at=current.ends_at,
     )
     if entitlement is None:
-        raise RuntimeError("Prepaid renewal owner produced no entitlement")
+        _error(
+            "incomplete_entitlement",
+            "Prepaid renewal did not produce exact entitlement evidence.",
+        )
     metadata = dict(entitlement.metadata_ or {})
     metadata.update(
         {
@@ -483,11 +490,6 @@ def confirm_prepaid_service_renewal(
     ):
         subscription.next_billing_at = current.ends_at
     db.flush()
-    if commit:
-        db.commit()
-        db.refresh(adjustment_result.adjustment)
-        db.refresh(adjustment_result.ledger_entry)
-        db.refresh(entitlement)
     return PrepaidServiceRenewalResult(
         preview=current,
         adjustment=adjustment_result.adjustment,
@@ -641,10 +643,11 @@ def apply_due_prepaid_service_after_funding_change(
 ) -> FundingChangeRenewalResult:
     """Consume newly available funding for currently due prepaid service.
 
-    Account-credit settlement and invoice allocation remain separate owners.
-    Their completed funding-change event invokes this owner only after ordinary
-    payable invoices have had first claim on the credit. A lapsed service starts
-    a new period on the payment day; missed inactive periods are never back-billed.
+    Payment settlement, account-credit settlement and invoice allocation remain
+    separate owners. Their completed funding-change event invokes this owner
+    only after ordinary payable invoices have had first claim on the credit. A
+    lapsed service starts a new period on the payment day; missed inactive
+    periods are never back-billed.
     """
     evaluated_at = _utc(effective_at)
     currency = str(funding_currency or "").strip().upper()
@@ -742,7 +745,6 @@ def apply_due_prepaid_service_after_funding_change(
             db,
             preview,
             evidence_ref=evidence,
-            commit=False,
         )
         if not renewal.replayed:
             renewals.append(
@@ -924,7 +926,6 @@ def run_due_prepaid_service_renewals(
                     "scheduled-billing-run:"
                     f"{effective_at.isoformat().replace('+00:00', 'Z')}"
                 ),
-                commit=False,
             )
             if not renewal.replayed:
                 stage_prepaid_service_renewed_outcome(
@@ -964,6 +965,7 @@ __all__ = [
     "FundingChangeRenewalResult",
     "PREPAID_SERVICE_RENEWAL_ELIGIBLE_STATUSES",
     "PrepaidServiceRenewalPreview",
+    "PrepaidServiceRenewalError",
     "PrepaidServiceRenewalResult",
     "PrepaidServiceRenewalSource",
     "PrepaidServiceRenewedOutcome",

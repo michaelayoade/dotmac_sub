@@ -237,21 +237,6 @@ _FEATURE_CONTROLS: tuple[Control, ...] = (
         description="Portal/agent location confirm-or-correct prompt.",
     ),
     Control(
-        key="billing.prepaid_monthly_invoicing",
-        layer=Layer.feature,
-        owner_module="billing",
-        default=False,
-        on_missing=False,
-        legacy=(
-            LegacyAlias(
-                _B,
-                "prepaid_monthly_invoicing_enabled",
-                "PREPAID_MONTHLY_INVOICING_ENABLED",
-            ),
-        ),
-        description="Monthly prepaid invoice generation.",
-    ),
-    Control(
         key="billing.prepaid_service_renewals",
         layer=Layer.feature,
         owner_module="billing",

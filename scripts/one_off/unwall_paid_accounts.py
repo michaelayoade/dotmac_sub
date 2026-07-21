@@ -1,15 +1,16 @@
-"""Restore service to paid-up-but-walled accounts (account-level, no ledger writes).
+"""Restore funded-or-covered walled service (no ledger writes).
 
-The safe replacement for the per-invoice credit-settle backfill. Keys on the
-authoritative account-level net (``get_available_balance`` — imported deposit for
-migrated accounts, ledger for native), NOT per-invoice balance_due. A walled
-(suspended/blocked) account whose available balance is >= 0 is paid up and gets
-its service restored: reason-scoped status restore + re-derive + RADIUS refresh
-+ CoA. No money/ledger changes. See app/services/billing/unwall_paid_accounts.py.
+The safe replacement for per-invoice or future-date inference. Prepaid
+selection uses canonical account funding or exact current coverage; a paid
+invoice or future ``next_billing_at`` alone is never enough. The restoration
+owner releases only eligible financial locks, then status is re-derived and
+RADIUS/CoA are refreshed. No money/ledger changes. See
+app/services/billing/unwall_paid_accounts.py.
 
 Dry-run by default; nothing written without --apply.
 
   python -m scripts.one_off.unwall_paid_accounts                       # dry-run
+  python -m scripts.one_off.unwall_paid_accounts --prepaid-locks-only # safe cohort
   python -m scripts.one_off.unwall_paid_accounts --apply --limit 1     # stage
   python -m scripts.one_off.unwall_paid_accounts --apply \
       --logins 100015097,100017641,100023828                           # reported set
@@ -59,11 +60,19 @@ def main() -> None:
         help="Send 'service resumed' notifications (off by default for bulk catch-up).",
     )
     parser.add_argument(
+        "--prepaid-locks-only",
+        action="store_true",
+        help=(
+            "Select only active prepaid locks the canonical restoration owner "
+            "can currently release."
+        ),
+    )
+    parser.add_argument(
         "--restore-logins",
         default="",
         help=(
             "TARGETED mode: restore ONLY these comma-separated logins' accounts "
-            "(paid-up gated), instead of the full walled cohort. Use this to "
+            "(funding/coverage gated), instead of the full walled cohort. Use this to "
             "un-wall a specific reported set first."
         ),
     )
@@ -76,6 +85,8 @@ def main() -> None:
     dry_run = not args.apply
     restore_logins = [s.strip() for s in args.restore_logins.split(",") if s.strip()]
     logins = [s.strip() for s in args.logins.split(",") if s.strip()]
+    if args.prepaid_locks_only and restore_logins:
+        parser.error("--prepaid-locks-only cannot be combined with --restore-logins")
 
     db = SessionLocal()
     try:
@@ -96,13 +107,14 @@ def main() -> None:
             send_coa=not args.no_coa,
             notify=args.notify,
             extra_subscription_ids=extra,
+            prepaid_locks_only=args.prepaid_locks_only,
         )
     finally:
         db.close()
 
     mode = "DRY-RUN (no changes written)" if dry_run else "APPLY"
-    print(f"\n=== Un-wall paid-up accounts — {mode} ===")
-    print(f"walled + paid-up candidates : {summary.candidates}")
+    print(f"\n=== Un-wall funded-or-covered accounts — {mode} ===")
+    print(f"eligible walled candidates  : {summary.candidates}")
     if not dry_run:
         print(f"accounts restored           : {summary.restored}")
         print(f"errors                      : {summary.errors}")

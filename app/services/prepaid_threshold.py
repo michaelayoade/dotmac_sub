@@ -9,17 +9,19 @@ portal projection, and the audit harness cannot drift apart. A second
 implementation of a suspension threshold would let an audit tool disagree with
 the enforcement it exists to check.
 
-The threshold is::
+The access threshold is zero while every collectible prepaid service has exact
+current coverage. A configured minimum is a reserve/top-up target, not a reason
+to suspend service that is already paid for. When a service is due and has no
+current coverage, the threshold is::
 
     max(configured_minimum, unfunded_renewal_requirement)
 
 where ``configured_minimum`` is the account's ``min_balance`` override, falling
 back to the canonical ``billing.prepaid_default_min_balance`` setting, and
-``unfunded_renewal_requirement`` is the summed effective price of every
-collectible prepaid subscription that has **no current paid coverage** — paid
-coverage being an active ``ServiceEntitlement`` spanning ``now``, or (legacy
-fallback, while cutover-era invoices are reconciled into explicit entitlement
-rows) a paid invoice whose billing period spans ``now``.
+``unfunded_renewal_requirement`` is the summed effective price of every due,
+uncovered collectible prepaid subscription. Coverage classification belongs to
+``financial.prepaid_service_coverage``. A future billing anchor without that
+evidence is an unresolved projection and blocks adverse enforcement.
 
 Query cost is bounded by the number of accounts *batches*, not by the number of
 accounts: resolving 5,269 accounts costs the same handful of queries as resolving
@@ -40,13 +42,6 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.billing import (
-    Invoice,
-    InvoiceLine,
-    InvoiceStatus,
-    ServiceEntitlement,
-    ServiceEntitlementStatus,
-)
 from app.models.catalog import (
     BillingMode,
     OfferPrice,
@@ -93,9 +88,19 @@ class PrepaidThresholdDecision:
     configured_minimum: Decimal
     unfunded_renewal_requirement: Decimal
     currency: str
+    covered_subscription_ids: tuple[UUID, ...] = ()
+    actionable_uncovered_subscription_ids: tuple[UUID, ...] = ()
+    unresolved_projection_subscription_ids: tuple[UUID, ...] = ()
 
     @property
     def threshold(self) -> Decimal:
+        if not self.actionable_uncovered_subscription_ids:
+            return ZERO
+        return max(self.configured_minimum, self.unfunded_renewal_requirement)
+
+    @property
+    def top_up_target(self) -> Decimal:
+        """Advisory reserve/renewal target, never a coverage override."""
         return max(self.configured_minimum, self.unfunded_renewal_requirement)
 
 
@@ -140,13 +145,22 @@ def _decisions(
     configured: dict[str, Decimal],
     required: dict[str, Decimal],
     currency: str,
+    covered: dict[str, tuple[UUID, ...]] | None = None,
+    actionable: dict[str, tuple[UUID, ...]] | None = None,
+    unresolved: dict[str, tuple[UUID, ...]] | None = None,
 ) -> dict[str, PrepaidThresholdDecision]:
+    covered = covered or {}
+    actionable = actionable or {}
+    unresolved = unresolved or {}
     return {
         account_id: PrepaidThresholdDecision(
             account_id=account_id,
             configured_minimum=configured[account_id],
             unfunded_renewal_requirement=required.get(account_id, ZERO),
             currency=currency,
+            covered_subscription_ids=covered.get(account_id, ()),
+            actionable_uncovered_subscription_ids=actionable.get(account_id, ()),
+            unresolved_projection_subscription_ids=unresolved.get(account_id, ()),
         )
         for account_id in account_ids
     }
@@ -220,53 +234,52 @@ def resolve_prepaid_threshold_decisions(
             currency=enforcement_currency,
         )
 
-    subscription_ids = [s.id for s in subscriptions]
+    # 3. Classify current service through the named coverage owner. A future
+    # billing anchor without evidence is unresolved, not paid service.
+    from app.services.prepaid_service_coverage import (
+        PrepaidCoverageStatus,
+        resolve_prepaid_service_coverage,
+    )
 
-    # 3. current paid coverage — an active entitlement spanning now.
-    covered: set[str] = {
-        str(subscription_id)
-        for (subscription_id,) in db.execute(
-            select(ServiceEntitlement.subscription_id).where(
-                ServiceEntitlement.subscription_id.in_(subscription_ids),
-                ServiceEntitlement.status == ServiceEntitlementStatus.active,
-                ServiceEntitlement.starts_at <= effective_now,
-                ServiceEntitlement.ends_at > effective_now,
-            )
-        ).all()
-    }
+    coverage = resolve_prepaid_service_coverage(
+        db,
+        subscriptions,
+        as_of=effective_now,
+    )
+    covered_by_account: dict[str, list[UUID]] = defaultdict(list)
+    actionable_by_account: dict[str, list[UUID]] = defaultdict(list)
+    unresolved_by_account: dict[str, list[UUID]] = defaultdict(list)
+    for subscription in subscriptions:
+        account_key = str(subscription.subscriber_id)
+        status = coverage[subscription.id].status
+        if status == PrepaidCoverageStatus.covered:
+            covered_by_account[account_key].append(subscription.id)
+        elif status == PrepaidCoverageStatus.unresolved_projection:
+            unresolved_by_account[account_key].append(subscription.id)
+        else:
+            actionable_by_account[account_key].append(subscription.id)
 
-    # 4. legacy fallback: a paid invoice whose billing period spans now. Only for
-    #    the subscriptions that no entitlement row covers, matching the scalar
-    #    resolver, which consults this only when the entitlement lookup misses.
-    uncovered = [s.id for s in subscriptions if str(s.id) not in covered]
-    if uncovered:
-        covered.update(
-            str(subscription_id)
-            for (subscription_id,) in db.execute(
-                select(InvoiceLine.subscription_id)
-                .join(Invoice, Invoice.id == InvoiceLine.invoice_id)
-                .where(
-                    InvoiceLine.subscription_id.in_(uncovered),
-                    InvoiceLine.is_active.is_(True),
-                    Invoice.is_active.is_(True),
-                    Invoice.status == InvoiceStatus.paid,
-                    Invoice.billing_period_start.isnot(None),
-                    Invoice.billing_period_start <= effective_now,
-                    Invoice.billing_period_end.isnot(None),
-                    Invoice.billing_period_end > effective_now,
-                )
-                .distinct()
-            ).all()
-        )
-
-    # 5. pricing inputs, fetched once per distinct offer / offer-version.
-    unfunded = [s for s in subscriptions if str(s.id) not in covered]
+    # 4. Only genuinely due/uncovered services form an access requirement.
+    # Unresolved projections are quarantined from adverse action.
+    unfunded = [
+        subscription
+        for subscription in subscriptions
+        if coverage[subscription.id].status == PrepaidCoverageStatus.uncovered_due
+    ]
     if not unfunded:
         return _decisions(
             ids,
             configured=configured,
             required={},
             currency=enforcement_currency,
+            covered={
+                key: tuple(sorted(values, key=str))
+                for key, values in covered_by_account.items()
+            },
+            unresolved={
+                key: tuple(sorted(values, key=str))
+                for key, values in unresolved_by_account.items()
+            },
         )
 
     version_ids = {s.offer_version_id for s in unfunded if s.offer_version_id}
@@ -294,7 +307,7 @@ def resolve_prepaid_threshold_decisions(
         ).all():
             offer_prices[str(offer_row.offer_id)].append(offer_row)
 
-    # 6. sum the effective price of every unfunded prepaid subscription.
+    # 5. sum the effective price of every due, uncovered subscription.
     required: dict[str, Decimal] = defaultdict(lambda: ZERO)
     for subscription in unfunded:
         amount: Decimal | None = None
@@ -343,6 +356,18 @@ def resolve_prepaid_threshold_decisions(
         configured=configured,
         required=required,
         currency=enforcement_currency,
+        covered={
+            key: tuple(sorted(values, key=str))
+            for key, values in covered_by_account.items()
+        },
+        actionable={
+            key: tuple(sorted(values, key=str))
+            for key, values in actionable_by_account.items()
+        },
+        unresolved={
+            key: tuple(sorted(values, key=str))
+            for key, values in unresolved_by_account.items()
+        },
     )
 
 

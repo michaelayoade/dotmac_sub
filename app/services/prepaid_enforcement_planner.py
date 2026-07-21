@@ -53,6 +53,7 @@ PREPAID_BALANCE_ENFORCEMENT_CONTROL = "collections.prepaid_balance_enforcement"
 class PrepaidEnforcementAction(StrEnum):
     not_applicable = "not_applicable"
     billing_profile_invalid = "billing_profile_invalid"
+    coverage_unresolved = "coverage_unresolved"
     clear_stale_timers = "clear_stale_timers"
     restore = "restore"
     warn = "warn"
@@ -67,13 +68,13 @@ class PrepaidEnforcementAction(StrEnum):
 
 
 class PrepaidEnforcementPolicyIssue(StrEnum):
-    ACTIVATION_NOT_CONFIGURED = "prepaid_enforcement_activation_at_not_configured"
-    ACTIVATION_INVALID = "prepaid_enforcement_activation_at_invalid"
+    READINESS_NOT_RECORDED = "prepaid_enforcement_readiness_not_recorded"
 
 
 class PrepaidEnforcementReasonSource(StrEnum):
     OWNER = "owner"
     BILLING_PROFILE = "billing_profile"
+    COVERAGE = "prepaid_service_coverage"
     WINDOW = "enforcement_window"
     SHIELD = "financial_shield"
     HEALTH = "enforcement_health"
@@ -125,6 +126,9 @@ class PrepaidEnforcementPlanItem:
     active_subscription_count: int
     suspended_subscription_count: int
     active_prepaid_lock_count: int
+    covered_subscription_ids: tuple[UUID, ...]
+    actionable_uncovered_subscription_ids: tuple[UUID, ...]
+    unresolved_projection_subscription_ids: tuple[UUID, ...]
     prepaid_low_balance_at: datetime | None
     grace_days: int
     grace_source: GracePolicySource
@@ -149,6 +153,15 @@ class PrepaidEnforcementPlanItem:
             "active_subscription_count": self.active_subscription_count,
             "suspended_subscription_count": self.suspended_subscription_count,
             "active_prepaid_lock_count": self.active_prepaid_lock_count,
+            "covered_subscription_ids": [
+                str(value) for value in self.covered_subscription_ids
+            ],
+            "actionable_uncovered_subscription_ids": [
+                str(value) for value in self.actionable_uncovered_subscription_ids
+            ],
+            "unresolved_projection_subscription_ids": [
+                str(value) for value in self.unresolved_projection_subscription_ids
+            ],
             "prepaid_low_balance_at": self.prepaid_low_balance_at,
             "grace_days": self.grace_days,
             "grace_source": self.grace_source.value,
@@ -210,25 +223,19 @@ def resolve_prepaid_enforcement_policy(db: Session) -> PrepaidEnforcementPolicy:
             )
         return text
 
-    activation_raw = settings_spec.resolve_value(
-        db, SettingDomain.collections, "prepaid_enforcement_activation_at"
+    from app.services.prepaid_enforcement_readiness import (
+        active_prepaid_enforcement_readiness,
     )
-    activation_at: datetime | None = None
-    activation_error: PrepaidEnforcementPolicyIssue | None = None
-    if not isinstance(activation_raw, str) or not activation_raw.strip():
-        activation_error = PrepaidEnforcementPolicyIssue.ACTIVATION_NOT_CONFIGURED
-    else:
-        try:
-            parsed_activation_at = datetime.fromisoformat(
-                activation_raw.strip().replace("Z", "+00:00")
-            )
-        except ValueError:
-            activation_error = PrepaidEnforcementPolicyIssue.ACTIVATION_INVALID
-        else:
-            if parsed_activation_at.tzinfo is None:
-                activation_error = PrepaidEnforcementPolicyIssue.ACTIVATION_INVALID
-            else:
-                activation_at = parsed_activation_at
+
+    readiness = active_prepaid_enforcement_readiness(db)
+    activation_at = (
+        _as_utc(readiness.intended_activation_at) if readiness is not None else None
+    )
+    activation_error = (
+        None
+        if readiness is not None
+        else PrepaidEnforcementPolicyIssue.READINESS_NOT_RECORDED
+    )
     holidays_raw = settings_spec.resolve_value(
         db, SettingDomain.collections, "prepaid_skip_holidays"
     )
@@ -588,7 +595,11 @@ def plan_prepaid_account(
         else:
             action = PrepaidEnforcementAction.not_applicable
             reason = "effective_billing_mode_not_prepaid"
-    elif balance >= threshold:
+    elif funding.unresolved_projection_subscription_ids:
+        action = PrepaidEnforcementAction.coverage_unresolved
+        reason = "future_billing_anchor_without_current_coverage_evidence"
+        reason_source = PrepaidEnforcementReasonSource.COVERAGE
+    elif funding.funded:
         if (
             account.prepaid_low_balance_at is not None
             or account.prepaid_deactivation_at is not None
@@ -660,6 +671,13 @@ def plan_prepaid_account(
         active_subscription_count=active_count,
         suspended_subscription_count=suspended_count,
         active_prepaid_lock_count=active_prepaid_lock_count,
+        covered_subscription_ids=funding.covered_subscription_ids,
+        actionable_uncovered_subscription_ids=(
+            funding.actionable_uncovered_subscription_ids
+        ),
+        unresolved_projection_subscription_ids=(
+            funding.unresolved_projection_subscription_ids
+        ),
         prepaid_low_balance_at=account.prepaid_low_balance_at,
         grace_days=grace.policy.days,
         grace_source=grace.policy.source,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from app.models.billing import (
@@ -10,10 +11,14 @@ from app.models.billing import (
     LedgerEntry,
     LedgerEntryType,
     LedgerSource,
+    ServiceEntitlement,
+    ServiceEntitlementStatus,
 )
-from app.models.catalog import BillingMode
+from app.models.catalog import BillingMode, Subscription, SubscriptionStatus
+from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services.billing.unwall_paid_accounts import (
+    find_prepaid_restorable_lock_account_ids,
     find_walled_paid_account_ids,
     unwall_cohort,
 )
@@ -80,7 +85,9 @@ def test_gate_includes_paid_up_walled_excludes_owing_and_active(db_session):
     assert str(paid_active.id) not in ids  # not walled
 
 
-def test_prepaid_unwall_uses_canonical_threshold_not_zero(db_session):
+def test_prepaid_unwall_uses_due_service_threshold_not_reserve_alone(
+    db_session, catalog_offer
+):
     underfunded = _sub(
         db_session, status=SubscriberStatus.suspended, balance=Decimal("0.00")
     )
@@ -90,12 +97,84 @@ def test_prepaid_unwall_uses_canonical_threshold_not_zero(db_session):
     for account in (underfunded, funded):
         account.billing_mode = BillingMode.prepaid
         account.min_balance = Decimal("100.00")
+        db_session.add(
+            Subscription(
+                subscriber_id=account.id,
+                offer_id=catalog_offer.id,
+                status=SubscriptionStatus.active,
+                billing_mode=BillingMode.prepaid,
+                unit_price=Decimal("100.00"),
+                next_billing_at=datetime.now(UTC) - timedelta(days=1),
+            )
+        )
     db_session.commit()
 
     ids = find_walled_paid_account_ids(db_session)
 
     assert str(underfunded.id) not in ids
     assert str(funded.id) in ids
+
+
+def test_prepaid_unwall_selects_exact_covered_service_despite_unresolved_sibling(
+    db_session, catalog_offer
+):
+    account = _sub(
+        db_session, status=SubscriberStatus.suspended, balance=Decimal("0.00")
+    )
+    account.billing_mode = BillingMode.prepaid
+    account.min_balance = Decimal("100.00")
+    covered = Subscription(
+        subscriber_id=account.id,
+        offer_id=catalog_offer.id,
+        status=SubscriptionStatus.active,
+        billing_mode=BillingMode.prepaid,
+        unit_price=Decimal("100.00"),
+        next_billing_at=datetime.now(UTC) + timedelta(days=20),
+    )
+    unresolved = Subscription(
+        subscriber_id=account.id,
+        offer_id=catalog_offer.id,
+        status=SubscriptionStatus.active,
+        billing_mode=BillingMode.prepaid,
+        unit_price=Decimal("100.00"),
+        next_billing_at=datetime.now(UTC) + timedelta(days=20),
+    )
+    db_session.add_all([covered, unresolved])
+    db_session.flush()
+    db_session.add(
+        ServiceEntitlement(
+            account_id=account.id,
+            subscription_id=covered.id,
+            starts_at=datetime.now(UTC) - timedelta(days=10),
+            ends_at=datetime.now(UTC) + timedelta(days=20),
+            amount_funded=Decimal("100.00"),
+            currency="NGN",
+            status=ServiceEntitlementStatus.active,
+        )
+    )
+    db_session.add_all(
+        [
+            EnforcementLock(
+                subscription_id=covered.id,
+                subscriber_id=account.id,
+                reason=EnforcementReason.prepaid,
+                source="test:covered-prepaid-lock",
+            ),
+            EnforcementLock(
+                subscription_id=unresolved.id,
+                subscriber_id=account.id,
+                reason=EnforcementReason.prepaid,
+                source="test:unresolved-prepaid-lock",
+            ),
+        ]
+    )
+    db_session.commit()
+
+    ids = find_walled_paid_account_ids(db_session)
+    prepaid_lock_ids = find_prepaid_restorable_lock_account_ids(db_session)
+
+    assert str(account.id) in ids
+    assert str(account.id) in prepaid_lock_ids
 
 
 def test_targeted_mode_skips_owing_account(db_session):

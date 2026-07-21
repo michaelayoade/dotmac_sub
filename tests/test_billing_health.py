@@ -397,6 +397,8 @@ def test_billing_health_snapshot_publishes_bounded_observations(monkeypatch):
     snapshot = _snap(
         negative_prepaid_balance_count=2,
         negative_prepaid_balance_total=Decimal("125.00"),
+        prepaid_coverage_repairable_count=3,
+        prepaid_coverage_quarantined_count=4,
     )
     assert billing_health.publish_billing_health_snapshot(snapshot) is True
     assert captured["domain"] == "billing_health"
@@ -406,6 +408,8 @@ def test_billing_health_snapshot_publishes_bounded_observations(monkeypatch):
     }
     assert labels[("negative_prepaid_balance_accounts", "all")] == 2.0
     assert labels[("negative_prepaid_balance_total", "all")] == 125.0
+    assert labels[("prepaid_coverage_repair_required", "all")] == 3.0
+    assert labels[("prepaid_coverage_quarantined", "all")] == 4.0
 
 
 def test_billing_profile_integrity_counts_mismatch_and_mixed_modes(db_session):

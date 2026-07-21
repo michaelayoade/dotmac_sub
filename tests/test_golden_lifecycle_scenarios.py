@@ -5,8 +5,8 @@ refactors — and eventually kernel adoption — cannot drift them silently:
 
 1. Invoice settlement: allocation row, its linked ledger credit, the
    PaymentSettlement record, and invoice arithmetic.
-2. Prepaid top-up -> wallet renewal: the renewal debit's exact ledger shape,
-   settlement prepaid fields, and the wallet-balance invariant.
+2. Prepaid payment -> canonical renewal: settlement records money only, then
+   the renewal owner writes the debit, entitlement, and outcome evidence.
 3. Suspend/restore: end-to-end SubscriptionLifecycleEvent rows and
    EnforcementLock forensics from the real service calls (emit=True).
 
@@ -37,6 +37,7 @@ from app.models.billing import (
     PaymentAllocation,
     PaymentSettlement,
     PaymentStatus,
+    ServiceEntitlement,
 )
 from app.models.catalog import (
     AccessType,
@@ -56,6 +57,7 @@ from app.models.enforcement_lock import (
     EnforcementLock,
     EnforcementReason,
 )
+from app.models.event_store import EventStore
 from app.models.lifecycle import LifecycleEventType, SubscriptionLifecycleEvent
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.schemas.billing import PaymentAllocationApply, PaymentCreate
@@ -65,6 +67,8 @@ from app.services.account_lifecycle import (
 )
 from app.services.billing._common import get_account_credit_balance
 from app.services.billing.payments import Payments
+from app.services.events.handlers.prepaid_renewal import PrepaidRenewalHandler
+from app.services.events.types import Event, EventType
 
 
 def _make_subscriber(db: Session) -> Subscriber:
@@ -271,8 +275,20 @@ class TestPrepaidTopupRenewalRowShapes:
         payment = _created_payment(db_session, subscriber)
 
         settlement = _settlement(db_session, payment.id)
-        assert settlement.prepaid_amount == Decimal("1000.00")
-        assert settlement.prepaid_ledger_entry_id is not None
+        assert settlement.prepaid_amount == Decimal("0.00")
+        assert settlement.prepaid_ledger_entry_id is None
+        assert settlement.unallocated_amount == Decimal("1500.00")
+
+        funding_event = Event(
+            event_type=EventType.payment_received,
+            payload={"payment_id": str(payment.id)},
+            account_id=subscriber.id,
+        )
+        handler = PrepaidRenewalHandler()
+        handler.handle(db_session, funding_event)
+        handler.handle(db_session, funding_event)
+        db_session.commit()
+
         application = Payments.application_summary(db_session, payment)
         assert application.amount_received == Decimal("1500.00")
         assert application.amount_credited == Decimal("1500.00")
@@ -280,12 +296,22 @@ class TestPrepaidTopupRenewalRowShapes:
         assert application.prepaid_amount_applied == Decimal("1000.00")
         assert application.unallocated_credit == Decimal("500.00")
 
-        debit = db_session.get(LedgerEntry, settlement.prepaid_ledger_entry_id)
+        entitlement = db_session.query(ServiceEntitlement).one()
+        outcome = (
+            db_session.query(EventStore)
+            .filter_by(
+                event_type=EventType.prepaid_service_renewed.value,
+                subscription_id=subscription.id,
+            )
+            .one()
+        )
+        assert outcome.payload["trigger_payment_id"] == str(payment.id)
+        debit = db_session.get(LedgerEntry, entitlement.source_ledger_entry_id)
         assert debit.entry_type == LedgerEntryType.debit
-        assert debit.source == LedgerSource.invoice
+        assert debit.source == LedgerSource.adjustment
         assert debit.category == LedgerCategory.internet_service
         assert debit.invoice_id is None
-        assert debit.payment_id == payment.id
+        assert debit.payment_id is None
         assert debit.amount == Decimal("1000.00")
 
         # Wallet invariant: 1500 top-up credit minus the 1000 renewal debit.

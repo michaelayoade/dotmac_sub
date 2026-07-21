@@ -519,16 +519,6 @@ class PaymentCreationAllocationEffectRead(BaseModel):
     ledger_source: LedgerSource
 
 
-class PaymentPrepaidServiceEffectRead(BaseModel):
-    subscription_id: UUID
-    charge_amount: Decimal
-    period_start: datetime
-    period_end: datetime
-    ledger_entry_type: LedgerEntryType | None = None
-    ledger_source: LedgerSource | None = None
-    consequence: str
-
-
 class PaymentCreationPreviewRead(BaseModel):
     account_id: UUID
     amount: Decimal
@@ -542,7 +532,6 @@ class PaymentCreationPreviewRead(BaseModel):
     unallocated_amount: Decimal
     unallocated_ledger_entry_type: LedgerEntryType | None = None
     unallocated_ledger_source: LedgerSource | None = None
-    prepaid_service_effect: PaymentPrepaidServiceEffectRead | None = None
     access_consequence: str
     fingerprint: str
 

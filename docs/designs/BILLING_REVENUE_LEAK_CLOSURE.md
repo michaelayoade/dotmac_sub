@@ -1,6 +1,6 @@
 # Billing Revenue-Leak Closure & Enforcement Consolidation
 
-**Status:** Active remediation plan — 2026-06-24
+**Status:** Superseded prepaid implementation plan — retained for incident history
 **Author:** audit + design pass
 
 ## 1. Current Production Facts
@@ -9,13 +9,18 @@ A read-only production audit on 2026-06-24 found that DotMac Sub is the sole
 biller of record. The previous billing platform is fully decommissioned; its
 data remains only as historical import metadata and reconciliation evidence.
 
+The monthly draft-invoice proposal in this document was retired by the
+`financial.prepaid_service_renewals` cutover. Do not execute its flag or rollout
+steps. The current contract is `PREPAID_SERVICE_COVERAGE.md`.
+
 Catalog correction on 2026-06-24 reclassified the four mislabelled daily-cycle
 prepaid offers as monthly. There is no genuine daily prepaid cohort in
-production. Therefore:
-
-- active prepaid subscriptions may create monthly invoice-in-advance accounting
-  rows, but those rows stay draft until funded from wallet credit;
-- invoice totals must apply VAT exclusively: `net + 7.5% VAT`.
+production. The draft-invoice proposal below is historical. New prepaid service
+periods do not create monthly draft invoices:
+`financial.prepaid_service_renewals` writes one exact debit, entitlement, and
+paid-through projection atomically. Existing paid invoice lines remain usable
+only as reconciliation evidence and must be projected into an entitlement
+before they authorize service.
 
 For the ₦17,500 plan, the customer-facing invoice total is:
 
@@ -28,7 +33,9 @@ For the ₦17,500 plan, the customer-facing invoice total is:
 The immediate revenue fix is monthly prepaid accounting plus wallet settlement,
 not prepaid AR collection.
 
-1. Dry-run `run_invoice_cycle` with `prepaid_monthly_invoicing_enabled=true` and
+Historical proposal (must not be executed):
+
+1. Dry-run the retired monthly-prepaid invoice path and
    verify:
    - only monthly prepaid subscriptions are included;
    - VAT is applied at 7.5% exclusive;
@@ -37,8 +44,8 @@ not prepaid AR collection.
 2. Run the real invoice cycle only after explicit finance/ops approval because
    it creates customer-visible accounting rows. Underfunded prepaid rows must
    remain draft; they must not become AR.
-3. Enable scheduled monthly-prepaid invoicing only after the manual run is
-   verified.
+3. This step is retired. Canonical service renewals are the only new-period
+   writer.
 
 ## 3. Collections And Enforcement
 
@@ -99,7 +106,8 @@ Add billing-liveness alerts before declaring full production billing healthy:
 
 Billing is production-complete when:
 
-- prepaid monthly invoices are being generated with VAT;
+- prepaid renewals write one exact debit, entitlement, and billing anchor;
+- coverage reconciliation has zero repairable or quarantined items;
 - postpaid invoicing and dunning are active and monitored;
 - prepaid enforcement reads only local ledger truth;
 - customer-visible restore/suspend decisions reconcile to ledger state;

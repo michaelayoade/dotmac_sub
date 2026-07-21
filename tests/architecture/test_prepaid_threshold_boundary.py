@@ -9,6 +9,10 @@ from app.services.sot_relationships import all_services
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CURRENCY_OWNER = PROJECT_ROOT / "app" / "services" / "prepaid_currency.py"
 THRESHOLD_OWNER = PROJECT_ROOT / "app" / "services" / "prepaid_threshold.py"
+COVERAGE_OWNER = PROJECT_ROOT / "app" / "services" / "prepaid_service_coverage.py"
+COVERAGE_RECONCILER = (
+    PROJECT_ROOT / "app" / "services" / "prepaid_coverage_reconciliation.py"
+)
 ACCESS_OWNER = PROJECT_ROOT / "app" / "services" / "access_resolution.py"
 SERVICE_STATUS = PROJECT_ROOT / "app" / "services" / "service_status.py"
 
@@ -31,6 +35,43 @@ def test_prepaid_currency_and_threshold_have_complete_read_only_manifests() -> N
         )
         assert service.contract.errors.domain_codes
         assert service.contract.errors.fail_closed_on
+
+
+def test_prepaid_coverage_has_one_typed_read_only_owner() -> None:
+    coverage = _service("financial.prepaid_service_coverage")
+    source = COVERAGE_OWNER.read_text(encoding="utf-8")
+    threshold_source = THRESHOLD_OWNER.read_text(encoding="utf-8")
+
+    assert coverage.is_contracted
+    assert coverage.contract is not None
+    assert coverage.contract.transaction.mode.value == "read_only"
+    assert coverage.contract.errors.fail_closed_on
+    assert "class PrepaidServiceCoverageDecision:" in source
+    assert "class PrepaidCoverageEvidence:" in source
+    assert "resolve_prepaid_service_coverage(" in threshold_source
+    assert "ServiceEntitlement" not in threshold_source
+    assert "InvoiceLine" not in threshold_source
+    assert "InvoiceLine" not in source
+    assert "InvoiceStatus" not in source
+    assert ".commit(" not in source
+    assert ".rollback(" not in source
+
+
+def test_prepaid_coverage_repair_has_one_typed_reconciler() -> None:
+    reconciler = _service("financial.prepaid_service_coverage_reconciliation")
+    source = COVERAGE_RECONCILER.read_text(encoding="utf-8")
+
+    assert reconciler.is_contracted
+    assert reconciler.contract is not None
+    assert reconciler.contract.transaction.mode.value == "owner_managed"
+    assert reconciler.contract.migration.state.value == "complete"
+    assert "execute_owner_command(" in source
+    assert "PrepaidCoverageReconciliationRun(" in source
+    assert "PrepaidCoverageReconciliationItem(" in source
+    assert "source_invoice_line_id=" in source
+    assert "source_account_adjustment_id=" in source
+    assert ".commit(" not in source
+    assert ".rollback(" not in source
 
 
 def test_threshold_exposes_typed_provenance_and_domain_failures() -> None:

@@ -47,12 +47,13 @@ with deterministic scripts.
 ### Invoicing
 
 - `app.tasks.billing.run_invoice_cycle` is gated by `billing_enabled`.
-- `app.services.billing_automation.run_invoice_cycle` creates invoices based on
-  subscription eligibility and `next_billing_at`.
-- `subscription_invoice_eligible` excludes prepaid unless explicit prepaid
-  monthly invoicing is enabled.
-- Prepaid monthly invoicing is intentionally opt-in through
-  `billing.prepaid_monthly_invoicing_enabled`.
+- `app.services.billing_automation.run_invoice_cycle` creates postpaid invoices.
+- `subscription_invoice_eligible` excludes prepaid from the scheduled invoice
+  owner. Its low-level `allow_prepaid` argument remains only for explicitly
+  scoped legacy/import operations, not the scheduler.
+- `financial.prepaid_service_renewals` exclusively owns new prepaid service
+  periods. The former monthly-prepaid invoice control and alias are retired;
+  see `PREPAID_SERVICE_COVERAGE.md`.
 
 ### Overdue and Dunning
 
@@ -69,7 +70,9 @@ with deterministic scripts.
 
 - `app.tasks.collections.prepaid_balance_sweep` calls
   `run_prepaid_balance_sweep`.
-- The sweep is gated only by `collections.prepaid_balance_enforcement`.
+- The sweep kill switch is `collections.prepaid_balance_enforcement`, and
+  adverse action also continuously requires the canonical renewal owner plus a
+  fresh readiness generation.
 - The control is default-off because it can suspend customers.
 - When enabled, it:
   - calculates available balance from canonical customer financial events;
@@ -147,14 +150,15 @@ Implemented readiness layer:
   snapshot for migrated accounts and never fills missing rows from the local
   ledger, while the enforcement owner still selects the cohort and applies all
   non-money policy;
-- launch requires an explicit activation timestamp plus a fresh, durable
-  full-cohort comparison between independent evidence and Sub's canonical
-  currency-bound funding decision;
+- launch requires a fresh, durable full-cohort comparison between independent
+  evidence and Sub's canonical currency-bound funding decision; that readiness
+  record owns the intended activation timestamp;
 - grace remains configuration-owned. The approved zero-day prepaid default is
   actionable on the first eligible sweep, and activation does not reset stale
   timers. Explicit account/policy-set nonzero grace is reported and honored;
 - the feature-control writer rejects production enablement until readiness is
-  recorded and still matches the activation, currency, cohort, and config;
+  recorded and still matches its activation time, currency, cohort, coverage
+  evidence, and config;
 - add billing health alert when billing is live, prepaid accounts are negative,
   and the sweep is disabled.
 

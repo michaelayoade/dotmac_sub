@@ -389,6 +389,7 @@ def preview_financial_access_consequence(
     outcome = f"{action.value}_ready"
     receivables: list[dict] = []
     prepaid_funding: dict | None = None
+    prepaid_target_ids: set[UUID] | None = None
     grace_decision: dict | None = None
     access_decision: dict | None = None
     shield_reason: str | None = None
@@ -459,14 +460,29 @@ def preview_financial_access_consequence(
                     "available_balance": f"{funding.available_balance:.2f}",
                     "required_balance": f"{funding.required_balance:.2f}",
                     "funded": funding.funded,
+                    "covered_subscription_ids": [
+                        str(value) for value in funding.covered_subscription_ids
+                    ],
+                    "actionable_uncovered_subscription_ids": [
+                        str(value)
+                        for value in funding.actionable_uncovered_subscription_ids
+                    ],
+                    "unresolved_projection_subscription_ids": [
+                        str(value)
+                        for value in funding.unresolved_projection_subscription_ids
+                    ],
                 }
+                prepaid_target_ids = set(funding.actionable_uncovered_subscription_ids)
                 grace_decision = resolve_grace_decision(
                     db,
                     account,
                     starts_at=account.prepaid_low_balance_at,
                 ).as_dict()
                 grace_decision.pop("as_of", None)
-                if funding.funded:
+                if funding.unresolved_projection_subscription_ids:
+                    eligible = False
+                    outcome = "prepaid_coverage_unresolved"
+                elif funding.funded:
                     eligible = False
                     outcome = "prepaid_balance_available"
 
@@ -564,6 +580,11 @@ def preview_financial_access_consequence(
                 subscription.id
                 for subscription in subscriptions
                 if subscription.id not in active_reason_locks
+                and (
+                    reason != EnforcementReason.prepaid
+                    or prepaid_target_ids is None
+                    or subscription.id in prepaid_target_ids
+                )
             )
             if not target_subscriptions:
                 eligible = False
@@ -1067,13 +1088,34 @@ def preview_financial_access_restoration(
                 "available_balance": f"{funding.available_balance:.2f}",
                 "required_balance": f"{funding.required_balance:.2f}",
                 "funded": funding.funded,
+                "covered_subscription_ids": [
+                    str(value) for value in funding.covered_subscription_ids
+                ],
+                "actionable_uncovered_subscription_ids": [
+                    str(value)
+                    for value in funding.actionable_uncovered_subscription_ids
+                ],
+                "unresolved_projection_subscription_ids": [
+                    str(value)
+                    for value in funding.unresolved_projection_subscription_ids
+                ],
             }
-            if funding.funded:
-                target_locks.extend(
-                    lock
+            restorable_prepaid_ids = (
+                {
+                    lock.subscription_id
                     for lock in active_locks
                     if lock.reason == EnforcementReason.prepaid
-                )
+                }
+                if funding.funded
+                else set(funding.covered_subscription_ids)
+            )
+            target_locks.extend(
+                lock
+                for lock in active_locks
+                if lock.reason == EnforcementReason.prepaid
+                and lock.subscription_id in restorable_prepaid_ids
+            )
+            if funding.funded:
                 clear_prepaid_timers = True
         elif profile.is_valid and profile.effective_mode != BillingMode.prepaid:
             clear_prepaid_timers = True
@@ -2756,11 +2798,11 @@ def _restore_prepaid_if_funded(
     *,
     resolved_by: str,
 ) -> int:
-    """Resolve only prepaid locks after the canonical funding decision passes."""
-    if not funding.funded:
+    """Resolve prepaid locks backed by funding or exact current coverage."""
+    if not funding.funded and not funding.covered_subscription_ids:
         logger.info(
-            "Prepaid restore skipped for account %s: available balance %s < "
-            "required balance %s",
+            "Prepaid restore skipped for account %s: no funded or covered service "
+            "(available %s, required %s)",
             account.id,
             funding.available_balance,
             funding.required_balance,
