@@ -248,9 +248,16 @@ class TestProvisioningHandlerAutoProvisioning:
         db.get.return_value = subscription
         mock_coerce.return_value = subscription.id
 
-        with patch(
-            "app.services.radius.sync_account_credentials_to_radius", return_value=2
-        ) as mock_sync:
+        with (
+            patch(
+                "app.services.radius.sync_account_credentials_to_radius",
+                return_value=2,
+            ) as mock_sync,
+            patch(
+                "app.services.radius.reconcile_subscription_connectivity",
+                return_value={"ok": True},
+            ),
+        ):
             handler._sync_radius_on_activation(db, str(uuid4()))
             mock_sync.assert_called_once()
 

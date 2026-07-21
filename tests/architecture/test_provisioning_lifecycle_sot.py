@@ -28,7 +28,9 @@ def test_terminal_service_order_states_have_one_writer() -> None:
             ):
                 writers.append(path.relative_to(ROOT).as_posix())
 
-    assert sorted(set(writers)) == ["app/services/service_order_lifecycle.py"]
+    # The owner routes every terminal write through its guarded transition
+    # (a variable target), so no module may assign terminal literals directly.
+    assert set(writers) <= {"app/services/service_order_lifecycle.py"}
 
 
 def test_event_adapter_delegates_and_has_no_subscription_wide_completion() -> None:

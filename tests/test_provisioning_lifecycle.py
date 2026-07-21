@@ -101,6 +101,14 @@ def _graph(db, subscriber, subscription, *, task_status: str):
     return order, run
 
 
+def _invoke(db, fn, command):
+    """Owner commands require a transaction-free session at entry. Committing
+    the fixture session ends its transaction without discarding setup (the
+    harness cannot survive a rollback across multiple commit cycles)."""
+    db.commit()
+    return fn(db, command)
+
+
 def test_incomplete_activation_task_blocks_without_activating(
     db_session, subscriber, subscription, monkeypatch
 ):
@@ -114,8 +122,9 @@ def test_incomplete_activation_task_blocks_without_activating(
         "app.services.provisioning_lifecycle.emit_event", lambda *a, **k: None
     )
 
-    outcome = evaluate_readiness(
+    outcome = _invoke(
         db_session,
+        evaluate_readiness,
         EvaluateReadinessCommand(
             context=_context("successful run with incomplete field scope"),
             service_order_id=order.id,
@@ -150,8 +159,9 @@ def test_ready_order_requests_activation_then_requires_projection_confirmation(
         lambda *args, **kwargs: emitted.append((args, kwargs)),
     )
 
-    requested = evaluate_readiness(
+    requested = _invoke(
         db_session,
+        evaluate_readiness,
         EvaluateReadinessCommand(
             context=_context("all readiness facts established"),
             service_order_id=order.id,
@@ -168,8 +178,9 @@ def test_ready_order_requests_activation_then_requires_projection_confirmation(
 
     # Release the read transaction before entering the next public owner command.
     db_session.commit()
-    confirmed = confirm_activation(
+    confirmed = _invoke(
         db_session,
+        confirm_activation,
         ConfirmActivationCommand(
             context=_context("connectivity projections succeeded"),
             service_order_id=order.id,
@@ -206,8 +217,8 @@ def test_readiness_command_id_is_an_idempotent_replay(
         provisioning_run_id=run.id,
     )
 
-    first = evaluate_readiness(db_session, command)
-    second = evaluate_readiness(db_session, command)
+    first = _invoke(db_session, evaluate_readiness, command)
+    second = _invoke(db_session, evaluate_readiness, command)
 
     assert second.decision_id == first.decision_id
     assert second.command_id == context.command_id
@@ -235,8 +246,9 @@ def test_readiness_command_id_reuse_for_another_run_fails_closed(
     )
     context = _context("collision-safe terminal run event")
 
-    evaluate_readiness(
+    _invoke(
         db_session,
+        evaluate_readiness,
         EvaluateReadinessCommand(
             context=context,
             service_order_id=order.id,
@@ -244,8 +256,9 @@ def test_readiness_command_id_reuse_for_another_run_fails_closed(
         ),
     )
     with pytest.raises(ProvisioningLifecycleError) as exc:
-        evaluate_readiness(
+        _invoke(
             db_session,
+            evaluate_readiness,
             EvaluateReadinessCommand(
                 context=context,
                 service_order_id=order.id,
@@ -272,8 +285,9 @@ def test_confirmation_rejects_activation_without_readiness_request(
     )
 
     with pytest.raises(ProvisioningLifecycleError) as exc:
-        confirm_activation(
+        _invoke(
             db_session,
+            confirm_activation,
             ConfirmActivationCommand(
                 context=_context("unsolicited confirmation"),
                 service_order_id=order.id,
@@ -304,8 +318,9 @@ def test_failed_run_records_decision_through_service_order_owner(
         "app.services.service_order_lifecycle.emit_event", lambda *a, **k: None
     )
 
-    outcome = evaluate_readiness(
+    outcome = _invoke(
         db_session,
+        evaluate_readiness,
         EvaluateReadinessCommand(
             context=_context("terminal provisioning failure"),
             service_order_id=order.id,
@@ -329,8 +344,9 @@ def test_readiness_evidence_is_append_only(
     monkeypatch.setattr(
         "app.services.provisioning_lifecycle.emit_event", lambda *a, **k: None
     )
-    outcome = evaluate_readiness(
+    outcome = _invoke(
         db_session,
+        evaluate_readiness,
         EvaluateReadinessCommand(
             context=_context("persist immutable blocked evidence"),
             service_order_id=order.id,
