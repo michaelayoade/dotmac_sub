@@ -152,16 +152,26 @@ def plan_recovery(
 
         first_old: dict[str, str | None] = {}
         latest_new: dict[str, str | None] = {}
+        evidence_conflicts: list[str] = []
         for event in source_events:
             changes = _audit_changes(event)
             for field_name in IDENTITY_FIELDS:
                 change = changes.get(field_name)
-                if not isinstance(change, dict):
+                if (
+                    not isinstance(change, dict)
+                    or "old" not in change
+                    or "new" not in change
+                ):
+                    evidence_conflicts.append(f"{field_name}:missing_transition")
                     continue
                 old = change.get("old")
                 new = change.get("new")
-                first_old.setdefault(field_name, None if old is None else str(old))
-                latest_new[field_name] = None if new is None else str(new)
+                old_value = None if old is None else str(old)
+                new_value = None if new is None else str(new)
+                if field_name in latest_new and old_value != latest_new[field_name]:
+                    evidence_conflicts.append(f"{field_name}:broken_chain")
+                first_old.setdefault(field_name, old_value)
+                latest_new[field_name] = new_value
 
         candidate = RecoveryCandidate(
             subscriber_id=subscriber.id,
@@ -170,10 +180,12 @@ def plan_recovery(
         )
         missing_evidence = set(IDENTITY_FIELDS) - set(first_old)
         if missing_evidence:
-            candidate.conflict_fields.extend(
+            evidence_conflicts.extend(
                 f"{field_name}:missing_evidence"
                 for field_name in sorted(missing_evidence)
             )
+        if evidence_conflicts:
+            candidate.conflict_fields.extend(sorted(set(evidence_conflicts)))
             candidates.append(candidate)
             continue
 
