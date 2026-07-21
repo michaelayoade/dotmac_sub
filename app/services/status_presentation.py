@@ -12,6 +12,7 @@ from enum import Enum
 
 from app.models.billing import CreditNoteStatus, InvoiceStatus, PaymentStatus
 from app.models.catalog import OfferStatus, SubscriptionStatus
+from app.models.fup_state import FupActionStatus
 from app.models.payment_proof import WithholdingTaxStatus
 from app.models.project import ProjectStatus, ProjectTaskStatus
 from app.models.provisioning import AppointmentStatus, ServiceOrderStatus, TaskStatus
@@ -873,3 +874,22 @@ def alarm_severity_presentation(severity: object | None) -> StatusPresentation:
 def alarm_status_presentation(status: object | None) -> StatusPresentation:
     """Server-owned presentation for a monitoring Alert.status."""
     return _presentation(_status_value(status), _ALARM_STATUS_PRESENTATIONS)
+
+
+_FUP_ACTION_STATUS_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    FupActionStatus.none.value: ("Normal", StatusTone.positive, StatusIcon.check),
+    FupActionStatus.notified.value: ("Notified", StatusTone.info, StatusIcon.info),
+    FupActionStatus.throttled.value: (
+        "Throttled",
+        StatusTone.warning,
+        StatusIcon.alert,
+    ),
+    FupActionStatus.blocked.value: ("Blocked", StatusTone.negative, StatusIcon.x),
+}
+
+
+def fup_action_status_presentation(
+    status: FupActionStatus | str | None,
+) -> StatusPresentation:
+    """Project the FUP enforcement action state (server-owned tone)."""
+    return _presentation(_status_value(status), _FUP_ACTION_STATUS_PRESENTATIONS)
