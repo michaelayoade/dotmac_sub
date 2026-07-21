@@ -410,6 +410,7 @@ def _initialize_handlers(dispatcher: EventDispatcher) -> None:
     from app.services.events.handlers.lifecycle import LifecycleHandler
     from app.services.events.handlers.notification import NotificationHandler
     from app.services.events.handlers.password_recovery import PasswordRecoveryHandler
+    from app.services.events.handlers.prepaid_renewal import PrepaidRenewalHandler
     from app.services.events.handlers.provisioning import ProvisioningHandler
     from app.services.events.handlers.referral import ReferralHandler
     from app.services.events.handlers.reseller_invite import ResellerInviteHandler
@@ -428,6 +429,7 @@ def _initialize_handlers(dispatcher: EventDispatcher) -> None:
     dispatcher.register_handler(CredentialSessionProjectionHandler())
     dispatcher.register_handler(ArrangementHandler())
     dispatcher.register_handler(ReferralHandler())
+    dispatcher.register_handler(PrepaidRenewalHandler())
     dispatcher.register_handler(StaffInviteHandler())
     dispatcher.register_handler(ResellerInviteHandler())
     dispatcher.register_handler(PasswordRecoveryHandler())
@@ -443,8 +445,8 @@ def _initialize_handlers(dispatcher: EventDispatcher) -> None:
     logger.info(
         "Event handlers initialized: integration_delivery, lifecycle, "
         "notification, provisioning, sales_lifecycle_projection, enforcement, "
-        "credential_session_projection, "
-        "arrangements, referral, staff_invite, reseller_invite, password_recovery",
+        "credential_session_projection, arrangements, referral, prepaid_renewal, "
+        "staff_invite, reseller_invite, password_recovery",
         extra={
             "event": "event_handlers_initialized",
             "handler_count": len(dispatcher._handlers),

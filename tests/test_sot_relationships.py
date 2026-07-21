@@ -497,7 +497,23 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     )
     assert sot_relationships.dependencies_for(
         "financial.provider_payment_settlements"
-    ) == ("financial.payments", "financial.invoices")
+    ) == (
+        "financial.payments",
+        "financial.invoices",
+        "financial.prepaid_service_renewals",
+    )
+    assert sot_relationships.dependencies_for("financial.account_credit_deposits") == (
+        "financial.payments",
+        "financial.account_credit_applications",
+        "financial.prepaid_service_renewals",
+        "financial.access_resolution",
+    )
+    assert sot_relationships.dependencies_for("financial.prepaid_service_renewals") == (
+        "financial.account_adjustments",
+        "financial.invoices",
+        "financial.prepaid_funding_reconstruction",
+        "events.dispatcher",
+    )
     assert sot_relationships.dependencies_for("financial.payment_reconciliation") == (
         "financial.ledger",
         "financial.payment_provider_events",

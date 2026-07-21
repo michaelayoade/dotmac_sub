@@ -1155,8 +1155,11 @@ def test_verify_and_record_topup_returns_allocation_breakdown_and_credit_added(
 
     assert result["already_recorded"] is False
     assert result["allocated_total"] == Decimal("3000.00")
+    assert result["amount_credited"] == Decimal("5000.00")
+    assert result["prepaid_amount_applied"] == Decimal("0.00")
     assert result["credit_added"] == Decimal("2000.00")
     assert result["available_balance"] == Decimal("2000.00")
+    assert result["renewed_services"] == []
     assert result["policy_warnings"] == []
     assert result["allocated_to_invoices"] == [
         {

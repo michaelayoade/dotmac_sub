@@ -17,7 +17,9 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.models.billing import Payment, PaymentAllocation, PaymentStatus
 from app.models.subscriber import Subscriber
+from app.services import billing as billing_service
 from app.services import email as email_service
+from app.services.billing.payment_receipt_identity import payment_receipt_reference
 from app.services.billing_invoice_pdf import (
     _build_simple_pdf,
     _ensure_weasyprint_pydyf_compat,
@@ -42,11 +44,7 @@ def _enum_value(value: Any) -> str:
 
 
 def _receipt_number(payment: Payment) -> str:
-    raw = str(payment.receipt_number or "").strip()
-    if raw:
-        return raw if raw.startswith("#") else f"#{raw}"
-    compact = str(payment.id).replace("-", "")[:8].upper()
-    return f"#RCP-{compact}"
+    return payment_receipt_reference(payment.id, payment.receipt_number)
 
 
 def _safe_receipt_number(payment: Payment) -> str:
@@ -108,6 +106,7 @@ def get_payment_receipt_context(
             selectinload(Payment.payment_channel),
             selectinload(Payment.payment_method),
             selectinload(Payment.provider),
+            selectinload(Payment.settlement),
             selectinload(Payment.allocations).selectinload(PaymentAllocation.invoice),
         )
         .filter(Payment.id == coerce_uuid(payment_id))
@@ -125,9 +124,12 @@ def get_payment_receipt_context(
         raise HTTPException(status_code=404, detail="Receipt not found")
 
     allocations = [item for item in payment.allocations if item.is_active]
-    amount_applied = sum((_money(item.amount) for item in allocations), Decimal("0.00"))
-    amount_received = _money(payment.amount)
-    unallocated_credit = max(Decimal("0.00"), amount_received - amount_applied)
+    application = billing_service.payments.application_summary(db, payment)
+    amount_applied = application.invoice_amount_applied
+    amount_received = application.amount_received
+    amount_credited = application.amount_credited
+    prepaid_amount_applied = application.prepaid_amount_applied
+    unallocated_credit = application.unallocated_credit
     occurred_at = payment.paid_at or payment.created_at or datetime.now(UTC)
     account = payment.account
 
@@ -147,6 +149,26 @@ def get_payment_receipt_context(
             )
         )
 
+    from app.models.catalog import CatalogOffer, Subscription
+    from app.services.prepaid_service_renewals import renewal_outcomes_for_payment
+
+    renewal_rows = []
+    for outcome in renewal_outcomes_for_payment(db, payment.id):
+        subscription = db.get(Subscription, outcome.subscription_id)
+        offer = (
+            db.get(CatalogOffer, subscription.offer_id)
+            if subscription is not None
+            else None
+        )
+        renewal_rows.append(
+            SimpleNamespace(
+                subscription_id=str(outcome.subscription_id),
+                offer_name=getattr(offer, "name", None) or "Service",
+                amount=outcome.amount,
+                renewed_through=outcome.renewed_through,
+            )
+        )
+
     return {
         "payment": payment,
         "receipt_number": _receipt_number(payment),
@@ -157,8 +179,11 @@ def get_payment_receipt_context(
         "received_from": _account_display(account),
         "received_email": _account_email(account),
         "amount_received": amount_received,
+        "amount_credited": amount_credited,
         "amount_applied": amount_applied,
+        "prepaid_amount_applied": prepaid_amount_applied,
         "unallocated_credit": unallocated_credit,
+        "settlement_evidenced": application.settlement_evidenced,
         "currency": payment.currency or "NGN",
         "status": _enum_value(payment.status).replace("_", " ").title(),
         "transaction_ref": payment.external_id
@@ -166,6 +191,7 @@ def get_payment_receipt_context(
         or str(payment.id),
         "method": _payment_method(payment),
         "allocations": allocation_rows,
+        "renewals": renewal_rows,
     }
 
 
@@ -182,6 +208,10 @@ def _format_amount(currency: str, amount: Decimal) -> str:
 
 
 def render_receipt_document_html(context: dict[str, Any]) -> str:
+    amount_credited = _money(
+        context.get("amount_credited", context.get("amount_received"))
+    )
+    prepaid_amount_applied = _money(context.get("prepaid_amount_applied"))
     rows = []
     for allocation in context["allocations"]:
         rows.append(
@@ -194,6 +224,22 @@ def render_receipt_document_html(context: dict[str, Any]) -> str:
     if not rows:
         rows.append(
             "<tr><td colspan='3' class='muted empty'>No invoice allocation recorded.</td></tr>"
+        )
+
+    renewal_section = ""
+    if context.get("renewals"):
+        renewal_items = "".join(
+            "<div>"
+            f"{html.escape(renewal.offer_name)}: renewed through "
+            f"{html.escape(renewal.renewed_through.strftime('%B %d, %Y'))} "
+            f"({_format_amount(context['currency'], renewal.amount)})"
+            "</div>"
+            for renewal in context["renewals"]
+        )
+        renewal_section = (
+            "<div class='details'>"
+            "<div class='details-title'>SERVICE RENEWAL CONFIRMED</div>"
+            f"{renewal_items}</div>"
         )
 
     date_value = context["receipt_date"].strftime("%Y-%m-%d")
@@ -260,9 +306,12 @@ td {{ padding: 14px; font-size: 13px; height: 38px; border-top: 1px solid #f3f4f
     </table>
     <div class="summary">
       <div class="summary-row"><span>Amount Received</span><strong>{html.escape(_format_amount(context["currency"], context["amount_received"]))}</strong></div>
-      <div class="summary-row"><span>Amount Applied</span><strong>{html.escape(_format_amount(context["currency"], context["amount_applied"]))}</strong></div>
-      <div class="summary-row green"><span>Unallocated Credit</span><strong>{html.escape(_format_amount(context["currency"], context["unallocated_credit"]))}</strong></div>
+      <div class="summary-row"><span>Amount Credited</span><strong>{html.escape(_format_amount(context["currency"], amount_credited))}</strong></div>
+      <div class="summary-row"><span>Applied to Invoices</span><strong>{html.escape(_format_amount(context["currency"], context["amount_applied"]))}</strong></div>
+      <div class="summary-row"><span>Applied to Service</span><strong>{html.escape(_format_amount(context["currency"], prepaid_amount_applied))}</strong></div>
+      <div class="summary-row green"><span>Account Credit Remaining</span><strong>{html.escape(_format_amount(context["currency"], context["unallocated_credit"]))}</strong></div>
     </div>
+    {renewal_section}
     <div class="details">
       <div class="details-title">PAYMENT DETAILS</div>
       <div>Payment Date: {html.escape(payment_date)}</div>
@@ -283,6 +332,10 @@ def _build_weasyprint_receipt_pdf(context: dict[str, Any]) -> bytes:
 
 
 def _receipt_text_lines(context: dict[str, Any]) -> list[str]:
+    amount_credited = _money(
+        context.get("amount_credited", context.get("amount_received"))
+    )
+    prepaid_amount_applied = _money(context.get("prepaid_amount_applied"))
     lines = [
         f"Payment Receipt {context['receipt_number']}",
         f"Received From: {context['received_from']}",
@@ -290,8 +343,10 @@ def _receipt_text_lines(context: dict[str, Any]) -> list[str]:
         f"Account: {context['account_number']}",
         f"Date: {context['receipt_date'].strftime('%Y-%m-%d %H:%M UTC')}",
         f"Amount Received: {_format_amount(context['currency'], context['amount_received'])}",
-        f"Amount Applied: {_format_amount(context['currency'], context['amount_applied'])}",
-        f"Unallocated Credit: {_format_amount(context['currency'], context['unallocated_credit'])}",
+        f"Amount Credited: {_format_amount(context['currency'], amount_credited)}",
+        f"Applied to Invoices: {_format_amount(context['currency'], context['amount_applied'])}",
+        f"Applied to Service: {_format_amount(context['currency'], prepaid_amount_applied)}",
+        f"Account Credit Remaining: {_format_amount(context['currency'], context['unallocated_credit'])}",
         f"Status: {context['status']}",
         f"Transaction Ref: {context['transaction_ref']}",
         f"Method: {context['method']}",
@@ -308,9 +363,18 @@ def _receipt_text_lines(context: dict[str, Any]) -> list[str]:
                 f"{allocation.invoice_number} | {allocation.status} | "
                 f"{_format_amount(context['currency'], allocation.amount)}"
             )
-    lines.extend(
-        ["", f"Payment ID: {context['payment'].id}", "Thank you for your business."]
-    )
+    lines.extend(["", f"Payment ID: {context['payment'].id}"])
+    renewals = context.get("renewals") or []
+    if renewals:
+        lines.extend(["", "Service Renewals:"])
+        for renewal in renewals:
+            lines.append(
+                "- "
+                f"{renewal.offer_name} renewed through "
+                f"{renewal.renewed_through.strftime('%B %d, %Y')} | "
+                f"{_format_amount(context['currency'], renewal.amount)}"
+            )
+    lines.append("Thank you for your business.")
     return lines
 
 
@@ -344,6 +408,11 @@ def _build_receipt_fallback_pdf(context: dict[str, Any]) -> bytes:
         if currency == "NGN" and not _font_path(False):
             return f"NGN {amount:,.2f}"
         return _format_amount(currency, amount)
+
+    amount_credited = _money(
+        context.get("amount_credited", context.get("amount_received"))
+    )
+    prepaid_amount_applied = _money(context.get("prepaid_amount_applied"))
 
     width, height = 1240, 1754
     margin_x = 72
@@ -524,7 +593,7 @@ def _build_receipt_fallback_pdf(context: dict[str, Any]) -> bytes:
     totals_left = width - 460
     totals_top = 1118
     draw.rounded_rectangle(
-        (totals_left, totals_top, width - margin_x, totals_top + 174),
+        (totals_left, totals_top, width - margin_x, totals_top + 230),
         radius=20,
         fill="#ffffff",
         outline=slate_200,
@@ -535,11 +604,19 @@ def _build_receipt_fallback_pdf(context: dict[str, Any]) -> bytes:
             _display_amount(context["currency"], context["amount_received"]),
         ),
         (
-            "Amount Applied",
+            "Amount Credited",
+            _display_amount(context["currency"], amount_credited),
+        ),
+        (
+            "Applied to Invoices",
             _display_amount(context["currency"], context["amount_applied"]),
         ),
         (
-            "Unallocated Credit",
+            "Applied to Service",
+            _display_amount(context["currency"], prepaid_amount_applied),
+        ),
+        (
+            "Account Credit Remaining",
             _display_amount(context["currency"], context["unallocated_credit"]),
         ),
     ]
@@ -549,24 +626,28 @@ def _build_receipt_fallback_pdf(context: dict[str, Any]) -> bytes:
             (totals_left + 22, ty),
             label,
             font=body_font,
-            fill=green_900 if index == 2 else slate_700,
+            fill=green_900 if index == len(totals) - 1 else slate_700,
         )
         draw.text(
             (totals_left + 242, ty),
             value,
-            font=value_font if index == 2 else body_font,
-            fill=green_900 if index == 2 else slate_900,
+            font=value_font if index == len(totals) - 1 else body_font,
+            fill=green_900 if index == len(totals) - 1 else slate_900,
         )
 
+    renewals = context.get("renewals") or []
+    renewal_line_count = min(len(renewals), 2)
     details_top = 1370
+    details_height = 142 + (renewal_line_count * 34)
     draw.rounded_rectangle(
-        (margin_x, details_top, width - margin_x, details_top + 142),
+        (margin_x, details_top, width - margin_x, details_top + details_height),
         radius=18,
         fill=green_50,
         outline="#bbf7d0",
     )
     draw.rectangle(
-        (margin_x, details_top, margin_x + 12, details_top + 142), fill=green_700
+        (margin_x, details_top, margin_x + 12, details_top + details_height),
+        fill=green_700,
     )
     draw.text(
         (margin_x + 28, details_top + 20),
@@ -586,6 +667,17 @@ def _build_receipt_fallback_pdf(context: dict[str, Any]) -> bytes:
         font=body_font,
         fill=slate_700,
     )
+    for index, renewal in enumerate(renewals[:2]):
+        draw.text(
+            (margin_x + 28, details_top + 128 + (index * 34)),
+            _truncate_text(
+                f"{renewal.offer_name} renewed through "
+                f"{renewal.renewed_through.strftime('%Y-%m-%d')}",
+                76,
+            ),
+            font=small_font,
+            fill=green_900,
+        )
 
     footer_y = 1612
     draw.text(

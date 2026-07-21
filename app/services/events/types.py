@@ -54,6 +54,7 @@ class EventType(enum.Enum):
     payment_refunded = "payment.refunded"
     payment_reversed = "payment.reversed"
     account_credit_deposited = "account_credit.deposited"
+    prepaid_service_renewed = "prepaid_service.renewed"
 
     # Billing - Consolidated billing account payment (1)
     billing_account_payment_received = "billing_account.payment_received"

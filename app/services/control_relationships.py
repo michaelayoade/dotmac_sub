@@ -202,6 +202,12 @@ HANDLER_CONTROLS: dict[str, HandlerControl] = {
     "ReferralHandler": HandlerControl(
         "ReferralHandler", HandlerStage.state, 30, ("referral_qualification",)
     ),
+    "PrepaidRenewalHandler": HandlerControl(
+        "PrepaidRenewalHandler",
+        HandlerStage.state,
+        47,
+        ("prepaid_service_renewal_after_funding",),
+    ),
     "NotificationHandler": HandlerControl(
         "NotificationHandler",
         HandlerStage.communication,
@@ -238,6 +244,7 @@ RELATIONSHIP_SETTING_KEYS = {
 }
 
 CHAINED_EVENT_TYPES = {
+    "account_credit.deposited",
     "subscription.activated",
     "subscription.suspended",
     "subscription.resumed",
@@ -254,6 +261,9 @@ CHAINED_EVENT_TYPES = {
 # Dependencies within the same stage. Stage-to-stage dependencies are derived
 # automatically for chained events.
 EVENT_HANDLER_DEPENDENCIES: dict[str, dict[str, tuple[str, ...]]] = {
+    "account_credit.deposited": {
+        "EnforcementHandler": ("PrepaidRenewalHandler",),
+    },
     "subscription.activated": {
         "EnforcementHandler": ("ProvisioningHandler",),
     },
@@ -285,6 +295,10 @@ def handler_event_types(handler_name: str) -> frozenset[str] | None:
         from app.services.events.handlers.notification import EVENT_NOTIFICATION_SPECS
 
         return frozenset(item.value for item in EVENT_NOTIFICATION_SPECS)
+    if handler_name == "PrepaidRenewalHandler":
+        from app.services.events.handlers.prepaid_renewal import HANDLED_EVENT_TYPES
+
+        return frozenset(item.value for item in HANDLED_EVENT_TYPES)
     if handler_name == "StaffInviteHandler":
         from app.services.events.handlers.staff_invite import HANDLED_EVENT_TYPES
 

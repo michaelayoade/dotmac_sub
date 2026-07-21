@@ -19,7 +19,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from app.models.billing import Invoice, InvoiceStatus
+from app.models.billing import Invoice, InvoiceStatus, Payment, PaymentStatus
 from app.models.catalog import (
     BillingMode,
     NasDevice,
@@ -90,6 +90,7 @@ class TestEventType:
         assert EventType.payment_received.value == "payment.received"
         assert EventType.payment_failed.value == "payment.failed"
         assert EventType.payment_reversed.value == "payment.reversed"
+        assert EventType.prepaid_service_renewed.value == "prepaid_service.renewed"
 
     def test_usage_events_exist(self):
         assert EventType.usage_recorded.value == "usage.recorded"
@@ -1082,6 +1083,88 @@ class TestNotificationHandler:
         )
         # Should not raise
         handler.handle(db_session, event)
+
+    def test_payment_event_queues_receipt_aware_email(self, db_session, subscriber):
+        payment = Payment(
+            account_id=subscriber.id,
+            amount=18712.50,
+            currency="NGN",
+            status=PaymentStatus.succeeded,
+            paid_at=datetime.now(UTC),
+            is_active=True,
+        )
+        db_session.add_all(
+            [
+                payment,
+                NotificationTemplate(
+                    code="payment_received",
+                    name="Payment Received",
+                    channel=NotificationChannel.email,
+                    subject="Payment receipt {receipt_number}",
+                    body=("Receipt {receipt_number}. View or download: {receipt_url}"),
+                    is_active=True,
+                ),
+            ]
+        )
+        db_session.commit()
+
+        NotificationHandler().handle(
+            db_session,
+            Event(
+                event_type=EventType.payment_received,
+                payload={"payment_id": str(payment.id), "amount": "18712.50"},
+                account_id=subscriber.id,
+            ),
+        )
+        db_session.commit()
+
+        notification = db_session.query(Notification).one()
+        receipt_reference = f"#RCP-{payment.id.hex[:8].upper()}"
+        assert notification.channel == NotificationChannel.email
+        assert notification.subject == f"Payment receipt {receipt_reference}"
+        assert receipt_reference in (notification.body or "")
+        assert (
+            f"https://selfcare.dotmac.io/portal/billing/payments/{payment.id}/receipt"
+        ) in (notification.body or "")
+
+    def test_prepaid_renewal_event_uses_owner_renewed_through_date(
+        self, db_session, subscriber, subscription
+    ):
+        template = (
+            db_session.query(NotificationTemplate)
+            .filter_by(
+                code="prepaid_service_renewed",
+                channel=NotificationChannel.email,
+            )
+            .one()
+        )
+        assert template.is_active is True
+
+        NotificationHandler().handle(
+            db_session,
+            Event(
+                event_type=EventType.prepaid_service_renewed,
+                payload={
+                    "amount": "18812.50",
+                    "currency": "NGN",
+                    "renewed_through": "2026-08-20T00:00:00+00:00",
+                },
+                account_id=subscriber.id,
+                subscription_id=subscription.id,
+            ),
+        )
+        db_session.commit()
+
+        notification = (
+            db_session.query(Notification)
+            .filter_by(event_type="prepaid_service_renewed")
+            .one()
+        )
+        assert notification.subject == (
+            f"Your {subscription.offer.name} service is renewed"
+        )
+        assert "₦18,812.50" in (notification.body or "")
+        assert "August 20, 2026" in (notification.body or "")
 
     def test_notification_handler_uses_fallback_copy_when_no_template(
         self, db_session, subscriber

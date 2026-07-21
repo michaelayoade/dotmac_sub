@@ -10,6 +10,7 @@ anchor in the caller's transaction.
 
 from __future__ import annotations
 
+import enum
 import hashlib
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -22,6 +23,8 @@ from sqlalchemy.orm import Session
 
 from app.models.billing import (
     AccountAdjustment,
+    Invoice,
+    InvoiceStatus,
     LedgerCategory,
     LedgerEntry,
     ServiceEntitlement,
@@ -53,11 +56,13 @@ from app.services.service_entitlements import (
 )
 
 _ORIGIN = AccountAdjustmentOrigin.prepaid_service_renewal
-_ELIGIBLE_STATUSES = {
-    SubscriptionStatus.active,
-    SubscriptionStatus.blocked,
-    SubscriptionStatus.suspended,
-}
+PREPAID_SERVICE_RENEWAL_ELIGIBLE_STATUSES = frozenset(
+    {
+        SubscriptionStatus.active,
+        SubscriptionStatus.blocked,
+        SubscriptionStatus.suspended,
+    }
+)
 _MAX_AUTOMATIC_LAG = timedelta(days=2)
 
 
@@ -161,6 +166,52 @@ class PrepaidServiceRenewalResult:
     replayed: bool
 
 
+class PrepaidServiceRenewalSource(enum.StrEnum):
+    direct_payment = "direct_payment"
+    account_credit = "account_credit"
+    scheduled = "scheduled"
+
+
+@dataclass(frozen=True)
+class PrepaidServiceRenewedOutcome:
+    """Exact customer-visible result of one forward prepaid renewal."""
+
+    event_id: UUID
+    account_id: UUID
+    subscription_id: UUID
+    entitlement_id: UUID
+    ledger_entry_id: UUID
+    period_start: datetime
+    renewed_through: datetime
+    amount: Decimal
+    currency: str
+    source: PrepaidServiceRenewalSource
+    trigger_payment_id: UUID | None = None
+
+
+class FundingChangeRenewalDisposition(enum.StrEnum):
+    no_due_service = "no_due_service"
+    payable_invoice_remaining = "payable_invoice_remaining"
+    funded = "funded"
+    unfunded = "unfunded"
+    already_covered = "already_covered"
+    missing_price = "missing_price"
+    currency_mismatch = "currency_mismatch"
+
+
+@dataclass(frozen=True)
+class FundingChangeRenewalResult:
+    account_id: UUID
+    scanned: int
+    funded: int
+    unfunded: int
+    already_covered: int
+    missing_price: int
+    currency_mismatch: int
+    disposition: FundingChangeRenewalDisposition
+    renewals: tuple[PrepaidServiceRenewedOutcome, ...] = ()
+
+
 def _subscription_for_request(
     db: Session,
     subscription_id: object,
@@ -171,9 +222,11 @@ def _subscription_for_request(
     if subscription.billing_mode != BillingMode.prepaid:
         raise HTTPException(
             status_code=409,
-            detail="Only a prepaid subscription can receive a wallet-funded cycle",
+            detail=(
+                "Only a prepaid subscription can receive an account-credit-funded cycle"
+            ),
         )
-    if subscription.status not in _ELIGIBLE_STATUSES:
+    if subscription.status not in PREPAID_SERVICE_RENEWAL_ELIGIBLE_STATUSES:
         raise HTTPException(
             status_code=409,
             detail="Subscription is not eligible for prepaid service renewal",
@@ -444,6 +497,296 @@ def confirm_prepaid_service_renewal(
     )
 
 
+def stage_prepaid_service_renewed_outcome(
+    db: Session,
+    *,
+    account_id: UUID,
+    subscription_id: UUID,
+    entitlement_id: UUID,
+    ledger_entry_id: UUID,
+    period_start: datetime,
+    renewed_through: datetime,
+    amount: Decimal,
+    currency: str,
+    source: PrepaidServiceRenewalSource,
+    trigger_payment_id: UUID | None = None,
+) -> PrepaidServiceRenewedOutcome:
+    """Stage the exact forward-renewal outcome beside its financial writes."""
+    from app.services.events.dispatcher import emit_event
+    from app.services.events.types import EventType
+
+    starts_at = _utc(period_start)
+    ends_at = _utc(renewed_through)
+    charge = round_money(amount)
+    event = emit_event(
+        db,
+        EventType.prepaid_service_renewed,
+        {
+            "schema_version": 1,
+            "subscription_id": str(subscription_id),
+            "entitlement_id": str(entitlement_id),
+            "ledger_entry_id": str(ledger_entry_id),
+            "trigger_payment_id": (
+                str(trigger_payment_id) if trigger_payment_id else None
+            ),
+            "amount": str(charge),
+            "currency": currency,
+            "period_start": starts_at.isoformat(),
+            "renewed_through": ends_at.isoformat(),
+            "source": source.value,
+        },
+        actor="system:prepaid_service_renewals",
+        account_id=account_id,
+        subscription_id=subscription_id,
+    )
+    return PrepaidServiceRenewedOutcome(
+        event_id=event.event_id,
+        account_id=account_id,
+        subscription_id=subscription_id,
+        entitlement_id=entitlement_id,
+        ledger_entry_id=ledger_entry_id,
+        period_start=starts_at,
+        renewed_through=ends_at,
+        amount=charge,
+        currency=currency,
+        source=source,
+        trigger_payment_id=trigger_payment_id,
+    )
+
+
+def renewal_outcomes_for_payment(
+    db: Session,
+    payment_id: UUID,
+) -> tuple[PrepaidServiceRenewedOutcome, ...]:
+    """Return canonical renewal outcomes explicitly linked to one payment."""
+    from app.models.event_store import EventStore
+    from app.services.events.types import EventType
+
+    rows = list(
+        db.scalars(
+            select(EventStore)
+            .where(
+                EventStore.event_type == EventType.prepaid_service_renewed.value,
+                EventStore.is_active.is_(True),
+                EventStore.payload["trigger_payment_id"].as_string() == str(payment_id),
+            )
+            .order_by(EventStore.created_at, EventStore.id)
+        ).all()
+    )
+    outcomes: list[PrepaidServiceRenewedOutcome] = []
+    for row in rows:
+        payload = row.payload or {}
+        if row.account_id is None or row.subscription_id is None:
+            continue
+        try:
+            outcomes.append(
+                PrepaidServiceRenewedOutcome(
+                    event_id=row.event_id,
+                    account_id=row.account_id,
+                    subscription_id=row.subscription_id,
+                    entitlement_id=UUID(str(payload["entitlement_id"])),
+                    ledger_entry_id=UUID(str(payload["ledger_entry_id"])),
+                    period_start=_utc(datetime.fromisoformat(payload["period_start"])),
+                    renewed_through=_utc(
+                        datetime.fromisoformat(payload["renewed_through"])
+                    ),
+                    amount=round_money(Decimal(str(payload["amount"]))),
+                    currency=str(payload["currency"]),
+                    source=PrepaidServiceRenewalSource(str(payload["source"])),
+                    trigger_payment_id=payment_id,
+                )
+            )
+        except (KeyError, TypeError, ValueError):
+            # Malformed historical events are not a basis for a customer claim.
+            continue
+    return tuple(outcomes)
+
+
+def _payable_invoice_exists(
+    db: Session,
+    *,
+    account_id: UUID,
+    currency: str,
+) -> bool:
+    return (
+        db.scalar(
+            select(Invoice.id)
+            .where(
+                Invoice.account_id == account_id,
+                Invoice.is_active.is_(True),
+                Invoice.status.in_(
+                    {
+                        InvoiceStatus.issued,
+                        InvoiceStatus.partially_paid,
+                        InvoiceStatus.overdue,
+                    }
+                ),
+                Invoice.currency == currency,
+                Invoice.balance_due > Decimal("0.00"),
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
+def apply_due_prepaid_service_after_funding_change(
+    db: Session,
+    *,
+    account_id: UUID,
+    effective_at: datetime,
+    funding_currency: str,
+    evidence_ref: str,
+    trigger_payment_id: UUID | None = None,
+) -> FundingChangeRenewalResult:
+    """Consume newly available funding for currently due prepaid service.
+
+    Account-credit settlement and invoice allocation remain separate owners.
+    Their completed funding-change event invokes this owner only after ordinary
+    payable invoices have had first claim on the credit. A lapsed service starts
+    a new period on the payment day; missed inactive periods are never back-billed.
+    """
+    evaluated_at = _utc(effective_at)
+    currency = str(funding_currency or "").strip().upper()
+    if len(currency) != 3:
+        raise ValueError("funding_currency must be a three-letter code")
+    evidence = evidence_ref.strip()
+    if not evidence:
+        raise ValueError("evidence_ref is required")
+
+    due_subscriptions = list(
+        db.scalars(
+            select(Subscription)
+            .join(CatalogOffer, CatalogOffer.id == Subscription.offer_id)
+            .where(
+                Subscription.subscriber_id == account_id,
+                Subscription.billing_mode == BillingMode.prepaid,
+                Subscription.status.in_(PREPAID_SERVICE_RENEWAL_ELIGIBLE_STATUSES),
+                Subscription.next_billing_at.isnot(None),
+                Subscription.next_billing_at <= evaluated_at,
+                CatalogOffer.billing_cycle == BillingCycle.monthly,
+                CatalogOffer.is_active.is_(True),
+            )
+            .order_by(Subscription.next_billing_at, Subscription.id)
+        ).all()
+    )
+    if not due_subscriptions:
+        return FundingChangeRenewalResult(
+            account_id=account_id,
+            scanned=0,
+            funded=0,
+            unfunded=0,
+            already_covered=0,
+            missing_price=0,
+            currency_mismatch=0,
+            disposition=FundingChangeRenewalDisposition.no_due_service,
+        )
+
+    if _payable_invoice_exists(db, account_id=account_id, currency=currency):
+        return FundingChangeRenewalResult(
+            account_id=account_id,
+            scanned=len(due_subscriptions),
+            funded=0,
+            unfunded=0,
+            already_covered=0,
+            missing_price=0,
+            currency_mismatch=0,
+            disposition=FundingChangeRenewalDisposition.payable_invoice_remaining,
+        )
+
+    from app.services.billing_automation import _period_end
+
+    funded = 0
+    unfunded = 0
+    already_covered = 0
+    missing_price = 0
+    currency_mismatch = 0
+    renewals: list[PrepaidServiceRenewedOutcome] = []
+    paid_day = evaluated_at.replace(hour=0, minute=0, second=0, microsecond=0)
+    for subscription in due_subscriptions:
+        charge = resolve_prepaid_monthly_charge(db, subscription, evaluated_at)
+        if charge is None:
+            missing_price += 1
+            continue
+        amount, charge_currency, cycle = charge
+        if charge_currency != currency:
+            currency_mismatch += 1
+            continue
+        anchor = _utc(subscription.next_billing_at or paid_day)
+        period_start = max(anchor, paid_day)
+        period_end = _period_end(period_start, cycle)
+        paid_through = prepaid_entitlement_coverage_end(
+            db,
+            subscription_id=subscription.id,
+            account_id=account_id,
+            period_start=period_start,
+            period_end=period_end,
+        )
+        if paid_through is not None and _utc(paid_through) > period_start:
+            if anchor < _utc(paid_through):
+                subscription.next_billing_at = paid_through
+            already_covered += 1
+            continue
+        preview = preview_prepaid_service_renewal(
+            db,
+            subscription_id=subscription.id,
+            starts_at=period_start,
+            ends_at=period_end,
+            amount=amount,
+            currency=charge_currency,
+        )
+        if not preview.allowed:
+            unfunded += 1
+            continue
+        renewal = confirm_prepaid_service_renewal(
+            db,
+            preview,
+            evidence_ref=evidence,
+            commit=False,
+        )
+        if not renewal.replayed:
+            renewals.append(
+                stage_prepaid_service_renewed_outcome(
+                    db,
+                    account_id=renewal.preview.account_id,
+                    subscription_id=renewal.preview.subscription_id,
+                    entitlement_id=renewal.entitlement.id,
+                    ledger_entry_id=renewal.ledger_entry.id,
+                    period_start=renewal.preview.starts_at,
+                    renewed_through=renewal.preview.ends_at,
+                    amount=renewal.preview.amount,
+                    currency=renewal.preview.currency,
+                    source=PrepaidServiceRenewalSource.account_credit,
+                    trigger_payment_id=trigger_payment_id,
+                )
+            )
+        funded += 1
+
+    db.flush()
+    disposition = (
+        FundingChangeRenewalDisposition.funded
+        if funded
+        else FundingChangeRenewalDisposition.already_covered
+        if already_covered
+        else FundingChangeRenewalDisposition.unfunded
+        if unfunded
+        else FundingChangeRenewalDisposition.missing_price
+        if missing_price
+        else FundingChangeRenewalDisposition.currency_mismatch
+    )
+    return FundingChangeRenewalResult(
+        account_id=account_id,
+        scanned=len(due_subscriptions),
+        funded=funded,
+        unfunded=unfunded,
+        already_covered=already_covered,
+        missing_price=missing_price,
+        currency_mismatch=currency_mismatch,
+        disposition=disposition,
+        renewals=tuple(renewals),
+    )
+
+
 def run_due_prepaid_service_renewals(
     db: Session,
     *,
@@ -488,7 +831,7 @@ def run_due_prepaid_service_renewals(
             .join(CatalogOffer, CatalogOffer.id == Subscription.offer_id)
             .where(
                 Subscription.billing_mode == BillingMode.prepaid,
-                Subscription.status.in_(_ELIGIBLE_STATUSES),
+                Subscription.status.in_(PREPAID_SERVICE_RENEWAL_ELIGIBLE_STATUSES),
                 Subscription.next_billing_at.isnot(None),
                 Subscription.next_billing_at <= effective_at,
                 CatalogOffer.billing_cycle == BillingCycle.monthly,
@@ -574,7 +917,7 @@ def run_due_prepaid_service_renewals(
             )
             continue
         if not dry_run:
-            confirm_prepaid_service_renewal(
+            renewal = confirm_prepaid_service_renewal(
                 db,
                 preview,
                 evidence_ref=(
@@ -583,6 +926,19 @@ def run_due_prepaid_service_renewals(
                 ),
                 commit=False,
             )
+            if not renewal.replayed:
+                stage_prepaid_service_renewed_outcome(
+                    db,
+                    account_id=renewal.preview.account_id,
+                    subscription_id=renewal.preview.subscription_id,
+                    entitlement_id=renewal.entitlement.id,
+                    ledger_entry_id=renewal.ledger_entry.id,
+                    period_start=renewal.preview.starts_at,
+                    renewed_through=renewal.preview.ends_at,
+                    amount=renewal.preview.amount,
+                    currency=renewal.preview.currency,
+                    source=PrepaidServiceRenewalSource.scheduled,
+                )
             from app.models.collections import FinancialAccessOrigin
             from app.services.collections._core import restore_account_services
 
@@ -604,10 +960,18 @@ def run_due_prepaid_service_renewals(
 
 
 __all__ = [
+    "FundingChangeRenewalDisposition",
+    "FundingChangeRenewalResult",
+    "PREPAID_SERVICE_RENEWAL_ELIGIBLE_STATUSES",
     "PrepaidServiceRenewalPreview",
     "PrepaidServiceRenewalResult",
+    "PrepaidServiceRenewalSource",
+    "PrepaidServiceRenewedOutcome",
+    "apply_due_prepaid_service_after_funding_change",
     "confirm_prepaid_service_renewal",
     "preview_prepaid_service_renewal",
+    "renewal_outcomes_for_payment",
     "resolve_prepaid_monthly_charge",
     "run_due_prepaid_service_renewals",
+    "stage_prepaid_service_renewed_outcome",
 ]

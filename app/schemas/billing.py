@@ -1131,9 +1131,12 @@ class TopupVerifyResponse(BaseModel):
     currency: str = "NGN"
     already_recorded: bool = False
     available_balance: Decimal | None = None
+    amount_credited: Decimal | None = None
+    prepaid_amount_applied: Decimal = Decimal("0.00")
     credit_added: Decimal | None = None
     allocated_total: Decimal = Decimal("0.00")
     allocated_to_invoices: list[dict[str, Any]] = Field(default_factory=list)
+    renewed_services: list[dict[str, Any]] = Field(default_factory=list)
     card_saved: bool | None = None
     card_save_message: str | None = None
 

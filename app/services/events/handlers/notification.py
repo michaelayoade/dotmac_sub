@@ -6,6 +6,7 @@ import logging
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -271,10 +272,24 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
         template_code="payment_received",
         category="billing",
         channels=(NotificationChannel.email, NotificationChannel.sms),
-        subject="Payment received — thank you",
+        subject="Payment receipt {receipt_number}",
         body=(
             "Dear {subscriber_name},\n\n"
-            "We have received your payment of {amount}. Thank you."
+            "We have received your payment of {amount}. Thank you.\n\n"
+            "Receipt: {receipt_number}\n"
+            "View or download: {receipt_url}"
+        ),
+    ),
+    EventType.prepaid_service_renewed: EventNotificationSpec(
+        template_code="prepaid_service_renewed",
+        category="service",
+        channels=(NotificationChannel.email,),
+        subject="Your {offer_name} service is renewed",
+        body=(
+            "Dear {subscriber_name},\n\n"
+            "We applied {amount} to your {offer_name} service. "
+            "Your service is renewed through {renewed_through}.\n\n"
+            "This renewal confirmation is separate from your payment receipt."
         ),
     ),
     EventType.payment_failed: EventNotificationSpec(
@@ -805,6 +820,46 @@ class NotificationHandler:
                         exc_info=True,
                     )
 
+        if event.event_type == EventType.payment_received:
+            payment_id = event.payload.get("payment_id")
+            if payment_id:
+                try:
+                    from app.models.billing import Payment, PaymentStatus
+                    from app.services.billing.payment_receipt_identity import (
+                        payment_receipt_path,
+                        payment_receipt_reference,
+                    )
+                    from app.services.branding_config import get_brand
+                    from app.services.common import coerce_uuid
+
+                    payment = db.get(Payment, coerce_uuid(payment_id))
+                    if (
+                        payment is not None
+                        and payment.status == PaymentStatus.succeeded
+                        and payment.is_active
+                        and (
+                            event.account_id is None
+                            or payment.account_id == event.account_id
+                        )
+                    ):
+                        app_url = str(get_brand().get("app_url") or "").rstrip("/")
+                        context.setdefault(
+                            "receipt_number",
+                            payment_receipt_reference(
+                                payment.id, payment.receipt_number
+                            ),
+                        )
+                        context.setdefault(
+                            "receipt_url",
+                            f"{app_url}{payment_receipt_path(payment.id)}",
+                        )
+                except Exception:
+                    logger.warning(
+                        "Failed to resolve payment receipt context (payment_id=%s)",
+                        payment_id,
+                        exc_info=True,
+                    )
+
         if event.invoice_id and "invoice_number" not in context:
             try:
                 from app.models.billing import Invoice
@@ -862,6 +917,13 @@ class NotificationHandler:
                 amount = Decimal(context["amount"])
                 context["amount"] = f"₦{amount:,.2f}"
             except (InvalidOperation, ValueError):
+                pass
+
+        if "renewed_through" in context:
+            try:
+                renewed_through = datetime.fromisoformat(context["renewed_through"])
+                context["renewed_through"] = renewed_through.strftime("%B %d, %Y")
+            except ValueError:
                 pass
 
         context.setdefault("device_serial", context.get("serial_number", ""))

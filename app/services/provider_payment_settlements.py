@@ -16,6 +16,7 @@ from decimal import Decimal
 from uuid import UUID
 
 from fastapi import HTTPException
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.billing import (
@@ -23,12 +24,15 @@ from app.models.billing import (
     PaymentAllocation,
     PaymentAllocationReconciliationException,
 )
+from app.models.event_store import EventStore
 from app.schemas.billing import (
     PaymentAllocationConfirm,
     PaymentAllocationPreviewRequest,
 )
 from app.services import billing as billing_service
 from app.services.common import round_money, to_decimal
+from app.services.events import emit_event
+from app.services.events.types import EventType
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +43,41 @@ class VerifiedInvoiceSettlementResult:
     allocation: PaymentAllocation | None
     reconciliation_exception: PaymentAllocationReconciliationException | None
     payment_created: bool
+
+
+def _emit_account_credit_application_completed(
+    db: Session,
+    *,
+    payment: Payment,
+    applied_amount: Decimal,
+    allocation_state: str,
+) -> None:
+    if payment.account_id is None or payment.settlement is None:
+        return
+    existing_event = db.scalar(
+        select(EventStore.id).where(
+            EventStore.event_type == EventType.account_credit_deposited.value,
+            EventStore.account_id == payment.account_id,
+            EventStore.payload["payment_id"].as_string() == str(payment.id),
+            EventStore.payload["origin"].as_string() == "verified_invoice_payment",
+        )
+    )
+    if existing_event is not None:
+        return
+    emit_event(
+        db,
+        EventType.account_credit_deposited,
+        {
+            "payment_id": str(payment.id),
+            "amount": str(payment.settlement.amount),
+            "currency": payment.settlement.currency,
+            "applied_amount": str(round_money(applied_amount)),
+            "allocation_state": allocation_state,
+            "origin": "verified_invoice_payment",
+        },
+        account_id=payment.account_id,
+    )
+    db.commit()
 
 
 def _allocation_key(
@@ -96,6 +135,12 @@ def settle_verified_invoice_payment(
             invoice_id=invoice_id,
             provider_reference=provider_reference,
         )
+        _emit_account_credit_application_completed(
+            db,
+            payment=payment,
+            applied_amount=round_money(to_decimal(existing_allocation.amount)),
+            allocation_state="allocated",
+        )
         return VerifiedInvoiceSettlementResult(
             payment=payment,
             allocation=existing_allocation,
@@ -120,6 +165,12 @@ def settle_verified_invoice_payment(
                 payment_id=payment.id,
                 invoice_id=invoice_id,
                 provider_reference=provider_reference,
+            )
+            _emit_account_credit_application_completed(
+                db,
+                payment=payment,
+                applied_amount=Decimal("0.00"),
+                allocation_state="no_allocatable_balance",
             )
             return VerifiedInvoiceSettlementResult(
                 payment=payment,
@@ -155,6 +206,12 @@ def settle_verified_invoice_payment(
             invoice_id=invoice_id,
             provider_reference=provider_reference,
         )
+        _emit_account_credit_application_completed(
+            db,
+            payment=payment,
+            applied_amount=round_money(to_decimal(allocation_result.allocation.amount)),
+            allocation_state="allocated",
+        )
         return VerifiedInvoiceSettlementResult(
             payment=payment,
             allocation=allocation_result.allocation,
@@ -187,6 +244,12 @@ def settle_verified_invoice_payment(
             raise RuntimeError(
                 "Verified payment disappeared while recording allocation exception"
             ) from exc
+        _emit_account_credit_application_completed(
+            db,
+            payment=durable_payment,
+            applied_amount=Decimal("0.00"),
+            allocation_state="retained_as_account_credit",
+        )
         return VerifiedInvoiceSettlementResult(
             payment=durable_payment,
             allocation=None,
