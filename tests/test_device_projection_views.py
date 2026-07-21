@@ -10,10 +10,12 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from fastapi.routing import APIRoute
 
 from app.models.network_monitoring import DeviceProjection
 from app.services import device_projection_views
 from app.services import web_network_core_devices_inventory as inventory
+from app.web.admin import network as network_routes
 
 
 def _proj(db, source_id, *, name, device_type="core", status="up", vendor="acme", **kw):
@@ -54,6 +56,26 @@ def test_build_network_device_list_query_normalizes_and_rejects():
         inventory.build_network_device_list_query(sort_by="vendor")  # not sortable
     with pytest.raises(ValueError):
         inventory.build_network_device_list_query(per_page=30)  # not allowed
+
+
+def test_network_devices_route_binds_list_handler_without_required_filters():
+    routes = [
+        route
+        for route in network_routes.router.routes
+        if isinstance(route, APIRoute)
+        and route.path == "/network/devices"
+        and "GET" in route.methods
+    ]
+
+    assert len(routes) == 1
+    route = routes[0]
+    assert route.endpoint is network_routes.devices_list
+    assert not [param.name for param in route.dependant.query_params if param.required]
+    assert any(
+        cell.cell_contents == "network:device:read"
+        for dependency in route.dependant.dependencies
+        for cell in (getattr(dependency.call, "__closure__", None) or ())
+    )
 
 
 # --- Read owner ---

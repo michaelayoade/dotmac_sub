@@ -40,11 +40,6 @@ def network_hub(request: Request, db: Session = Depends(get_db)) -> HTMLResponse
     )
 
 
-@router.get(
-    "/devices",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:device:read"))],
-)
 def _build_device_query(
     *,
     device_type: str | None,
@@ -86,6 +81,11 @@ def _build_device_query(
         )
 
 
+@router.get(
+    "/devices",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:device:read"))],
+)
 def devices_list(
     request: Request,
     device_type: str | None = None,
