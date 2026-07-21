@@ -7,6 +7,7 @@ import re
 import threading
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from uuid import UUID
 
 from fastapi import HTTPException
 from pyrad.client import Client, Timeout
@@ -1224,7 +1225,12 @@ def remove_subscription_address_list_block(db: Session, subscription_id: str) ->
     return count
 
 
-def lift_fup_enforcement(db: Session, subscription_id: str) -> dict[str, Any]:
+def lift_fup_enforcement(
+    db: Session,
+    subscription_id: str,
+    *,
+    evaluated_at: datetime,
+) -> dict[str, Any]:
     """Undo whatever FUP enforcement is active, then clear the FUP state row.
 
     Called at the quota period boundary (and on a qualifying top-up). The old
@@ -1239,7 +1245,7 @@ def lift_fup_enforcement(db: Session, subscription_id: str) -> dict[str, Any]:
       suspension (both idempotent; ``blocked`` covers both apply paths).
     """
     from app.models.fup_state import FupActionStatus
-    from app.services.fup_state import fup_state
+    from app.services.fup_state import ClearFupRuntimeState, fup_state
 
     state = fup_state.get(db, subscription_id)
     if not state:
@@ -1298,7 +1304,13 @@ def lift_fup_enforcement(db: Session, subscription_id: str) -> dict[str, Any]:
                     "FUP lift: resume failed for %s: %s", subscription_id, exc
                 )
 
-    fup_state.clear(db, subscription_id)
+    fup_state.clear(
+        db,
+        ClearFupRuntimeState(
+            subscription_id=UUID(subscription_id),
+            evaluated_at=evaluated_at,
+        ),
+    )
     db.flush()
     return {"lifted": True, "prior": prior.value, "actions": actions}
 

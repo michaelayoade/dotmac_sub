@@ -54,39 +54,28 @@ def _operator_id(principal: dict[str, Any]) -> str:
 
 def _installation_command(db: Session, command: Callable[[], T]) -> T:
     try:
-        value = command()
-        db.commit()
-        return value
+        return installations.execute_command(db, command)
     except KeyError as exc:
-        db.rollback()
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except installations.InstallationError as exc:
-        db.rollback()
         code = 404 if "not found" in str(exc) else 400
         raise HTTPException(status_code=code, detail=str(exc)) from exc
     except RuntimeExecutionError as exc:
-        db.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _delivery_command(db: Session, command: Callable[[], T]) -> T:
     try:
-        value = command()
-        db.commit()
-        return value
+        return integration_delivery.execute_command(db, command)
     except integration_delivery.DeliveryError as exc:
-        db.rollback()
         code = 404 if "not found" in str(exc) else 409
         raise HTTPException(status_code=code, detail=str(exc)) from exc
 
 
 def _inbox_command(db: Session, command: Callable[[], T]) -> T:
     try:
-        value = command()
-        db.commit()
-        return value
+        return integration_inbox.execute_command(db, command)
     except integration_inbox.InboxError as exc:
-        db.rollback()
         code = 404 if "not found" in str(exc) else 409
         raise HTTPException(status_code=code, detail=str(exc)) from exc
 

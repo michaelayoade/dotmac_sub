@@ -7,16 +7,20 @@ assumed subscriber/system_user. These verify a reseller_user works there too.
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 from starlette.requests import Request
 
 from app.api.reseller import _reseller_id
 from app.config import settings
-from app.models.subscriber import Reseller
+from app.models.auth import UserCredential
+from app.models.subscriber import Reseller, ResellerUser
 from app.services import auth_flow as auth_flow_service
-from app.services import reseller_portal
+from app.services import reseller_onboarding
 from app.services.auth_dependencies import require_user_auth
 from app.services.auth_flow import AuthFlow, change_password
+from app.services.owner_commands import CommandContext
 
 
 @pytest.fixture
@@ -43,16 +47,40 @@ def _request(headers=None):
 def _reseller_login(db):
     r = Reseller(name="Bearer Net", code="BRR")
     db.add(r)
+    db.flush()
+    reseller_id = r.id
     db.commit()
-    db.refresh(r)
-    ru = reseller_portal.create_reseller_user_principal(
+    command_id = uuid.uuid4()
+    outcome = reseller_onboarding.provision_reseller_user(
         db,
-        reseller_id=str(r.id),
-        username="brr-admin",
-        password="secret",  # noqa: S106
-        email="brr@example.com",
-        full_name="BRR Admin",
+        reseller_onboarding.ProvisionResellerUserCommand(
+            context=CommandContext(
+                command_id=command_id,
+                correlation_id=command_id,
+                actor="user:reseller-bearer-test",
+                scope=reseller_onboarding.RESELLER_WRITE_SCOPE,
+                reason="create first-class reseller bearer test principal",
+            ),
+            reseller_id=reseller_id,
+            portal_user=reseller_onboarding.ResellerPortalUserSpec(
+                first_name="BRR",
+                last_name="Admin",
+                email="brr@example.com",
+                username="brr-admin",
+                password="secret",  # noqa: S106
+                send_invite=False,
+            ),
+        ),
     )
+    ru = db.get(ResellerUser, outcome.reseller_user_id)
+    r = db.get(Reseller, reseller_id)
+    credential = (
+        db.query(UserCredential)
+        .filter(UserCredential.reseller_user_id == outcome.reseller_user_id)
+        .one()
+    )
+    credential.must_change_password = False
+    db.commit()
     tokens = AuthFlow.login(db, "brr-admin", "secret", _request(), None)
     return r, ru, tokens
 

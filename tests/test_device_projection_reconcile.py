@@ -11,11 +11,17 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
 from sqlalchemy import select
 
+from app.models.event_store import EventStore
 from app.models.network_monitoring import DeviceProjection
 from app.services import device_projection_reconcile as reconcile_mod
-from app.services.device_projection_reconcile import reconcile_device_projections
+from app.services.device_projection_reconcile import (
+    ReconcileDeviceProjectionsCommand,
+    reconcile_device_projections,
+)
+from app.services.owner_commands import CommandContext
 
 
 def _device(device_id, device_type, *, status="up", **overrides):
@@ -38,6 +44,17 @@ def _device(device_id, device_type, *, status="up", **overrides):
 
 def _patch_collect(monkeypatch, devices):
     monkeypatch.setattr(reconcile_mod, "collect_devices", lambda db: list(devices))
+
+
+def _command(*, now: datetime | None = None) -> ReconcileDeviceProjectionsCommand:
+    return ReconcileDeviceProjectionsCommand(
+        context=CommandContext.system(
+            actor="pytest:device_projection",
+            scope="network:test",
+            reason="verify projection owner behavior",
+        ),
+        reconciled_at=now,
+    )
 
 
 def _rows(db):
@@ -63,7 +80,7 @@ def test_reconcile_inserts_one_row_per_derived_device(db_session, monkeypatch):
         ],
     )
 
-    result = reconcile_device_projections(db_session)
+    result = reconcile_device_projections(db_session, _command())
 
     assert result.inserted == 4
     assert result.updated == 0
@@ -78,10 +95,10 @@ def test_reconcile_is_idempotent(db_session, monkeypatch):
     devices = [_device("1", "olt"), _device("2", "core")]
     _patch_collect(monkeypatch, devices)
 
-    first = reconcile_device_projections(db_session)
+    first = reconcile_device_projections(db_session, _command())
     assert first.inserted == 2
 
-    second = reconcile_device_projections(db_session)
+    second = reconcile_device_projections(db_session, _command())
     assert second.inserted == 0
     assert second.updated == 2
     assert second.pruned == 0
@@ -91,15 +108,17 @@ def test_reconcile_is_idempotent(db_session, monkeypatch):
 def test_reconcile_updates_changed_status_and_freshness(db_session, monkeypatch):
     early = datetime(2026, 7, 16, 8, 0, tzinfo=UTC)
     _patch_collect(monkeypatch, [_device("1", "olt", status="up")])
-    reconcile_device_projections(db_session, now=early)
+    first = reconcile_device_projections(db_session, _command(now=early))
+    assert first.reconciled_at == early
     assert _naive(_rows(db_session)[("olt", "1")].refreshed_at) == _naive(early)
+    db_session.commit()
 
     later = datetime(2026, 7, 16, 9, 0, tzinfo=UTC)
     _patch_collect(
         monkeypatch,
         [_device("1", "olt", status="down", operational_reason="link_down")],
     )
-    reconcile_device_projections(db_session, now=later)
+    reconcile_device_projections(db_session, _command(now=later))
 
     row = _rows(db_session)[("olt", "1")]
     assert row.operational_status == "down"
@@ -109,11 +128,11 @@ def test_reconcile_updates_changed_status_and_freshness(db_session, monkeypatch)
 
 def test_reconcile_prunes_orphaned_devices(db_session, monkeypatch):
     _patch_collect(monkeypatch, [_device("1", "olt"), _device("2", "core")])
-    reconcile_device_projections(db_session)
+    reconcile_device_projections(db_session, _command())
 
     # Device 2 disappears from the authoritative source.
     _patch_collect(monkeypatch, [_device("1", "olt")])
-    result = reconcile_device_projections(db_session)
+    result = reconcile_device_projections(db_session, _command())
 
     assert result.pruned == 1
     assert set(_rows(db_session)) == {("olt", "1")}
@@ -123,7 +142,90 @@ def test_same_source_id_across_types_are_distinct_rows(db_session, monkeypatch):
     # (device_type, source_id) is the natural key: an OLT and an ONT may share
     # a numeric id without colliding.
     _patch_collect(monkeypatch, [_device("1", "olt"), _device("1", "ont")])
-    result = reconcile_device_projections(db_session)
+    result = reconcile_device_projections(db_session, _command())
 
     assert result.inserted == 2
     assert set(_rows(db_session)) == {("olt", "1"), ("ont", "1")}
+
+
+def test_reconcile_stages_versioned_event_with_command_evidence(
+    db_session, monkeypatch
+):
+    command = _command()
+    _patch_collect(monkeypatch, [_device("1", "olt")])
+
+    result = reconcile_device_projections(db_session, command)
+
+    record = db_session.scalar(
+        select(EventStore).where(
+            EventStore.event_type == "device_projection.reconciled"
+        )
+    )
+    assert record is not None
+    assert record.payload["schema_version"] == 1
+    assert record.payload["command_id"] == str(command.context.command_id)
+    assert record.payload["correlation_id"] == str(command.context.correlation_id)
+    assert record.payload["aggregate_type"] == "device_projection"
+    assert record.payload["aggregate_id"] == "network:global"
+    assert record.payload["aggregate_version"] == str(command.context.command_id)
+    assert record.payload["inserted"] == 1
+    assert result.command_id == command.context.command_id
+
+
+def test_reconcile_failure_rolls_back_projection_and_event(db_session, monkeypatch):
+    def fail_collect(_db):
+        raise RuntimeError("authoritative source unavailable")
+
+    monkeypatch.setattr(reconcile_mod, "collect_devices", fail_collect)
+
+    with pytest.raises(RuntimeError, match="authoritative source unavailable"):
+        reconcile_device_projections(db_session, _command())
+
+    assert not db_session.in_transaction()
+    assert _rows(db_session) == {}
+    assert (
+        db_session.scalar(
+            select(EventStore.id).where(
+                EventStore.event_type == "device_projection.reconciled"
+            )
+        )
+        is None
+    )
+
+
+def test_failure_after_event_staging_rolls_back_projection_and_outbox(
+    db_session, monkeypatch
+):
+    _patch_collect(monkeypatch, [_device("1", "olt")])
+
+    def fail_after_event(*_args, **_kwargs):
+        raise RuntimeError("failure after event staging")
+
+    monkeypatch.setattr(reconcile_mod.logger, "info", fail_after_event)
+
+    with pytest.raises(RuntimeError, match="failure after event staging"):
+        reconcile_device_projections(db_session, _command())
+
+    assert not db_session.in_transaction()
+    assert _rows(db_session) == {}
+    assert (
+        db_session.scalar(
+            select(EventStore.id).where(
+                EventStore.event_type == "device_projection.reconciled"
+            )
+        )
+        is None
+    )
+
+
+def test_reconcile_rejects_naive_reconciliation_time_without_open_transaction(
+    db_session, monkeypatch
+):
+    _patch_collect(monkeypatch, [])
+    command = _command(now=datetime(2026, 7, 19, 8, 0))
+
+    with pytest.raises(reconcile_mod.DeviceProjectionCommandError) as captured:
+        reconcile_device_projections(db_session, command)
+
+    assert captured.value.code == "network.device_projection.invalid_command"
+    assert not db_session.in_transaction()

@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.models.domain_settings import SettingDomain
 from app.models.notification import NotificationChannel, NotificationStatus
 from app.models.sales import Lead
-from app.models.subscriber import Subscriber, SubscriberContact
+from app.models.subscriber import Subscriber
 from app.models.support import (
     Ticket,
     TicketAccessToken,
@@ -1051,40 +1051,27 @@ class Tickets:
             f"Confirm or dispute it here: {action_url}"
         )
 
-        recipients: set[tuple[NotificationChannel, str]] = set()
-        if subscriber.email:
-            recipients.add((NotificationChannel.email, subscriber.email.strip()))
-        if subscriber.phone:
-            recipients.add((NotificationChannel.sms, subscriber.phone.strip()))
+        from app.services import customer_experience_communications
 
-        contact_rows = (
-            db.query(SubscriberContact)
-            .filter(SubscriberContact.subscriber_id == subscriber.id)
-            .filter(SubscriberContact.receives_notifications.is_(True))
-            .all()
+        customer_experience_communications.request_update(
+            db,
+            subscriber_id=subscriber.id,
+            event_type="support_ticket_resolution_confirmation",
+            subject=subject,
+            body=body,
+            metadata={
+                "type": "ticket",
+                "ticket_id": str(ticket.id),
+                "ticket_number": ticket.number,
+                "confirmation_token_id": str(token_row.id),
+            },
+            dedupe_key=f"ticket-resolution-confirmation:{token_row.id}",
+            default_channels=(
+                NotificationChannel.email,
+                NotificationChannel.whatsapp,
+                NotificationChannel.push,
+            ),
         )
-        for contact in contact_rows:
-            if contact.email:
-                recipients.add((NotificationChannel.email, contact.email.strip()))
-            phone = contact.whatsapp or contact.phone
-            if phone:
-                recipients.add((NotificationChannel.sms, phone.strip()))
-
-        for channel, recipient in sorted(recipients, key=lambda item: item[1]):
-            if not recipient:
-                continue
-            notification_service.notifications.queue_customer_notification(
-                db,
-                NotificationCreate(
-                    subscriber_id=subscriber.id,
-                    channel=channel,
-                    recipient=recipient,
-                    event_type="support_ticket_resolution_confirmation",
-                    category="service",
-                    subject=subject if channel == NotificationChannel.email else None,
-                    body=body,
-                ),
-            )
 
     @staticmethod
     def _emit_ticket_event(
@@ -1383,6 +1370,49 @@ class Tickets:
         db.commit()
         db.refresh(ticket)
         return ticket
+
+    @staticmethod
+    def respond_to_resolution_for_customer(
+        db: Session,
+        ticket: Ticket,
+        *,
+        confirm: bool,
+        reason: str | None = None,
+    ) -> Ticket:
+        """Authenticated self-care adapter into the resolution owner.
+
+        The public magic link and signed-in clients converge on the same active
+        confirmation capability and therefore the same mutation/audit path.
+        """
+        if ticket.status != TicketStatus.pending_confirmation.value:
+            raise HTTPException(
+                status_code=409,
+                detail="This ticket is not awaiting resolution confirmation.",
+            )
+        token_row = (
+            db.query(TicketAccessToken)
+            .filter(TicketAccessToken.ticket_id == ticket.id)
+            .filter(TicketAccessToken.purpose == "resolution_confirm")
+            .filter(TicketAccessToken.is_active.is_(True))
+            .filter(TicketAccessToken.responded_at.is_(None))
+            .filter(
+                or_(
+                    TicketAccessToken.expires_at.is_(None),
+                    TicketAccessToken.expires_at >= _now(),
+                )
+            )
+            .order_by(TicketAccessToken.created_at.desc())
+            .first()
+        )
+        if token_row is None:
+            raise HTTPException(
+                status_code=409,
+                detail="The resolution confirmation request is no longer active.",
+            )
+        token_row.ticket = ticket
+        if confirm:
+            return Tickets.confirm_resolution(db, token_row)
+        return Tickets.dispute_resolution(db, token_row, reason=reason)
 
     @staticmethod
     def dispute_resolution(

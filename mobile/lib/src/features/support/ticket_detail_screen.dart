@@ -95,6 +95,77 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen> {
     }
   }
 
+  Future<void> _confirmResolution(Ticket ticket) async {
+    try {
+      await ref.read(supportRepositoryProvider).confirmResolution(ticket.id);
+      ref.invalidate(ticketProvider(widget.ticketId));
+      ref.invalidate(ticketCommentsProvider(widget.ticketId));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Thanks for confirming the resolution.'),
+          ),
+        );
+      }
+    } on ApiException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.message)));
+      }
+    }
+  }
+
+  Future<void> _disputeResolution(Ticket ticket) async {
+    final controller = TextEditingController();
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('What still needs attention?'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLines: 4,
+          maxLength: 2000,
+          decoration: const InputDecoration(
+            hintText: 'Describe what is still wrong',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.pop(dialogContext, controller.text.trim()),
+            child: const Text('Reopen ticket'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (reason == null) return;
+    try {
+      await ref
+          .read(supportRepositoryProvider)
+          .disputeResolution(ticket.id, reason: reason);
+      ref.invalidate(ticketProvider(widget.ticketId));
+      ref.invalidate(ticketCommentsProvider(widget.ticketId));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('The ticket has been reopened.')),
+        );
+      }
+    } on ApiException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.message)));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final ticket = ref.watch(ticketProvider(widget.ticketId));
@@ -161,6 +232,41 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen> {
                       ),
                     ),
                   const SizedBox(height: 16),
+                  if (t.canConfirmResolution || t.canDisputeResolution) ...[
+                    Card(
+                      color: Theme.of(context).colorScheme.primaryContainer,
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Text(
+                              'Has this issue been resolved?',
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                            const SizedBox(height: 6),
+                            const Text(
+                              'Support has proposed a resolution. Confirm it or tell us what still needs attention.',
+                            ),
+                            const SizedBox(height: 12),
+                            if (t.canConfirmResolution)
+                              FilledButton.icon(
+                                onPressed: () => _confirmResolution(t),
+                                icon: const Icon(Icons.check_circle_outline),
+                                label: const Text('Yes, it is resolved'),
+                              ),
+                            if (t.canDisputeResolution)
+                              OutlinedButton.icon(
+                                onPressed: () => _disputeResolution(t),
+                                icon: const Icon(Icons.report_problem_outlined),
+                                label: const Text('No, I still need help'),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
                   if (t.canRate) ...[
                     _CsatCard(
                       rating: t.csatRating,

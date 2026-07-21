@@ -145,8 +145,13 @@
                 {% if task.ticket_id %}
                 <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Ticket</dt><dd class="text-right"><a href="/admin/support/tickets/{{ task.ticket_id }}" class="text-emerald-700 hover:underline dark:text-emerald-400">{{ task.ticket_id }}</a></dd></div>
                 {% endif %}
-                {% if task.work_order_id %}
-                <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Work Order</dt><dd class="break-all text-right text-slate-800 dark:text-slate-100">{{ task.work_order_id }}</dd></div>
+                {% if task.work_orders %}
+                <div class="flex justify-between gap-4">
+                    <dt class="text-slate-500 dark:text-slate-400">Field visits</dt>
+                    <dd class="text-right text-slate-800 dark:text-slate-100">
+                        {% for work_order in task.work_orders %}<a class="block font-medium text-blue-600 hover:underline dark:text-blue-400" href="/admin/dispatch/work-orders?q={{ work_order.public_id }}">{{ work_order.public_id }} · {{ work_order.status | replace('_', ' ') | title }}</a>{% endfor %}
+                    </dd>
+                </div>
                 {% endif %}
                 <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Created</dt><dd class="text-right text-slate-800 dark:text-slate-100">{{ task.created_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</dd></div>
                 <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Updated</dt><dd class="text-right text-slate-800 dark:text-slate-100">{{ task.updated_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</dd></div>

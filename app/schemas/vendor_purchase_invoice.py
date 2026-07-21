@@ -42,7 +42,7 @@ class VendorPurchaseInvoiceLineRead(BaseModel):
 class VendorPurchaseInvoiceCreate(BaseModel):
     project_id: UUID
     invoice_number: str | None = Field(default=None, max_length=80)
-    currency: str = Field(default="NGN", min_length=3, max_length=3)
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
     tax_rate_percent: Decimal = Field(default=Decimal("0.00"), ge=0, le=100)
 
 

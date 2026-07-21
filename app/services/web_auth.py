@@ -10,7 +10,10 @@ from sqlalchemy.orm import Session
 from starlette.responses import Response
 
 from app.services import auth_flow as auth_flow_service
+from app.services import credential_recovery
 from app.services.auth_flow import AuthFlow
+from app.services.domain_errors import DomainError
+from app.services.owner_commands import CommandContext
 from app.web.portal_branding import auth_branding_context
 
 logger = logging.getLogger(__name__)
@@ -27,6 +30,14 @@ REMEMBER_COOKIE = "admin_remember"
 # logs). HttpOnly, short-lived, cleared once the reset succeeds.
 PASSWORD_RESET_COOKIE = "pwd_reset_token"
 PASSWORD_RESET_COOKIE_TTL = 15 * 60
+
+
+def _credential_recovery_context(reason: str) -> CommandContext:
+    return CommandContext.system(
+        actor="service:public-auth-web",
+        scope=credential_recovery.CREDENTIAL_RECOVERY_SCOPE,
+        reason=reason,
+    )
 
 
 def _session_cookie_settings(db: Session) -> dict:
@@ -204,10 +215,12 @@ def login_submit(
                 isinstance(detail, dict)
                 and detail.get("code") == "PASSWORD_RESET_REQUIRED"
             ):
-                reset = auth_flow_service.request_password_reset(
-                    db=db, email=username, ttl_minutes=15
+                reset = credential_recovery.issue_reset_capability_for_email(
+                    db,
+                    username,
+                    ttl_minutes=15,
                 )
-                if reset and reset.get("token"):
+                if reset and reset.token:
                     # Hand the token to the reset page via a short-lived
                     # HttpOnly cookie instead of the URL, so it never lands in
                     # browser history or access logs.
@@ -217,7 +230,7 @@ def login_submit(
                     cookie_cfg = _session_cookie_settings(db)
                     redirect.set_cookie(
                         key=PASSWORD_RESET_COOKIE,
-                        value=reset["token"],
+                        value=reset.token,
                         max_age=PASSWORD_RESET_COOKIE_TTL,
                         httponly=True,
                         secure=cookie_cfg["secure"],
@@ -473,7 +486,15 @@ def forgot_password_page(request: Request, success: bool = False):
 
 def forgot_password_submit(request: Request, db: Session, email: str):
     try:
-        auth_flow_service.forgot_password_flow(db, email)
+        credential_recovery.request_password_recovery(
+            db,
+            credential_recovery.RequestPasswordRecoveryCommand(
+                context=_credential_recovery_context(
+                    "Administrative web password recovery request"
+                ),
+                email=email,
+            ),
+        )
     except Exception:
         logger.info("Password reset request failed for %s", email, exc_info=True)
     return templates.TemplateResponse(
@@ -534,7 +555,16 @@ def reset_password_submit(
             status_code=400,
         )
     try:
-        auth_flow_service.reset_password(db=db, token=token, new_password=password)
+        credential_recovery.complete_password_reset(
+            db,
+            credential_recovery.CompletePasswordResetCommand(
+                context=_credential_recovery_context(
+                    "Administrative web password reset capability redemption"
+                ),
+                token=token,
+                new_password=password,
+            ),
+        )
         separator = "&" if "?" in safe_next_login else "?"
         redirect = RedirectResponse(
             url=f"{safe_next_login}{separator}reset=success", status_code=303
@@ -543,12 +573,10 @@ def reset_password_submit(
         return redirect
     except Exception as exc:
         error_msg = "Invalid or expired reset link"
-        if (
-            isinstance(exc, HTTPException)
-            and exc.status_code == 400
-            and isinstance(exc.detail, str)
+        if isinstance(exc, DomainError) and exc.code == (
+            "auth.credential_recovery.invalid_password"
         ):
-            error_msg = exc.detail
+            error_msg = exc.message
         return templates.TemplateResponse(
             "auth/reset-password.html",
             {

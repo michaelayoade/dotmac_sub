@@ -16,6 +16,12 @@ idempotency, and native provenance. It delegates work-order creation to
 `operations.work_order_commands`; dispatch and field execution continue to own
 the resulting work order. One ticket may issue zero or many work orders.
 
+When the incident belongs to planned project work, the team may select a
+`ProjectTask` already linked to that ticket. The handoff validates that ticket
+link, infers the task's project, and asks the work-order command owner to write
+`work_order.project_task_id`. One task may therefore require several field
+visits without storing a single-work-order cache on the task.
+
 The canonical relationship is the nullable, indexed foreign key
 `work_order.origin_ticket_id -> support_tickets.id`. It uses `RESTRICT` on
 delete so operational evidence cannot be orphaned. Generic work-order create
@@ -36,7 +42,10 @@ change it.
    comment back to the official ticket timeline with the work-order and field
    event identities.
 7. Support verifies the result and separately decides whether to resolve or
-   close the incident. Field completion never changes ticket status.
+   request customer confirmation. Field completion never changes ticket status.
+8. Authenticated self-care/mobile and the signed public link converge on the
+   same active confirmation capability: confirmation closes the ticket and a
+   dispute reopens it with the customer reason.
 
 ## Authority migration
 

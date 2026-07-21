@@ -35,13 +35,17 @@ def _owned_ticket(db: Session, subscriber_id, ticket_id: str) -> bool:
 
 
 def _owned_project(db: Session, subscriber_id, project_id: str) -> bool:
-    from app.models.project_mirror import ProjectMirror
+    from app.models.project import Project
 
+    native_id = coerce_uuid(project_id)
+    if native_id is None:
+        return False
     return (
-        db.query(ProjectMirror.crm_project_id)
+        db.query(Project.id)
         .filter(
-            ProjectMirror.crm_project_id == str(project_id),
-            ProjectMirror.subscriber_id == coerce_uuid(str(subscriber_id)),
+            Project.id == native_id,
+            Project.subscriber_id == coerce_uuid(str(subscriber_id)),
+            Project.is_active.is_(True),
         )
         .first()
         is not None
@@ -80,7 +84,7 @@ def _customer_context(db, subscriber_id, *, ticket_id, project_id):
 
 def _reseller_context(db, reseller_id, *, ticket_id, project_id):
     """Drop any ticket/project not belonging to one of the reseller's accounts."""
-    from app.models.project_mirror import ProjectMirror
+    from app.models.project import Project
     from app.models.support import Ticket
 
     if ticket_id:
@@ -97,10 +101,13 @@ def _reseller_context(db, reseller_id, *, ticket_id, project_id):
             )
             ticket_id = None
     if project_id:
+        native_id = coerce_uuid(project_id)
         owner = (
-            db.query(ProjectMirror.subscriber_id)
-            .filter(ProjectMirror.crm_project_id == str(project_id))
+            db.query(Project.subscriber_id)
+            .filter(Project.id == native_id, Project.is_active.is_(True))
             .scalar()
+            if native_id is not None
+            else None
         )
         if not _reseller_owns(db, reseller_id, owner):
             logger.warning(

@@ -122,8 +122,10 @@ env_value() {
 set_env_value() {
   local key="$1"
   local value="$2"
+  local backup_suffix=".deploy-$$.bak"
   if grep -q "^${key}=" .env; then
-    sed -i "s|^${key}=.*|${key}=${value}|" .env
+    sed -i"${backup_suffix}" "s|^${key}=.*|${key}=${value}|" .env
+    rm -f -- ".env${backup_suffix}"
   else
     printf '%s=%s\n' "${key}" "${value}" >> .env
   fi
@@ -136,7 +138,9 @@ restore_env_value() {
   if [[ "${was_present}" == "1" ]]; then
     set_env_value "${key}" "${value}"
   else
-    sed -i "/^${key}=/d" .env
+    local backup_suffix=".deploy-$$.bak"
+    sed -i"${backup_suffix}" "/^${key}=/d" .env
+    rm -f -- ".env${backup_suffix}"
   fi
 }
 

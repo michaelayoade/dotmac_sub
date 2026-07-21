@@ -10,10 +10,12 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
-from fastapi import HTTPException
 
+from app.models.audit import AuditEvent
 from app.models.billing import CreditNote
 from app.models.domain_settings import DomainSetting, SettingDomain, SettingValueType
+from app.models.event_store import EventStore
+from app.models.notification import CommunicationIntentRecord, Notification
 from app.models.party import (
     Party,
     PartyContactPoint,
@@ -25,8 +27,24 @@ from app.models.sales import Lead, LeadOriginCapture
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services import crm_api
 from app.services import party as party_service
+from app.services import referrals as referral_program
 from app.services.customer_lifecycle_audit import build_customer_lifecycle_audit
-from app.services.referrals import _CODE_ALPHABET, referrals
+from app.services.domain_errors import DomainError
+from app.services.owner_commands import CommandContext
+from app.services.referrals import (
+    _CODE_ALPHABET,
+    ReferralAttachmentError,
+    ReferralProgramError,
+    referrals,
+)
+from tests.referral_program_testkit import (
+    capture,
+    ensure_code,
+    issue_reward,
+    qualify_for_subscriber,
+    refer_friend,
+    reject,
+)
 
 
 def _unique_email() -> str:
@@ -90,17 +108,39 @@ def _program(
 
 def test_ensure_code_mints_and_reuses(db_session):
     referrer = _subscriber(db_session)
-    code = referrals.ensure_code(db_session, str(referrer.id))
+    code = ensure_code(db_session, referrer.id)
     assert len(code.code) == 8
     assert set(code.code) <= set(_CODE_ALPHABET)
-    again = referrals.ensure_code(db_session, str(referrer.id))
+    again = ensure_code(db_session, referrer.id)
     assert again.id == code.id  # one active code per referrer
 
 
 def test_ensure_code_unknown_subscriber_404(db_session):
-    with pytest.raises(HTTPException) as exc:
-        referrals.ensure_code(db_session, str(uuid.uuid4()))
-    assert exc.value.status_code == 404
+    with pytest.raises(ReferralProgramError) as exc:
+        ensure_code(db_session, uuid.uuid4())
+    assert exc.value.code == "referrals.program.subscriber_not_found"
+
+
+def test_program_owner_rejects_an_active_caller_transaction(db_session):
+    referrer = _subscriber(db_session)
+    db_session.get(Subscriber, referrer.id)
+    assert db_session.in_transaction()
+
+    with pytest.raises(DomainError) as exc:
+        referral_program.ensure_referral_code(
+            db_session,
+            referral_program.EnsureReferralCodeCommand(
+                context=CommandContext.system(
+                    actor="test_referral_program",
+                    scope=referral_program.REFERRAL_PROGRAM_SCOPE,
+                    reason="Prove the adapter cannot own the transaction",
+                ),
+                subscriber_id=referrer.id,
+            ),
+        )
+
+    assert exc.value.code == "referrals.program.active_caller_transaction"
+    assert not db_session.in_transaction()
 
 
 # ── capture ──────────────────────────────────────────────────────────────────
@@ -109,11 +149,11 @@ def test_ensure_code_unknown_subscriber_404(db_session):
 def test_capture_creates_prospect_lead_and_referral(db_session):
     _program(db_session)
     referrer = _subscriber(db_session)
-    code = referrals.ensure_code(db_session, str(referrer.id))
+    code = ensure_code(db_session, referrer.id)
 
     email = _unique_email()
     subscriber_count = db_session.query(Subscriber).count()
-    referral = referrals.capture(
+    referral = capture(
         db_session,
         code=code.code,
         name="Ada Lovelace",
@@ -172,35 +212,109 @@ def test_capture_creates_prospect_lead_and_referral(db_session):
 def test_capture_is_idempotent_per_referred_prospect(db_session):
     _program(db_session)
     referrer = _subscriber(db_session)
-    code = referrals.ensure_code(db_session, str(referrer.id))
+    code = ensure_code(db_session, referrer.id)
     email = _unique_email()
 
-    first = referrals.capture(db_session, code=code.code, email=email, name="Once")
-    second = referrals.capture(db_session, code=code.code, email=email, name="Twice")
+    first = capture(db_session, code=code.code, email=email, name="Once")
+    second = capture(db_session, code=code.code, email=email, name="Twice")
     assert second.id == first.id
 
     # Phone-only exact retries dedupe too.
-    phone_first = referrals.capture(db_session, code=code.code, phone="0812 345 6789")
-    phone_second = referrals.capture(db_session, code=code.code, phone="+2348123456789")
+    phone_first = capture(db_session, code=code.code, phone="0812 345 6789")
+    phone_second = capture(db_session, code=code.code, phone="+2348123456789")
     assert phone_second.id == phone_first.id
+
+
+def test_capture_replay_has_one_pii_free_audit_and_event(db_session):
+    _program(db_session)
+    referrer = _subscriber(db_session)
+    code = ensure_code(db_session, referrer.id)
+    email = _unique_email()
+
+    first = capture(
+        db_session,
+        code=code.code,
+        name="Private Prospect",
+        email=email,
+        phone="0812 345 6701",
+    )
+    second = capture(
+        db_session,
+        code=code.code,
+        name="Retry Name",
+        email=email,
+        phone="+2348123456701",
+    )
+
+    assert second.id == first.id
+    events = (
+        db_session.query(EventStore)
+        .filter(EventStore.event_type == "referral.captured")
+        .all()
+    )
+    audits = (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.action == "referrals.captured")
+        .all()
+    )
+    assert len(events) == len(audits) == 1
+    serialized = f"{events[0].payload} {audits[0].metadata_}".lower()
+    assert email.lower() not in serialized
+    assert "private prospect" not in serialized
+    assert "0812" not in serialized
+    assert events[0].payload["schema_version"] == 1
+
+
+def test_late_capture_event_failure_rolls_back_party_lead_and_referral(
+    db_session, monkeypatch
+):
+    from app.models.party import Party
+    from app.services import referrals as referral_program
+
+    _program(db_session)
+    referrer = _subscriber(db_session)
+    code = ensure_code(db_session, referrer.id)
+    before = {
+        "parties": db_session.query(Party).count(),
+        "leads": db_session.query(Lead).count(),
+        "referrals": db_session.query(Referral).count(),
+    }
+
+    def fail_event(*_args, **_kwargs):
+        raise RuntimeError("referral event unavailable")
+
+    monkeypatch.setattr(referral_program, "emit_event", fail_event)
+    with pytest.raises(RuntimeError, match="referral event unavailable"):
+        capture(db_session, code=code.code, email=_unique_email())
+
+    assert not db_session.in_transaction()
+    assert db_session.query(Party).count() == before["parties"]
+    assert db_session.query(Lead).count() == before["leads"]
+    assert db_session.query(Referral).count() == before["referrals"]
+    assert (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.action == "referrals.captured")
+        .count()
+        == 0
+    )
 
 
 def test_capture_retry_requires_the_exact_submitted_contact_set(db_session):
     _program(db_session)
     referrer = _subscriber(db_session)
-    code = referrals.ensure_code(db_session, str(referrer.id))
+    code = ensure_code(db_session, referrer.id)
     email = _unique_email()
 
-    both = referrals.capture(
+    both = capture(
         db_session,
         code=code.code,
         email=email,
         phone="0812 345 6790",
     )
-    email_only = referrals.capture(db_session, code=code.code, email=email)
+    email_only = capture(db_session, code=code.code, email=email)
 
     assert email_only.id != both.id
-    exact_retry = referrals.capture(
+    exact_retry = capture(
         db_session,
         code=code.code,
         email=email.upper(),
@@ -212,38 +326,38 @@ def test_capture_retry_requires_the_exact_submitted_contact_set(db_session):
 def test_capture_validations(db_session):
     referrer = _subscriber(db_session)
 
-    with pytest.raises(HTTPException) as exc:
-        referrals.capture(db_session, code="NOPE1234", email=_unique_email())
-    assert exc.value.status_code == 503  # program disabled
+    with pytest.raises(ReferralProgramError) as exc:
+        capture(db_session, code="NOPE1234", email=_unique_email())
+    assert exc.value.code == "referrals.program.program_disabled"
 
     _program(db_session)
-    with pytest.raises(HTTPException) as exc:
-        referrals.capture(db_session, code="NOPE1234", email=_unique_email())
-    assert exc.value.status_code == 404  # invalid code
+    with pytest.raises(ReferralProgramError) as exc:
+        capture(db_session, code="NOPE1234", email=_unique_email())
+    assert exc.value.code == "referrals.program.code_not_found"
 
-    code = referrals.ensure_code(db_session, str(referrer.id))
-    with pytest.raises(HTTPException) as exc:
-        referrals.capture(db_session, code=code.code, name="No Contact")
-    assert exc.value.status_code == 422  # email or phone required
+    code = ensure_code(db_session, referrer.id)
+    with pytest.raises(ReferralProgramError) as exc:
+        capture(db_session, code=code.code, name="No Contact")
+    assert exc.value.code == "referrals.program.contact_required"
 
 
 def test_capture_self_referral_409(db_session):
     _program(db_session)
     referrer = _subscriber(db_session)
-    code = referrals.ensure_code(db_session, str(referrer.id))
-    with pytest.raises(HTTPException) as exc:
-        referrals.capture(db_session, code=code.code, email=referrer.email)
-    assert exc.value.status_code == 409
+    code = ensure_code(db_session, referrer.id)
+    with pytest.raises(ReferralProgramError) as exc:
+        capture(db_session, code=code.code, email=referrer.email)
+    assert exc.value.code == "referrals.program.self_referral"
 
 
 def test_capture_already_active_customer_409(db_session):
     _program(db_session)
     referrer = _subscriber(db_session)
     existing_customer = _subscriber(db_session, status=SubscriberStatus.active)
-    code = referrals.ensure_code(db_session, str(referrer.id))
-    with pytest.raises(HTTPException) as exc:
-        referrals.capture(db_session, code=code.code, email=existing_customer.email)
-    assert exc.value.status_code == 409
+    code = ensure_code(db_session, referrer.id)
+    with pytest.raises(ReferralProgramError) as exc:
+        capture(db_session, code=code.code, email=existing_customer.email)
+    assert exc.value.code == "referrals.program.existing_customer"
 
 
 # ── qualification ────────────────────────────────────────────────────────────
@@ -251,9 +365,9 @@ def test_capture_already_active_customer_409(db_session):
 
 def _captured_referral(db, referrer=None, **capture_kwargs):
     referrer = referrer or _subscriber(db)
-    code = referrals.ensure_code(db, str(referrer.id))
+    code = ensure_code(db, referrer.id)
     capture_kwargs.setdefault("email", _unique_email())
-    referral = referrals.capture(db, code=code.code, **capture_kwargs)
+    referral = capture(db, code=code.code, **capture_kwargs)
     prospect = _subscriber(db, status=SubscriberStatus.new)
     party_service.bind_subscriber_account(
         db,
@@ -262,7 +376,7 @@ def _captured_referral(db, referrer=None, **capture_kwargs):
         source="test_review",
         reason="Test fixture reviewed referral conversion",
     )
-    referrals.attach_subscriber(
+    referrals.attach_subscriber_for_conversion(
         db,
         referral_id=str(referral.id),
         subscriber_id=str(prospect.id),
@@ -281,7 +395,7 @@ def test_qualify_on_activation(db_session):
     prospect.status = SubscriberStatus.active
     db_session.commit()
 
-    result = referrals.qualify_for_subscriber(db_session, prospect)
+    result = qualify_for_subscriber(db_session, prospect)
     assert result is not None and result.id == referral.id
     assert result.status == "qualified"
     assert result.reward_status == "pending"  # no auto-approve
@@ -290,7 +404,7 @@ def test_qualify_on_activation(db_session):
     assert result.referred_subscriber_id == prospect.id
 
     # Idempotent: a second activation event does nothing (no longer pending).
-    assert referrals.qualify_for_subscriber(db_session, prospect) is None
+    assert qualify_for_subscriber(db_session, prospect) is None
 
 
 def test_qualify_auto_approve(db_session):
@@ -299,7 +413,7 @@ def test_qualify_auto_approve(db_session):
     prospect = db_session.get(Subscriber, referral.referred_subscriber_id)
     prospect.status = SubscriberStatus.active
     db_session.commit()
-    result = referrals.qualify_for_subscriber(db_session, prospect)
+    result = qualify_for_subscriber(db_session, prospect)
     assert result is not None
     assert result.reward_status == "approved"
 
@@ -312,7 +426,7 @@ def test_qualify_expires_outside_window(db_session):
     prospect.status = SubscriberStatus.active
     db_session.commit()
 
-    result = referrals.qualify_for_subscriber(db_session, prospect)
+    result = qualify_for_subscriber(db_session, prospect)
     assert result is not None
     assert result.status == "expired"
     assert result.reward_status == "none"
@@ -322,12 +436,12 @@ def test_qualify_attaches_only_a_reviewed_matching_party(db_session):
     _program(db_session)
     email = _unique_email()
     referrer = _subscriber(db_session)
-    code = referrals.ensure_code(db_session, str(referrer.id))
-    referral = referrals.capture(db_session, code=code.code, email=email)
+    code = ensure_code(db_session, referrer.id)
+    referral = capture(db_session, code=code.code, email=email)
 
     signup = _subscriber(db_session, status=SubscriberStatus.active, email=email)
     assert signup.party_id is None
-    assert referrals.qualify_for_subscriber(db_session, signup) is None
+    assert qualify_for_subscriber(db_session, signup) is None
     assert referral.referred_subscriber_id is None
 
     party_service.bind_subscriber_account(
@@ -338,11 +452,11 @@ def test_qualify_attaches_only_a_reviewed_matching_party(db_session):
         reason="Signup was reviewed as the referred Party",
     )
 
-    result = referrals.qualify_for_subscriber(db_session, signup)
+    result = qualify_for_subscriber(db_session, signup)
     assert result is not None and result.id == referral.id
     assert result.status == "qualified"
     assert result.referred_subscriber_id == signup.id
-    assert result.subscriber_link_source == "subscriber_activation"
+    assert result.subscriber_link_source == "test_referral_program"
     lead = db_session.get(Lead, referral.referred_lead_id)
     assert lead.subscriber_id == signup.id
 
@@ -350,8 +464,8 @@ def test_qualify_attaches_only_a_reviewed_matching_party(db_session):
 def test_attach_subscriber_refuses_a_different_party(db_session):
     _program(db_session)
     referrer = _subscriber(db_session)
-    code = referrals.ensure_code(db_session, str(referrer.id))
-    referral = referrals.capture(db_session, code=code.code, email=_unique_email())
+    code = ensure_code(db_session, referrer.id)
+    referral = capture(db_session, code=code.code, email=_unique_email())
     wrong_party = party_service.create_party(
         db_session,
         party_type="person",
@@ -366,15 +480,15 @@ def test_attach_subscriber_refuses_a_different_party(db_session):
         reason="Test fixture reviewed a different identity",
     )
 
-    with pytest.raises(HTTPException) as exc:
-        referrals.attach_subscriber(
+    with pytest.raises(ReferralAttachmentError) as exc:
+        referrals.attach_subscriber_for_conversion(
             db_session,
             referral_id=str(referral.id),
             subscriber_id=str(subscriber.id),
             source="test_review",
             reason="Attempted mismatched conversion",
         )
-    assert exc.value.status_code == 409
+    assert exc.value.code == "account_conflict"
     assert referral.referred_subscriber_id is None
 
 
@@ -384,15 +498,15 @@ def test_qualify_noops(db_session):
     prospect = db_session.get(Subscriber, referral.referred_subscriber_id)
 
     # Not active yet → no-op.
-    assert referrals.qualify_for_subscriber(db_session, prospect) is None
+    assert qualify_for_subscriber(db_session, prospect) is None
     assert db_session.get(Referral, referral.id).status == "pending"
 
     # Active subscriber with no referral → no-op.
     unrelated = _subscriber(db_session, status=SubscriberStatus.active)
-    assert referrals.qualify_for_subscriber(db_session, unrelated) is None
+    assert qualify_for_subscriber(db_session, unrelated) is None
 
     # The referrer activating themselves never qualifies their own referral.
-    assert referrals.qualify_for_subscriber(db_session, referrer) is None
+    assert qualify_for_subscriber(db_session, referrer) is None
 
 
 def test_qualify_noop_when_program_disabled(db_session):
@@ -404,7 +518,7 @@ def test_qualify_noop_when_program_disabled(db_session):
         DomainSetting.key == "referral_program_enabled"
     ).update({"value_text": "false"})
     db_session.commit()
-    assert referrals.qualify_for_subscriber(db_session, prospect) is None
+    assert qualify_for_subscriber(db_session, prospect) is None
 
 
 # ── reward payout (external_ref continuity) ──────────────────────────────────
@@ -416,15 +530,14 @@ def _qualified_referral(db, amount="2500"):
     prospect = db.get(Subscriber, referral.referred_subscriber_id)
     prospect.status = SubscriberStatus.active
     db.commit()
-    referral = referrals.qualify_for_subscriber(db, prospect)
-    db.commit()
+    referral = qualify_for_subscriber(db, prospect)
     return referral, referrer
 
 
 def test_issue_reward_credits_wallet_with_referral_external_ref(db_session):
     referral, referrer = _qualified_referral(db_session)
 
-    result = referrals.issue_reward(db_session, str(referral.id))
+    result = issue_reward(db_session, referral.id)
     assert result.status == "rewarded"
     assert result.reward_status == "issued"
     assert result.reward_issued_at is not None
@@ -438,8 +551,8 @@ def test_issue_reward_credits_wallet_with_referral_external_ref(db_session):
 
 def test_issue_reward_is_idempotent(db_session):
     referral, referrer = _qualified_referral(db_session)
-    referrals.issue_reward(db_session, str(referral.id))
-    again = referrals.issue_reward(db_session, str(referral.id))  # retry
+    issue_reward(db_session, referral.id)
+    again = issue_reward(db_session, referral.id)  # retry
     assert again.status == "rewarded"
 
     credits = (
@@ -467,10 +580,17 @@ def test_issue_reward_external_ref_continuity_with_crm_payout(db_session):
         external_ref=external_ref,
     )
 
-    result = referrals.issue_reward(db_session, str(referral.id))
+    result = issue_reward(db_session, referral.id)
     assert result.status == "rewarded"
     assert result.reward_status == "issued"
     assert result.metadata_["reward_credit_id"] == str(crm_entry.id)
+
+    reconciliation_event = (
+        db_session.query(EventStore)
+        .filter(EventStore.event_type == "referral.reward_reconciled")
+        .one()
+    )
+    assert reconciliation_event.subscriber_id == referrer.id
 
     assert (
         db_session.query(CreditNote)
@@ -485,30 +605,30 @@ def test_issue_reward_guards(db_session):
     _program(db_session)
     referral, _ = _captured_referral(db_session)
 
-    with pytest.raises(HTTPException) as exc:
-        referrals.issue_reward(db_session, str(referral.id))
-    assert exc.value.status_code == 409  # still pending
+    with pytest.raises(ReferralProgramError) as exc:
+        issue_reward(db_session, referral.id)
+    assert exc.value.code == "referrals.program.invalid_transition"
 
-    with pytest.raises(HTTPException) as exc:
-        referrals.issue_reward(db_session, str(uuid.uuid4()))
-    assert exc.value.status_code == 404
+    with pytest.raises(ReferralProgramError) as exc:
+        issue_reward(db_session, uuid.uuid4())
+    assert exc.value.code == "referrals.program.referral_not_found"
 
     # Qualified but zero reward: never mark rewarded with no credit behind it.
     prospect = db_session.get(Subscriber, referral.referred_subscriber_id)
     prospect.status = SubscriberStatus.active
     db_session.commit()
-    qualified = referrals.qualify_for_subscriber(db_session, prospect)
+    qualified = qualify_for_subscriber(db_session, prospect)
     qualified.reward_amount = Decimal("0")
     db_session.commit()
-    with pytest.raises(HTTPException) as exc:
-        referrals.issue_reward(db_session, str(referral.id))
-    assert exc.value.status_code == 400
+    with pytest.raises(ReferralProgramError) as exc:
+        issue_reward(db_session, referral.id)
+    assert exc.value.code == "referrals.program.invalid_reward"
 
 
 def test_reject_sets_void_and_notes(db_session):
     _program(db_session)
     referral, _ = _captured_referral(db_session)
-    result = referrals.reject(db_session, str(referral.id), "Fraudulent capture")
+    result = reject(db_session, referral.id, "Fraudulent capture")
     assert result.status == "rejected"
     assert result.reward_status == "void"
     assert "Rejected: Fraudulent capture" in (result.notes or "")
@@ -527,6 +647,41 @@ def test_referral_handler_registered_in_dispatcher():
         assert "ReferralHandler" in names
     finally:
         reset_dispatcher()
+
+
+def test_reward_event_uses_template_policy_and_deduplicated_intent(db_session):
+    from app.services.events.handlers.notification import NotificationHandler
+    from app.services.events.types import Event, EventType
+
+    subscriber = _subscriber(db_session)
+    event = Event(
+        event_type=EventType.referral_reward_issued,
+        payload={
+            "schema_version": 1,
+            "referral_id": str(uuid.uuid4()),
+            "amount": "NGN 2500.00",
+        },
+        subscriber_id=subscriber.id,
+    )
+
+    NotificationHandler().handle(db_session, event)
+    db_session.commit()
+    NotificationHandler().handle(db_session, event)
+    db_session.commit()
+
+    dedupe_key = f"event-notification:{event.event_id}:referral_reward_issued:push"
+    intents = (
+        db_session.query(CommunicationIntentRecord)
+        .filter(CommunicationIntentRecord.dedupe_key == dedupe_key)
+        .all()
+    )
+    notifications = (
+        db_session.query(Notification)
+        .filter(Notification.event_type == "referral_reward_issued")
+        .all()
+    )
+    assert len(intents) == len(notifications) == 1
+    assert "NGN 2500.00" in str(notifications[0].body)
 
 
 def test_activation_event_qualifies_referral(db_session):
@@ -586,7 +741,7 @@ def test_read_for_subscriber_matches_mirror_shape(db_session):
     from app.schemas.portal import MyReferralsResponse
 
     referral, referrer = _qualified_referral(db_session)
-    referrals.issue_reward(db_session, str(referral.id))
+    issue_reward(db_session, referral.id)
 
     payload = referrals.read_for_subscriber(db_session, str(referrer.id))
 
@@ -632,12 +787,33 @@ def test_read_for_subscriber_matches_mirror_shape(db_session):
     assert Decimal(payload["program"]["reward_amount"]) == Decimal("2500")
 
 
+def test_share_url_uses_the_canonical_configured_base(db_session):
+    configured_base = "https://referrals.example.test/customer"
+    _program(db_session)
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.subscriber,
+            key="referral_share_base_url",
+            value_type=SettingValueType.string,
+            value_text=configured_base,
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    referrer = _subscriber(db_session)
+    ensure_code(db_session, referrer.id)
+
+    payload = referrals.read_for_subscriber(db_session, str(referrer.id))
+
+    assert payload["share_url"].startswith(f"{configured_base}/r/")
+
+
 def test_refer_a_friend_portal_shape(db_session):
     from app.schemas.portal import ReferAFriendResponse
 
     _program(db_session)
     referrer = _subscriber(db_session)
-    result = referrals.refer_a_friend(
+    result = refer_friend(
         db_session,
         str(referrer.id),
         name="Friend",

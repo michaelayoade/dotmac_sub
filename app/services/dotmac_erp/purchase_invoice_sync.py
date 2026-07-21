@@ -511,3 +511,19 @@ def refresh_purchase_invoice_statuses(
         errors=errors,
     )
     return result
+
+
+def run_repair_purchase_invoice_sync() -> dict[str, object]:
+    """Own the background session for purchase-invoice projection repair."""
+    from app.db import task_session
+
+    with task_session() as db:
+        return repair_purchase_invoice_sync(db)
+
+
+def run_refresh_purchase_invoice_statuses() -> dict[str, object]:
+    """Own the background session for ERP payment-observation reconciliation."""
+    from app.db import task_session
+
+    with task_session() as db:
+        return refresh_purchase_invoice_statuses(db)

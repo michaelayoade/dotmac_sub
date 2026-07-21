@@ -1,9 +1,14 @@
 import json
 import logging
 import secrets
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from hashlib import sha256
 from types import SimpleNamespace
+from typing import TypeVar
+from uuid import UUID
 
 from fastapi import HTTPException, Request, status
 from sqlalchemy import and_, func, or_
@@ -46,6 +51,12 @@ from app.services.account_lifecycle import (
     transition_subscription_status,
 )
 from app.services.common import coerce_uuid
+from app.services.domain_errors import DomainError
+from app.services.owner_commands import (
+    CommandContext,
+    OwnerCommandDefinition,
+    execute_owner_command,
+)
 from app.services.session_store import (
     delete_session,
     get_session_revocation_epoch,
@@ -65,6 +76,7 @@ from app.services.topology.connection_status import connection_status
 from app.services.ui_contracts import Action, Kpi, StateValue
 
 logger = logging.getLogger(__name__)
+ResultT = TypeVar("ResultT")
 
 
 def _emit_reseller_event(db: Session, event_name: str, payload: dict) -> None:
@@ -253,50 +265,6 @@ def reseller_id_for_subscriber(db: Session, subscriber_id: str) -> str | None:
     return str(reseller_user.reseller_id)
 
 
-def create_reseller_user_principal(
-    db: Session,
-    *,
-    reseller_id: str,
-    username: str,
-    password: str,
-    email: str | None = None,
-    full_name: str | None = None,
-    must_change_password: bool = False,
-) -> ResellerUser:
-    """Create a first-class reseller portal login (Layer 3).
-
-    A ``ResellerUser`` identity plus its local ``UserCredential`` — no backing
-    Subscriber. Used by reseller onboarding (post-cutover) and by the backfill
-    that repoints existing reseller credentials. The login only authenticates
-    when ``RESELLER_USER_PRINCIPAL_ENABLED`` is on.
-    """
-    from datetime import UTC, datetime
-
-    from app.models.auth import AuthProvider, UserCredential
-
-    reseller_user = ResellerUser(
-        reseller_id=coerce_uuid(reseller_id),
-        email=email,
-        full_name=full_name,
-        is_active=True,
-    )
-    db.add(reseller_user)
-    db.flush()
-    credential = UserCredential(
-        reseller_user_id=reseller_user.id,
-        provider=AuthProvider.local,
-        username=username,
-        password_hash=auth_flow_service.hash_password(password),
-        must_change_password=must_change_password,
-        password_updated_at=datetime.now(UTC),
-        is_active=True,
-    )
-    db.add(credential)
-    db.commit()
-    db.refresh(reseller_user)
-    return reseller_user
-
-
 def _create_session(
     username: str,
     reseller_id: str,
@@ -477,14 +445,24 @@ def _reseller_session_revoked(session: dict) -> bool:
 
 
 def revoke_reseller_sessions_for_subscriber(
-    subscriber_id: object, db: Session | None = None
+    subscriber_id: object,
+    db: Session | None = None,
+    *,
+    require_durable: bool = False,
 ) -> None:
     """Invalidate every existing reseller portal session for a subscriber."""
-    revoke_reseller_sessions_for_principal(subscriber_id, db=db)
+    revoke_reseller_sessions_for_principal(
+        subscriber_id,
+        db=db,
+        require_durable=require_durable,
+    )
 
 
 def revoke_reseller_sessions_for_principal(
-    principal_id: object, db: Session | None = None
+    principal_id: object,
+    db: Session | None = None,
+    *,
+    require_durable: bool = False,
 ) -> None:
     """Invalidate every existing reseller portal session for a principal."""
     ttl = max(
@@ -493,7 +471,11 @@ def revoke_reseller_sessions_for_principal(
         _absolute_ttl_seconds(db),
     )
     set_session_revocation_epoch(
-        _RESELLER_SESSION_PREFIX, str(principal_id), ttl, _RESELLER_SESSION_EPOCHS
+        _RESELLER_SESSION_PREFIX,
+        str(principal_id),
+        ttl,
+        _RESELLER_SESSION_EPOCHS,
+        require_durable=require_durable,
     )
 
 
@@ -917,8 +899,70 @@ ACCOUNT_STATUS_FILTERS = ("overdue",) + tuple(
     status.value for status in SubscriberStatus
 )
 ACCOUNT_LIST_STATUS_OPTIONS = tuple(status.value for status in SubscriberStatus)
-RESELLER_ACCOUNT_STATUS_ACTIONS = ("deactivate", "restore", "disable")
 _RESELLER_ACCOUNT_STATUS_SCOPE_PREFIX = "reseller_account_status"
+
+
+class ResellerAccountStatusAction(StrEnum):
+    deactivate = "deactivate"
+    restore = "restore"
+    disable = "disable"
+
+
+RESELLER_ACCOUNT_STATUS_ACTIONS = tuple(
+    action.value for action in ResellerAccountStatusAction
+)
+
+
+class ResellerStatusActionError(DomainError):
+    """Stable failures from the reseller status-action coordinator."""
+
+
+def _status_action_error(suffix: str, message: str) -> ResellerStatusActionError:
+    return ResellerStatusActionError(
+        code=f"customer.reseller_status_actions.{suffix}",
+        message=message,
+    )
+
+
+def _status_action_definition(name: str) -> OwnerCommandDefinition:
+    return OwnerCommandDefinition(
+        owner="customer.reseller_status_actions",
+        concern="account-bound idempotent status confirmation",
+        name=name,
+    )
+
+
+def _execute_status_action(
+    db: Session,
+    *,
+    context: CommandContext,
+    name: str,
+    operation: Callable[[], ResultT],
+) -> ResultT:
+    return execute_owner_command(
+        db,
+        definition=_status_action_definition(name),
+        context=context,
+        operation=operation,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class PreviewCustomerAccountStatusConfirmationRequest:
+    reseller_id: UUID
+    account_id: UUID
+    action: ResellerAccountStatusAction
+    expected_preview_fingerprint: str
+
+
+@dataclass(frozen=True, slots=True)
+class ConfirmCustomerAccountStatusCommand:
+    context: CommandContext
+    reseller_id: UUID
+    account_id: UUID
+    action: ResellerAccountStatusAction
+    expected_preview_fingerprint: str
+
 
 _RESELLER_RESTORABLE_STATUSES = {
     SubscriptionStatus.suspended,
@@ -1086,17 +1130,20 @@ def account_status_action_contracts(
 
 def preview_customer_account_status_confirmation(
     db: Session,
-    reseller_id: str,
-    account_id: str,
-    action: str,
-    *,
-    expected_preview_fingerprint: str,
+    request: PreviewCustomerAccountStatusConfirmationRequest,
 ) -> dict | None:
     """Return the server-owned second-step confirmation for one status action."""
-    normalized_action = (action or "").strip().lower()
-    if normalized_action not in RESELLER_ACCOUNT_STATUS_ACTIONS:
-        raise ValueError("Unsupported account status action")
-    account = _get_customer_account(db, reseller_id, account_id)
+    expected_fingerprint = request.expected_preview_fingerprint.strip()
+    if len(expected_fingerprint) != 64:
+        raise _status_action_error(
+            "invalid_preview_fingerprint",
+            "Account status confirmation fingerprint is invalid.",
+        )
+    account = _get_customer_account(
+        db,
+        str(request.reseller_id),
+        str(request.account_id),
+    )
     if account is None:
         return None
     subscriptions = (
@@ -1106,16 +1153,18 @@ def preview_customer_account_status_confirmation(
         .all()
     )
     preview = preview_customer_account_status_actions(db, account, subscriptions)[
-        normalized_action
+        request.action.value
     ]
-    if not secrets.compare_digest(
-        preview["fingerprint"], (expected_preview_fingerprint or "").strip()
-    ):
-        raise ValueError(
-            "Account status changed after preview; review the current impact and try again"
+    if not secrets.compare_digest(preview["fingerprint"], expected_fingerprint):
+        raise _status_action_error(
+            "stale_preview",
+            "Account status changed after preview; review the current impact and try again.",
         )
     if not preview["allowed"]:
-        raise ValueError("This account status action would not change the account")
+        raise _status_action_error(
+            "action_not_allowed",
+            "This account status action would not change the account.",
+        )
 
     labels = {
         "deactivate": "Deactivate account",
@@ -1141,9 +1190,9 @@ def preview_customer_account_status_confirmation(
         "account_id": str(account.id),
         "account_name": _subscriber_label(account),
         "account_number": account.account_number,
-        "action": normalized_action,
-        "title": labels[normalized_action],
-        "consequence": consequences[normalized_action],
+        "action": request.action.value,
+        "title": labels[request.action.value],
+        "consequence": consequences[request.action.value],
         "affected": int(preview["affected"]),
         "unaffected": max(0, total_services - int(preview["affected"])),
         "account_affected": bool(preview["account_affected"]),
@@ -1680,13 +1729,16 @@ def _reserve_customer_account_status_action(
     db: Session,
     *,
     account: Subscriber,
-    action: str,
+    action: ResellerAccountStatusAction,
     idempotency_key: str,
 ) -> IdempotencyKey:
-    scope = f"{_RESELLER_ACCOUNT_STATUS_SCOPE_PREFIX}:{action}"
-    key = (idempotency_key or "").strip()
+    scope = f"{_RESELLER_ACCOUNT_STATUS_SCOPE_PREFIX}:{action.value}"
+    key = idempotency_key.strip()
     if not key or len(key) > 120:
-        raise ValueError("Account status confirmation is invalid")
+        raise _status_action_error(
+            "invalid_idempotency_key",
+            "Account status confirmation is invalid.",
+        )
     existing = (
         db.query(IdempotencyKey)
         .filter(IdempotencyKey.scope == scope, IdempotencyKey.key == key)
@@ -1695,10 +1747,16 @@ def _reserve_customer_account_status_action(
     )
     if existing is not None:
         if existing.account_id != account.id:
-            raise ValueError("Account status confirmation belongs to another account")
+            raise _status_action_error(
+                "idempotency_account_mismatch",
+                "Account status confirmation belongs to another account.",
+            )
         if existing.ref_id:
             return existing
-        raise ValueError("This account status confirmation is already running")
+        raise _status_action_error(
+            "confirmation_in_progress",
+            "This account status confirmation is already running.",
+        )
 
     reservation = IdempotencyKey(
         scope=scope,
@@ -1708,22 +1766,11 @@ def _reserve_customer_account_status_action(
     db.add(reservation)
     try:
         db.flush()
-    except IntegrityError:
-        db.rollback()
-        replay = (
-            db.query(IdempotencyKey)
-            .filter(IdempotencyKey.scope == scope, IdempotencyKey.key == key)
-            .one_or_none()
-        )
-        if replay is not None and replay.account_id != account.id:
-            raise ValueError(
-                "Account status confirmation belongs to another account"
-            ) from None
-        if replay is not None and replay.ref_id:
-            return replay
-        raise ValueError(
-            "This account status confirmation is already running"
-        ) from None
+    except IntegrityError as exc:
+        raise _status_action_error(
+            "idempotency_conflict",
+            "Account status confirmation conflicted with another request; retry it.",
+        ) from exc
     return reservation
 
 
@@ -1756,86 +1803,17 @@ def _replayed_customer_account_status_result(
     }
 
 
-def confirm_customer_account_status_action(
+def _stage_customer_account_status_action(
     db: Session,
-    reseller_id: str,
-    account_id: str,
-    action: str,
-    *,
-    actor_id: str | None,
-    expected_preview_fingerprint: str,
-    idempotency_key: str,
-) -> dict | None:
-    """Execute one confirmed reseller status action at most once."""
-    normalized_action = (action or "").strip().lower()
-    if normalized_action not in RESELLER_ACCOUNT_STATUS_ACTIONS:
-        raise ValueError("Unsupported account status action")
-    account = _get_customer_account(db, reseller_id, account_id)
-    if account is None:
-        return None
-    reservation = _reserve_customer_account_status_action(
-        db,
-        account=account,
-        action=normalized_action,
-        idempotency_key=idempotency_key,
-    )
-    if reservation.ref_id:
-        db.refresh(account)
-        return _replayed_customer_account_status_result(account, reservation.ref_id)
-    try:
-        result = update_customer_account_status(
-            db,
-            reseller_id,
-            account_id,
-            normalized_action,
-            actor_id=actor_id,
-            expected_preview_fingerprint=expected_preview_fingerprint,
-            commit=False,
-        )
-        if result is None:
-            db.rollback()
-            return None
-        reservation.ref_id = "|".join(
-            (
-                str(account.id),
-                str(result.get("status") or ""),
-                str(result.get("changed") or 0),
-                str(result.get("skipped") or 0),
-            )
-        )
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
-    result["replayed"] = False
-    return result
-
-
-def update_customer_account_status(
-    db: Session,
-    reseller_id: str,
-    account_id: str,
-    action: str,
-    *,
-    actor_id: str | None = None,
-    expected_preview_fingerprint: str | None = None,
-    commit: bool = True,
-) -> dict | None:
-    """Deactivate, restore, or disable a reseller-owned customer account."""
-    normalized_action = (action or "").strip().lower()
-    if normalized_action not in RESELLER_ACCOUNT_STATUS_ACTIONS:
-        raise ValueError("Unsupported account status action")
-
-    account = _get_customer_account(db, reseller_id, account_id)
-    if not account:
-        return None
+    command: ConfirmCustomerAccountStatusCommand,
+    account: Subscriber,
+) -> dict:
     account = (
-        _customer_accounts_query(db, reseller_id)
+        _customer_accounts_query(db, str(command.reseller_id))
         .filter(Subscriber.id == account.id)
         .with_for_update()
         .one()
     )
-
     subscriptions = (
         db.query(Subscription)
         .filter(Subscription.subscriber_id == account.id)
@@ -1843,24 +1821,29 @@ def update_customer_account_status(
         .all()
     )
     preview = preview_customer_account_status_actions(db, account, subscriptions)[
-        normalized_action
+        command.action.value
     ]
-    if expected_preview_fingerprint is not None:
-        if not secrets.compare_digest(
-            preview["fingerprint"], expected_preview_fingerprint.strip()
-        ):
-            raise ValueError(
-                "Account status changed after preview; review the current impact and try again"
-            )
+    expected_fingerprint = command.expected_preview_fingerprint.strip()
+    if len(expected_fingerprint) != 64:
+        raise _status_action_error(
+            "invalid_preview_fingerprint",
+            "Account status confirmation fingerprint is invalid.",
+        )
+    if not secrets.compare_digest(preview["fingerprint"], expected_fingerprint):
+        raise _status_action_error(
+            "stale_preview",
+            "Account status changed after preview; review the current impact and try again.",
+        )
     if not preview["allowed"]:
-        raise ValueError("This account status action would not change the account")
-    source = f"reseller:{reseller_id}"
-    if actor_id:
-        source = f"{source}:user:{actor_id}"
+        raise _status_action_error(
+            "action_not_allowed",
+            "This account status action would not change the account.",
+        )
+    source = command.context.actor
 
     changed = 0
     skipped = 0
-    if normalized_action == "deactivate":
+    if command.action is ResellerAccountStatusAction.deactivate:
         for subscription in subscriptions:
             if subscription.status in _RESELLER_DEACTIVATABLE_STATUSES:
                 if get_active_locks(db, subscription_id=str(subscription.id)):
@@ -1890,7 +1873,7 @@ def update_customer_account_status(
                 skipped += 1
         db.flush()
         compute_account_status(db, str(account.id))
-    elif normalized_action == "restore":
+    elif command.action is ResellerAccountStatusAction.restore:
         clear_account_lifecycle_override(
             db,
             str(account.id),
@@ -1929,9 +1912,9 @@ def update_customer_account_status(
         compute_account_status(db, str(account.id))
 
     if not subscriptions:
-        if normalized_action == "deactivate":
+        if command.action is ResellerAccountStatusAction.deactivate:
             target_status = SubscriberStatus.blocked
-        elif normalized_action == "restore":
+        elif command.action is ResellerAccountStatusAction.restore:
             target_status = SubscriberStatus.active
         else:
             target_status = SubscriberStatus.disabled
@@ -1939,23 +1922,77 @@ def update_customer_account_status(
             db,
             str(account.id),
             target_status,
-            reason=f"{normalized_action.title()} from reseller portal.",
+            reason=f"{command.action.value.title()} from reseller portal.",
             source=source,
         )
         changed = 1
         db.flush()
 
-    if commit:
-        db.commit()
-        db.refresh(account)
-    else:
-        db.flush()
+    db.flush()
     return {
         "account_id": str(account.id),
         "status": account.status.value if account.status else None,
         "changed": changed,
         "skipped": skipped,
     }
+
+
+def _confirm_customer_account_status_action(
+    db: Session,
+    command: ConfirmCustomerAccountStatusCommand,
+) -> dict | None:
+    if command.context.scope != str(command.account_id):
+        raise _status_action_error(
+            "command_scope_mismatch",
+            "Account status confirmation scope does not match the account.",
+        )
+    account = _get_customer_account(
+        db,
+        str(command.reseller_id),
+        str(command.account_id),
+    )
+    if account is None:
+        return None
+    idempotency_key = command.context.idempotency_key
+    if idempotency_key is None:
+        raise _status_action_error(
+            "invalid_idempotency_key",
+            "Account status confirmation is invalid.",
+        )
+    reservation = _reserve_customer_account_status_action(
+        db,
+        account=account,
+        action=command.action,
+        idempotency_key=idempotency_key,
+    )
+    if reservation.ref_id:
+        return _replayed_customer_account_status_result(account, reservation.ref_id)
+
+    result = _stage_customer_account_status_action(db, command, account)
+    reservation.ref_id = "|".join(
+        (
+            str(account.id),
+            str(result.get("status") or ""),
+            str(result.get("changed") or 0),
+            str(result.get("skipped") or 0),
+        )
+    )
+    db.flush()
+    result["replayed"] = False
+    return result
+
+
+def confirm_customer_account_status_action(
+    db: Session,
+    command: ConfirmCustomerAccountStatusCommand,
+) -> dict | None:
+    """Execute one typed, account-bound status confirmation at most once."""
+    return _execute_status_action(
+        db,
+        context=command.context,
+        name="confirm_customer_account_status_action",
+        operation=lambda: _confirm_customer_account_status_action(db, command),
+    )
 
 
 ACCOUNT_INVOICE_SORT_COLUMNS = {

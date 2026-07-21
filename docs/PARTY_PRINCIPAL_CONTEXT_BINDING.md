@@ -6,9 +6,11 @@ runtime authentication/authorization cutover.
 ## Decision
 
 `party.registry` owns the link from a security or compatibility record to its
-canonical identity and organization context. `auth.rbac` and
-`auth.permission_gate` continue to own permissions. Credential, session, MFA,
-token, and login services continue to own authentication state.
+canonical identity and organization context. `auth.rbac_catalog` owns role,
+permission, and role-policy catalogs; `auth.subscriber_assignments` owns
+subscriber grants; and `auth.permission_gate` owns request authorization.
+Credential, session, MFA, token, and login services continue to own
+authentication state.
 
 The layers are deliberately separate:
 

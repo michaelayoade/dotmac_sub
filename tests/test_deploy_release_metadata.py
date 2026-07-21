@@ -39,6 +39,7 @@ exit 0
     curl_exit_code = 0 if health_success else 1
     _write_executable(bin_dir / "curl", f"#!/usr/bin/env bash\nexit {curl_exit_code}\n")
     _write_executable(bin_dir / "pgrep", "#!/usr/bin/env bash\nexit 1\n")
+    _write_executable(bin_dir / "flock", "#!/usr/bin/env bash\nexit 0\n")
 
     repo_root = Path(__file__).resolve().parents[1]
     env = {

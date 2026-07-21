@@ -17,6 +17,10 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
+from app.services.enforcement_event_policy import (
+    GroupRoutingPolicy,
+    SessionRefreshPolicy,
+)
 from app.services.events.handlers.enforcement import EnforcementHandler
 from app.services.events.types import Event, EventType
 
@@ -46,8 +50,8 @@ class TestShadowWriteFeatureFlagGate:
 
         with (
             patch(
-                "app.services.enforcement_event_policy.group_routing_enabled",
-                return_value=False,
+                "app.services.events.handlers.enforcement.resolve_group_routing_policy",
+                return_value=GroupRoutingPolicy(enabled=False),
             ),
             patch(
                 "app.services.events.handlers.enforcement.set_subscription_access_state"
@@ -69,8 +73,8 @@ class TestShadowWriteFeatureFlagGate:
 
         with (
             patch(
-                "app.services.enforcement_event_policy.group_routing_enabled",
-                return_value=True,
+                "app.services.events.handlers.enforcement.resolve_group_routing_policy",
+                return_value=GroupRoutingPolicy(enabled=True),
             ),
             patch(
                 "app.services.events.handlers.enforcement.set_subscription_access_state",
@@ -96,8 +100,8 @@ class TestShadowWriteFeatureFlagGate:
 
         with (
             patch(
-                "app.services.enforcement_event_policy.group_routing_enabled",
-                return_value=True,
+                "app.services.events.handlers.enforcement.resolve_group_routing_policy",
+                return_value=GroupRoutingPolicy(enabled=True),
             ),
             patch(
                 "app.services.events.handlers.enforcement.set_subscription_access_state",
@@ -123,8 +127,8 @@ class TestShadowWriteFeatureFlagGate:
 
         with (
             patch(
-                "app.services.enforcement_event_policy.group_routing_enabled",
-                return_value=True,
+                "app.services.events.handlers.enforcement.resolve_group_routing_policy",
+                return_value=GroupRoutingPolicy(enabled=True),
             ),
             patch(
                 "app.services.events.handlers.enforcement.set_subscription_access_state",
@@ -140,8 +144,8 @@ class TestShadowWriteFeatureFlagGate:
 
         with (
             patch(
-                "app.services.enforcement_event_policy.group_routing_enabled",
-                return_value=True,
+                "app.services.events.handlers.enforcement.resolve_group_routing_policy",
+                return_value=GroupRoutingPolicy(enabled=True),
             ),
             patch(
                 "app.services.events.handlers.enforcement.set_subscription_access_state"
@@ -205,10 +209,7 @@ class TestRestoreHandlerInvokesShadowWrite:
     @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
     @patch("app.services.events.handlers.enforcement.radius_service")
     @patch("app.services.events.handlers.enforcement.radius_reject_service")
-    @patch(
-        "app.services.enforcement_event_policy."
-        "refresh_sessions_on_profile_change_enabled"
-    )
+    @patch("app.services.events.handlers.enforcement.resolve_session_refresh_policy")
     def test_restore_path_calls_shadow_write(
         self,
         mock_refresh,
@@ -221,7 +222,7 @@ class TestRestoreHandlerInvokesShadowWrite:
         db = MagicMock()
         sub = _stub_subscription()
         db.get.return_value = sub
-        mock_refresh.return_value = True
+        mock_refresh.return_value = SessionRefreshPolicy(enabled=True)
         event = Event(
             event_type=EventType.subscription_resumed,
             payload={"subscription_id": str(sub.id)},

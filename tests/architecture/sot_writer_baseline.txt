@@ -150,7 +150,6 @@ app.services.numbering
 app.services.olt_observed_state_adapter
 app.services.operational_escalation_delivery
 app.services.pppoe_credentials
-app.services.projects_mirror
 app.services.provisioning_helpers
 app.services.provisioning_step_executors
 app.services.push
@@ -247,12 +246,10 @@ app.services.web_system_geocode_tool
 app.services.web_system_import_wizard
 app.services.web_system_profiles
 app.services.web_system_restore_tool
-app.services.web_system_role_forms
 app.services.web_system_user_edit
 app.services.web_system_user_mutations
 app.services.web_vpn_peers
 app.services.web_vpn_servers
 app.services.whatsapp_notification_templates
 app.services.wireless_mast
-app.services.work_orders_mirror
 app.services.workqueue.snooze

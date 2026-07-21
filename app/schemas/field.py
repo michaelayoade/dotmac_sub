@@ -40,7 +40,7 @@ class FieldMeResponse(BaseModel):
 
 
 class FieldJobSummary(BaseModel):
-    """Technician job-list item from the imported work-order view."""
+    """Technician job-list item from the native work-order view."""
 
     id: str
     work_order_mirror_id: UUID
@@ -505,13 +505,43 @@ class FieldJobHistoryItem(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class FieldProjectContext(BaseModel):
+    id: UUID
+    number: str | None = None
+    name: str
+    status: str
+    status_presentation: StatusPresentation
+
+
+class FieldProjectTaskContext(BaseModel):
+    id: UUID
+    number: str | None = None
+    title: str
+    status: str
+    status_presentation: StatusPresentation
+
+
+class FieldTicketContext(BaseModel):
+    id: UUID
+    number: str | None = None
+    title: str
+    status: str
+    status_presentation: StatusPresentation
+
+
+class FieldCustomerExperienceContext(BaseModel):
+    project: FieldProjectContext | None = None
+    project_task: FieldProjectTaskContext | None = None
+    origin_ticket: FieldTicketContext | None = None
+    project_task_ticket: FieldTicketContext | None = None
+
+
 class FieldJobDetail(BaseModel):
     job: FieldJobSummary
     completion_requirements: FieldCompletionRequirements
     customer: FieldCustomer | None = None
     location: FieldJobLocation
-    ticket_ref: str | None = None
-    project_id: str | None = None
+    customer_experience: FieldCustomerExperienceContext
     access_notes: str | None = None
     additional_contacts: list[FieldSiteContact] = Field(default_factory=list)
     recent_visits: list[FieldVisitHistoryItem] = Field(default_factory=list)

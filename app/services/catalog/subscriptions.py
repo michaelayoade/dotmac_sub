@@ -85,7 +85,7 @@ def _subscription_billing_mode_for_write(
     except BillingModeWriteRejected as exc:
         raise HTTPException(
             status_code=409,
-            detail=f"Subscription billing mode is not aligned: {exc.reason}",
+            detail=(f"Subscription billing mode is not aligned: {exc.reason.value}"),
         ) from exc
 
 

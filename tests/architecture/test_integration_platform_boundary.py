@@ -176,10 +176,7 @@ def test_integration_sot_names_the_live_cutover_owners() -> None:
     )
     assert sot_relationships.dependencies_for(
         "integration.dotmac_erp_payables_adapter"
-    ) == (
-        "integration.backoffice_adapter",
-        "operations.vendor_purchase_invoices",
-    )
+    ) == ("integration.backoffice_adapter",)
     assert sot_relationships.dependencies_for(
         "integration.dotmac_erp_material_support_adapter"
     ) == (

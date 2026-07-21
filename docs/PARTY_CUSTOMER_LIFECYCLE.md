@@ -47,7 +47,7 @@ person or organization is; each named domain owner keeps its own lifecycle.
 | Inbox/social interaction | `communications.team_inbox` | Observed conversation and routing, not a sales decision |
 | Native outbound campaign | `communications.campaigns` | Sub campaign, audience, recipients, and delivery state |
 | Lead identity and origin | `sales.lead_lifecycle` | Party-first Lead, immutable origin, reviewed account attachment |
-| Referral program | `referrals.program` | Party-first capture, reviewed account conversion, qualification and reward decision |
+| Referral program | `referrals.program` | Capture policy, canonical program and account-attachment records, qualification/reward policy, and atomic transitions |
 | Referral account orchestration | `referrals.account_conversion` | Exact Referral/Party/Lead context into atomic account creation or reviewed attachment |
 | Pipeline and Quote | `sales.service` | Opportunity progress and account-specific commercial offer |
 | Sales Order | `sales.orders` | Accepted/manual order and fulfilment handoff |
@@ -133,17 +133,19 @@ delegates exact Party, Lead, and Referral links to their existing owners before
 one commit. It never selects identity by contact value. The full boundary is
 `docs/REFERRAL_ACCOUNT_CONVERSION.md`.
 
-For the unauthenticated handoff, capture returns a 24-hour signed capability
-containing only that UUID context and bounded purpose/version/time claims.
+For the unauthenticated handoff, capture returns a signed capability containing
+only that UUID context and bounded purpose/version/time claims.
 `auth.token_signing` owns the cryptographic envelope; the referral conversion
-owner owns claim meaning and canonical revalidation. Public signup cannot set
-account lifecycle, reseller, billing, verification, numbering, or permission
-or marketing-consent state and never compares submitted contact values with
-capture observations.
+owner owns claim meaning and canonical revalidation, and resolves lifetime only
+through `subscriber.referral_signup_context_expiry_minutes`. Public signup
+cannot set account lifecycle, reseller, billing, verification, numbering,
+permission, or marketing-consent state and never compares submitted contact
+values with capture observations.
 
 The subsequent credential handoff is separately owned by
 `auth.customer_credential_enrollment`. No local credential exists until the
-emailed 24-hour capability is redeemed with a customer-chosen password.
+emailed capability, whose lifetime resolves through the auth settings owner, is
+redeemed with a customer-chosen password.
 Completion verifies the Subscriber account email, not the quarantined Party or
 its contact point, and does not change billing-block or subscription state.
 

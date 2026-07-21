@@ -17,16 +17,13 @@ sub conventions applied:
   ``projects.lead_id`` is a real FK to the native ``leads`` table, and
   ``project_tasks.ticket_id`` points at Sub ``support_tickets.id``; import
   translates legacy ticket identifiers at the boundary.
-* ``project_tasks.work_order_id`` remains a plain UUID carrying the imported
-  CRM task link. The service validates it against authoritative
-  ``work_order.public_id``; native ``sub-`` work-order links need a later
-  project-task contract migration before this column can become a real FK.
+* Field execution belongs to the work-order root. ``work_order.project_task_id``
+  is the native optional FK, so one project task can require multiple visits.
 * Both comment tables gain a ``metadata`` JSON column for import provenance
   because CRM has no metadata column there.
 
-CRM UUID primary keys are retained by the import. This module coexists with
-the read-only ``project_mirror`` projection until the project authority
-contract completes its explicit read cutover.
+CRM UUID primary keys retained during import are now native Sub project keys.
+There is no parallel project read projection after the authority cutover.
 """
 
 import enum
@@ -273,10 +270,6 @@ class ProjectTask(Base):
     ticket_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("support_tickets.id")
     )
-    # Imported CRM work-order UUID carried verbatim and validated against
-    # work_order.public_id. A native ``sub-`` id cannot fit this UUID field;
-    # migrate the project-task link contract before adding a real FK.
-    work_order_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     start_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -302,6 +295,7 @@ class ProjectTask(Base):
     parent_task = relationship("ProjectTask", remote_side=[id])
     template_task = relationship("ProjectTemplateTask")
     ticket = relationship("Ticket", foreign_keys=[ticket_id])
+    work_orders = relationship("WorkOrder", back_populates="project_task")
     comments = relationship("ProjectTaskComment", back_populates="task")
     assignees = relationship(
         "ProjectTaskAssignee",

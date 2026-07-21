@@ -226,7 +226,7 @@ async def receive_meta_whatsapp_webhook(
         for item in _iter_meta_whatsapp_statuses(payload):
             status_items.append(item)
         binding = require_binding(db, capability_id=WHATSAPP_RECEIVE_CAPABILITY)
-        receipt, _created = integration_inbox.receive_verified(
+        receipt, should_process = integration_inbox.receive_and_claim_verified(
             db,
             capability_binding_id=binding.id,
             provider_event_id=f"meta:{hashlib.sha256(raw_body).hexdigest()}",
@@ -241,7 +241,7 @@ async def receive_meta_whatsapp_webhook(
                 if value
             },
         )
-        if not integration_inbox.claim_for_processing(receipt):
+        if not should_process:
             return dict(receipt.consequence_json)
         try:
             results, status_results = (
@@ -259,14 +259,17 @@ async def receive_meta_whatsapp_webhook(
                 "items": results,
                 "status_items": status_results,
             }
-            integration_inbox.mark_processed(receipt, consequence=consequence)
-            db.commit()
+            integration_inbox.complete_consequence(
+                db,
+                receipt=receipt,
+                consequence=consequence,
+            )
         except Exception as exc:
-            integration_inbox.mark_failed(
-                receipt,
+            integration_inbox.fail_consequence(
+                db,
+                receipt=receipt,
                 error_code="whatsapp_consequence_failed",
                 error_detail=type(exc).__name__,
             )
-            db.commit()
             raise
         return consequence

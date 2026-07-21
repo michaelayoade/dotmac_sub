@@ -348,3 +348,11 @@ def refresh_expense_claim_statuses(
     result["processed"] = processed
     result["updated"] = updated
     return result
+
+
+def run_refresh_expense_claim_statuses() -> dict[str, object]:
+    """Own the background session for expense-claim reconciliation."""
+    from app.db import task_session
+
+    with task_session() as db:
+        return refresh_expense_claim_statuses(db)

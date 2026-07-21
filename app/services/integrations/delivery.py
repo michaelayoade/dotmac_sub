@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, TypeVar
 from uuid import UUID, uuid4
 
 from sqlalchemy.orm import Session
@@ -31,6 +32,24 @@ from app.services.integrations.runtime_execution import (
 
 class DeliveryError(ValueError):
     """Raised when a delivery transition violates its binding or lifecycle."""
+
+
+CommandResultT = TypeVar("CommandResultT")
+
+
+def execute_command(
+    db: Session,
+    command: Callable[[], CommandResultT],
+) -> CommandResultT:
+    """Complete one delivery-owned unit of work."""
+
+    try:
+        result = command()
+        db.commit()
+        return result
+    except Exception:
+        db.rollback()
+        raise
 
 
 def payload_digest(payload: dict[str, Any]) -> str:
