@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.services import web_network_ip as web_network_ip_service
 from app.services import web_network_ip_actions as web_network_ip_actions_service
+from app.services import web_network_ipam_ledger as web_network_ipam_ledger_service
 from app.services import web_network_vlans as web_network_vlans_service
 from app.services.auth_dependencies import require_permission
 from app.services.ip_pool_utilization_snapshot import ip_pool_utilization_snapshots
@@ -1041,3 +1042,18 @@ def vlan_update(request: Request, vlan_id: str, db: Session = Depends(get_db)):
 def vlan_delete(vlan_id: str, db: Session = Depends(get_db)):
     web_network_vlans_service.handle_vlan_delete(db, vlan_id=vlan_id)
     return RedirectResponse("/admin/network/vlans", status_code=303)
+
+
+@router.get(
+    "/ipam",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:ip:read"))],
+)
+def ipam_ledger(
+    request: Request,
+    facet: str = Query(default="pools"),
+    db: Session = Depends(get_db),
+):
+    context = _base_context(request, db, active_page="ip-management")
+    context.update(web_network_ipam_ledger_service.ipam_ledger_data(db, facet))
+    return templates.TemplateResponse("admin/network/ipam/index.html", context)

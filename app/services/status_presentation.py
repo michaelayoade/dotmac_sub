@@ -13,6 +13,7 @@ from enum import Enum
 from app.models.billing import CreditNoteStatus, InvoiceStatus, PaymentStatus
 from app.models.catalog import OfferStatus, SubscriptionStatus
 from app.models.fup_state import FupActionStatus
+from app.models.network import Ipv6PrefixState
 from app.models.payment_proof import WithholdingTaxStatus
 from app.models.project import ProjectStatus, ProjectTaskStatus
 from app.models.provisioning import AppointmentStatus, ServiceOrderStatus, TaskStatus
@@ -926,3 +927,17 @@ def fup_action_status_presentation(
 ) -> StatusPresentation:
     """Project the FUP enforcement action state (server-owned tone)."""
     return _presentation(_status_value(status), _FUP_ACTION_STATUS_PRESENTATIONS)
+
+
+_IPV6_PREFIX_STATE_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    Ipv6PrefixState.available.value: ("Available", StatusTone.info, StatusIcon.info),
+    Ipv6PrefixState.reserved.value: ("Reserved", StatusTone.warning, StatusIcon.clock),
+    Ipv6PrefixState.assigned.value: ("Assigned", StatusTone.positive, StatusIcon.check),
+}
+
+
+def ipv6_prefix_state_presentation(
+    status: Ipv6PrefixState | str | None,
+) -> StatusPresentation:
+    """Project the IPv6 delegated-prefix lifecycle state (server-owned tone)."""
+    return _presentation(_status_value(status), _IPV6_PREFIX_STATE_PRESENTATIONS)
