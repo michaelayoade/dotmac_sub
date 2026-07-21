@@ -185,6 +185,49 @@ def test_recovery_plan_includes_partial_placeholder_name_fields(db_session):
     }
 
 
+def test_recovery_plan_skips_broken_source_audit_transition_chain(db_session):
+    subscriber = Subscriber(
+        first_name="Customer",
+        last_name="Customer",
+        display_name="Customer Customer",
+        email="broken-chain@example.com",
+        subscriber_number="100000009",
+    )
+    db_session.add(subscriber)
+    db_session.flush()
+    first_event = _incident_event(
+        subscriber,
+        {
+            "first_name": {"old": "Original", "new": "Customer"},
+            "last_name": {"old": "Identity", "new": "Customer"},
+            "display_name": {
+                "old": "Original Identity",
+                "new": "Customer Customer",
+            },
+        },
+    )
+    second_event = _incident_event(
+        subscriber,
+        {
+            "first_name": {"old": "Intervening", "new": "Customer"},
+            "last_name": {"old": "Change", "new": "Customer"},
+        },
+    )
+    second_event.occurred_at = datetime(2026, 7, 20, 15, 6, tzinfo=UTC)
+    db_session.add_all([first_event, second_event])
+    db_session.commit()
+
+    candidates = plan_recovery(db_session)
+
+    assert len(candidates) == 1
+    assert candidates[0].classification == "skip_drift"
+    assert set(candidates[0].conflict_fields) == {
+        "display_name:missing_transition",
+        "first_name:broken_chain",
+        "last_name:broken_chain",
+    }
+
+
 def test_recovery_apply_is_guarded_audited_and_idempotent(db_session):
     subscriber = Subscriber(
         first_name="Customer",
