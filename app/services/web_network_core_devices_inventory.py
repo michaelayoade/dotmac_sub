@@ -320,7 +320,11 @@ def collect_devices(db: Session) -> list[dict]:
                 "status_presentation": operational.presentation,
                 "last_seen": getattr(olt, "last_seen", None),
                 "subscriber": None,
-                "class_facts": None,
+                "class_facts": {
+                    "software_version": getattr(olt, "software_version", None),
+                    "firmware_version": getattr(olt, "firmware_version", None),
+                    "pon_types": getattr(olt, "supported_pon_types", None),
+                },
             }
         )
         _add_seen("id", olt.id)
@@ -511,7 +515,10 @@ def collect_devices(db: Session) -> list[dict]:
                 ),
                 "last_seen": getattr(cpe, "last_seen", None),
                 "subscriber": None,
-                "class_facts": None,
+                "class_facts": {
+                    "firmware_version": getattr(cpe, "firmware_version", None),
+                    "mac_address": getattr(cpe, "mac_address", None),
+                },
             }
         )
 

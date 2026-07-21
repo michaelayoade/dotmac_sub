@@ -18,6 +18,8 @@
                     {%- elif device.type == 'router' and cf.routeros_version %}RouterOS {{ cf.routeros_version }}
                     {%- elif device.type == 'nas' %}{{ cf.health_status or 'nas' }}{% if cf.site_name %} · {{ cf.site_name }}{% endif %}
                     {%- elif device.type == 'core' %}{{ cf.site_name or '' }}{% if cf.role %}{% if cf.site_name %} · {% endif %}{{ cf.role }}{% endif %}
+                    {%- elif device.type == 'olt' %}{% if cf.software_version %}SW {{ cf.software_version }}{% elif cf.firmware_version %}FW {{ cf.firmware_version }}{% endif %}{% if cf.pon_types %} · {{ cf.pon_types }}{% endif %}
+                    {%- elif device.type == 'cpe' %}{% if cf.firmware_version %}FW {{ cf.firmware_version }}{% endif %}{% if cf.mac_address %}{% if cf.firmware_version %} · {% endif %}{{ cf.mac_address }}{% endif %}
                     {%- endif %}
                 </p>
                 {% endif %}
