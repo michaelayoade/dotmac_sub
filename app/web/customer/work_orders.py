@@ -1,9 +1,7 @@
 """Customer portal Field Service page (technician visits / work orders).
 
-Server-rendered: reads the local work-order mirror (fast, resilient to a CRM
-outage) to show "where's my technician?" — status, scheduled window, ETA, and
-the assigned technician. Live technician position + rating use same-origin
-session-authed routes backed by sub.
+Server-rendered: reads the typed native work-order projection to show schedule,
+project/task/ticket context, technician location, and customer feedback.
 """
 
 from fastapi import APIRouter, Depends, Form, Request
@@ -16,7 +14,7 @@ from fastapi.responses import (
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.services import work_orders_mirror
+from app.services import customer_experience_lifecycle, customer_work_order_selfcare
 from app.services.customer_context import optional_customer_subscriber_id
 from app.web.customer.auth import get_current_customer_from_request
 from app.web.customer.branding import get_customer_templates
@@ -37,7 +35,9 @@ def customer_work_orders(request: Request, db: Session = Depends(get_db)) -> Res
         "request": request,
         "customer": customer,
         "active_page": "work-orders",
-        "tracker": work_orders_mirror.read_for_subscriber(db, subscriber_id),
+        "tracker": customer_experience_lifecycle.work_orders_for_subscriber(
+            db, subscriber_id
+        ),
     }
     return templates.TemplateResponse("customer/work_orders/index.html", context)
 
@@ -52,8 +52,10 @@ def customer_technician_location(
     if not customer:
         return JSONResponse({"detail": "Not authenticated"}, status_code=401)
     subscriber_id = str(optional_customer_subscriber_id(db, customer) or "")
-    data = work_orders_mirror.technician_location(db, subscriber_id, work_order_id)
-    return JSONResponse(data)
+    data = customer_work_order_selfcare.technician_location(
+        db, subscriber_id, work_order_id
+    )
+    return JSONResponse(data.model_dump(mode="json"))
 
 
 @router.post("/work-orders/{work_order_id}/rate-technician")
@@ -74,7 +76,7 @@ def customer_rate_technician(
     subscriber_id = str(optional_customer_subscriber_id(db, customer) or "")
     status = "ok"
     try:
-        work_orders_mirror.rate_technician(
+        customer_work_order_selfcare.rate_technician(
             db,
             subscriber_id,
             work_order_id,

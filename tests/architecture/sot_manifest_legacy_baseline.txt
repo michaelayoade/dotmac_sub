@@ -16,6 +16,7 @@ auth.permission_gate
 auth.token_signing
 communications.campaigns
 communications.channel_policy
+communications.customer_experience_intents
 communications.customer_policy
 communications.customer_read_state
 communications.eligibility
@@ -35,6 +36,7 @@ control.settings_spec
 customer.accounts
 customer.branding
 customer.data_completeness
+customer.experience_lifecycle
 customer.financial_position
 customer.identity_scope
 customer.lifecycle_audit
@@ -44,6 +46,7 @@ customer.network_context
 customer.profile_commands
 customer.service_status
 customer.usage_summary
+customer.work_order_selfcare
 events.dispatcher
 events.store
 financial.account_credit_applications

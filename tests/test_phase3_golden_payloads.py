@@ -17,28 +17,22 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.models.domain_settings import DomainSetting, SettingDomain, SettingValueType
-from app.models.project import Project, ProjectTask
-from app.models.project_mirror import ProjectMirror, ProjectSyncState
+from app.models.project import Project
 from app.models.quote_mirror import QuoteMirror, QuoteSyncState
 from app.models.referral import ReferralMirror, ReferralProgramCache
 from app.models.subscriber import Reseller, Subscriber
 from app.schemas.portal import (
-    MyProjectsResponse,
     MyQuotesResponse,
     MyReferralsResponse,
-    ProjectItem,
     QuoteItem,
     ReferralItem,
 )
-from app.services import projects as projects_service
 from app.services import (
-    projects_mirror,
     quotes_mirror,
     referrals_mirror,
     reseller_crm_views,
 )
 from app.services import referrals as referrals_service
-from app.services.projects import FIBER_INSTALLATION_STAGE_ORDER
 from app.services.sales import selfserve as selfserve_service
 
 # ── shape comparison ──────────────────────────────────────────────────────────
@@ -89,11 +83,6 @@ def _subscriber(db, reseller_id=None) -> Subscriber:
 
 def _synced_quotes(db, sub):
     db.add(QuoteSyncState(subscriber_id=sub.id, synced_at=datetime.now(UTC)))
-    db.commit()
-
-
-def _synced_projects(db, sub):
-    db.add(ProjectSyncState(subscriber_id=sub.id, synced_at=datetime.now(UTC)))
     db.commit()
 
 
@@ -262,109 +251,6 @@ def test_me_quotes_native_open_count_matches_mirror_semantics(db_session):
     assert statuses[str(accepted.id)] == "accepted"
 
 
-# ── projects: GET /me/projects ────────────────────────────────────────────────
-
-_STAGE_TITLES = {
-    "site_survey": "Site survey",
-    "project_plan": "Project plan",
-}
-
-
-def _mirror_project(db, sub) -> ProjectMirror:
-    stages = []
-    for index, key in enumerate(FIBER_INSTALLATION_STAGE_ORDER):
-        done = index == 0
-        stages.append(
-            {
-                "key": key,
-                "title": _STAGE_TITLES.get(key, key.replace("_", " ").title()),
-                "status": "done" if done else "pending",
-                "completed_at": "2026-07-01T12:00:00+00:00" if done else None,
-            }
-        )
-    row = ProjectMirror(
-        crm_project_id=str(uuid.uuid4()),
-        subscriber_id=sub.id,
-        name="Fiber install — Wuse II",
-        status="active",
-        project_type="fiber_optics_installation",
-        progress_pct=17,
-        current_stage=stages[1]["title"],
-        stages=stages,
-        customer_address="12 Aminu Kano Crescent",
-        region="Abuja",
-        start_at=datetime(2026, 7, 1, 8, 0, tzinfo=UTC),
-        due_at=datetime(2026, 7, 15, 8, 0, tzinfo=UTC),
-        project_created_at=datetime(2026, 6, 30, 9, 0, tzinfo=UTC),
-    )
-    db.add(row)
-    db.commit()
-    db.refresh(row)
-    return row
-
-
-def _native_project(db, sub) -> Project:
-    project = Project(
-        name="Fiber install — Wuse II",
-        project_type="fiber_optics_installation",
-        status="active",
-        subscriber_id=sub.id,
-        customer_address="12 Aminu Kano Crescent",
-        region="Abuja",
-        start_at=datetime(2026, 7, 1, 8, 0, tzinfo=UTC),
-        due_at=datetime(2026, 7, 15, 8, 0, tzinfo=UTC),
-    )
-    db.add(project)
-    db.flush()
-    for index, key in enumerate(FIBER_INSTALLATION_STAGE_ORDER):
-        done = index == 0
-        db.add(
-            ProjectTask(
-                project_id=project.id,
-                title=key.replace("_", " ").title(),
-                status="done" if done else "todo",
-                completed_at=datetime(2026, 7, 1, 12, 0, tzinfo=UTC) if done else None,
-                metadata_={"fiber_stage_key": key},
-                is_active=True,
-            )
-        )
-    db.commit()
-    db.refresh(project)
-    return project
-
-
-def test_me_projects_native_matches_mirror_golden_payload(db_session):
-    mirror_sub = _subscriber(db_session)
-    _mirror_project(db_session, mirror_sub)
-    _synced_projects(db_session, mirror_sub)
-    mirror_out = projects_mirror.read_for_subscriber(db_session, str(mirror_sub.id))
-
-    native_sub = _subscriber(db_session)
-    native_project = _native_project(db_session, native_sub)
-    native_out = projects_service.portal_read_for_subscriber(
-        db_session, str(native_sub.id)
-    )
-
-    _assert_same_shape(native_out, mirror_out)
-    assert native_out["total"] == 1 and mirror_out["total"] == 1
-    assert native_out["active"] == 1 and mirror_out["active"] == 1
-
-    for out in (native_out, mirror_out):
-        parsed = MyProjectsResponse.model_validate(out)
-        assert len(parsed.projects) == 1
-        item = ProjectItem.model_validate(out["projects"][0])
-        assert isinstance(item.progress_pct, int)
-        assert all(
-            stage.status in {"pending", "in_progress", "done"} for stage in item.stages
-        )
-
-    # §2.5: id is the project UUID (the value the mirror served as
-    # crm_project_id) and the fiber timeline is the canonical 6 stages.
-    item = native_out["projects"][0]
-    assert item["id"] == str(native_project.id)
-    assert [s["key"] for s in item["stages"]] == list(FIBER_INSTALLATION_STAGE_ORDER)
-
-
 # ── referrals: GET /me/referrals ──────────────────────────────────────────────
 
 
@@ -499,27 +385,3 @@ def test_reseller_quotes_native_matches_mirror_golden_payload(db_session):
     item = native_out["quotes"][0]
     assert item["account_id"] == str(native_sub.id)
     assert isinstance(item["account_name"], str)
-
-
-def test_reseller_projects_native_matches_mirror_golden_payload(db_session):
-    mirror_reseller, mirror_sub = _reseller_with_customer(db_session)
-    _mirror_project(db_session, mirror_sub)
-    with patch.object(projects_service, "native_read_enabled", return_value=False):
-        mirror_out = reseller_crm_views.projects_for_reseller(
-            db_session, str(mirror_reseller.id)
-        )
-
-    native_reseller, native_sub = _reseller_with_customer(db_session)
-    _native_project(db_session, native_sub)
-    with patch.object(projects_service, "native_read_enabled", return_value=True):
-        native_out = reseller_crm_views.projects_for_reseller(
-            db_session, str(native_reseller.id)
-        )
-
-    _assert_same_shape(native_out, mirror_out)
-    assert native_out["total"] == 1 and mirror_out["total"] == 1
-    assert native_out["active"] == 1 and mirror_out["active"] == 1
-    item = native_out["projects"][0]
-    assert item["account_id"] == str(native_sub.id)
-    assert isinstance(item["account_name"], str)
-    assert isinstance(item["progress_pct"], int)

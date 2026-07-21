@@ -15,9 +15,9 @@ from app.services import auth_flow as auth_flow_service
 from app.services import (
     crm_portal,
     customer_portal,
+    customer_work_order_selfcare,
     reseller_crm_views,
     reseller_portal,
-    work_orders_mirror,
 )
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
@@ -1058,8 +1058,10 @@ def reseller_technician_location(
     account = reseller_portal.owned_account(db, str(context["reseller"].id), account_id)
     if account is None:
         return JSONResponse({"available": False, "reason": "not_found"})
-    data = work_orders_mirror.technician_location(db, str(account.id), work_order_id)
-    return JSONResponse(data)
+    data = customer_work_order_selfcare.technician_location(
+        db, str(account.id), work_order_id
+    )
+    return JSONResponse(data.model_dump(mode="json"))
 
 
 def reseller_rate_technician(
@@ -1079,7 +1081,7 @@ def reseller_rate_technician(
         status_flag = "error"
     else:
         try:
-            work_orders_mirror.rate_technician(
+            customer_work_order_selfcare.rate_technician(
                 db,
                 str(account.id),
                 work_order_id,

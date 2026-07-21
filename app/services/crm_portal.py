@@ -157,6 +157,8 @@ def _ok_context() -> dict[str, Any]:
 
 def _ticket_to_dict(ticket: Any) -> dict[str, Any]:
     """Map a local support Ticket to the dict shape the portal templates expect."""
+    from app.services.customer_experience_lifecycle import ticket_actions
+
     meta = ticket.metadata_ if isinstance(ticket.metadata_, dict) else {}
     csat = meta.get("csat") if isinstance(meta.get("csat"), dict) else {}
     due_at = getattr(ticket, "due_at", None)
@@ -179,6 +181,9 @@ def _ticket_to_dict(ticket: Any) -> dict[str, Any]:
         "created_at": ticket.created_at.isoformat() if ticket.created_at else None,
         "updated_at": ticket.updated_at.isoformat() if ticket.updated_at else None,
         "csat_rating": csat.get("rating"),
+        "resolution_actions": [
+            action.model_dump(mode="json") for action in ticket_actions(ticket)
+        ],
     }
 
 
@@ -210,6 +215,36 @@ def handle_ticket_rating(
         )
     except HTTPException:
         return {"success": False, "error": "You can rate support once resolved."}
+    return {"success": True}
+
+
+def handle_ticket_resolution_response(
+    db: Session,
+    subscriber_ids: list[str],
+    ticket_id: str,
+    *,
+    confirm: bool,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    """Apply a signed-in customer's resolution response to a native ticket."""
+    from app.services import support as support_service
+
+    allowed = {str(value) for value in subscriber_ids if value}
+    try:
+        ticket = support_service.Tickets.get(db, ticket_id)
+    except Exception:  # noqa: BLE001 - ownership-safe not-found response
+        return {"success": False, "error": "Ticket not found."}
+    if not ticket.subscriber_id or str(ticket.subscriber_id) not in allowed:
+        return {"success": False, "error": "Ticket not found."}
+    try:
+        support_service.Tickets.respond_to_resolution_for_customer(
+            db,
+            ticket,
+            confirm=confirm,
+            reason=reason,
+        )
+    except HTTPException as exc:
+        return {"success": False, "error": str(exc.detail)}
     return {"success": True}
 
 

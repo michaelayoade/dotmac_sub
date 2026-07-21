@@ -92,7 +92,7 @@ be restated in durable domain language here or in the owning design document.
 
 Architecture liveness is checked in both directions. Every declared owner must
 have a real application/operator caller, and every new service module with a
-persistence-like mutation must name a declared owner. The 253 existing
+persistence-like mutation must name a declared owner. The 251 existing
 undeclared writer-like modules are an explicit shrink-only migration baseline,
 not approved parallel writers; resolving an owner or removing its write requires
 deleting the baseline entry. Adding an entry requires an explicit ownership
@@ -1395,23 +1395,34 @@ network summary composition.
    locking, commits the lifecycle mutation and replay result once, and returns
    the original result on retry. Lifecycle mutation is still delegated to
    `access.subscription_lifecycle`.
-9. `subscriber.growth_reports` (`app/services/subscriber_growth.py`) owns the
+9. `customer.experience_lifecycle`
+   (`app/services/customer_experience_lifecycle.py`) owns the read-only typed
+   composition of native `Project -> ProjectTask -> WorkOrder -> Ticket` state,
+   the customer experience-state projection, and server-owned self-care action
+   availability. It never mutates any of those roots. Customer, reseller,
+   field, web, and mobile adapters consume it without a CRM mirror fallback.
+10. `customer.work_order_selfcare`
+    (`app/services/customer_work_order_selfcare.py`) owns subscriber-scoped live
+    technician-location reads and the canonical, audited customer technician
+    rating. It reads native dispatch assignment and field-presence facts and
+    writes no work-order lifecycle state.
+11. `subscriber.growth_reports` (`app/services/subscriber_growth.py`) owns the
    admin subscriber growth and churn report reads: monthly growth/churn series,
    month-over-month new counts, churn/at-risk summaries, status counts, and
    cumulative signups. The derived-cancelled rule (explicit `canceled`, or NULL
    status on an inactive row) lives here; report pages compose it and never
    re-derive lifecycle in Python.
-10. `customer.data_completeness`
+12. `customer.data_completeness`
    (`app/services/subscriber_data_completeness.py`) owns the purpose-specific
    requirements, derived completeness/revalidation state, capture backlog, and
    filing-readiness counts. It is read-only: it identifies the gap and never
    fills it.
-11. `customer.location_verification`
+13. `customer.location_verification`
    (`app/services/geocode_reconciler.py`) is the only writer of subscriber
    location verification-ledger facts and owns reconciliation of a captured GPS
    pin against claimed location. It writes only facts that agree; disagreement
    is flagged for a human and never auto-applied.
-12. `customer.location_capture` (`app/services/location_capture.py`) owns the
+14. `customer.location_capture` (`app/services/location_capture.py`) owns the
     default-off rollout controls, source authorization, prompt eligibility and
     snooze lifecycle, and orchestration of field-arrival, portal, and agent
     capture. Those adapters call this owner, which delegates adjudication and
@@ -1428,6 +1439,10 @@ restoration amounts from locally loaded invoice rows; they consume
 `/me/service-status`. Customer clients consume `/me/usage-summary` totals and
 provenance; they do not replace a server total with a loaded-session page,
 chart-series sum, or a different time window.
+For project/task/field/ticket journeys, clients render the identifiers,
+relationships, status presentations, experience state, and allowed actions
+provided by `customer.experience_lifecycle`; they do not join CRM ids or derive
+confirmation, tracking, or rating eligibility from raw statuses.
 
 ## Support Operations
 
@@ -1867,14 +1882,21 @@ in forms, or rotate key material directly.
 3. `communications.eligibility` owns the recipient suppression ledger and the
    transactional-versus-marketing send decision.
 4. `communications.intents` owns communication intent lifecycle, recipient and
-   channel expansion, and delivery-outcome projection.
-5. `communications.ephemeral_actions` owns the allowlisted, typed, non-secret
+   channel expansion, including authorized subscriber contacts, and
+   delivery-outcome projection.
+5. `communications.customer_experience_intents`
+   (`app/services/customer_experience_communications.py`) owns the named
+   project/task/field/ticket customer communication requests, their content,
+   native relationship lineage, and stable dedupe identities. It requests
+   email, direct WhatsApp, and push outcomes through `communications.intents`;
+   it does not select recipients, decide suppressions/preferences, or deliver.
+6. `communications.ephemeral_actions` owns the allowlisted, typed, non-secret
    action envelope and just-in-time sensitive-message materialization
    orchestration. Calling domains still own capability purpose, claims,
    lifetime, and consequences. The worker must not persist or log rendered
    bearer content or exception text that may contain it.
-6. Notification service owns notification rows and delivery lifecycle.
-7. `operations.sla_escalation` owns operational SLA policy lifecycle,
+7. Notification service owns notification rows and delivery lifecycle.
+8. `operations.sla_escalation` owns operational SLA policy lifecycle,
    event-scoped escalation planning, and escalation acknowledgement/cancellation.
    Every operational domain emits named facts into this owner. Operators configure
    entity type, event key, escalation level, unresolved delay, channels, active
@@ -1884,7 +1906,7 @@ in forms, or rotate key material directly.
    devices/sites, subscribers, payment incidents, and payment proofs. A domain
    service may not embed a fallback SLA duration or channel list. When no active
    policy matches, the owner invents neither a deadline nor an escalation.
-8. Staff notification service owns internal/admin notification creation,
+9. Staff notification service owns internal/admin notification creation,
    permission-targeted staff audience resolution, and materialization of review
    requests into the assigned admin notification inbox. For payment proofs it
    resolves active system users who effectively hold `billing:proof:verify`
@@ -2520,8 +2542,9 @@ Dependency order:
 3. `operations.work_order_status`: declares persisted work-order values and the
    canonical open, assignable, and terminal sets.
 4. `operations.work_order_commands`: owns native work-order creation and header
-   commands, the native `work_order.project_id` and internal-only
-   `work_order.origin_ticket_id` bindings, the default-enabled
+   commands, the native `work_order.project_id`, optional
+   `work_order.project_task_id`, and internal-only `work_order.origin_ticket_id`
+   bindings, the default-enabled
    `requires_as_built_evidence` policy, assignment decisions/projection, and
    assignment-queue transitions.
    Dispatch API/web and field-manager handlers are authorization/transport
@@ -2529,22 +2552,20 @@ Dependency order:
    the work order, atomically updates the queue and assignee projection, records
    exact previous/result actor audit evidence, and treats an equivalent retry as
    a replay. Direct header assignment fields and direct field-execution status
-   changes are rejected. CRM ingest remains a provenance importer and does not
-   become native command authority; it may resolve an exact retained CRM
-   project UUID into an otherwise-empty native link, but never replaces a
-   native binding. Native project-binding and evidence-policy
+   changes are rejected. `work_order.project_task_id` is the execution-side FK:
+   one project task may require zero or many field visits. The command validates
+   subscriber/project consistency and makes established bindings immutable.
+   Retained CRM ids are provenance only. Native project/task-binding and evidence-policy
    rejections use transport-neutral `WorkOrderCommandError`; only
    `app.errors` maps them to HTTP responses.
 5. `operations.work_orders`: exposes work-order read models and customer links.
    The `work_order` table is Sub's authoritative work-order storage
    (WORK_ORDER_IDENTITY_SOT): identity is the Sub-generated `public_id`;
-   `crm_work_order_id` is a nullable provenance reference on the `work_order`
-   root only — NULL for native rows and written only by CRM import/webhook
-   ingest, resolved to native identity once at that boundary, and never used as
-   a join key. The eleven field-evidence tables carry no CRM string; they join
-   solely through the `work_order.id` FK. The still-live
-   `reconcile_work_order_mirror` job keeps its persisted name because it is a
-   CRM sync job, not the name of authoritative storage, and retires with CRM.
+   `crm_work_order_id` is nullable historical provenance on the `work_order`
+   root only — NULL for native rows and never used as a join key. The eleven
+   field-evidence tables join solely through the `work_order.id` FK. The CRM
+   work-order pull, webhook, sync state, reconcile tasks, and customer mirror
+   reads are retired; there is no fallback writer or read path.
 
    Native mutations delegate to `operations.work_order_commands`. Read-only
    cross-domain worklists may show job context but cannot write work-order or
@@ -2651,9 +2672,12 @@ consume context, but should not rediscover subscriber/ONT/CPE links themselves.
 `Projects.update` is the canonical writer for native project mutations;
 Kanban, Gantt, normal edit, API, and web adapters delegate to it rather than
 maintaining parallel SLA/event/notification paths. Customer and reseller read
-authority is owned by `projects.native_read`. Where CRM project data is shown, it
-is served from a local mirror populated over the CRM API and treated as a cache,
-never as the authority. Field job detail projects `completion_requirements`
+authority is the native read-only `customer.experience_lifecycle` composition.
+The project mirror, project read flip, work-order mirror control, and Dotmac CRM
+project/work-order observation operations are retired. The CRM connector cannot
+read project, work-order, work-order-note, or technician-location authority.
+Field job detail projects typed native project/task/origin-ticket
+context and `completion_requirements`
 from the same transition service that validates completion. Field clients consume
 that contract and may offer advisory quality checks, but must not invent a separate
 completion gate from local checklist state or cached settings.
@@ -2663,8 +2687,8 @@ reinterpret its presentation.
 
 ## Support Control Plane
 
-1. `support.tickets` owns ticket lifecycle, assignment, comments, and
-   satisfaction state.
+1. `support.tickets` owns ticket lifecycle, assignment, comments, satisfaction,
+   and both signed-link and authenticated resolution confirmation/dispute.
 2. `support.ticket_configuration` owns the operator-managed priority and ticket-
    type SLA targets shown at `/admin/system/ticket-settings`. Ticket types have
    no fixed code default: zero or no override falls through to the configured
@@ -2677,7 +2701,9 @@ reinterpret its presentation.
    active assigned service team; only an active member of that team, holding
    both ticket-update and dispatch-write permission at the adapter, may issue a
    work order. Each idempotency key identifies one issuance, and a ticket may
-   issue zero or many work orders. `work_order.origin_ticket_id` is the only
+   issue zero or many work orders. An issuance may be scoped to a
+   ticket-linked project task, which writes `work_order.project_task_id` and
+   infers its project. `work_order.origin_ticket_id` is the only ticket-to-work
    native link; `Ticket.metadata.work_order_id` and native uses of
    `WorkOrder.crm_ticket_id` are retired. `field_visit` remains a descriptive
    tag and has no decision authority.
@@ -2688,6 +2714,11 @@ reinterpret its presentation.
    system fact to the originating ticket timeline. Support must verify that
    evidence and decide the incident lifecycle; work-order completion never
    silently resolves or closes the ticket.
+
+   When support requests customer confirmation, the communication intent carries
+   the native ticket identity and dedupe key. The authenticated portal/mobile
+   actions and signed public link converge on the same active confirmation
+   capability and the same ticket transition/audit owner.
 
 Rule: support routes and jobs translate requests and delegate ticket decisions
 to `app.services.support`. Events and notifications are consequences requested

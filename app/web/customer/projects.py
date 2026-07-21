@@ -1,34 +1,21 @@
 """Customer portal Installation Progress page (project tracker).
 
-Server-rendered: shows the install lifecycle — stage timeline + progress %.
-Behind the ``projects_native_read_enabled`` ownership flag:
-OFF reads the local project mirror (fast, resilient to a CRM outage), ON
-reads the native ``projects`` table with the same payload shape. Distinct
-from /portal/installations (which lists scheduled appointments). Thin wrapper.
+Server-rendered typed projection of native projects, tasks, field visits and
+support resolution. Distinct from /portal/installations (provisioning slots).
 """
-
-import logging
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.services import projects as projects_service
-from app.services import projects_mirror
+from app.services import customer_experience_lifecycle
 from app.services.customer_context import optional_customer_subscriber_id
 from app.web.customer.auth import get_current_customer_from_request
 from app.web.customer.branding import get_customer_templates
 
 templates = get_customer_templates()
 router = APIRouter(prefix="/portal", tags=["web-customer"])
-logger = logging.getLogger(__name__)
-
-
-def _tracker(db: Session, subscriber_id: str) -> dict:
-    if projects_service.native_read_enabled(db):
-        return projects_service.portal_read_for_subscriber(db, subscriber_id)
-    return projects_mirror.read_for_subscriber(db, subscriber_id)
 
 
 @router.get("/projects", response_class=HTMLResponse)
@@ -43,6 +30,8 @@ def customer_projects(request: Request, db: Session = Depends(get_db)) -> Respon
         "request": request,
         "customer": customer,
         "active_page": "projects",
-        "tracker": _tracker(db, subscriber_id),
+        "tracker": customer_experience_lifecycle.projects_for_subscriber(
+            db, subscriber_id
+        ),
     }
     return templates.TemplateResponse("customer/projects/index.html", context)

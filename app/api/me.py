@@ -78,6 +78,7 @@ from app.schemas.portal import (
     MyReferralsResponse,
     MyWorkOrdersResponse,
     PortalSessionResponse,
+    ProjectItem,
     QuoteDepositInitiateRequest,
     QuoteDepositInitiateResponse,
     QuoteDepositVerifyRequest,
@@ -89,6 +90,7 @@ from app.schemas.portal import (
     TechnicianLocation,
     TechnicianRatingRequest,
     TechnicianRatingResponse,
+    WorkOrderItem,
 )
 from app.schemas.service_status import ServiceStatusResponse
 from app.schemas.subscriber import (
@@ -107,6 +109,7 @@ from app.schemas.support import (
     TicketCommentRead,
     TicketCreate,
     TicketRead,
+    TicketResolutionDisputeRequest,
     TicketSatisfactionRequest,
 )
 from app.schemas.usage import (
@@ -120,6 +123,13 @@ from app.services import autopay as autopay_service
 from app.services import billing as billing_service
 from app.services import catalog as catalog_service
 from app.services import chat_session as chat_session_service
+from app.services import (
+    customer_experience_lifecycle,
+    customer_work_order_selfcare,
+    quote_deposits,
+    quotes_mirror,
+    web_support_tickets,
+)
 from app.services import customer_location_requests as location_service
 from app.services import customer_portal_contacts as contacts_service
 from app.services import customer_portal_flow_addons as customer_addons
@@ -130,14 +140,6 @@ from app.services import customer_portal_notifications as customer_notifications
 from app.services import geocoding as geocoding_service
 from app.services import notification as notification_service
 from app.services import portal_session as portal_session_service
-from app.services import projects as projects_service
-from app.services import (
-    projects_mirror,
-    quote_deposits,
-    quotes_mirror,
-    web_support_tickets,
-    work_orders_mirror,
-)
 from app.services import push as push_service
 from app.services import referrals as referrals_service
 from app.services import status_presentation as status_presentation_service
@@ -913,14 +915,23 @@ def my_projects(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """The caller's installations/projects — stage timeline + progress %.
-    Behind the ``projects_native_read_enabled`` read-flip flag:
-    OFF serves the local CRM mirror (refreshed lazily), ON serves the native
-    ``projects`` table — same shape and ids either way."""
+    """The caller's typed native project/task/field/support lifecycle."""
     subscriber_id = _subscriber_id(principal)
-    if projects_service.native_read_enabled(db):
-        return projects_service.portal_read_for_subscriber(db, subscriber_id)
-    return projects_mirror.read_for_subscriber(db, subscriber_id)
+    return customer_experience_lifecycle.projects_for_subscriber(db, subscriber_id)
+
+
+@router.get("/projects/{project_id}", response_model=ProjectItem)
+def my_project(
+    project_id: UUID,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    project = customer_experience_lifecycle.project_for_subscriber(
+        db, _subscriber_id(principal), project_id
+    )
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return project
 
 
 @router.get("/work-orders", response_model=MyWorkOrdersResponse)
@@ -928,10 +939,23 @@ def my_work_orders(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """The caller's field-service work orders — technician, schedule, ETA,
-    status — served from the local mirror (refreshed from the CRM lazily)."""
+    """The caller's Sub-owned field visits and native lifecycle links."""
     subscriber_id = _subscriber_id(principal)
-    return work_orders_mirror.read_for_subscriber(db, subscriber_id)
+    return customer_experience_lifecycle.work_orders_for_subscriber(db, subscriber_id)
+
+
+@router.get("/work-orders/{work_order_id}", response_model=WorkOrderItem)
+def my_work_order(
+    work_order_id: str,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    work_order = customer_experience_lifecycle.work_order_for_subscriber(
+        db, _subscriber_id(principal), work_order_id
+    )
+    if work_order is None:
+        raise HTTPException(status_code=404, detail="Work order not found")
+    return work_order
 
 
 @router.get(
@@ -947,8 +971,9 @@ def my_work_order_technician_location(
     'where's my technician' map). Returns available=False when the map should
     be hidden."""
     subscriber_id = _subscriber_id(principal)
-    data = work_orders_mirror.technician_location(db, subscriber_id, work_order_id)
-    return TechnicianLocation.model_validate(data)
+    return customer_work_order_selfcare.technician_location(
+        db, subscriber_id, work_order_id
+    )
 
 
 @router.post(
@@ -964,7 +989,7 @@ def my_rate_technician(
     """Rate the technician after a completed work order (1-5 + optional comment)."""
     subscriber_id = _subscriber_id(principal)
     try:
-        data = work_orders_mirror.rate_technician(
+        return customer_work_order_selfcare.rate_technician(
             db,
             subscriber_id,
             work_order_id,
@@ -977,7 +1002,6 @@ def my_rate_technician(
         raise HTTPException(
             status_code=409, detail="Work order is not completed"
         ) from exc
-    return TechnicianRatingResponse.model_validate(data)
 
 
 @router.get("/quotes", response_model=MyQuotesResponse)
@@ -1493,6 +1517,40 @@ def my_rate_ticket(
     ticket = _owned_ticket(db, _subscriber_id(principal), ticket_id)
     return support_service.tickets.set_satisfaction(
         db, ticket, rating=payload.rating, comment=payload.comment
+    )
+
+
+@router.post(
+    "/support/tickets/{ticket_id}/confirm-resolution", response_model=TicketRead
+)
+def my_confirm_ticket_resolution(
+    ticket_id: str,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Confirm that the owner-resolved incident is fixed."""
+    ticket = _owned_ticket(db, _subscriber_id(principal), ticket_id)
+    return support_service.tickets.respond_to_resolution_for_customer(
+        db, ticket, confirm=True
+    )
+
+
+@router.post(
+    "/support/tickets/{ticket_id}/dispute-resolution", response_model=TicketRead
+)
+def my_dispute_ticket_resolution(
+    ticket_id: str,
+    payload: TicketResolutionDisputeRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Reopen the incident when the reported resolution did not fix it."""
+    ticket = _owned_ticket(db, _subscriber_id(principal), ticket_id)
+    return support_service.tickets.respond_to_resolution_for_customer(
+        db,
+        ticket,
+        confirm=False,
+        reason=payload.reason,
     )
 
 

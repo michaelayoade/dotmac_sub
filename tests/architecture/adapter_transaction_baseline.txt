@@ -86,7 +86,6 @@ rollback 2 app/tasks/ont_reconcile.py
 rollback 2 app/tasks/ont_runtime_status.py
 rollback 2 app/tasks/ont_signal_observations.py
 rollback 1 app/tasks/profile_sync.py
-rollback 2 app/tasks/projects.py
 rollback 2 app/tasks/quotes.py
 rollback 3 app/tasks/radius.py
 rollback 3 app/tasks/radius_health.py
@@ -102,7 +101,6 @@ rollback 3 app/tasks/uisp_control.py
 rollback 4 app/tasks/uisp_ip_backfill.py
 rollback 1 app/tasks/unmatched_radio.py
 rollback 1 app/tasks/vacation_holds.py
-rollback 2 app/tasks/work_orders.py
 rollback 2 app/web/admin/billing_accounts.py
 rollback 2 app/web/admin/billing_consolidated.py
 rollback 2 app/web/admin/billing_credits.py

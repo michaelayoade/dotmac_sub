@@ -227,6 +227,16 @@ class FieldTransitions:
                 note=event_row.note,
                 actor_id=profile.system_user_id or profile.person_id,
             )
+        if event_value in {"en_route", "arrived", "complete", "unable_to_complete"}:
+            from app.services import customer_experience_communications
+
+            db.flush()
+            customer_experience_communications.request_field_event(
+                db,
+                work_order=row,
+                event=event_value,
+                field_event_id=event_row.id,
+            )
         try:
             db.commit()
         except IntegrityError:

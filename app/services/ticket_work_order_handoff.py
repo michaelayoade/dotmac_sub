@@ -17,6 +17,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType, AuditEvent
+from app.models.project import ProjectTask
 from app.models.service_team import ServiceTeam, ServiceTeamMember
 from app.models.support import Ticket, TicketStatus
 from app.models.work_order import WorkOrder
@@ -226,12 +227,34 @@ def issue_work_order(
 
     from app.services import work_order_commands
 
+    project_id = payload.project_id
+    if payload.project_task_id is not None:
+        project_task = db.get(ProjectTask, payload.project_task_id)
+        if project_task is None or not project_task.is_active:
+            raise TicketWorkOrderHandoffError(
+                "project_task_not_found", "Project task not found", kind="not_found"
+            )
+        if project_task.ticket_id != ticket.id:
+            raise TicketWorkOrderHandoffError(
+                "project_task_ticket_mismatch",
+                "Link this ticket to the project task before issuing field work",
+                kind="invalid",
+            )
+        if project_id is not None and project_id != project_task.project_id:
+            raise TicketWorkOrderHandoffError(
+                "project_task_project_mismatch",
+                "Project task does not belong to the selected project",
+                kind="invalid",
+            )
+        project_id = project_task.project_id
+
     work_order = work_order_commands.work_order_commands.create(
         db,
         WorkOrderHeaderCreate(
             title=payload.title or f"Field action — {ticket.title}"[:200],
             subscriber_id=subscriber_id,
-            project_id=payload.project_id,
+            project_id=project_id,
+            project_task_id=payload.project_task_id,
             requires_as_built_evidence=payload.requires_as_built_evidence,
             description=scope_description,
             status="draft",
@@ -274,6 +297,10 @@ def issue_work_order(
         metadata={
             "owner": "support.ticket_work_order_handoff",
             "work_order_id": work_order.public_id,
+            "project_id": str(work_order.project_id) if work_order.project_id else None,
+            "project_task_id": str(work_order.project_task_id)
+            if work_order.project_task_id
+            else None,
             "assigned_team_id": str(ticket.service_team_id),
             "reason": payload.reason,
             "transport_request_id": request_id,

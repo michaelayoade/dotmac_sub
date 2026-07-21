@@ -1,7 +1,7 @@
 """Work-order headers and their field-execution activity.
 
-Sub owns work orders. ``public_id`` is the identity; ``project_id`` and
-``origin_ticket_id`` are native relationships; ``crm_work_order_id`` is nullable import
+Sub owns work orders. ``public_id`` is the identity; ``project_id``,
+``project_task_id`` and ``origin_ticket_id`` are native relationships; ``crm_work_order_id`` is nullable import
 provenance and is NULL for natively created work orders; ``crm_project_id`` is
 legacy project provenance and never a native join key. Field activity (worklogs, notes,
 attachments, materials, movements, fiber tests, chat, job events) hangs off
@@ -56,6 +56,14 @@ class WorkOrder(Base):
     project_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("projects.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    # Optional execution scope. One project task may own many field visits;
+    # this root FK is written only by operations.work_order_commands.
+    project_task_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("project_tasks.id", ondelete="RESTRICT"),
         nullable=True,
         index=True,
     )
@@ -119,22 +127,13 @@ class WorkOrder(Base):
     )
 
     project = relationship("Project", back_populates="work_orders")
+    project_task = relationship("ProjectTask", back_populates="work_orders")
     origin_ticket = relationship("Ticket", foreign_keys=[origin_ticket_id])
 
-
-class WorkOrderSyncState(Base):
-    """Per-subscriber reconcile marker — drives the lazy on-view refresh TTL even
-    when the subscriber has zero work orders."""
-
-    __tablename__ = "work_order_sync_state"
-
-    subscriber_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("subscribers.id", ondelete="CASCADE"),
-        primary_key=True,
-    )
-    synced_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
-        onupdate=lambda: datetime.now(UTC),
-    )
+    @property
+    def technician_rating(self) -> int | None:
+        """Canonical customer rating projected from typed metadata."""
+        metadata = self.metadata_ if isinstance(self.metadata_, dict) else {}
+        feedback = metadata.get("technician_rating")
+        rating = feedback.get("rating") if isinstance(feedback, dict) else None
+        return int(rating) if isinstance(rating, int | float) else None

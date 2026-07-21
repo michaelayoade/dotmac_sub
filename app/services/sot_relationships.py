@@ -537,6 +537,41 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="customer.experience_lifecycle",
+                module="app.services.customer_experience_lifecycle",
+                owns=(
+                    "read-only Project to ProjectTask to WorkOrder to Ticket composition",
+                    "customer experience-state projection",
+                    "server-owned customer self-care action projection",
+                ),
+                depends_on=(
+                    "customer.identity_scope",
+                    "operations.project_lifecycle",
+                    "operations.work_orders",
+                    "support.ticket_lifecycle",
+                ),
+                notes=(
+                    "This owner composes native Sub state and never mutates a "
+                    "domain root. Customer, reseller, field, web, and mobile "
+                    "surfaces consume the typed projection without CRM mirror "
+                    "fallbacks or client-side action eligibility decisions."
+                ),
+            ),
+            SOTService(
+                name="customer.work_order_selfcare",
+                module="app.services.customer_work_order_selfcare",
+                owns=(
+                    "subscriber-scoped live technician-location read",
+                    "canonical customer technician rating",
+                ),
+                depends_on=(
+                    "customer.identity_scope",
+                    "operations.work_order_commands",
+                    "operations.work_orders",
+                    "observability.audit_log",
+                ),
+            ),
+            SOTService(
                 name="subscriber.growth_reports",
                 module="app.services.subscriber_growth",
                 owns=(
@@ -4151,6 +4186,27 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="communications.customer_experience_intents",
+                module="app.services.customer_experience_communications",
+                owns=(
+                    "customer-work lifecycle communication intent names",
+                    "customer-work communication content and native lineage metadata",
+                    "customer-work communication dedupe identities",
+                ),
+                depends_on=(
+                    "communications.intents",
+                    "customer.experience_lifecycle",
+                    "operations.field_completion",
+                    "support.ticket_lifecycle",
+                ),
+                notes=(
+                    "This service requests delivery outcomes only. The intent "
+                    "control plane expands primary and authorized-contact "
+                    "recipients, resolves email/direct WhatsApp/push channels, "
+                    "applies suppressions and preferences, and owns delivery state."
+                ),
+            ),
+            SOTService(
                 name="communications.ephemeral_actions",
                 module="app.services.ephemeral_communication_actions",
                 owns=(
@@ -4467,6 +4523,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "ticket status vocabulary",
                     "guarded ticket status transitions",
                     "ticket lifecycle timestamps and consequences",
+                    "signed-link and authenticated resolution confirmation/dispute",
                 ),
             ),
             SOTService(
@@ -4515,7 +4572,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 notes=(
                     "An active member of the ticket's assigned team explicitly "
                     "issues each field scope. A ticket may issue many work orders "
-                    "through WorkOrder.origin_ticket_id. Tags and ticket metadata "
+                    "through WorkOrder.origin_ticket_id and may scope one issuance "
+                    "to a ticket-linked ProjectTask. Tags and ticket metadata "
                     "carry no issuance authority. Field completion records an "
                     "internal timeline fact and never closes the ticket."
                 ),
@@ -4635,6 +4693,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "native work-order creation and header commands",
                     "native work-order project binding",
+                    "native work-order project-task binding",
                     "work-order as-built evidence requirement",
                     "work-order assignment decisions and projection",
                     "work-order assignment-queue transitions",
@@ -4649,8 +4708,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "delegate here. The owner validates a read-only assignment "
                     "preview, locks the work order, changes queue and assignee "
                     "projection atomically, records exact actor audit evidence, "
-                    "and treats equivalent retries as replays. CRM mirror ingest "
-                    "remains a provenance importer; field execution statuses remain "
+                    "and treats equivalent retries as replays. Retained CRM ids are "
+                    "provenance only; field execution statuses remain "
                     "owned by operations.field_completion. Native project-binding "
                     "and evidence-policy rejections are transport-neutral "
                     "WorkOrderCommandError values mapped only by the app boundary."
@@ -4666,8 +4725,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
                 notes=(
                     "This registration owns reads only. Native mutations delegate "
-                    "to operations.work_order_commands; imported CRM identifiers "
-                    "remain provenance and never become native command authority."
+                    "to operations.work_order_commands; retained CRM identifiers "
+                    "are provenance and never become native command authority."
                 ),
             ),
             SOTService(
@@ -4931,8 +4990,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "communications.staff_notifications",
                 ),
                 notes=(
-                    "Customer and reseller read authority remains controlled by "
-                    "projects.native_read until the CRM mirror cutover is complete."
+                    "Customer and reseller reads consume the read-only "
+                    "customer.experience_lifecycle projection. There is no CRM "
+                    "project mirror, read-flip fallback, or connector operation "
+                    "that can read project/work-order authority."
                 ),
             ),
             SOTService(
