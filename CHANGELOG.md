@@ -2,6 +2,17 @@
 
 All notable changes to DotMac Sub are tracked here.
 
+## 7.1.1 - 2026-07-22
+
+- Complete the Team Inbox source-of-truth split with typed observation,
+  processing, contact, routing, operator-state, delivery, query, maintenance,
+  health, and realtime ownership contracts.
+- Persist normalized provider observations before applying Inbox consequences,
+  add monotonic delivery receipts and per-operator read cursors, and route
+  outbound replies through transactional communication intents.
+- Move Inbox queue filtering, sorting, pagination, unread state, metrics, and
+  action eligibility into the typed projection owner.
+
 ## 7.1.0 - 2026-07-22
 
 - Version bump.
