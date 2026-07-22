@@ -204,6 +204,8 @@ class FundingChangeRenewalDisposition(enum.StrEnum):
     already_covered = "already_covered"
     missing_price = "missing_price"
     currency_mismatch = "currency_mismatch"
+    non_cash_granted = "non_cash_granted"
+    treatment_blocked = "treatment_blocked"
 
 
 @dataclass(frozen=True)
@@ -217,6 +219,8 @@ class FundingChangeRenewalResult:
     currency_mismatch: int
     disposition: FundingChangeRenewalDisposition
     renewals: tuple[PrepaidServiceRenewedOutcome, ...] = ()
+    non_cash_granted: int = 0
+    treatment_blocked: int = 0
 
 
 def _subscription_for_request(
@@ -698,6 +702,14 @@ def apply_due_prepaid_service_after_funding_change(
         )
 
     from app.services.billing_automation import _period_end
+    from app.services.subscription_billing_grants import (
+        SubscriptionBillingGrantError,
+        stage_subscription_billing_grant,
+    )
+    from app.services.subscription_billing_treatments import (
+        SubscriptionBillingTreatmentError,
+        resolve_subscription_billing_treatments,
+    )
 
     funded = 0
     unfunded = 0
@@ -705,8 +717,39 @@ def apply_due_prepaid_service_after_funding_change(
     missing_price = 0
     currency_mismatch = 0
     renewals: list[PrepaidServiceRenewedOutcome] = []
+    non_cash_granted = 0
+    treatment_blocked = 0
     paid_day = evaluated_at.replace(hour=0, minute=0, second=0, microsecond=0)
+    treatment_decisions = resolve_subscription_billing_treatments(
+        db, due_subscriptions, as_of=evaluated_at
+    )
     for subscription in due_subscriptions:
+        treatment = treatment_decisions[subscription.id]
+        if treatment.suppress_customer_billing:
+            if not treatment.grantable:
+                treatment_blocked += 1
+                continue
+            anchor = _utc(subscription.next_billing_at or paid_day)
+            period_start = max(anchor, paid_day, _utc(treatment.starts_at or paid_day))
+            period_end = _period_end(period_start, BillingCycle.monthly)
+            try:
+                stage_subscription_billing_grant(
+                    db,
+                    subscription=subscription,
+                    decision=treatment,
+                    starts_at=period_start,
+                    ends_at=period_end,
+                    actor="system:prepaid_service_renewals",
+                    correlation_id=trigger_payment_id,
+                )
+            except (
+                SubscriptionBillingGrantError,
+                SubscriptionBillingTreatmentError,
+            ):
+                treatment_blocked += 1
+                continue
+            non_cash_granted += 1
+            continue
         charge = resolve_prepaid_monthly_charge(db, subscription, evaluated_at)
         if charge is None:
             missing_price += 1
@@ -766,7 +809,11 @@ def apply_due_prepaid_service_after_funding_change(
 
     db.flush()
     disposition = (
-        FundingChangeRenewalDisposition.funded
+        FundingChangeRenewalDisposition.non_cash_granted
+        if non_cash_granted
+        else FundingChangeRenewalDisposition.treatment_blocked
+        if treatment_blocked
+        else FundingChangeRenewalDisposition.funded
         if funded
         else FundingChangeRenewalDisposition.already_covered
         if already_covered
@@ -786,6 +833,8 @@ def apply_due_prepaid_service_after_funding_change(
         currency_mismatch=currency_mismatch,
         disposition=disposition,
         renewals=tuple(renewals),
+        non_cash_granted=non_cash_granted,
+        treatment_blocked=treatment_blocked,
     )
 
 
@@ -812,21 +861,6 @@ def run_due_prepaid_service_renewals(
     )
 
     effective_at = _utc(run_at or datetime.now(UTC))
-    authority = authority_cutover_batch(db)
-    if authority is None:
-        return {
-            "prepaid_renewals_scanned": 0,
-            "prepaid_renewals_funded": 0,
-            "prepaid_renewals_unfunded": 0,
-            "prepaid_renewals_already_covered": 0,
-            "prepaid_renewals_stale_anchor": 0,
-            "prepaid_renewals_missing_price": 0,
-            "prepaid_renewals_quarantined": 0,
-            "prepaid_renewals_missing_baseline": 0,
-            "prepaid_renewals_restored": 0,
-            "prepaid_renewals_skipped": "authority_not_materialized",
-        }
-
     subscriptions = list(
         db.scalars(
             select(Subscription)
@@ -842,6 +876,18 @@ def run_due_prepaid_service_renewals(
             .order_by(Subscription.next_billing_at, Subscription.id)
         ).all()
     )
+    from app.services.subscription_billing_grants import (
+        SubscriptionBillingGrantError,
+        stage_subscription_billing_grant,
+    )
+    from app.services.subscription_billing_treatments import (
+        SubscriptionBillingTreatmentError,
+        resolve_subscription_billing_treatments,
+    )
+
+    treatment_decisions = resolve_subscription_billing_treatments(
+        db, subscriptions, as_of=effective_at
+    )
     summary: dict[str, int | str] = {
         "prepaid_renewals_scanned": len(subscriptions),
         "prepaid_renewals_funded": 0,
@@ -852,13 +898,65 @@ def run_due_prepaid_service_renewals(
         "prepaid_renewals_quarantined": 0,
         "prepaid_renewals_missing_baseline": 0,
         "prepaid_renewals_restored": 0,
+        "prepaid_renewals_non_cash_granted": 0,
+        "prepaid_renewals_treatment_blocked": 0,
     }
+    chargeable_subscriptions: list[Subscription] = []
+    for subscription in subscriptions:
+        next_billing_at = subscription.next_billing_at
+        if next_billing_at is None:
+            continue
+        treatment = treatment_decisions[subscription.id]
+        if not treatment.suppress_customer_billing:
+            chargeable_subscriptions.append(subscription)
+            continue
+        if not treatment.grantable:
+            summary["prepaid_renewals_treatment_blocked"] = (
+                int(summary["prepaid_renewals_treatment_blocked"]) + 1
+            )
+            continue
+        period_start = max(
+            _utc(next_billing_at), _utc(treatment.starts_at or next_billing_at)
+        )
+        period_end = _period_end(period_start, BillingCycle.monthly)
+        if dry_run:
+            summary["prepaid_renewals_non_cash_granted"] = (
+                int(summary["prepaid_renewals_non_cash_granted"]) + 1
+            )
+            continue
+        try:
+            stage_subscription_billing_grant(
+                db,
+                subscription=subscription,
+                decision=treatment,
+                starts_at=period_start,
+                ends_at=period_end,
+                actor="system:prepaid_service_renewals",
+            )
+        except (
+            SubscriptionBillingGrantError,
+            SubscriptionBillingTreatmentError,
+        ):
+            summary["prepaid_renewals_treatment_blocked"] = (
+                int(summary["prepaid_renewals_treatment_blocked"]) + 1
+            )
+            continue
+        summary["prepaid_renewals_non_cash_granted"] = (
+            int(summary["prepaid_renewals_non_cash_granted"]) + 1
+        )
+
+    authority = authority_cutover_batch(db)
+    if authority is None:
+        summary["prepaid_renewals_skipped"] = "authority_not_materialized"
+        db.flush()
+        return summary
+
     quarantined_account_ids = prepaid_funding_quarantined_account_ids(
         db,
-        {subscription.subscriber_id for subscription in subscriptions},
+        {subscription.subscriber_id for subscription in chargeable_subscriptions},
     )
     authority_at = _utc(authority.position_at)
-    for subscription in subscriptions:
+    for subscription in chargeable_subscriptions:
         if subscription.subscriber_id in quarantined_account_ids:
             summary["prepaid_renewals_quarantined"] = (
                 int(summary["prepaid_renewals_quarantined"]) + 1

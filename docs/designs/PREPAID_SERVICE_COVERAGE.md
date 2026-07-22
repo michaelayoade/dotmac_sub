@@ -10,8 +10,10 @@ money, restores access, or suspends service.
 
 Positive current-coverage evidence, in priority order, is:
 
-1. An active `ServiceEntitlement` spanning the decision time. New service
-   periods must use this evidence.
+1. An active `ServiceEntitlement` spanning the decision time. It is linked to
+   either the exact customer-funded ledger entry or an append-only
+   `SubscriptionBillingGrant`; new service periods must use one of these exact
+   sources.
 2. An applied `ServiceExtensionEntry` spanning the exact added interval
    `[previous_next_billing_at, new_next_billing_at)`. This is a non-financial
    service grant and does not fabricate a funded entitlement.

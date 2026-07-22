@@ -237,6 +237,7 @@ def _process_account(
                 required_balance=decision.required_balance,
                 currency=decision.currency,
                 covered_subscription_ids=decision.covered_subscription_ids,
+                non_billable_subscription_ids=(decision.non_billable_subscription_ids),
                 actionable_uncovered_subscription_ids=(
                     decision.actionable_uncovered_subscription_ids
                 ),

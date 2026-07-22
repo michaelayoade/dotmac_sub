@@ -57,6 +57,8 @@ class EventType(enum.Enum):
     payment_provider_event_failed = "payment_provider_event.failed"
     account_credit_deposited = "account_credit.deposited"
     prepaid_service_renewed = "prepaid_service.renewed"
+    subscription_billing_treatment_changed = "subscription_billing_treatment.changed"
+    subscription_service_granted = "subscription_service.granted"
 
     # Billing - Bank-transfer evidence lifecycle
     payment_proof_submitted = "payment_proof.submitted"

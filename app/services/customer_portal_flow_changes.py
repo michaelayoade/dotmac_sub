@@ -25,7 +25,10 @@ from app.services.customer_financial_position import (
     CustomerFinancialPosition,
     get_customer_financial_position,
 )
-from app.services.customer_portal_context import get_available_portal_offers
+from app.services.customer_portal_context import (
+    get_available_portal_offers,
+    offer_has_positive_recurring_price,
+)
 from app.services.customer_portal_flow_common import (
     _compute_total_pages,
     _resolve_next_billing_date,
@@ -234,6 +237,8 @@ def _build_migration_offers(
     )
     offers: list[CatalogOffer] = []
     for offer in all_portal_offers:
+        if not offer_has_positive_recurring_price(offer):
+            continue
         family = str(offer.plan_family or "").strip().lower()
         if not family or family == str(current_offer.plan_family or "").strip().lower():
             continue

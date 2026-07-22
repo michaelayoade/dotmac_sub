@@ -2633,6 +2633,18 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "GET /api/v1/billing-treatments/subscriptions/{subscription_id}": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:subscription_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "10d198595588",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "GET /api/v1/branding/profiles": {
    "params": [
     "header:authorization",
@@ -13137,6 +13149,42 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "POST /api/v1/billing-treatments/subscriptions/{subscription_id}": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:subscription_id!"
+   ],
+   "request": "c98fdcab19e2",
+   "responses": {
+    "201": "d4ab14812146",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/billing-treatments/subscriptions/{subscription_id}/preview": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:subscription_id!"
+   ],
+   "request": "e225ad5a5e48",
+   "responses": {
+    "200": "da38b57fc854",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/billing-treatments/{arrangement_id}/revoke": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:arrangement_id!"
+   ],
+   "request": "046005b53bf8",
+   "responses": {
+    "200": "d4ab14812146",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "POST /api/v1/campaigns": {
    "params": [
     "header:authorization",
@@ -18250,6 +18298,14 @@
   "BillingMode": "af626e02711a",
   "BillingRunRead": "5db064304690",
   "BillingRunStatus": "8828c76039be",
+  "BillingTreatmentConfirmRequest": "ec34699f82e3",
+  "BillingTreatmentOutcomeRead": "526cbcc2433c",
+  "BillingTreatmentPreviewRead": "ca2b05f2c497",
+  "BillingTreatmentPreviewRequest": "b9767e9df386",
+  "BillingTreatmentRead": "461f97330770",
+  "BillingTreatmentReason": "e4166cf73bcd",
+  "BillingTreatmentRevokeRequest": "e8dc37d14cc7",
+  "BillingTreatmentStatus": "5b518a7d3842",
   "Body_import_subscriber_custom_fields_api_v1_imports_subscriber_custom_fields_post": "5a91e05ec795",
   "Body_my_add_ticket_comment_api_v1_me_support_tickets__ticket_id__comments_post": "d1a3a0cea554",
   "Body_my_create_ticket_api_v1_me_support_tickets_post": "2ae0ec94443b",
@@ -19299,6 +19355,7 @@
   "SubscriptionAddOnCreate": "254584caf81b",
   "SubscriptionAddOnRead": "fc2a625323ad",
   "SubscriptionAddOnUpdate": "3eb9493528e7",
+  "SubscriptionBillingTreatment": "6f669e9e59a6",
   "SubscriptionCreate": "dd2fcd35ad82",
   "SubscriptionDefaultsResponse": "3e153d9f51b0",
   "SubscriptionRead": "4217aba4c23f",

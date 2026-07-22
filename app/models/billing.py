@@ -2057,11 +2057,11 @@ class AccountAdjustment(Base):
 
 
 class ServiceEntitlement(Base):
-    """Funded prepaid service period.
+    """Exact paid or explicitly granted service period.
 
     Money remains represented by invoices, payments, allocations, and ledger
     entries. This row is the prepaid access proof created only after a service
-    period has been funded.
+    period has been funded or approved through a non-cash billing treatment.
     """
 
     __tablename__ = "service_entitlements"
@@ -2095,6 +2095,17 @@ class ServiceEntitlement(Base):
                 "status = 'active' AND source_ledger_entry_id IS NOT NULL"
             ),
         ),
+        Index(
+            "uq_service_entitlements_active_billing_grant",
+            "source_billing_grant_id",
+            unique=True,
+            postgresql_where=text(
+                "status = 'active' AND source_billing_grant_id IS NOT NULL"
+            ),
+            sqlite_where=text(
+                "status = 'active' AND source_billing_grant_id IS NOT NULL"
+            ),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -2114,6 +2125,10 @@ class ServiceEntitlement(Base):
     )
     source_ledger_entry_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("ledger_entries.id")
+    )
+    source_billing_grant_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("subscription_billing_grants.id", ondelete="RESTRICT"),
     )
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -2139,6 +2154,9 @@ class ServiceEntitlement(Base):
     source_invoice = relationship("Invoice")
     source_invoice_line = relationship("InvoiceLine")
     source_ledger_entry = relationship("LedgerEntry")
+    source_billing_grant = relationship(
+        "SubscriptionBillingGrant", back_populates="entitlement"
+    )
 
 
 class TaxRate(Base):

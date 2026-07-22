@@ -723,6 +723,20 @@ def _validate_plan_change(
     - Regional availability (if offer has region_zone_id)
     - Billing mode compatibility (prepaid ↔ prepaid, postpaid ↔ postpaid)
     """
+    from app.services.subscription_billing_treatments import (
+        subscription_has_open_billing_treatment,
+    )
+
+    if subscription_has_open_billing_treatment(db, subscription.id):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This service has an approved complimentary or sponsored billing "
+                "treatment. Revoke and reapprove that treatment before changing "
+                "the plan."
+            ),
+        )
+
     new_offer = db.get(CatalogOffer, new_offer_id)
     if not new_offer:
         raise HTTPException(status_code=404, detail="Target offer not found")

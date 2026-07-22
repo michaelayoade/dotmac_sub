@@ -1764,6 +1764,16 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.billing,
+        key="subscription_billing_treatment_max_days",
+        env_var="BILLING_SUBSCRIPTION_TREATMENT_MAX_DAYS",
+        value_type=SettingValueType.integer,
+        default=366,
+        min_value=1,
+        max_value=366,
+        label="Subscription Billing Treatment Maximum Approval Days",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
         key="topup_reconciliation_stale_minutes",
         env_var="BILLING_TOPUP_RECONCILIATION_STALE_MINUTES",
         value_type=SettingValueType.integer,

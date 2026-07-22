@@ -212,6 +212,47 @@ def test_get_available_portal_offers_only_returns_same_family_compatible_offers(
     }
 
 
+def test_zero_price_offer_is_not_available_for_customer_plan_change(
+    db_session, subscriber
+):
+    current_offer = _make_offer(
+        db_session,
+        name="Unlimited Paid",
+        amount=Decimal("100.00"),
+        plan_family="unlimited",
+    )
+    zero_price_offer = _make_offer(
+        db_session,
+        name="Unlimited Internal",
+        amount=Decimal("0.00"),
+        plan_family="unlimited",
+    )
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current_offer,
+        next_billing_at=datetime(2026, 6, 1, tzinfo=UTC),
+        start_at=datetime(2026, 5, 1, tzinfo=UTC),
+    )
+
+    offers = get_available_portal_offers(db_session, subscription)
+    assert zero_price_offer.id not in {offer.id for offer in offers}
+
+    with pytest.raises(ValueError, match="not available for self-service change"):
+        apply_instant_plan_change(
+            db_session,
+            {"account_id": str(subscriber.id), "subscriber_id": str(subscriber.id)},
+            str(subscription.id),
+            str(zero_price_offer.id),
+            preview_fingerprint="x" * 64,
+            idempotency_key=f"test-plan-{uuid4()}",
+            confirmation_origin="test",
+        )
+
+    db_session.refresh(subscription)
+    assert subscription.offer_id == current_offer.id
+
+
 def test_change_plan_page_separates_migration_offers(db_session, subscriber):
     from app.services import customer_portal_flow_changes as flow
 

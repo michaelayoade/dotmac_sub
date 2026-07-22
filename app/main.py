@@ -99,6 +99,7 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.notifications", "router", "api", "perm:monitoring"),
     ("app.api.external", "router", "api", "admin"),
     ("app.api.billing", "router", "api", "user"),
+    ("app.api.billing_treatments", "router", "api", "user"),
     ("app.api.files", "router", "api", "admin"),
     ("app.api.catalog", "router", "api", "user"),
     ("app.api.auth", "router", "api", "admin"),

@@ -165,6 +165,7 @@ class PrepaidFundingDecision:
     currency: str
     configured_reserve_target: Decimal = Decimal("0.00")
     covered_subscription_ids: tuple[UUID, ...] = ()
+    non_billable_subscription_ids: tuple[UUID, ...] = ()
     actionable_uncovered_subscription_ids: tuple[UUID, ...] = ()
     unresolved_projection_subscription_ids: tuple[UUID, ...] = ()
 
@@ -180,9 +181,8 @@ class PrepaidFundingDecision:
         if self.unresolved_projection_subscription_ids:
             return False
         if (
-            self.covered_subscription_ids
-            and not self.actionable_uncovered_subscription_ids
-        ):
+            self.covered_subscription_ids or self.non_billable_subscription_ids
+        ) and not self.actionable_uncovered_subscription_ids:
             return True
         return self.available_balance >= self.required_balance
 
@@ -239,6 +239,7 @@ def resolve_prepaid_funding(
         currency=currency,
         configured_reserve_target=threshold.configured_minimum,
         covered_subscription_ids=threshold.covered_subscription_ids,
+        non_billable_subscription_ids=threshold.non_billable_subscription_ids,
         actionable_uncovered_subscription_ids=(
             threshold.actionable_uncovered_subscription_ids
         ),
