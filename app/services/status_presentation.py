@@ -354,6 +354,12 @@ _ACCESS_SESSION_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
     "inactive": ("Not connected", StatusTone.neutral, StatusIcon.minus),
 }
 
+_SERVICE_ACCESS_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    "available": ("Available", StatusTone.positive, StatusIcon.check),
+    "restricted": ("Restricted", StatusTone.warning, StatusIcon.alert),
+    "unavailable": ("Unavailable", StatusTone.neutral, StatusIcon.minus),
+}
+
 _WITHHOLDING_TAX_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
     WithholdingTaxStatus.pending.value: (
         "Pending certificate",
@@ -702,6 +708,11 @@ def connection_health_status_presentation(
 def access_session_status_presentation(status: str | None) -> StatusPresentation:
     """Project the admin RADIUS-session observation without deriving health."""
     return _presentation(_status_value(status), _ACCESS_SESSION_PRESENTATIONS)
+
+
+def service_access_status_presentation(status: str | None) -> StatusPresentation:
+    """Project an already-resolved service-access availability state."""
+    return _presentation(_status_value(status), _SERVICE_ACCESS_PRESENTATIONS)
 
 
 def withholding_tax_status_presentation(

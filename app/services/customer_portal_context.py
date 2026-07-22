@@ -15,9 +15,7 @@ from app.models.billing import Invoice, InvoiceStatus
 from app.models.catalog import (
     CatalogOffer,
     OfferStatus,
-    PriceType,
     Subscription,
-    SubscriptionStatus,
 )
 from app.models.provisioning import AppointmentStatus, InstallAppointment, ServiceOrder
 from app.models.subscriber import (
@@ -42,14 +40,10 @@ from app.services.customer_context import (
 from app.services.customer_financial_position import get_customer_financial_position
 from app.services.customer_support_links import ticket_customer_link_filter
 from app.services.invoice_classification import collectible_ar_invoice_filter
-from app.services.network.radius_sessions import live_framed_ips_by_subscription
 from app.services.prepaid_funding_reconstruction import (
     PrepaidFundingBaselineMissingError,
 )
-from app.services.status_presentation import (
-    account_status_presentation,
-    subscription_status_presentation,
-)
+from app.services.status_presentation import account_status_presentation
 
 logger = logging.getLogger(__name__)
 
@@ -142,18 +136,6 @@ def get_dashboard_template_context(db: Session, session: dict) -> tuple[str, dic
     )
 
 
-def _live_framed_ips(db: Session, subscription_ids: list) -> dict:
-    """Framed IP of each subscription's open accounting session, newest first.
-
-    The live session address covers dynamically-addressed plans, where the
-    subscription's own ipv4_address is empty; callers fall back to the
-    assigned IP when there is no open session.
-    """
-    if not subscription_ids:
-        return {}
-    return live_framed_ips_by_subscription(db, subscription_ids)
-
-
 def _format_address(address) -> str:
     if not address:
         return "No address on file"
@@ -232,151 +214,6 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
         elif subscriber.first_name:
             user = {"first_name": subscriber.first_name}
 
-    # Track whether the headline account stats loaded cleanly so the template
-    # can warn the customer that figures may be incomplete instead of silently
-    # showing zeros.
-    stats_error = False
-
-    invoices = []
-    if account_id:
-        try:
-            invoices = billing_service.invoices.list(
-                db=db,
-                account_id=account_id,
-                status=None,
-                is_active=None,
-                order_by="issued_at",
-                order_dir="desc",
-                limit=25,
-                offset=0,
-            )
-        except Exception:
-            logger.warning(
-                "Failed to load dashboard invoices for account %s",
-                account_id,
-                exc_info=True,
-            )
-            stats_error = True
-
-    # An unknown balance must never render as 0.00 "good standing": track
-    # whether it actually loaded so the template can show "unavailable" instead
-    # of a reassuring zero (unknown != zero).
-    current_balance = 0.0
-    balance_available = False
-    if account_id:
-        try:
-            current_balance = float(get_available_balance(db, str(account_id)))
-            balance_available = True
-        except Exception:
-            logger.warning(
-                "Failed to resolve available balance for dashboard account %s",
-                account_id,
-                exc_info=True,
-            )
-            stats_error = True
-    next_bill_amount = float(invoices[0].total or 0) if invoices else 0.0
-    next_bill_date = None
-
-    subscriptions = []
-    if account_id:
-        try:
-            subscriptions = catalog_service.subscriptions.list(
-                db=db,
-                subscriber_id=account_id,
-                offer_id=None,
-                status=SubscriptionStatus.active.value,
-                order_by="created_at",
-                order_dir="desc",
-                limit=25,
-                offset=0,
-            )
-        except Exception:
-            logger.warning(
-                "Failed to load dashboard subscriptions for account %s",
-                account_id,
-                exc_info=True,
-            )
-            stats_error = True
-
-    if subscriptions:
-        next_bill_date = subscriptions[0].next_billing_at
-    if not next_bill_date and invoices:
-        next_bill_date = invoices[0].due_at or invoices[0].issued_at
-    has_next_bill = bool(next_bill_date or next_bill_amount)
-
-    account = SimpleNamespace(
-        balance=current_balance,
-        balance_available=balance_available,
-        next_bill_amount=next_bill_amount,
-        next_bill_date=next_bill_date,
-        has_next_bill=has_next_bill,
-    )
-
-    services = []
-    live_ips = _live_framed_ips(db, [s.id for s in subscriptions])
-    for subscription in subscriptions:
-        offer = subscription.offer
-        speed = "N/A"
-        if offer and (offer.speed_download_mbps or offer.speed_upload_mbps):
-            speed = f"{offer.speed_download_mbps or '-'}/{offer.speed_upload_mbps or '-'} Mbps"
-        address = _format_address(subscription.service_address)
-        recurring_prices = []
-        if offer:
-            recurring_prices = [
-                price
-                for price in offer.prices
-                if price.price_type == PriceType.recurring and price.is_active
-            ]
-        monthly_cost = float(recurring_prices[0].amount) if recurring_prices else 0.0
-        services.append(
-            SimpleNamespace(
-                name=offer.name if offer else "Service",
-                speed=speed,
-                address=address,
-                ip_address=live_ips.get(subscription.id) or subscription.ipv4_address,
-                status=subscription.status.value if subscription.status else "pending",
-                status_presentation=subscription_status_presentation(
-                    subscription.status or "pending"
-                ),
-                monthly_cost=monthly_cost,
-            )
-        )
-
-    primary_service = (
-        services[0]
-        if services
-        else SimpleNamespace(
-            status="inactive",
-            plan_name="No active plan",
-            status_presentation=subscription_status_presentation("inactive"),
-        )
-    )
-    if services:
-        primary_service = SimpleNamespace(
-            status=services[0].status,
-            plan_name=services[0].name,
-            status_presentation=services[0].status_presentation,
-        )
-
-    # Service-access is owned by the access resolver and kept distinct from
-    # subscription lifecycle and financial state: a subscription can read
-    # "active" while access is restricted for non-payment. "known" stays False
-    # when the resolver can't be reached so the template shows "unknown"
-    # rather than implying access is fine.
-    service_access = SimpleNamespace(known=False, restricted=False)
-    if subscriber_id:
-        try:
-            service_access = SimpleNamespace(
-                known=True,
-                restricted=bool(customer_is_restricted(db, subscriber_id)),
-            )
-        except Exception:
-            logger.warning(
-                "Failed to resolve service access for subscriber %s",
-                subscriber_id,
-                exc_info=True,
-            )
-
     open_count = 0
     if account_id:
         try:
@@ -400,47 +237,20 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
         except Exception:
             open_count = 0
 
-    # Billing mode and available balance
-    billing_mode = "postpaid"
-    prepaid_balance = current_balance
-    if subscriber and hasattr(subscriber, "billing_mode") and subscriber.billing_mode:
-        billing_mode = subscriber.billing_mode.value
+    from app.services.portal_account_health import build_portal_account_health
 
-    # Get subscriber's ONT devices
-    devices = []
-    if subscriber_id:
-        devices = _get_subscriber_devices(db, subscriber_id)
-
-    try:
-        amount_due = (
-            get_total_outstanding_balance(db, account_id) if account_id else 0.0
-        )
-    except Exception:
-        logger.warning(
-            "Failed to load outstanding balance for account %s",
-            account_id,
-            exc_info=True,
-        )
-        amount_due = 0.0
-        stats_error = True
+    health_account_id = account_id or subscriber_id
+    account_health = (
+        build_portal_account_health(db, coerce_uuid(health_account_id))
+        if health_account_id
+        else None
+    )
 
     return {
         "user": SimpleNamespace(**user),
-        "account": account,
-        "service": primary_service,
-        "service_access": service_access,
-        "services": services,
-        "devices": devices,
+        "account_health": account_health,
         "tickets": SimpleNamespace(open_count=open_count),
-        "recent_activity": [],
-        "billing_mode": billing_mode,
-        "prepaid_balance": prepaid_balance,
-        # Outstanding invoice balance (what the customer owes right now). Drives
-        # the dashboard "Pay Now" panel's one-tap "pay what you owe" prefill.
-        "amount_due": amount_due,
-        # True when a headline figure (invoices/subscriptions/balance) failed to
-        # load — the template surfaces a "couldn't load, refresh" banner.
-        "stats_error": stats_error,
+        "stats_error": account_health is None or account_health.has_partial_data,
     }
 
 

@@ -173,14 +173,7 @@ def build_service_status(db: Session, subscriber_id: str) -> ServiceStatusRespon
         resp.outstanding = outstanding
         resp.oldest_overdue_due_at = oldest_due
 
-    subs = (
-        db.query(Subscription)
-        .filter(Subscription.subscriber_id == coerce_uuid(subscriber_id))
-        .filter(Subscription.status.in_(_CURRENT_STATUSES))
-        .options(selectinload(Subscription.offer))
-        .order_by(Subscription.start_at.desc().nullslast())
-        .all()
-    )
+    subs = list_current_service_subscriptions(db, subscriber_id)
     lock_reasons = _active_lock_reasons(db, [subscription.id for subscription in subs])
 
     for s in subs:
@@ -223,6 +216,20 @@ def build_service_status(db: Session, subscriber_id: str) -> ServiceStatusRespon
         )
     resp.primary_action = _primary_action(resp.services, resp.currency)
     return resp
+
+
+def list_current_service_subscriptions(
+    db: Session, subscriber_id: str
+) -> list[Subscription]:
+    """Return the exact current-service cohort used by status projections."""
+    return (
+        db.query(Subscription)
+        .filter(Subscription.subscriber_id == coerce_uuid(subscriber_id))
+        .filter(Subscription.status.in_(_CURRENT_STATUSES))
+        .options(selectinload(Subscription.offer))
+        .order_by(Subscription.start_at.desc().nullslast())
+        .all()
+    )
 
 
 def _active_lock_reasons(

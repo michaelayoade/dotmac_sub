@@ -29,7 +29,7 @@ class Subscription {
     this.serverIsExpired,
     this.hasServerExpiry = false,
   }) : statusPresentation =
-            statusPresentation ?? StatusPresentation.neutralFallback(status);
+           statusPresentation ?? StatusPresentation.neutralFallback(status);
 
   final String id;
   final String accountId;
@@ -90,9 +90,10 @@ class Subscription {
 
   /// "Business · fiber" style plan descriptor, when available.
   String? get planType {
-    final parts = [offerServiceType, offerAccessType]
-        .where((e) => e != null && e.isNotEmpty)
-        .toList();
+    final parts = [
+      offerServiceType,
+      offerAccessType,
+    ].where((e) => e != null && e.isNotEmpty).toList();
     return parts.isEmpty ? null : parts.join(' · ');
   }
 
@@ -106,7 +107,7 @@ class Subscription {
   /// authoritative value; fall back to local mode-aware logic when the backend
   /// didn't supply it (older API / offline cache). Note: postpaid and healthy
   /// prepaid have no date expiry — the real prepaid lapse (low balance → grace)
-  /// comes from GET /me/service-status, not from next_billing_at.
+  /// comes from GET /me/account-health, not from next_billing_at.
   DateTime? get expiresAt => hasServerExpiry
       ? serverExpiresAt
       : (hasExpiry ? (endAt ?? nextBillingAt) : null);
@@ -151,7 +152,8 @@ class Subscription {
       status: status,
       statusPresentation: json['status_presentation'] is Map
           ? StatusPresentation.fromJson(
-              (json['status_presentation'] as Map).cast<String, dynamic>())
+              (json['status_presentation'] as Map).cast<String, dynamic>(),
+            )
           : StatusPresentation.neutralFallback(status),
       billingMode: json['billing_mode'] as String? ?? 'prepaid',
       serviceDescription: json['service_description'] as String?,

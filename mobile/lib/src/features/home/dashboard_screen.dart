@@ -5,9 +5,9 @@ import 'package:go_router/go_router.dart';
 import '../../core/formatters.dart';
 import '../../core/semantic_colors.dart';
 import '../auth/biometric_enrollment_prompt.dart';
+import '../../models/account_health.dart';
 import '../../models/project.dart';
 import '../../models/connection_status.dart';
-import '../../models/service_status.dart';
 import '../../models/subscription.dart';
 import '../../models/usage.dart';
 import '../../models/work_order.dart';
@@ -41,9 +41,7 @@ class DashboardScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final me = ref.watch(currentUserProvider);
     final subs = ref.watch(subscriptionsProvider);
-    final serviceStatus = ref.watch(serviceStatusProvider).asData?.value;
-    final invoices = ref.watch(invoicesProvider);
-    final sessions = ref.watch(accountingSessionsProvider);
+    final accountHealth = ref.watch(accountHealthProvider).asData?.value;
     final notifications = ref.watch(notificationsProvider);
     ref.watch(notificationReadMigrationProvider);
 
@@ -64,23 +62,31 @@ class DashboardScreen extends ConsumerWidget {
         orElse: () => pickCurrentService(subList),
       );
     }
-    final currentServiceStatus = currentService == null
+    final currentServiceHealth = currentService == null
         ? null
-        : serviceStatus?.forSubscription(currentService.id);
+        : accountHealth?.forSubscription(currentService.id);
     final unavailableServices =
-        serviceStatus?.unavailableServices ?? const <ServiceStatusItem>[];
-    final statusAction =
-        unavailableServices.isNotEmpty ? serviceStatus?.primaryAction : null;
-
-    final invItems = invoices.asData?.value.items;
-    final outstanding = invItems
-        ?.where((i) => !i.isPaid)
-        .fold<double>(0, (sum, i) => sum + i.balanceDue);
-    final currency = (invItems != null && invItems.isNotEmpty)
-        ? invItems.first.currency
-        : 'NGN';
-
-    final sessItems = sessions.asData?.value.items;
+        accountHealth?.unavailableServices ?? const <AccountServiceHealth>[];
+    final statusAction = unavailableServices.isNotEmpty
+        ? accountHealth?.primaryAction
+        : null;
+    final funding = accountHealth?.financial.prepaidFunding.value;
+    final fundingDisplay = accountHealth == null
+        ? null
+        : funding == null
+        ? '—'
+        : Fmt.moneyCompact(funding.amount, funding.currency);
+    final receivableLanes = accountHealth?.financial.receivables.value;
+    final amountDueDisplay = receivableLanes == null
+        ? null
+        : receivableLanes.length == 1
+        ? Fmt.moneyCompact(
+            receivableLanes.first.outstanding,
+            receivableLanes.first.currency,
+          )
+        : '${receivableLanes.length} currencies';
+    final hasAmountDue =
+        receivableLanes?.any((lane) => lane.outstanding > 0) ?? false;
     // Defined-window total (today) instead of summing the latest 50 sessions.
     final todaySummary = ref.watch(usageSummaryProvider('today')).asData?.value;
     final fup = todaySummary?.fup;
@@ -94,8 +100,6 @@ class DashboardScreen extends ConsumerWidget {
     // missing-data sentinel and must never be replaced with the loaded-session
     // page, retention-limited chart series, or today's different window.
     final dataPeriod = cycleSummary?.authoritativeTotalBytes;
-    // Server-owned account credit balance for the at-a-glance card.
-    final balance = ref.watch(balanceProvider).asData?.value;
     // Peak throughput for the "Peak" tile — shown per direction (↓ download,
     // ↑ upload), subscriber perspective. Prefer the exact billing-cycle peak
     // from the cycle summary; fall back to the ~30d stats window.
@@ -107,13 +111,14 @@ class DashboardScreen extends ConsumerWidget {
     String mbps(double? b) => (b == null || b <= 0)
         ? '—'
         : (b / 1e6).toStringAsFixed(b >= 1e7 ? 0 : 1);
-    final peakHasData = (peakDownBps != null && peakDownBps > 0) ||
+    final peakHasData =
+        (peakDownBps != null && peakDownBps > 0) ||
         (peakUpBps != null && peakUpBps > 0);
     final peakValue = !peakLoaded
         ? null // still loading
         : (!peakHasData
-            ? '—'
-            : '↑${mbps(peakUpBps)} ↓${mbps(peakDownBps)} Mbps');
+              ? '—'
+              : '↑${mbps(peakUpBps)} ↓${mbps(peakDownBps)} Mbps');
 
     // Current period's quota bucket for the current service, when the plan is
     // capped — drives the usage bar on the service card.
@@ -150,19 +155,21 @@ class DashboardScreen extends ConsumerWidget {
     // (a non-active current service). Postpaid has no date expiry at all.
     final daysLeft = currentService?.daysUntilExpiry;
     // Third stat card: expiry countdown for date-expiry plans, else next-bill.
-    final (expiryStatLabel, expiryStatValue) =
-        _expiryOrBillingStat(subList, currentService);
+    final (expiryStatLabel, expiryStatValue) = _expiryOrBillingStat(
+      subList,
+      currentService,
+    );
     String? renewMessage;
-    ServiceStatusAction? renewAction;
+    AccountHealthAction? renewAction;
     if (currentService != null && currentService.isActive) {
       final name = currentService.displayName;
       if (currentService.isExpired) {
         renewMessage = '$name has expired — renew now';
-      } else if (currentServiceStatus?.action?.isFinancial ?? false) {
+      } else if (currentServiceHealth?.nextAction?.isFinancial ?? false) {
         // The real, balance/dunning-driven nudge: a running service heading for
         // a cut the customer can prevent by paying. The cut date (if known)
         // comes from the prepaid grace timer — never from a billing date.
-        renewAction = currentServiceStatus!.action;
+        renewAction = currentServiceHealth!.nextAction;
         renewMessage = renewAction!.message;
       } else if (daysLeft != null && daysLeft >= 0 && daysLeft <= 3) {
         // Contract end approaching (the only genuine date-based expiry).
@@ -171,18 +178,6 @@ class DashboardScreen extends ConsumerWidget {
           1 => '$name expires tomorrow — renew now',
           final d => '$name expires in $d days — renew now',
         };
-      }
-    }
-
-    // Connection status: an open RADIUS accounting session (no end) means the
-    // subscriber is currently online; its start gives the uptime.
-    AccountingSession? activeSession;
-    if (sessItems != null) {
-      for (final s in sessItems) {
-        if (s.isActive) {
-          activeSession = s;
-          break;
-        }
       }
     }
 
@@ -222,16 +217,14 @@ class DashboardScreen extends ConsumerWidget {
       body: RefreshIndicator(
         onRefresh: () async {
           ref.invalidate(subscriptionsProvider);
-          ref.invalidate(serviceStatusProvider);
-          ref.invalidate(invoicesProvider);
-          ref.invalidate(accountingSessionsProvider);
+          ref.invalidate(accountHealthProvider);
           ref.invalidate(usageSummaryProvider('today'));
           ref.invalidate(quotaBucketsProvider);
           ref.invalidate(liveBandwidthProvider);
           ref.invalidate(peakBandwidthProvider);
           await Future.wait([
             ref.read(subscriptionsProvider.future),
-            ref.read(invoicesProvider.future),
+            ref.read(accountHealthProvider.future),
           ]);
         },
         child: ListView(
@@ -240,22 +233,24 @@ class DashboardScreen extends ConsumerWidget {
             const BiometricEnrollmentPrompt(),
             const OfflineBanner(),
             ConnectionBanner(
-              session: activeSession,
-              known: sessions.hasValue,
+              session: currentServiceHealth?.session.isOnline == true
+                  ? currentServiceHealth?.session
+                  : null,
+              known: accountHealth != null,
               serviceActive: currentService?.isActive ?? false,
               ipAddress: currentService?.ipv4Address,
               // Outage-classifier verdict (P4): lets the banner suppress
               // "check your router" during a known area outage and drill into
               // the connection troubleshooter.
-              classifier: ref.watch(connectionStatusProvider).asData?.value,
+              classifier: currentServiceHealth?.connection.value,
             ),
             const SizedBox(height: 12),
             _StatusBanner(
               attentionMessage: unavailableServices.isNotEmpty
                   ? statusAction?.message ??
-                      'A service is unavailable — contact support for help.'
+                        'A service is unavailable — contact support for help.'
                   : null,
-              known: serviceStatus != null,
+              known: accountHealth != null,
               onTap: statusAction == null
                   ? null
                   : () => _openServiceAction(context, statusAction),
@@ -277,86 +272,91 @@ class DashboardScreen extends ConsumerWidget {
             // Live technician visit — a slim banner shown only while a work
             // order is in progress. The full map lives on its own screen
             // (/track/:id) so it doesn't crowd the dashboard.
-            Consumer(builder: (context, ref, _) {
-              final orders =
-                  ref.watch(workOrdersProvider).asData?.value.workOrders ??
-                      const <WorkOrderItem>[];
-              WorkOrderItem? active;
-              for (final w in orders) {
-                if (w.status == 'in_progress') {
-                  active = w;
-                  break;
+            Consumer(
+              builder: (context, ref, _) {
+                final orders =
+                    ref.watch(workOrdersProvider).asData?.value.workOrders ??
+                    const <WorkOrderItem>[];
+                WorkOrderItem? active;
+                for (final w in orders) {
+                  if (w.status == 'in_progress') {
+                    active = w;
+                    break;
+                  }
                 }
-              }
-              if (active == null) return const SizedBox.shrink();
-              final v = active;
-              final scheme = Theme.of(context).colorScheme;
-              final who = v.technicianName ?? 'Your technician';
-              return Padding(
-                padding: const EdgeInsets.only(top: 12),
-                child: Card(
-                  shape: RoundedRectangleBorder(
-                    side: BorderSide(
-                      color: scheme.primary.withValues(alpha: 0.45),
+                if (active == null) return const SizedBox.shrink();
+                final v = active;
+                final scheme = Theme.of(context).colorScheme;
+                final who = v.technicianName ?? 'Your technician';
+                return Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Card(
+                    shape: RoundedRectangleBorder(
+                      side: BorderSide(
+                        color: scheme.primary.withValues(alpha: 0.45),
+                      ),
+                      borderRadius: BorderRadius.circular(12),
                     ),
-                    borderRadius: BorderRadius.circular(12),
+                    child: ListTile(
+                      leading: CircleAvatar(
+                        backgroundColor: scheme.primaryContainer,
+                        foregroundColor: scheme.onPrimaryContainer,
+                        child: const Icon(Icons.engineering_outlined),
+                      ),
+                      title: const Text(
+                        'Technician on the way',
+                        style: TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      subtitle: Text('$who · ${_visitEta(v)}'),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () => context.push('/track/${v.id}'),
+                    ),
                   ),
-                  child: ListTile(
-                    leading: CircleAvatar(
-                      backgroundColor: scheme.primaryContainer,
-                      foregroundColor: scheme.onPrimaryContainer,
-                      child: const Icon(Icons.engineering_outlined),
-                    ),
-                    title: const Text(
-                      'Technician on the way',
-                      style: TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                    subtitle: Text('$who · ${_visitEta(v)}'),
-                    trailing: const Icon(Icons.chevron_right),
-                    onTap: () => context.push('/track/${v.id}'),
-                  ),
-                ),
-              );
-            }),
+                );
+              },
+            ),
             // Installation progress — a modest, secondary banner shown only
             // while an install is under way. Onboarding is a one-time activity,
             // so it's deliberately low-key (muted, no accent) vs. the visit
             // banner; it links to the tracker and disappears once complete.
-            Consumer(builder: (context, ref, _) {
-              final projects =
-                  ref.watch(projectsProvider).asData?.value.projects ??
-                      const <ProjectItem>[];
-              ProjectItem? install;
-              for (final p in projects) {
-                if (p.progressPct < 100) {
-                  install = p;
-                  break;
+            Consumer(
+              builder: (context, ref, _) {
+                final projects =
+                    ref.watch(projectsProvider).asData?.value.projects ??
+                    const <ProjectItem>[];
+                ProjectItem? install;
+                for (final p in projects) {
+                  if (p.progressPct < 100) {
+                    install = p;
+                    break;
+                  }
                 }
-              }
-              if (install == null) return const SizedBox.shrink();
-              final p = install;
-              final scheme = Theme.of(context).colorScheme;
-              final stage = (p.currentStage?.isNotEmpty ?? false)
-                  ? p.currentStage!
-                  : 'Setting up your service';
-              return Padding(
-                padding: const EdgeInsets.only(top: 12),
-                child: Card(
-                  color: scheme.surfaceContainerHighest,
-                  elevation: 0,
-                  child: ListTile(
-                    leading: Icon(
-                      Icons.timeline_outlined,
-                      color: scheme.onSurfaceVariant,
+                if (install == null) return const SizedBox.shrink();
+                final p = install;
+                final scheme = Theme.of(context).colorScheme;
+                final stage = (p.currentStage?.isNotEmpty ?? false)
+                    ? p.currentStage!
+                    : 'Setting up your service';
+                return Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Card(
+                    color: scheme.surfaceContainerHighest,
+                    elevation: 0,
+                    child: ListTile(
+                      leading: Icon(
+                        Icons.timeline_outlined,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                      title: const Text('Installation in progress'),
+                      subtitle: Text('$stage · ${p.progressPct}%'),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () =>
+                          context.push('/profile/installation-progress'),
                     ),
-                    title: const Text('Installation in progress'),
-                    subtitle: Text('$stage · ${p.progressPct}%'),
-                    trailing: const Icon(Icons.chevron_right),
-                    onTap: () => context.push('/profile/installation-progress'),
                   ),
-                ),
-              );
-            }),
+                );
+              },
+            ),
             const SizedBox(height: 16),
 
             // --- At-a-glance summary (rows of 3; grid pads the last row) ---
@@ -364,21 +364,15 @@ class DashboardScreen extends ConsumerWidget {
               tiles: [
                 _StatCard(
                   icon: Icons.account_balance_wallet_outlined,
-                  label: 'Account credit',
-                  value: balance == null
-                      ? null
-                      : Fmt.moneyCompact(
-                          balance.creditBalance, balance.currency),
+                  label: 'Prepaid funding',
+                  value: fundingDisplay,
                   onTap: () => context.go('/billing'),
                 ),
                 _StatCard(
                   icon: Icons.receipt_long_outlined,
                   label: 'Amount due',
-                  value: outstanding == null
-                      ? null
-                      : Fmt.moneyCompact(outstanding, currency),
-                  // Label already says "Amount due"; highlight when > 0.
-                  highlight: (outstanding ?? 0) > 0,
+                  value: amountDueDisplay,
+                  highlight: hasAmountDue,
                   onTap: () => context.go('/billing'),
                 ),
                 _StatCard(
@@ -394,9 +388,10 @@ class DashboardScreen extends ConsumerWidget {
                   value: cycleSummary == null
                       ? null
                       : dataPeriod == null
-                          ? '—'
-                          : Fmt.bytes(dataPeriod),
-                  highlight: (fup?.isApproaching ?? false) ||
+                      ? '—'
+                      : Fmt.bytes(dataPeriod),
+                  highlight:
+                      (fup?.isApproaching ?? false) ||
                       (fup?.needsAttention ?? false),
                   onTap: () => context.go('/usage'),
                 ),
@@ -406,7 +401,8 @@ class DashboardScreen extends ConsumerWidget {
                     icon: Icons.data_saver_off_outlined,
                     label: quotaLeftLabel,
                     value: quotaLeftValue,
-                    highlight: (currentQuota != null &&
+                    highlight:
+                        (currentQuota != null &&
                             (currentQuota.usedFraction ?? 0) >= 0.9) ||
                         (fup?.isApproaching ?? false) ||
                         (fup?.needsAttention ?? false),
@@ -426,7 +422,8 @@ class DashboardScreen extends ConsumerWidget {
                   label: expiryStatLabel,
                   value: expiryStatValue,
                   // Urgent when expiring within 3 days or genuinely expired.
-                  highlight: (currentService?.expiresSoon ?? false) ||
+                  highlight:
+                      (currentService?.expiresSoon ?? false) ||
                       (currentService?.isExpired ?? false),
                   onTap: () => context.go('/billing'),
                 ),
@@ -437,9 +434,7 @@ class DashboardScreen extends ConsumerWidget {
             // --- Primary payment action ---
             // A single, prominent "Add funds / Pay" entry (the wallet top-up
             // flow), replacing the redundant "Pay bill" + "Top up" chips.
-            _AddFundsCard(
-              onTap: () => context.push('/topup'),
-            ),
+            _AddFundsCard(onTap: () => context.push('/topup')),
             const SizedBox(height: 20),
 
             // --- Current service (with a switcher when there are several) ---
@@ -472,17 +467,20 @@ class DashboardScreen extends ConsumerWidget {
                         _ServiceSwitcher(
                           services: services,
                           selectedId: selected.id,
-                          onSelect: (id) => ref
-                              .read(selectedServiceIdProvider.notifier)
-                              .state = id,
+                          onSelect: (id) =>
+                              ref
+                                      .read(selectedServiceIdProvider.notifier)
+                                      .state =
+                                  id,
                         ),
                         const SizedBox(height: 10),
                       ],
                       _CurrentServiceCard(
                         service: selected,
                         quota: currentQuota,
-                        action:
-                            serviceStatus?.forSubscription(selected.id)?.action,
+                        action: accountHealth
+                            ?.forSubscription(selected.id)
+                            ?.nextAction,
                       ),
                     ],
                   );
@@ -490,7 +488,8 @@ class DashboardScreen extends ConsumerWidget {
                 return subs.isLoading
                     ? const CardSkeleton()
                     : const _MessageCard(
-                        'Couldn’t load your service. Pull down to refresh.');
+                        'Couldn’t load your service. Pull down to refresh.',
+                      );
               },
             ),
           ],
@@ -525,7 +524,7 @@ class DashboardScreen extends ConsumerWidget {
   return ('Days left', '—');
 }
 
-void _openServiceAction(BuildContext context, ServiceStatusAction action) {
+void _openServiceAction(BuildContext context, AccountHealthAction action) {
   final route = switch (action.kind) {
     'top_up' => '/topup',
     'pay_invoices' => '/billing',
@@ -568,7 +567,7 @@ class ConnectionBanner extends StatelessWidget {
   final bool serviceActive;
 
   /// The active session, or null when offline. Only meaningful when [known].
-  final AccountingSession? session;
+  final AccountHealthSession? session;
 
   /// True once the sessions request has resolved with data.
   final bool known;
@@ -583,7 +582,7 @@ class ConnectionBanner extends StatelessWidget {
   /// "Connected" when the classifier says healthy but no session is loaded.
   String _connectedLine() {
     final s = session;
-    final start = s?.sessionStart;
+    final start = s?.observedAt;
     final ip = s?.framedIpAddress ?? ipAddress;
     return [
       'Connected',
@@ -654,13 +653,18 @@ class ConnectionBanner extends StatelessWidget {
     }
 
     final Widget label = subtitle == null
-        ? Text(text, style: TextStyle(color: fg, fontWeight: FontWeight.w600))
+        ? Text(
+            text,
+            style: TextStyle(color: fg, fontWeight: FontWeight.w600),
+          )
         : Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(text,
-                  style: TextStyle(color: fg, fontWeight: FontWeight.w600)),
+              Text(
+                text,
+                style: TextStyle(color: fg, fontWeight: FontWeight.w600),
+              ),
               const SizedBox(height: 2),
               Text(
                 subtitle,
@@ -722,21 +726,21 @@ class _StatusBanner extends StatelessWidget {
             scheme.surfaceContainerHighest,
             scheme.onSurface,
             Icons.hourglass_empty,
-            'Loading your account…'
+            'Loading your account…',
           )
         : attentionMessage != null
-            ? (
-                scheme.errorContainer,
-                scheme.onErrorContainer,
-                Icons.warning_amber_rounded,
-                attentionMessage!
-              )
-            : (
-                scheme.primaryContainer,
-                scheme.onPrimaryContainer,
-                Icons.check_circle_outline,
-                'All services active'
-              );
+        ? (
+            scheme.errorContainer,
+            scheme.onErrorContainer,
+            Icons.warning_amber_rounded,
+            attentionMessage!,
+          )
+        : (
+            scheme.primaryContainer,
+            scheme.onPrimaryContainer,
+            Icons.check_circle_outline,
+            'All services active',
+          );
     final radius = BorderRadius.circular(14);
     return Material(
       color: bg,
@@ -751,8 +755,10 @@ class _StatusBanner extends StatelessWidget {
               Icon(icon, color: fg),
               const SizedBox(width: 10),
               Expanded(
-                child: Text(text,
-                    style: TextStyle(color: fg, fontWeight: FontWeight.w600)),
+                child: Text(
+                  text,
+                  style: TextStyle(color: fg, fontWeight: FontWeight.w600),
+                ),
               ),
               if (onTap != null) Icon(Icons.chevron_right, color: fg),
             ],
@@ -795,8 +801,10 @@ class _RenewBanner extends StatelessWidget {
               Icon(expired ? Icons.error_outline : Icons.schedule, color: fg),
               const SizedBox(width: 10),
               Expanded(
-                child: Text(message,
-                    style: TextStyle(color: fg, fontWeight: FontWeight.w600)),
+                child: Text(
+                  message,
+                  style: TextStyle(color: fg, fontWeight: FontWeight.w600),
+                ),
               ),
               if (onTap != null) Icon(Icons.chevron_right, color: fg),
             ],
@@ -820,19 +828,20 @@ class _FupBanner extends StatelessWidget {
     final bg = blocked
         ? scheme.errorContainer
         : approaching
-            ? scheme.secondaryContainer
-            : scheme.tertiaryContainer;
+        ? scheme.secondaryContainer
+        : scheme.tertiaryContainer;
     final fg = blocked
         ? scheme.onErrorContainer
         : approaching
-            ? scheme.onSecondaryContainer
-            : scheme.onTertiaryContainer;
-    final text = fup.summary ??
+        ? scheme.onSecondaryContainer
+        : scheme.onTertiaryContainer;
+    final text =
+        fup.summary ??
         (blocked
             ? 'Service paused — fair-usage limit reached'
             : approaching
-                ? 'Approaching your fair-usage limit'
-                : 'Speed reduced — fair-usage limit reached');
+            ? 'Approaching your fair-usage limit'
+            : 'Speed reduced — fair-usage limit reached');
     return Material(
       color: bg,
       borderRadius: BorderRadius.circular(14),
@@ -847,14 +856,16 @@ class _FupBanner extends StatelessWidget {
                 blocked
                     ? Icons.block
                     : approaching
-                        ? Icons.data_usage
-                        : Icons.speed,
+                    ? Icons.data_usage
+                    : Icons.speed,
                 color: fg,
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: Text(text,
-                    style: TextStyle(color: fg, fontWeight: FontWeight.w600)),
+                child: Text(
+                  text,
+                  style: TextStyle(color: fg, fontWeight: FontWeight.w600),
+                ),
               ),
               if (onTap != null) Icon(Icons.chevron_right, color: fg),
             ],
@@ -888,8 +899,11 @@ class _ServiceSwitcher extends StatelessWidget {
         itemBuilder: (_, i) {
           final s = services[i];
           return ChoiceChip(
-            label: Text(s.displayName,
-                maxLines: 1, overflow: TextOverflow.ellipsis),
+            label: Text(
+              s.displayName,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
             selected: s.id == selectedId,
             avatar: Icon(
               s.isActive ? Icons.circle : Icons.pause_circle_outline,
@@ -920,16 +934,19 @@ class _StatGrid extends StatelessWidget {
       for (var j = 0; j < perRow; j++) {
         if (j > 0) cells.add(const SizedBox(width: gap));
         final idx = i + j;
-        cells.add(Expanded(
-          child: idx < tiles.length ? tiles[idx] : const SizedBox(),
-        ));
+        cells.add(
+          Expanded(child: idx < tiles.length ? tiles[idx] : const SizedBox()),
+        );
       }
       if (rows.isNotEmpty) rows.add(const SizedBox(height: gap));
-      rows.add(IntrinsicHeight(
+      rows.add(
+        IntrinsicHeight(
           child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: cells,
-      )));
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: cells,
+          ),
+        ),
+      );
     }
     return Column(children: rows);
   }
@@ -977,18 +994,23 @@ class _StatCard extends StatelessWidget {
                 FittedBox(
                   fit: BoxFit.scaleDown,
                   alignment: Alignment.centerLeft,
-                  child: Text(value!,
-                      maxLines: 1,
-                      softWrap: false,
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
-                        color: highlight ? theme.colorScheme.error : null,
-                      )),
+                  child: Text(
+                    value!,
+                    maxLines: 1,
+                    softWrap: false,
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                      color: highlight ? theme.colorScheme.error : null,
+                    ),
+                  ),
                 ),
               const SizedBox(height: 2),
-              Text(label,
-                  style: theme.textTheme.bodySmall
-                      ?.copyWith(color: theme.colorScheme.outline)),
+              Text(
+                label,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.outline,
+                ),
+              ),
             ],
           ),
         ),
@@ -1053,7 +1075,7 @@ class _AddFundsCard extends StatelessWidget {
 class _CurrentServiceCard extends StatelessWidget {
   const _CurrentServiceCard({required this.service, this.quota, this.action});
   final Subscription service;
-  final ServiceStatusAction? action;
+  final AccountHealthAction? action;
 
   /// Current period's quota bucket, when the plan is capped — renders a thin
   /// usage bar so an approaching cap is visible without opening Usage.
@@ -1071,22 +1093,23 @@ class _CurrentServiceCard extends StatelessWidget {
         : switch (days) {
             // Postpaid / no date expiry: show the next bill date, not a
             // (meaningless) validity countdown.
-            null => s.nextBillingAt != null
-                ? (
-                    theme.colorScheme.outline,
-                    'Next bill',
-                    Fmt.date(s.nextBillingAt)
-                  )
-                : (theme.colorScheme.outline, null, null),
+            null =>
+              s.nextBillingAt != null
+                  ? (
+                      theme.colorScheme.outline,
+                      'Next bill',
+                      Fmt.date(s.nextBillingAt),
+                    )
+                  : (theme.colorScheme.outline, null, null),
             0 => (theme.colorScheme.error, 'Validity', 'Expires today'),
             // Active service with a momentarily-stale billing date: running, not
             // expired — show nothing rather than alarm next to the IP.
             < 0 => (theme.colorScheme.outline, null, null),
             <= 3 => (
-                context.semantic.warning,
-                'Validity',
-                '$days day${days == 1 ? '' : 's'} left'
-              ),
+              context.semantic.warning,
+              'Validity',
+              '$days day${days == 1 ? '' : 's'} left',
+            ),
             _ => (context.semantic.success, 'Validity', '$days days left'),
           };
 
@@ -1104,19 +1127,24 @@ class _CurrentServiceCard extends StatelessWidget {
                   const Icon(Icons.router_outlined),
                   const SizedBox(width: 10),
                   Expanded(
-                    child: Text(s.displayName,
-                        style: theme.textTheme.titleMedium,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis),
+                    child: Text(
+                      s.displayName,
+                      style: theme.textTheme.titleMedium,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
                   StatusChip.fromPresentation(s.statusPresentation),
                 ],
               ),
               if (s.planType != null) ...[
                 const SizedBox(height: 2),
-                Text(s.planType!,
-                    style: theme.textTheme.bodySmall
-                        ?.copyWith(color: theme.colorScheme.outline)),
+                Text(
+                  s.planType!,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.outline,
+                  ),
+                ),
               ],
               const Divider(height: 20),
               Row(
@@ -1141,79 +1169,86 @@ class _CurrentServiceCard extends StatelessWidget {
               ),
               if (quota?.usedFraction != null) ...[
                 const SizedBox(height: 10),
-                Builder(builder: (context) {
-                  final q = quota!;
-                  final fraction = q.usedFraction!;
-                  final nearCap = fraction >= 0.9;
-                  final color = nearCap
-                      ? theme.colorScheme.error
-                      : theme.colorScheme.primary;
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                Builder(
+                  builder: (context) {
+                    final q = quota!;
+                    final fraction = q.usedFraction!;
+                    final nearCap = fraction >= 0.9;
+                    final color = nearCap
+                        ? theme.colorScheme.error
+                        : theme.colorScheme.primary;
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: LinearProgressIndicator(
+                            value: fraction,
+                            minHeight: 6,
+                            color: color,
+                            backgroundColor:
+                                theme.colorScheme.surfaceContainerHighest,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '${q.usedGb.toStringAsFixed(1)} of '
+                          '${q.allowanceGb!.toStringAsFixed(0)} GB used',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: nearCap
+                                ? theme.colorScheme.error
+                                : theme.colorScheme.outline,
+                          ),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              ],
+              const SizedBox(height: 8),
+              Builder(
+                builder: (context) {
+                  // Suspended/stopped actions come only from Account Health. A
+                  // status string alone is never treated as proof that payment
+                  // will reactivate service.
+                  final serverAction = action;
+                  final showContractRenewal =
+                      serverAction == null &&
+                      s.isActive &&
+                      days != null &&
+                      days >= 0 &&
+                      days <= 3;
+                  final showAction =
+                      serverAction != null || showContractRenewal;
+                  return Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
                     children: [
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(4),
-                        child: LinearProgressIndicator(
-                          value: fraction,
-                          minHeight: 6,
-                          color: color,
-                          backgroundColor:
-                              theme.colorScheme.surfaceContainerHighest,
+                      if (showAction)
+                        Expanded(
+                          child: FilledButton.icon(
+                            icon: Icon(
+                              serverAction?.kind == 'contact_support'
+                                  ? Icons.support_agent_outlined
+                                  : Icons.payment,
+                              size: 18,
+                            ),
+                            onPressed: serverAction == null
+                                ? () => context.go('/billing')
+                                : () =>
+                                      _openServiceAction(context, serverAction),
+                            label: Text(serverAction?.label ?? 'Renew'),
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        '${q.usedGb.toStringAsFixed(1)} of '
-                        '${q.allowanceGb!.toStringAsFixed(0)} GB used',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: nearCap
-                              ? theme.colorScheme.error
-                              : theme.colorScheme.outline,
-                        ),
+                      if (showAction) const SizedBox(width: 8),
+                      TextButton(
+                        onPressed: () =>
+                            context.push('/service/${s.id}', extra: s),
+                        child: const Text('Manage'),
                       ),
                     ],
                   );
-                }),
-              ],
-              const SizedBox(height: 8),
-              Builder(builder: (context) {
-                // Suspended/stopped actions come only from service-status. A
-                // status string alone is never treated as proof that payment
-                // will reactivate service.
-                final serverAction = action;
-                final showContractRenewal = serverAction == null &&
-                    s.isActive &&
-                    days != null &&
-                    days >= 0 &&
-                    days <= 3;
-                final showAction = serverAction != null || showContractRenewal;
-                return Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    if (showAction)
-                      Expanded(
-                        child: FilledButton.icon(
-                          icon: Icon(
-                            serverAction?.kind == 'contact_support'
-                                ? Icons.support_agent_outlined
-                                : Icons.payment,
-                            size: 18,
-                          ),
-                          onPressed: serverAction == null
-                              ? () => context.go('/billing')
-                              : () => _openServiceAction(context, serverAction),
-                          label: Text(serverAction?.label ?? 'Renew'),
-                        ),
-                      ),
-                    if (showAction) const SizedBox(width: 8),
-                    TextButton(
-                      onPressed: () =>
-                          context.push('/service/${s.id}', extra: s),
-                      child: const Text('Manage'),
-                    ),
-                  ],
-                );
-              }),
+                },
+              ),
             ],
           ),
         ),
@@ -1246,8 +1281,10 @@ class _MiniStat extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(label, style: theme.textTheme.labelSmall),
-            Text(value,
-                style: TextStyle(fontWeight: FontWeight.w600, color: color)),
+            Text(
+              value,
+              style: TextStyle(fontWeight: FontWeight.w600, color: color),
+            ),
           ],
         ),
       ],
@@ -1273,9 +1310,6 @@ class _MessageCard extends StatelessWidget {
   final String message;
   @override
   Widget build(BuildContext context) => Card(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Text(message),
-        ),
-      );
+    child: Padding(padding: const EdgeInsets.all(16), child: Text(message)),
+  );
 }

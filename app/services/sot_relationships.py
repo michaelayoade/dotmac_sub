@@ -6196,8 +6196,145 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "online-now session state",
                     "active-session NAS observation evidence",
                     "bounded historical NAS evidence",
+                    "subscription-scoped live-session binding and freshness projection",
                 ),
-                depends_on=("network.identity",),
+                depends_on=(
+                    "access.subscription_lifecycle",
+                    "network.identity",
+                    "sessions.radius_reconciliation",
+                ),
+                notes=(
+                    "An exact subscription binding wins. An unbound live session may "
+                    "represent a service only when the subscriber has exactly one "
+                    "operationally-current subscription; it is never copied across "
+                    "sibling services. Connected evidence becomes stale after the "
+                    "declared freshness window."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="online-now session state",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical live RADIUS observations",
+                                "canonical subscription cohort",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="active-session NAS observation evidence",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical live RADIUS observations",
+                                "canonical network identities",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="bounded historical NAS evidence",
+                            role=OwnerRole.RESOLVER,
+                            input_names=("canonical RADIUS history",),
+                        ),
+                        ConcernContract(
+                            name=(
+                                "subscription-scoped live-session binding and freshness "
+                                "projection"
+                            ),
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical live RADIUS observations",
+                                "canonical subscription cohort",
+                                "session freshness policy",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical live RADIUS observations",
+                            owner="sessions.radius_reconciliation",
+                            kind=AuthorityKind.OBSERVATION,
+                            source=(
+                                "active RadiusSession subscription, NAS, IP, and "
+                                "last-update observations"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical RADIUS history",
+                            owner="sessions.radius_reconciliation",
+                            kind=AuthorityKind.OBSERVATION,
+                            source="bounded reconciled RADIUS accounting history",
+                        ),
+                        AuthorityInput(
+                            name="canonical subscription cohort",
+                            owner="access.subscription_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "operationally-current Subscription identity, subscriber, "
+                                "and lifecycle status"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical network identities",
+                            owner="network.identity",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="NAS and managed-device identities",
+                        ),
+                        AuthorityInput(
+                            name="session freshness policy",
+                            owner="network.radius_sessions",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "exact-binding precedence, single-service unbound "
+                                "eligibility, and fifteen-minute freshness window"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary=(
+                            "Resolvers read on the caller session and never poll, "
+                            "mutate, commit, or roll back."
+                        ),
+                        locking="Read projections acquire no mutation locks.",
+                        idempotency=(
+                            "The same cohort, observations, and evaluation time produce "
+                            "the same binding and freshness result."
+                        ),
+                        retries="Read-only resolution is safe to retry.",
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(),
+                        mapping_owner="calling read projection adapters",
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "customer_portal_flow_services and web_customer_details "
+                            "page-local accounting-session freshness and subscriber-wide "
+                            "fallback rules"
+                        ),
+                        new_owner="network.radius_sessions",
+                        verification=(
+                            "Exact-binding, single-service fallback, multi-service "
+                            "non-leakage, freshness, and consumer contract tests."
+                        ),
+                        cutover_gate=(
+                            "Portal and Customer 360 consumers request subscription "
+                            "snapshots from this owner."
+                        ),
+                        fallback_retirement=(
+                            "Page-local freshness thresholds and subscriber-wide session "
+                            "reuse are absent."
+                        ),
+                    ),
+                    steward="network operations",
+                    design_refs=(
+                        "docs/designs/PORTAL_ACCOUNT_SERVICE_HEALTH.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_network_sot_services.py",
+                        "tests/test_portal_account_health.py",
+                    ),
+                ),
             ),
             SOTService(
                 name="network.ont_runtime_status",
@@ -15461,6 +15598,223 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="ui.portal_account_health_projection",
+                module="app.services.portal_account_health",
+                owns=(
+                    "customer and reseller account-health first-viewport projection",
+                    "subscription-scoped service-health row projection",
+                    "portal financial-position currency-lane projection",
+                    "mobile account-health transport projection",
+                ),
+                depends_on=(
+                    "access.subscription_lifecycle",
+                    "customer.accounts",
+                    "customer.financial_position",
+                    "customer.service_status",
+                    "financial.billing_profile",
+                    "financial.prepaid_funding_reconstruction",
+                    "network.connection_health",
+                    "network.outage_lifecycle",
+                    "network.radius_sessions",
+                    "ui.projection_contracts",
+                    "ui.status_presentation",
+                ),
+                notes=(
+                    "One read owner composes lifecycle, billing mode, currency-typed "
+                    "receivables, prepaid funding, access decisions, live-session "
+                    "freshness, customer-safe connection/outage diagnosis, and the "
+                    "canonical next action. It never polls equipment or mutates state."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name=(
+                                "customer and reseller account-health first-viewport "
+                                "projection"
+                            ),
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical account state",
+                                "canonical billing profile",
+                                "canonical customer financial position",
+                                "canonical service-health rows",
+                                "UI projection vocabulary",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="subscription-scoped service-health row projection",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical current subscriptions",
+                                "canonical service access decision",
+                                "canonical live-session evidence",
+                                "canonical connection and outage diagnosis",
+                                "UI status semantics",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="portal financial-position currency-lane projection",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical billing profile",
+                                "canonical customer financial position",
+                                "UI projection vocabulary",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="mobile account-health transport projection",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical account-health projection",
+                                "UI projection vocabulary",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical account state",
+                            owner="customer.accounts",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Subscriber identity and lifecycle status",
+                        ),
+                        AuthorityInput(
+                            name="canonical current subscriptions",
+                            owner="access.subscription_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "operationally-current Subscription identity, offer, "
+                                "billing mode, and lifecycle status"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical billing profile",
+                            owner="financial.billing_profile",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "effective account/subscription billing mode, source, "
+                                "and invalid reason"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical customer financial position",
+                            owner="customer.financial_position",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "currency-separated open receivables and reviewed prepaid "
+                                "funding position"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical service access decision",
+                            owner="customer.service_status",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "per-subscription usability, reason, charge/lapse dates, "
+                                "and customer action"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical live-session evidence",
+                            owner="network.radius_sessions",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "subscription-scoped online/stale/offline state, binding, "
+                                "IP, NAS, and observation time"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical connection and outage diagnosis",
+                            owner="network.connection_health",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "customer-safe connection state, wording, access medium, "
+                                "area-outage result, and checked time"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical service-health rows",
+                            owner="ui.portal_account_health_projection",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="the exact account's composed service-health rows",
+                        ),
+                        AuthorityInput(
+                            name="canonical account-health projection",
+                            owner="ui.portal_account_health_projection",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="the exact account's composed Account Health DTO",
+                        ),
+                        AuthorityInput(
+                            name="UI projection vocabulary",
+                            owner="ui.projection_contracts",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="StateValue availability and freshness semantics",
+                        ),
+                        AuthorityInput(
+                            name="UI status semantics",
+                            owner="ui.status_presentation",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="semantic labels, tones, and icon keys",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary=(
+                            "The projection reads on the adapter session and never polls, "
+                            "mutates, commits, or rolls back."
+                        ),
+                        locking="Read projections acquire no mutation locks.",
+                        idempotency=(
+                            "The same account, current cohort, authoritative evidence, "
+                            "and evaluation time produce the same projection."
+                        ),
+                        retries="Read-only projection calls are safe to retry.",
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(),
+                        mapping_owner=(
+                            "customer, reseller, and /api/v1/me account-health adapters"
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "customer dashboard generic balance/service-access arithmetic, "
+                            "customer service page local RADIUS freshness, reseller account "
+                            "detail open_balance/status mapping, and separate mobile "
+                            "service-status and connection-status responses"
+                        ),
+                        new_owner="ui.portal_account_health_projection",
+                        verification=(
+                            "Financial separation, availability, multi-service session "
+                            "non-leakage, shared-template, API cutover, mobile model, and "
+                            "query-budget tests."
+                        ),
+                        cutover_gate=(
+                            "Customer dashboard/detail, reseller account detail, and mobile "
+                            "consume the shared projection."
+                        ),
+                        fallback_retirement=(
+                            "Generic balances, local freshness/status mapping, /me/service-"
+                            "status, /me/connection-status, and the old mobile model are "
+                            "absent."
+                        ),
+                    ),
+                    steward="customer operations",
+                    design_refs=(
+                        "docs/designs/PORTAL_ACCOUNT_SERVICE_HEALTH.md",
+                        "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_portal_account_health.py",
+                        "tests/test_network_sot_services.py",
+                        "tests/test_connection_health_ui_contract.py",
+                        "mobile/test/models_test.dart",
+                        "mobile/test/connection_status_test.dart",
+                    ),
+                ),
+            ),
+            SOTService(
                 name="ui.status_presentation",
                 module="app.services.status_presentation",
                 owns=(
@@ -15472,12 +15826,14 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "device operational status labels, semantic tones, and icon keys",
                     "customer connection health labels, semantic tones, and icon keys",
                     "RADIUS access-session observation labels, semantic tones, and icon keys",
+                    "service access availability labels, semantic tones, and icon keys",
                     "support-ticket status labels, semantic tones, and icon keys",
                     "field work-order status labels, semantic tones, and icon keys",
                     "supplier-invoice status labels, semantic tones, and icon keys",
                     "status presentation fallback semantics",
                 ),
                 depends_on=(
+                    "customer.service_status",
                     "financial.invoices",
                     "financial.payments",
                     "network.device_state",

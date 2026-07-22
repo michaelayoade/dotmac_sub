@@ -37,6 +37,7 @@ from app.services.status_presentation import (
     invoice_status_presentation,
     outage_status_presentation,
     payment_status_presentation,
+    service_access_status_presentation,
     subscription_status_presentation,
     supplier_invoice_status_presentation,
     system_job_status_presentation,
@@ -47,6 +48,16 @@ from app.services.status_presentation import (
 )
 from app.services.topology.connection_status import ConnectionHealthState
 from app.services.topology.outage import OutageStatus
+
+
+@pytest.mark.parametrize("status", ["available", "restricted", "unavailable"])
+def test_service_access_presentation_covers_projection_states(status: str) -> None:
+    presentation = service_access_status_presentation(status)
+
+    assert presentation.value == status
+    assert presentation.label
+    assert presentation.tone in StatusTone
+    assert presentation.icon in StatusIcon
 
 
 @pytest.mark.parametrize("status", list(WithholdingTaxStatus))

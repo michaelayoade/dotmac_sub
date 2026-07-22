@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:dotmac_portal/src/config/env.dart';
 import 'package:dotmac_portal/src/models/auth.dart';
 import 'package:dotmac_portal/src/models/addon.dart';
+import 'package:dotmac_portal/src/models/account_health.dart';
 import 'package:dotmac_portal/src/models/invoice.dart';
 import 'package:dotmac_portal/src/models/ledger.dart';
 import 'package:dotmac_portal/src/models/notification.dart';
@@ -10,7 +11,6 @@ import 'package:dotmac_portal/src/models/page.dart';
 import 'package:dotmac_portal/src/models/payment_method.dart';
 import 'package:dotmac_portal/src/models/payment_flow.dart';
 import 'package:dotmac_portal/src/models/plan_change.dart';
-import 'package:dotmac_portal/src/models/service_status.dart';
 import 'package:dotmac_portal/src/models/session.dart';
 import 'package:dotmac_portal/src/models/subscription.dart';
 import 'package:dotmac_portal/src/models/ticket.dart';
@@ -167,17 +167,14 @@ void main() {
 
   group('Page', () {
     test('parses envelope and computes hasMore', () {
-      final page = Page.fromJson(
-        {
-          'items': [
-            {'id': 'i1', 'account_id': 'a', 'balance_due': '0', 'total': '0'},
-          ],
-          'count': 5,
-          'limit': 1,
-          'offset': 0,
-        },
-        Invoice.fromJson,
-      );
+      final page = Page.fromJson({
+        'items': [
+          {'id': 'i1', 'account_id': 'a', 'balance_due': '0', 'total': '0'},
+        ],
+        'count': 5,
+        'limit': 1,
+        'offset': 0,
+      }, Invoice.fromJson);
       expect(page.items, hasLength(1));
       expect(page.hasMore, isTrue);
     });
@@ -185,12 +182,16 @@ void main() {
 
   group('Env.resolveUrl', () {
     test('prefixes relative paths with the base url', () {
-      expect(Env.resolveUrl('/static/avatars/x.png'),
-          '${Env.apiBaseUrl}/static/avatars/x.png');
+      expect(
+        Env.resolveUrl('/static/avatars/x.png'),
+        '${Env.apiBaseUrl}/static/avatars/x.png',
+      );
     });
     test('leaves absolute urls unchanged', () {
-      expect(Env.resolveUrl('https://cdn.example.com/a.png'),
-          'https://cdn.example.com/a.png');
+      expect(
+        Env.resolveUrl('https://cdn.example.com/a.png'),
+        'https://cdn.example.com/a.png',
+      );
     });
   });
 
@@ -291,24 +292,26 @@ void main() {
       expect(s.isExpired, isTrue);
     });
 
-    test('prefers server is_expired/expires_at when the backend provides them',
-        () {
-      // Server says: active, no date expiry (prepaid lapses on balance, not
-      // next_billing_at). Client must trust it over local date math.
-      final s = Subscription.fromJson({
-        'id': 's9',
-        'account_id': 'a1',
-        'offer_id': 'o1',
-        'status': 'active',
-        'billing_mode': 'prepaid',
-        'next_billing_at': '2020-01-01T00:00:00Z',
-        'expires_at': null,
-        'is_expired': false,
-      });
-      expect(s.hasServerExpiry, isTrue);
-      expect(s.expiresAt, isNull);
-      expect(s.isExpired, isFalse);
-    });
+    test(
+      'prefers server is_expired/expires_at when the backend provides them',
+      () {
+        // Server says: active, no date expiry (prepaid lapses on balance, not
+        // next_billing_at). Client must trust it over local date math.
+        final s = Subscription.fromJson({
+          'id': 's9',
+          'account_id': 'a1',
+          'offer_id': 'o1',
+          'status': 'active',
+          'billing_mode': 'prepaid',
+          'next_billing_at': '2020-01-01T00:00:00Z',
+          'expires_at': null,
+          'is_expired': false,
+        });
+        expect(s.hasServerExpiry, isTrue);
+        expect(s.expiresAt, isNull);
+        expect(s.isExpired, isFalse);
+      },
+    );
 
     test('falls back to local logic when server fields are absent', () {
       final s = Subscription.fromJson({
@@ -321,7 +324,9 @@ void main() {
       });
       expect(s.hasServerExpiry, isFalse);
       expect(
-          s.expiresAt, isNotNull); // local fallback for older/offline backend
+        s.expiresAt,
+        isNotNull,
+      ); // local fallback for older/offline backend
       expect(s.isExpired, isFalse); // active is never expired
     });
 
@@ -332,8 +337,9 @@ void main() {
         'offer_id': 'o1',
         'status': 'active',
         'billing_mode': 'prepaid',
-        'next_billing_at':
-            DateTime.now().add(const Duration(days: 2)).toIso8601String(),
+        'next_billing_at': DateTime.now()
+            .add(const Duration(days: 2))
+            .toIso8601String(),
       });
       expect(soon.expiresSoon, isTrue);
       final postpaid = Subscription.fromJson({
@@ -342,19 +348,20 @@ void main() {
         'offer_id': 'o1',
         'status': 'active',
         'billing_mode': 'postpaid',
-        'next_billing_at':
-            DateTime.now().add(const Duration(days: 2)).toIso8601String(),
+        'next_billing_at': DateTime.now()
+            .add(const Duration(days: 2))
+            .toIso8601String(),
       });
       expect(postpaid.expiresSoon, isFalse);
     });
 
     Subscription withStatus(String status) => Subscription(
-          id: 's',
-          accountId: 'a',
-          offerId: 'o',
-          status: status,
-          billingMode: 'prepaid',
-        );
+      id: 's',
+      accountId: 'a',
+      offerId: 'o',
+      status: status,
+      billingMode: 'prepaid',
+    );
 
     test('isCurrent excludes terminal/historical statuses', () {
       for (final status in [
@@ -362,7 +369,7 @@ void main() {
         'active',
         'blocked',
         'suspended',
-        'stopped'
+        'stopped',
       ]) {
         expect(withStatus(status).isCurrent, isTrue, reason: status);
       }
@@ -371,7 +378,7 @@ void main() {
         'canceled',
         'expired',
         'hidden',
-        'archived'
+        'archived',
       ]) {
         expect(withStatus(status).isCurrent, isFalse, reason: status);
       }
@@ -452,20 +459,22 @@ void main() {
       expect(q.hasProration, isFalse);
     });
 
-    test('postpaid quote still carries a confirmable no-ledger fingerprint',
-        () {
-      final q = PlanChangeQuote.fromJson({
-        'preview_fingerprint': List.filled(64, 'n').join(),
-        'has_financial_effect': false,
-        'postpaid_receivables': 750.0,
-        'collection_blocking_balance': 0.0,
-        'access_consequence': 'none_plan_change_only',
-      });
-      expect(q.hasProration, isFalse);
-      expect(q.hasFinancialEffect, isFalse);
-      expect(q.previewFingerprint, hasLength(64));
-      expect(q.postpaidReceivables, 750.0);
-    });
+    test(
+      'postpaid quote still carries a confirmable no-ledger fingerprint',
+      () {
+        final q = PlanChangeQuote.fromJson({
+          'preview_fingerprint': List.filled(64, 'n').join(),
+          'has_financial_effect': false,
+          'postpaid_receivables': 750.0,
+          'collection_blocking_balance': 0.0,
+          'access_consequence': 'none_plan_change_only',
+        });
+        expect(q.hasProration, isFalse);
+        expect(q.hasFinancialEffect, isFalse);
+        expect(q.previewFingerprint, hasLength(64));
+        expect(q.postpaidReceivables, 750.0);
+      },
+    );
 
     test('flags a shortfall as needing top-up', () {
       final q = PlanChangeQuote.fromJson({
@@ -507,8 +516,10 @@ void main() {
 
   group('AccountBalance', () {
     test('positive credit / negative owes', () {
-      expect(AccountBalance.fromJson({'credit_balance': '2071.49'}).inCredit,
-          isTrue);
+      expect(
+        AccountBalance.fromJson({'credit_balance': '2071.49'}).inCredit,
+        isTrue,
+      );
       expect(AccountBalance.fromJson({'credit_balance': -500}).owes, isTrue);
       final zero = AccountBalance.fromJson({'credit_balance': '0.00'});
       expect(zero.inCredit, isFalse);
@@ -528,10 +539,10 @@ void main() {
             'currency': 'NGN',
             'min_quantity': 1,
             'max_quantity': 3,
-          }
+          },
         ],
         'active': [
-          {'id': 's1', 'add_on_id': 'a1', 'name': 'Static IP', 'quantity': 2}
+          {'id': 's1', 'add_on_id': 'a1', 'name': 'Static IP', 'quantity': 2},
         ],
       });
       expect(d.available.single.maxQuantity, 3);
@@ -588,8 +599,11 @@ void main() {
     });
 
     test('falls back to brand + last4 when no label', () {
-      final c = SavedCard.fromJson(
-          {'id': 'p2', 'brand': 'mastercard', 'last4': '1234'});
+      final c = SavedCard.fromJson({
+        'id': 'p2',
+        'brand': 'mastercard',
+        'last4': '1234',
+      });
       expect(c.title, 'mastercard •••• 1234');
       expect(c.expiry, isNull);
     });
@@ -640,7 +654,7 @@ void main() {
         'status': 'active',
         'user_agent':
             'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15) AppleWebKit/537.36 '
-                '(KHTML, like Gecko) Chrome/120 Safari/537.36',
+            '(KHTML, like Gecko) Chrome/120 Safari/537.36',
       });
       expect(s.isCurrent, isFalse);
       expect(s.deviceLabel, contains('Macintosh'));
@@ -703,15 +717,35 @@ void main() {
     });
   });
 
-  group('ServiceStatus', () {
-    test('prepaid low balance flags a renewal with the grace cut-off', () {
-      final s = ServiceStatus.fromJson({
-        'billing_mode': 'prepaid',
-        'currency': 'NGN',
-        'balance': '50.00',
-        'min_balance': '100.00',
-        'low_balance': true,
-        'grace_until': '2026-07-01T00:00:00Z',
+  group('AccountHealth', () {
+    test('parses financial lanes, service evidence, and canonical action', () {
+      final health = AccountHealth.fromJson({
+        'account_id': 'a1',
+        'display_name': 'Amaka Okafor',
+        'lifecycle': {
+          'value': 'active',
+          'label': 'Active',
+          'tone': 'positive',
+          'icon': 'check',
+        },
+        'financial': {
+          'billing_mode': {'kind': 'present', 'value': 'Prepaid'},
+          'receivables': {
+            'kind': 'present',
+            'value': [
+              {
+                'currency': 'NGN',
+                'outstanding': '1250.00',
+                'overdue': '250.00',
+                'overdue_count': 1,
+              },
+            ],
+          },
+          'prepaid_funding': {
+            'kind': 'present',
+            'value': {'amount': '50.00', 'currency': 'NGN'},
+          },
+        },
         'primary_action': {
           'kind': 'top_up',
           'label': 'Top up',
@@ -723,17 +757,54 @@ void main() {
         'services': [
           {
             'subscription_id': 's1',
-            'status': 'active',
-            'status_presentation': {
+            'offer_name': 'Fibre 100',
+            'lifecycle': {
               'value': 'active',
               'label': 'Active',
               'tone': 'positive',
               'icon': 'check',
             },
             'billing_mode': 'prepaid',
-            'usable': true,
-            'reason': 'low_balance',
-            'action': {
+            'access_state': 'available',
+            'access': {
+              'value': 'available',
+              'label': 'Available',
+              'tone': 'positive',
+              'icon': 'check',
+            },
+            'access_reason': 'No access hold is active.',
+            'session': {
+              'state': 'connected',
+              'binding': 'exact_subscription',
+              'observed_at': '2026-07-22T10:00:00Z',
+              'framed_ip_address': '100.64.1.2',
+              'nas_device_id': null,
+            },
+            'session_presentation': {
+              'value': 'connected',
+              'label': 'Connected',
+              'tone': 'positive',
+              'icon': 'check',
+            },
+            'connection': {
+              'kind': 'present',
+              'value': {
+                'state': 'connected',
+                'status_presentation': {
+                  'value': 'connected',
+                  'label': 'Connected',
+                  'tone': 'positive',
+                  'icon': 'check',
+                },
+                'headline': "You're connected",
+                'message': 'Connection healthy.',
+                'advice': null,
+                'medium': 'fiber',
+                'area_outage': false,
+                'checked_at': '2026-07-22T10:00:00Z',
+              },
+            },
+            'next_action': {
               'kind': 'top_up',
               'label': 'Top up',
               'message': 'Balance low — top up NGN 50.00 to keep your service.',
@@ -741,74 +812,25 @@ void main() {
               'currency': 'NGN',
               'restores_service': false,
             },
-          }
+          },
         ],
+        'as_of': '2026-07-22T10:00:00Z',
       });
-      expect(s.isPrepaid, isTrue);
-      expect(s.balance, 50.0);
-      expect(s.lowBalance, isTrue);
-      expect(s.graceUntil, isNotNull);
-      expect(s.needsRenewal, isTrue);
-      expect(s.services.single.actionable, isTrue);
-      expect(s.services.single.statusPresentation.label, 'Active');
-      expect(s.services.single.statusPresentation.tone.name, 'positive');
-      expect(s.primaryAction?.kind, 'top_up');
-      expect(s.primaryAction?.amount, 50.0);
-      expect(s.primaryAction?.restoresService, isFalse);
+      expect(health.financial.prepaidFunding.value?.amount, 50.0);
+      expect(health.financial.receivables.value?.single.outstanding, 1250.0);
+      expect(health.services.single.session.isOnline, isTrue);
+      expect(health.services.single.connection.value?.isConnected, isTrue);
+      expect(health.services.single.nextAction?.isFinancial, isTrue);
+      expect(health.primaryAction?.kind, 'top_up');
     });
 
-    test('healthy account does not flag a renewal', () {
-      final s = ServiceStatus.fromJson({
-        'billing_mode': 'postpaid',
-        'in_dunning': false,
-        'services': [
-          {
-            'subscription_id': 's1',
-            'status': 'active',
-            'billing_mode': 'postpaid',
-            'usable': true,
-            'reason': 'ok',
-          }
-        ],
-      });
-      expect(s.needsRenewal, isFalse);
-      expect(s.services.single.actionable, isFalse);
-    });
-
-    test('manual suspension directs support and never implies payment restore',
-        () {
-      final s = ServiceStatus.fromJson({
-        'billing_mode': 'postpaid',
-        'primary_action': {
-          'kind': 'contact_support',
-          'label': 'Contact support',
-          'message': 'This hold cannot be cleared by payment.',
-          'currency': 'NGN',
-          'restores_service': false,
-        },
-        'services': [
-          {
-            'subscription_id': 's1',
-            'status': 'suspended',
-            'billing_mode': 'postpaid',
-            'usable': false,
-            'reason': 'administrative_hold',
-            'action': {
-              'kind': 'contact_support',
-              'label': 'Contact support',
-              'message': 'This hold cannot be cleared by payment.',
-              'currency': 'NGN',
-              'restores_service': false,
-            },
-          }
-        ],
-      });
-
-      expect(s.unavailableServices, hasLength(1));
-      expect(s.needsRenewal, isFalse);
-      expect(s.primaryAction?.kind, 'contact_support');
-      expect(s.services.single.action?.isFinancial, isFalse);
-      expect(s.services.single.action?.restoresService, isFalse);
+    test('keeps unavailable values distinct from authoritative zero', () {
+      final value = AvailableValue<MoneyAmount>.fromJson({
+        'kind': 'unavailable',
+        'value': null,
+      }, (raw) => MoneyAmount.fromJson((raw as Map).cast<String, dynamic>()));
+      expect(value.isPresent, isFalse);
+      expect(value.value, isNull);
     });
   });
 }

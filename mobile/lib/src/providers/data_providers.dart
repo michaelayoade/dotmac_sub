@@ -3,10 +3,10 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/addon.dart';
+import '../models/account_health.dart';
 import '../models/connection_status.dart';
 import '../models/contact.dart';
 import '../models/invoice.dart';
-import '../models/service_status.dart';
 import '../models/ledger.dart';
 import '../models/notification.dart';
 import '../models/payment_method.dart';
@@ -98,15 +98,15 @@ final resellerQuotesProvider = FutureProvider.autoDispose<List<ResellerQuote>>((
 
 final resellerProjectsProvider =
     FutureProvider.autoDispose<List<ResellerProject>>((ref) async {
-  cacheFor(ref);
-  return ref.watch(resellerRepositoryProvider).projects();
-});
+      cacheFor(ref);
+      return ref.watch(resellerRepositoryProvider).projects();
+    });
 
 final resellerWorkOrdersProvider =
     FutureProvider.autoDispose<List<ResellerWorkOrder>>((ref) async {
-  cacheFor(ref);
-  return ref.watch(resellerRepositoryProvider).workOrders();
-});
+      cacheFor(ref);
+      return ref.watch(resellerRepositoryProvider).workOrders();
+    });
 
 /// 12-month revenue summary for the reseller portal.
 final resellerRevenueProvider = FutureProvider.autoDispose<ResellerRevenue>((
@@ -119,16 +119,16 @@ final resellerRevenueProvider = FutureProvider.autoDispose<ResellerRevenue>((
 /// One managed account's detail (subscriptions + open balance).
 final resellerAccountProvider = FutureProvider.autoDispose
     .family<ResellerAccountDetail, String>((ref, accountId) async {
-  cacheFor(ref);
-  return ref.watch(resellerRepositoryProvider).account(accountId);
-});
+      cacheFor(ref);
+      return ref.watch(resellerRepositoryProvider).account(accountId);
+    });
 
 /// Invoices for one managed account.
 final resellerAccountInvoicesProvider = FutureProvider.autoDispose
     .family<List<ResellerInvoiceSummary>, String>((ref, accountId) async {
-  cacheFor(ref);
-  return ref.watch(resellerRepositoryProvider).accountInvoices(accountId);
-});
+      cacheFor(ref);
+      return ref.watch(resellerRepositoryProvider).accountInvoices(accountId);
+    });
 
 /// Reseller organization profile + MFA state.
 final resellerProfileProvider = FutureProvider.autoDispose<ResellerProfile>((
@@ -141,17 +141,17 @@ final resellerProfileProvider = FutureProvider.autoDispose<ResellerProfile>((
 /// Consolidated billing statement for the reseller portal.
 final resellerBillingProvider =
     FutureProvider.autoDispose<ResellerBillingSummary>((ref) async {
-  cacheFor(ref);
-  return ref.watch(resellerRepositoryProvider).billing();
-});
+      cacheFor(ref);
+      return ref.watch(resellerRepositoryProvider).billing();
+    });
 
 /// The reseller's saved cards (GET /reseller/payment-methods). Invalidate after
 /// set-default / remove / a save-card payment.
 final resellerPaymentMethodsProvider =
     FutureProvider.autoDispose<List<SavedCard>>((ref) async {
-  cacheFor(ref);
-  return ref.watch(resellerRepositoryProvider).paymentMethods();
-});
+      cacheFor(ref);
+      return ref.watch(resellerRepositoryProvider).paymentMethods();
+    });
 
 /// Fiber-plant map for the reseller coverage screen.
 final resellerFiberMapProvider = FutureProvider.autoDispose<ResellerFiberMap>((
@@ -164,16 +164,16 @@ final resellerFiberMapProvider = FutureProvider.autoDispose<ResellerFiberMap>((
 /// The reseller's submitted service requests.
 final resellerServiceRequestsProvider =
     FutureProvider.autoDispose<List<ResellerServiceRequest>>((ref) async {
-  cacheFor(ref);
-  return ref.watch(resellerRepositoryProvider).serviceRequests();
-});
+      cacheFor(ref);
+      return ref.watch(resellerRepositoryProvider).serviceRequests();
+    });
 
 /// CRM tickets for one managed account (reseller portal).
 final resellerAccountTicketsProvider = FutureProvider.autoDispose
     .family<ResellerTicketsPage, String>((ref, accountId) async {
-  cacheFor(ref);
-  return ref.watch(resellerRepositoryProvider).accountTickets(accountId);
-});
+      cacheFor(ref);
+      return ref.watch(resellerRepositoryProvider).accountTickets(accountId);
+    });
 
 /// The signed-in subscriber's id (== Subscriber.id == billing account_id).
 /// Used where a request needs the caller's id explicitly (e.g. new tickets);
@@ -249,25 +249,26 @@ final autopayStatusProvider = FutureProvider.autoDispose<AutopayStatus>((
   return ref.watch(billingRepositoryProvider).autopayStatus();
 });
 
-/// Truthful account/service health (GET /me/service-status): balance, grace,
-/// deactivation, dunning. Drives the renew/top-up banner with the real cut date
-/// instead of guessing from a billing date.
-final serviceStatusProvider = FutureProvider.autoDispose<ServiceStatus>((
+/// Canonical cross-client account/service health (GET /me/account-health).
+final accountHealthProvider = FutureProvider.autoDispose<AccountHealth>((
   ref,
 ) async {
   cacheFor(ref);
-  return ref.watch(catalogRepositoryProvider).serviceStatus();
+  return ref.watch(catalogRepositoryProvider).accountHealth();
 });
 
-/// Per-customer connection verdict (GET /me/connection-status, outage
-/// classifier P4): "what's wrong with my connection?" with area-outage blame
-/// suppression. Drives the Connection status screen + the slim Home banner.
-final connectionStatusProvider = FutureProvider.autoDispose<ConnectionStatus>((
-  ref,
-) async {
-  cacheFor(ref);
-  return ref.watch(catalogRepositoryProvider).connectionStatus();
-});
+/// The selected service's diagnosis is a projection of Account Health; it does
+/// not issue a second request or keep a parallel outage/session verdict.
+final connectionStatusProvider =
+    Provider.autoDispose<AsyncValue<ConnectionStatus?>>((ref) {
+      final selectedId = ref.watch(selectedServiceIdProvider);
+      return ref.watch(accountHealthProvider).whenData((health) {
+        final service = selectedId == null
+            ? (health.services.isEmpty ? null : health.services.first)
+            : health.forSubscription(selectedId);
+        return service?.connection.value;
+      });
+    });
 
 final subscriptionsProvider = FutureProvider.autoDispose<Page<Subscription>>((
   ref,
@@ -305,7 +306,8 @@ final currentServiceProvider = Provider.autoDispose<AsyncValue<Subscription?>>((
 /// [currentServiceProvider] and the dashboard service switcher so the default
 /// selection matches across the app.
 Subscription pickCurrentService(List<Subscription> services) {
-  final sorted = [...services]..sort((a, b) {
+  final sorted = [...services]
+    ..sort((a, b) {
       if (a.isActive != b.isActive) return a.isActive ? -1 : 1;
       final ad = a.startAt ?? DateTime.fromMillisecondsSinceEpoch(0);
       final bd = b.startAt ?? DateTime.fromMillisecondsSinceEpoch(0);
@@ -326,25 +328,25 @@ final selectedServiceIdProvider = StateProvider.autoDispose<String?>((ref) {
 /// switcher pick when set, else the shared current-service rule.
 final displayedServiceProvider =
     Provider.autoDispose<AsyncValue<Subscription?>>((ref) {
-  final selectedId = ref.watch(selectedServiceIdProvider);
-  return ref.watch(subscriptionsProvider).whenData((page) {
-    if (page.items.isEmpty) return null;
-    if (selectedId != null) {
-      for (final s in page.items) {
-        if (s.id == selectedId) return s;
-      }
-    }
-    return pickCurrentService(page.items);
-  });
-});
+      final selectedId = ref.watch(selectedServiceIdProvider);
+      return ref.watch(subscriptionsProvider).whenData((page) {
+        if (page.items.isEmpty) return null;
+        if (selectedId != null) {
+          for (final s in page.items) {
+            if (s.id == selectedId) return s;
+          }
+        }
+        return pickCurrentService(page.items);
+      });
+    });
 
 /// Add-ons (buyable options + active purchases) for a subscription. Drives the
 /// plan-conditional "Buy data" entry points and the active-bundles section.
 final addonsProvider = FutureProvider.autoDispose
     .family<AddonsAvailable, String>((ref, subscriptionId) async {
-  cacheFor(ref);
-  return ref.watch(catalogRepositoryProvider).addons(subscriptionId);
-});
+      cacheFor(ref);
+      return ref.watch(catalogRepositoryProvider).addons(subscriptionId);
+    });
 
 /// How the Invoices tab list is filtered.
 enum InvoiceFilter {
@@ -357,11 +359,11 @@ enum InvoiceFilter {
   final String label;
 
   bool test(Invoice inv) => switch (this) {
-        InvoiceFilter.all => true,
-        InvoiceFilter.unpaid => !inv.isPaid,
-        InvoiceFilter.overdue => inv.isOverdue,
-        InvoiceFilter.paid => inv.isPaid,
-      };
+    InvoiceFilter.all => true,
+    InvoiceFilter.unpaid => !inv.isPaid,
+    InvoiceFilter.overdue => inv.isOverdue,
+    InvoiceFilter.paid => inv.isPaid,
+  };
 }
 
 final invoiceFilterProvider = StateProvider.autoDispose<InvoiceFilter>((ref) {
@@ -372,9 +374,9 @@ final invoiceFilterProvider = StateProvider.autoDispose<InvoiceFilter>((ref) {
 /// My bank-transfer payment proofs (pending + reviewed).
 final paymentProofsProvider =
     FutureProvider.autoDispose<List<PaymentProofItem>>((ref) async {
-  cacheFor(ref);
-  return ref.watch(billingRepositoryProvider).myPaymentProofs();
-});
+      cacheFor(ref);
+      return ref.watch(billingRepositoryProvider).myPaymentProofs();
+    });
 
 /// All quota buckets for the subscriber, in a single round-trip.
 final quotaBucketsProvider = FutureProvider.autoDispose<List<QuotaBucket>>((
@@ -388,9 +390,9 @@ final quotaBucketsProvider = FutureProvider.autoDispose<List<QuotaBucket>>((
 /// The subscriber's RADIUS accounting (data-usage) sessions.
 final accountingSessionsProvider =
     FutureProvider.autoDispose<Page<AccountingSession>>((ref) async {
-  cacheFor(ref);
-  return ref.watch(usageRepositoryProvider).sessions();
-});
+      cacheFor(ref);
+      return ref.watch(usageRepositoryProvider).sessions();
+    });
 
 /// Selected window for the Usage tab summary (hour|today|week|cycle|all).
 final selectedUsagePeriodProvider = StateProvider.autoDispose<String>((ref) {
@@ -401,9 +403,9 @@ final selectedUsagePeriodProvider = StateProvider.autoDispose<String>((ref) {
 /// Windowed data-usage summary for a given period.
 final usageSummaryProvider = FutureProvider.autoDispose
     .family<UsageSummary, String>((ref, period) async {
-  cacheFor(ref);
-  return ref.watch(usageRepositoryProvider).usageSummary(period);
-});
+      cacheFor(ref);
+      return ref.watch(usageRepositoryProvider).usageSummary(period);
+    });
 
 /// Selected look-back window (days) for the long-history usage chart.
 /// 365 = 1Y, 730 = 2Y, 3660 = full archive (the endpoint's max).
@@ -414,11 +416,11 @@ final usageHistoryDaysProvider = StateProvider.autoDispose<int>((ref) {
 
 /// Long-history daily usage (GET /me/usage-history), aggregated to months in
 /// the UI. Keyed by the look-back window in days.
-final usageHistoryProvider =
-    FutureProvider.autoDispose.family<UsageHistory, int>((ref, days) async {
-  cacheFor(ref);
-  return ref.watch(usageRepositoryProvider).usageHistory(days: days);
-});
+final usageHistoryProvider = FutureProvider.autoDispose
+    .family<UsageHistory, int>((ref, days) async {
+      cacheFor(ref);
+      return ref.watch(usageRepositoryProvider).usageHistory(days: days);
+    });
 
 /// Selected range (hours back) for the speed-history chart.
 /// 1h / 6h / 24h / 7d / 30d.
@@ -431,13 +433,13 @@ final speedRangeHoursProvider = StateProvider.autoDispose<int>((ref) {
 /// look-back window in hours. VM-backed, so it reaches as far as VM retention.
 final bandwidthSeriesProvider = FutureProvider.autoDispose
     .family<List<BandwidthPoint>, int>((ref, hours) async {
-  cacheFor(ref);
-  final end = DateTime.now();
-  final start = end.subtract(Duration(hours: hours));
-  return ref
-      .watch(usageRepositoryProvider)
-      .bandwidthSeries(start: start, end: end);
-});
+      cacheFor(ref);
+      final end = DateTime.now();
+      final start = end.subtract(Duration(hours: hours));
+      return ref
+          .watch(usageRepositoryProvider)
+          .bandwidthSeries(start: start, end: end);
+    });
 
 /// Peak throughput this period (~30d window) for the at-a-glance tile, from
 /// /bandwidth/my/stats. Degrades to an empty value (tile shows "—") when the
@@ -532,16 +534,16 @@ final workOrdersProvider = FutureProvider.autoDispose<WorkOrdersSummary>((
 /// returns available=false otherwise, so the map self-hides.
 final technicianLocationProvider = StreamProvider.autoDispose
     .family<TechnicianLocation, String>((ref, workOrderId) async* {
-  final repo = ref.watch(workOrderRepositoryProvider);
-  while (true) {
-    try {
-      yield await repo.technicianLocation(workOrderId);
-    } catch (_) {
-      yield const TechnicianLocation(available: false, reason: 'error');
-    }
-    await Future<void>.delayed(const Duration(seconds: 20));
-  }
-});
+      final repo = ref.watch(workOrderRepositoryProvider);
+      while (true) {
+        try {
+          yield await repo.technicianLocation(workOrderId);
+        } catch (_) {
+          yield const TechnicianLocation(available: false, reason: 'error');
+        }
+        await Future<void>.delayed(const Duration(seconds: 20));
+      }
+    });
 
 final serviceLocationProvider = FutureProvider.autoDispose<ServiceLocation>((
   ref,
@@ -571,9 +573,9 @@ final ticketProvider = FutureProvider.autoDispose.family<Ticket, String>((
 
 final ticketCommentsProvider = FutureProvider.autoDispose
     .family<Page<TicketComment>, String>((ref, ticketId) async {
-  cacheFor(ref);
-  return ref.watch(supportRepositoryProvider).comments(ticketId);
-});
+      cacheFor(ref);
+      return ref.watch(supportRepositoryProvider).comments(ticketId);
+    });
 
 final quotesProvider = FutureProvider.autoDispose<List<Quote>>((ref) async {
   cacheFor(ref);

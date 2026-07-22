@@ -5426,6 +5426,17 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "GET /api/v1/me/account-health": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key"
+   ],
+   "request": null,
+   "responses": {
+    "200": "9b40b873423d",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "GET /api/v1/me/autopay": {
    "params": [
     "header:authorization",
@@ -5482,17 +5493,6 @@
    "request": null,
    "responses": {
     "200": "d4840518ed2f",
-    "422": "a11c9d9b2af8"
-   }
-  },
-  "GET /api/v1/me/connection-status": {
-   "params": [
-    "header:authorization",
-    "header:x-api-key"
-   ],
-   "request": null,
-   "responses": {
-    "200": "244b6e79c191",
     "422": "a11c9d9b2af8"
    }
   },
@@ -5684,17 +5684,6 @@
    "request": null,
    "responses": {
     "200": "bb5c68eb0317",
-    "422": "a11c9d9b2af8"
-   }
-  },
-  "GET /api/v1/me/service-status": {
-   "params": [
-    "header:authorization",
-    "header:x-api-key"
-   ],
-   "request": null,
-   "responses": {
-    "200": "f67dc075106e",
     "422": "a11c9d9b2af8"
    }
   },
@@ -18867,6 +18856,7 @@
   "MfaSetupResponse": "44209c458dbc",
   "MfaVerifyRequest": "eb4dabcdb3b8",
   "MikroTikScriptResponse": "b6abfe61cb61",
+  "MoneyAmountRead": "38ffd028db15",
   "MyLocationRead": "f9e44ef2d270",
   "MyLocationRequestCreate": "070e81d19d1c",
   "MyLocationRequestRead": "7a095cc41e3d",
@@ -19087,6 +19077,11 @@
   "PortUtilizationRead": "b062124724ee",
   "PortVlanCreate": "cea4c86aea54",
   "PortVlanRead": "090b4e5a17eb",
+  "PortalAccountHealthRead": "183a6ecd1950",
+  "PortalConnectionDiagnosisRead": "eb9756d33f61",
+  "PortalFinancialHealthRead": "788493dff6ef",
+  "PortalServiceHealthRead": "ac52ab57d66f",
+  "PortalSessionRead": "8fe0c72ef283",
   "PortalSessionResponse": "a40ab1015c3f",
   "PriceBasis": "f0f72bcdeeae",
   "PriceType": "991176fa607a",
@@ -19165,6 +19160,7 @@
   "RadiusProfileRead": "2c7de2aee451",
   "RadiusProfileSummary": "5e6959b280ee",
   "RadiusProfileUpdate": "40f3b49701c2",
+  "ReceivableLaneRead": "c9c05df6c607",
   "ReferAFriendRequest": "8bee3413c7ea",
   "ReferAFriendResponse": "4160efa8b93e",
   "ReferralAccountConversionRead": "9cf42c08688d",
@@ -19240,8 +19236,6 @@
   "ServiceStateTransitionUpdate": "9c12dbfd88a9",
   "ServiceStatusAction": "7a92398e0d65",
   "ServiceStatusActionKind": "3a5b0379d84f",
-  "ServiceStatusItem": "c75f0102afbb",
-  "ServiceStatusResponse": "38ae3c0302cf",
   "ServiceType": "fda443194483",
   "SessionCreate": "73aa4549de57",
   "SessionInfoResponse": "bea9f0553443",
@@ -19277,6 +19271,11 @@
   "StaffAccountCreate": "b6432e3a2f81",
   "StaffAccountRead": "cebf0aa826aa",
   "StaffAccountRolesUpdate": "cea929707cae",
+  "StateKind": "c193abe43198",
+  "StateRead_MoneyAmountRead_": "8588c889f98a",
+  "StateRead_PortalConnectionDiagnosisRead_": "109f11bc5a4d",
+  "StateRead_list_ReceivableLaneRead__": "69ce48d197da",
+  "StateRead_str_": "349c032033c4",
   "StatusIcon": "a2f487075407",
   "StatusPresentation": "849b7d3979d4",
   "StatusTone": "97e30697e883",

@@ -1,7 +1,7 @@
 import 'status_presentation.dart';
 
-/// Mirrors the customer-safe payload from the outage classifier P4 surface
-/// (GET /me/connection-status, backed by app/services/topology/connection_status.py).
+/// Mirrors one customer-safe connection diagnosis embedded in Account Health
+/// (GET /me/account-health, composed from topology.connection_status).
 ///
 /// Answers "what's wrong with my connection?" — the per-customer last-mile
 /// verdict, with area-outage blame suppression already applied server-side.
@@ -35,21 +35,16 @@ class ConnectionStatus {
     required this.headline,
     required this.message,
     required this.areaOutage,
-    StatusPresentation? statusPresentation,
+    required this.statusPresentation,
     this.advice,
     this.medium,
     this.checkedAt,
-  }) : _statusPresentation = statusPresentation;
+  });
 
   final ConnectionHealth state;
   final String headline;
   final String message;
-  final StatusPresentation? _statusPresentation;
-
-  /// Server-owned label/tone/icon semantics. Older cached payloads stay
-  /// neutral instead of rebuilding connection-state color policy on-device.
-  StatusPresentation get statusPresentation =>
-      _statusPresentation ?? StatusPresentation.neutralFallback(state.name);
+  final StatusPresentation statusPresentation;
 
   /// The one action for the customer to take, or null when there's nothing for
   /// them to do (we're fixing it, or an area outage suppresses self-blame).
@@ -72,10 +67,9 @@ class ConnectionStatus {
     final state = ConnectionHealth.fromWire(json['state'] as String?);
     return ConnectionStatus(
       state: state,
-      statusPresentation: json['status_presentation'] is Map
-          ? StatusPresentation.fromJson(
-              (json['status_presentation'] as Map).cast<String, dynamic>())
-          : StatusPresentation.neutralFallback(state.name),
+      statusPresentation: StatusPresentation.fromJson(
+        (json['status_presentation'] as Map).cast<String, dynamic>(),
+      ),
       headline: json['headline'] as String? ?? 'Connection status',
       message: json['message'] as String? ?? '',
       advice: json['advice'] as String?,

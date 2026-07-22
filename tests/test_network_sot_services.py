@@ -11,6 +11,8 @@ from app.models.usage import AccountingStatus, RadiusAccountingSession
 from app.services.network.access_path import summarize_subscription_access_path
 from app.services.network.identity import identity_for_subscription
 from app.services.network.radius_sessions import (
+    SubscriptionSessionBinding,
+    SubscriptionSessionState,
     active_session_count_for_subscriber,
     latest_accounting_observation_at,
     latest_open_accounting_session_for_subscription,
@@ -19,6 +21,7 @@ from app.services.network.radius_sessions import (
     live_nas_device_ids_for_subscription,
     recent_nas_history_by_subscription,
     resolve_subscriber_radius_sessions,
+    subscription_session_snapshots,
 )
 from app.services.network.sot_relationships import (
     dependencies_for,
@@ -184,6 +187,80 @@ def test_live_nas_evidence_can_require_exact_subscription_binding(
         first_nas.id,
         second_nas.id,
     }
+
+
+def test_subscription_session_snapshot_does_not_leak_unbound_session_to_siblings(
+    db_session, subscriber, catalog_offer
+):
+    first = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=catalog_offer.id,
+        status=SubscriptionStatus.active,
+    )
+    second = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=catalog_offer.id,
+        status=SubscriptionStatus.active,
+    )
+    db_session.add_all([first, second])
+    db_session.flush()
+    db_session.add(
+        RadiusActiveSession(
+            subscriber_id=subscriber.id,
+            subscription_id=None,
+            username="ambiguous-unbound",
+            acct_session_id="ambiguous-unbound",
+            session_start=datetime.now(UTC),
+            last_update=datetime.now(UTC),
+            framed_ip_address="10.0.0.50",
+        )
+    )
+    db_session.flush()
+
+    snapshots = subscription_session_snapshots(db_session, [first, second])
+
+    assert snapshots[first.id].state == SubscriptionSessionState.offline
+    assert snapshots[second.id].state == SubscriptionSessionState.offline
+    assert snapshots[first.id].binding == SubscriptionSessionBinding.none
+    assert snapshots[second.id].binding == SubscriptionSessionBinding.none
+
+
+def test_subscription_session_snapshot_prefers_exact_bound_session(
+    db_session, subscriber, catalog_offer
+):
+    first = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=catalog_offer.id,
+        status=SubscriptionStatus.active,
+    )
+    second = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=catalog_offer.id,
+        status=SubscriptionStatus.active,
+    )
+    db_session.add_all([first, second])
+    db_session.flush()
+    db_session.add(
+        RadiusActiveSession(
+            subscriber_id=subscriber.id,
+            subscription_id=first.id,
+            username="first-bound",
+            acct_session_id="first-bound",
+            session_start=datetime.now(UTC),
+            last_update=datetime.now(UTC),
+            framed_ip_address="10.0.0.51",
+        )
+    )
+    db_session.flush()
+
+    snapshots = subscription_session_snapshots(db_session, [first, second])
+
+    assert snapshots[first.id].state == SubscriptionSessionState.connected
+    assert snapshots[first.id].binding == (
+        SubscriptionSessionBinding.exact_subscription
+    )
+    assert snapshots[first.id].framed_ip_address == "10.0.0.51"
+    assert snapshots[second.id].state == SubscriptionSessionState.offline
 
 
 def test_open_accounting_session_helpers_use_newest_non_stop_session(

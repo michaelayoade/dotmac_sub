@@ -632,6 +632,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "support.ticket_bulk_commands",
     )
     assert sot_relationships.dependencies_for("ui.status_presentation") == (
+        "customer.service_status",
         "financial.invoices",
         "financial.payments",
         "network.device_state",
