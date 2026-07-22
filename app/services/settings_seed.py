@@ -490,21 +490,6 @@ def seed_notification_settings(db: Session) -> None:
             else SettingValueType.string,
             value_text=os.getenv(env_name, default),
         )
-    for key, env_name, default in [
-        (
-            "notification_quiet_hours_enabled",
-            "NOTIFICATION_QUIET_HOURS_ENABLED",
-            "false",
-        ),
-    ]:
-        raw = os.getenv(env_name, default)
-        notification_settings.ensure_by_key(
-            db,
-            key=key,
-            value_type=SettingValueType.boolean,
-            value_text=raw,
-            value_json=raw.lower() in {"1", "true", "yes", "on"},
-        )
 
 
 def _seed_missing_notification_templates(db: Session) -> int:
@@ -1131,18 +1116,6 @@ def seed_collections_settings(db: Session) -> None:
     )
     collections_settings.ensure_by_key(
         db,
-        key="prepaid_blocking_time",
-        value_type=SettingValueType.string,
-        value_text=os.getenv("PREPAID_BLOCKING_TIME", "08:00"),
-    )
-    collections_settings.ensure_by_key(
-        db,
-        key="enforcement_window_mode",
-        value_type=SettingValueType.string,
-        value_text=os.getenv("ENFORCEMENT_WINDOW_MODE", "audit"),
-    )
-    collections_settings.ensure_by_key(
-        db,
         key="enforcement_window_start",
         value_type=SettingValueType.string,
         value_text=os.getenv("ENFORCEMENT_WINDOW_START", ""),
@@ -1152,56 +1125,6 @@ def seed_collections_settings(db: Session) -> None:
         key="enforcement_window_end",
         value_type=SettingValueType.string,
         value_text=os.getenv("ENFORCEMENT_WINDOW_END", ""),
-    )
-    enforcement_skip_weekends = os.getenv("ENFORCEMENT_SKIP_WEEKENDS", "false")
-    collections_settings.ensure_by_key(
-        db,
-        key="enforcement_skip_weekends",
-        value_type=SettingValueType.boolean,
-        value_text=enforcement_skip_weekends,
-        value_json=enforcement_skip_weekends.lower() in {"1", "true", "yes", "on"},
-    )
-    enforcement_skip_holidays_raw = os.getenv("ENFORCEMENT_SKIP_HOLIDAYS", "[]")
-    try:
-        enforcement_skip_holidays = json.loads(enforcement_skip_holidays_raw)
-    except json.JSONDecodeError:
-        enforcement_skip_holidays = []
-    collections_settings.ensure_by_key(
-        db,
-        key="enforcement_skip_holidays",
-        value_type=SettingValueType.json,
-        value_json=enforcement_skip_holidays,
-    )
-    prepaid_skip_weekends_raw = os.getenv("PREPAID_SKIP_WEEKENDS", "false")
-    collections_settings.ensure_by_key(
-        db,
-        key="prepaid_skip_weekends",
-        value_type=SettingValueType.boolean,
-        value_text=prepaid_skip_weekends_raw,
-        value_json=prepaid_skip_weekends_raw.lower() in {"1", "true", "yes", "on"},
-    )
-    prepaid_skip_holidays_raw = os.getenv("PREPAID_SKIP_HOLIDAYS", "[]")
-    try:
-        prepaid_skip_holidays_value = json.loads(prepaid_skip_holidays_raw)
-    except json.JSONDecodeError:
-        prepaid_skip_holidays_value = []
-    collections_settings.ensure_by_key(
-        db,
-        key="prepaid_skip_holidays",
-        value_type=SettingValueType.json,
-        value_json=prepaid_skip_holidays_value,
-    )
-    collections_settings.ensure_by_key(
-        db,
-        key="prepaid_readiness_max_age_minutes",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("PREPAID_READINESS_MAX_AGE_MINUTES", "60"),
-    )
-    collections_settings.ensure_by_key(
-        db,
-        key="prepaid_activation_max_grace_days",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("PREPAID_ACTIVATION_MAX_GRACE_DAYS", "0"),
     )
     collections_settings.ensure_by_key(
         db,
@@ -1363,14 +1286,6 @@ def seed_scheduler_settings(db: Session) -> None:
         key="refresh_minutes",
         value_type=SettingValueType.integer,
         value_text=os.getenv("CELERY_BEAT_REFRESH_MINUTES", "5"),
-    )
-    event_dispatch_enabled = os.getenv("EVENT_DISPATCH_ENABLED", "true")
-    scheduler_settings.ensure_by_key(
-        db,
-        key="event_dispatch_enabled",
-        value_type=SettingValueType.boolean,
-        value_text=event_dispatch_enabled,
-        value_json=event_dispatch_enabled.lower() in {"1", "true", "yes", "on"},
     )
     scheduler_settings.ensure_by_key(
         db,
@@ -1645,22 +1560,6 @@ def seed_billing_settings(db: Session) -> None:
         value_type=SettingValueType.string,
         value_text=os.getenv("BILLING_DEFAULT_PAYMENT_STATUS", "pending"),
     )
-    billing_enabled_raw = os.getenv("BILLING_ENABLED", "true")
-    billing_settings.ensure_by_key(
-        db,
-        key="billing_enabled",
-        value_type=SettingValueType.boolean,
-        value_text=billing_enabled_raw,
-    )
-    # Pin the expected master-switch value so the hourly check_billing_switch
-    # guard alarms if billing is ever turned OFF (drift = actual != expected).
-    # Default "true": post-cutover DotMac is the biller of record.
-    billing_settings.ensure_by_key(
-        db,
-        key="billing_enabled_expected",
-        value_type=SettingValueType.boolean,
-        value_text=os.getenv("BILLING_ENABLED_EXPECTED", "true"),
-    )
     billing_settings.ensure_by_key(
         db,
         key="billing_interval_seconds",
@@ -1681,17 +1580,6 @@ def seed_billing_settings(db: Session) -> None:
         key="autopay_max_consecutive_failures",
         value_type=SettingValueType.integer,
         value_text=os.getenv("BILLING_AUTOPAY_MAX_CONSECUTIVE_FAILURES", "3"),
-    )
-    customer_balance_notifications_raw = os.getenv(
-        "BILLING_CUSTOMER_BALANCE_NOTIFICATIONS_ENABLED", "true"
-    )
-    billing_settings.ensure_by_key(
-        db,
-        key="customer_balance_notifications_enabled",
-        value_type=SettingValueType.boolean,
-        value_text=customer_balance_notifications_raw,
-        value_json=customer_balance_notifications_raw.lower()
-        in {"1", "true", "yes", "on"},
     )
     billing_settings.ensure_by_key(
         db,
@@ -1789,6 +1677,12 @@ def seed_billing_settings(db: Session) -> None:
     )
     billing_settings.ensure_by_key(
         db,
+        key="subscription_billing_treatment_max_days",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("BILLING_SUBSCRIPTION_TREATMENT_MAX_DAYS", "366"),
+    )
+    billing_settings.ensure_by_key(
+        db,
         key="topup_preset_amounts",
         value_type=SettingValueType.string,
         value_text=os.getenv(
@@ -1854,14 +1748,6 @@ def seed_billing_settings(db: Session) -> None:
         value_type=SettingValueType.string,
         value_text=os.getenv("BILLING_HEALTH_PAYMENT_BASELINE_MIN_DAILY", "5.0"),
     )
-    invoice_enabled_raw = os.getenv("BILLING_INVOICE_NUMBER_ENABLED", "true")
-    billing_settings.ensure_by_key(
-        db,
-        key="invoice_number_enabled",
-        value_type=SettingValueType.boolean,
-        value_text=invoice_enabled_raw,
-        value_json=invoice_enabled_raw.lower() in {"1", "true", "yes", "on"},
-    )
     billing_settings.ensure_by_key(
         db,
         key="invoice_number_prefix",
@@ -1880,14 +1766,6 @@ def seed_billing_settings(db: Session) -> None:
         key="invoice_number_start",
         value_type=SettingValueType.integer,
         value_text=os.getenv("BILLING_INVOICE_NUMBER_START", "1"),
-    )
-    credit_note_enabled_raw = os.getenv("BILLING_CREDIT_NOTE_NUMBER_ENABLED", "true")
-    billing_settings.ensure_by_key(
-        db,
-        key="credit_note_number_enabled",
-        value_type=SettingValueType.boolean,
-        value_text=credit_note_enabled_raw,
-        value_json=credit_note_enabled_raw.lower() in {"1", "true", "yes", "on"},
     )
     billing_settings.ensure_by_key(
         db,
@@ -2091,26 +1969,6 @@ def seed_collections_policy_settings(db: Session) -> None:
         value_text=os.getenv("COLLECTIONS_DEFAULT_DUNNING_CASE_STATUS", "open"),
     )
     for key, env_name, default in [
-        (
-            "billing_enforcement_health_gates_enabled",
-            "BILLING_ENFORCEMENT_HEALTH_GATES_ENABLED",
-            "true",
-        ),
-        (
-            "billing_enforcement_require_notification_health",
-            "BILLING_ENFORCEMENT_REQUIRE_NOTIFICATION_HEALTH",
-            "false",
-        ),
-        (
-            "billing_enforcement_require_payment_health",
-            "BILLING_ENFORCEMENT_REQUIRE_PAYMENT_HEALTH",
-            "true",
-        ),
-        (
-            "billing_enforcement_settle_credit_before_dunning_enabled",
-            "BILLING_ENFORCEMENT_SETTLE_CREDIT_BEFORE_DUNNING_ENABLED",
-            "true",
-        ),
         (
             "billing_enforcement_require_active_gateway",
             "BILLING_ENFORCEMENT_REQUIRE_ACTIVE_GATEWAY",

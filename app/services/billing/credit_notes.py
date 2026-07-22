@@ -614,11 +614,10 @@ class CreditNotes(ListResponseMixin):
             if default_currency:
                 data["currency"] = default_currency
         if not data.get("credit_number"):
-            generated = numbering.generate_number(
+            generated = numbering.generate_required_number(
                 db,
                 SettingDomain.billing,
                 "credit_note_number",
-                "credit_note_number_enabled",
                 "credit_note_number_prefix",
                 "credit_note_number_padding",
                 "credit_note_number_start",
@@ -737,11 +736,10 @@ class CreditNotes(ListResponseMixin):
             db, key=key, account_id=payload.account_id
         )
 
-        credit_number = payload.credit_number or numbering.generate_number(
+        credit_number = payload.credit_number or numbering.generate_required_number(
             db,
             SettingDomain.billing,
             "credit_note_number",
-            "credit_note_number_enabled",
             "credit_note_number_prefix",
             "credit_note_number_padding",
             "credit_note_number_start",

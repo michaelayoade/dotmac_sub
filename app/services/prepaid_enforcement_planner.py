@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from collections.abc import Collection, Sequence
-from dataclasses import dataclass, replace
-from datetime import UTC, date, datetime
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
 from uuid import UUID
@@ -22,7 +22,7 @@ from app.models.catalog import BillingMode, Subscription, SubscriptionBundle
 from app.models.domain_settings import SettingDomain
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.subscriber import Subscriber, SubscriberStatus
-from app.services import control_registry, enforcement_window, settings_spec
+from app.services import enforcement_window, settings_spec
 from app.services.access_resolution import (
     PrepaidFundingDecision,
     prepaid_enforcement_filters,
@@ -30,10 +30,6 @@ from app.services.access_resolution import (
 )
 from app.services.billing_communication_policy import (
     billing_communication_decisions,
-)
-from app.services.billing_enforcement_guards import (
-    EnforcementHealth,
-    billing_enforcement_health,
 )
 from app.services.billing_profile import resolve_billing_profile
 from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
@@ -47,8 +43,6 @@ from app.services.common import coerce_uuid
 from app.services.domain_errors import DomainError
 from app.services.prepaid_currency import resolve_prepaid_enforcement_currency
 
-PREPAID_BALANCE_ENFORCEMENT_CONTROL = "collections.prepaid_balance_enforcement"
-
 
 class PrepaidEnforcementAction(StrEnum):
     not_applicable = "not_applicable"
@@ -61,14 +55,9 @@ class PrepaidEnforcementAction(StrEnum):
     deferred = "deferred"
     suspend = "suspend"
     shielded = "shielded"
-    health_blocked = "health_blocked"
     state_drift = "state_drift"
     already_suspended = "already_suspended"
     ok = "ok"
-
-
-class PrepaidEnforcementPolicyIssue(StrEnum):
-    READINESS_NOT_RECORDED = "prepaid_enforcement_readiness_not_recorded"
 
 
 class PrepaidEnforcementReasonSource(StrEnum):
@@ -77,7 +66,6 @@ class PrepaidEnforcementReasonSource(StrEnum):
     COVERAGE = "prepaid_service_coverage"
     WINDOW = "enforcement_window"
     SHIELD = "financial_shield"
-    HEALTH = "enforcement_health"
 
 
 class PrepaidEnforcementError(DomainError):
@@ -86,28 +74,10 @@ class PrepaidEnforcementError(DomainError):
 
 @dataclass(frozen=True, slots=True)
 class PrepaidEnforcementPolicy:
-    activation_at: datetime | None
-    activation_error: PrepaidEnforcementPolicyIssue | None
     warning_subject: str
     warning_body: str
     deactivation_subject: str
     deactivation_body: str
-    blocking_time: str | None
-    skip_weekends: bool
-    skip_holidays: tuple[str, ...]
-
-    def report_values(self) -> dict[str, object]:
-        """Return operational policy without customer-message templates."""
-        return {
-            "activation_at": self.activation_at,
-            "activation_ready": self.activation_error is None,
-            "activation_error": (
-                self.activation_error.value if self.activation_error else None
-            ),
-            "blocking_time": self.blocking_time,
-            "skip_weekends": self.skip_weekends,
-            "skip_holidays": list(self.skip_holidays),
-        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,6 +97,7 @@ class PrepaidEnforcementPlanItem:
     suspended_subscription_count: int
     active_prepaid_lock_count: int
     covered_subscription_ids: tuple[UUID, ...]
+    non_billable_subscription_ids: tuple[UUID, ...]
     actionable_uncovered_subscription_ids: tuple[UUID, ...]
     unresolved_projection_subscription_ids: tuple[UUID, ...]
     prepaid_low_balance_at: datetime | None
@@ -156,6 +127,9 @@ class PrepaidEnforcementPlanItem:
             "covered_subscription_ids": [
                 str(value) for value in self.covered_subscription_ids
             ],
+            "non_billable_subscription_ids": [
+                str(value) for value in self.non_billable_subscription_ids
+            ],
             "actionable_uncovered_subscription_ids": [
                 str(value) for value in self.actionable_uncovered_subscription_ids
             ],
@@ -175,7 +149,6 @@ class PrepaidEnforcementPlanItem:
 @dataclass(frozen=True, slots=True)
 class PrepaidEnforcementPlan:
     generated_at: datetime
-    control_enabled: bool
     policy: PrepaidEnforcementPolicy
     funding_owner: str
     funding_observed_at: datetime
@@ -189,8 +162,6 @@ class PrepaidEnforcementPlan:
     def to_dict(self, *, include_items: bool = True) -> dict[str, object]:
         result: dict[str, object] = {
             "generated_at": self.generated_at,
-            "control_enabled": self.control_enabled,
-            "policy": self.policy.report_values(),
             "funding_owner": self.funding_owner,
             "funding_observed_at": self.funding_observed_at,
             "accounts": len(self.items),
@@ -207,10 +178,6 @@ class PrepaidEnforcementPlan:
         return result
 
 
-def prepaid_balance_enforcement_enabled(db: Session) -> bool:
-    return control_registry.is_enabled(db, PREPAID_BALANCE_ENFORCEMENT_CONTROL)
-
-
 def resolve_prepaid_enforcement_policy(db: Session) -> PrepaidEnforcementPolicy:
     def _string(key: str) -> str:
         value = settings_spec.resolve_value(db, SettingDomain.collections, key)
@@ -223,60 +190,11 @@ def resolve_prepaid_enforcement_policy(db: Session) -> PrepaidEnforcementPolicy:
             )
         return text
 
-    from app.services.prepaid_enforcement_readiness import (
-        active_prepaid_enforcement_readiness,
-    )
-
-    readiness = active_prepaid_enforcement_readiness(db)
-    activation_at = (
-        _as_utc(readiness.intended_activation_at) if readiness is not None else None
-    )
-    activation_error = (
-        None
-        if readiness is not None
-        else PrepaidEnforcementPolicyIssue.READINESS_NOT_RECORDED
-    )
-    holidays_raw = settings_spec.resolve_value(
-        db, SettingDomain.collections, "prepaid_skip_holidays"
-    )
-    holidays: tuple[str, ...] = ()
-    if isinstance(holidays_raw, list):
-        normalized_holidays: list[str] = []
-        for raw_day in holidays_raw:
-            day = str(raw_day).strip()
-            try:
-                normalized_holidays.append(date.fromisoformat(day).isoformat())
-            except ValueError:
-                raise PrepaidEnforcementError(
-                    code="financial.prepaid_enforcement.invalid_holiday",
-                    message="A prepaid enforcement holiday is not an ISO date.",
-                ) from None
-        holidays = tuple(normalized_holidays)
-    blocking_time = settings_spec.resolve_value(
-        db, SettingDomain.collections, "prepaid_blocking_time"
-    )
-    blocking_time_text = (
-        str(blocking_time).strip() if blocking_time is not None else None
-    )
-    if blocking_time_text and enforcement_window.parse_time(blocking_time_text) is None:
-        raise PrepaidEnforcementError(
-            code="financial.prepaid_enforcement.invalid_blocking_time",
-            message="The prepaid blocking time must use HH:MM or HH:MM:SS.",
-        )
     return PrepaidEnforcementPolicy(
-        activation_at=activation_at,
-        activation_error=activation_error,
         warning_subject=_string("prepaid_warning_subject"),
         warning_body=_string("prepaid_warning_body"),
         deactivation_subject=_string("prepaid_deactivation_subject"),
         deactivation_body=_string("prepaid_deactivation_body"),
-        blocking_time=blocking_time_text,
-        skip_weekends=bool(
-            settings_spec.resolve_value(
-                db, SettingDomain.collections, "prepaid_skip_weekends"
-            )
-        ),
-        skip_holidays=holidays,
     )
 
 
@@ -439,15 +357,8 @@ def _window_block_reason(
     db: Session,
     *,
     now: datetime,
-    policy: PrepaidEnforcementPolicy,
 ) -> str | None:
-    local_now = enforcement_window.to_local(db, now)
-    return enforcement_window.window_block_reason(
-        local_now,
-        start_time=enforcement_window.parse_time(policy.blocking_time),
-        skip_weekends=policy.skip_weekends,
-        skip_holidays=list(policy.skip_holidays),
-    )
+    return enforcement_window.resolve_enforcement_window_decision(db, now).block_reason
 
 
 def plan_prepaid_account(
@@ -462,7 +373,6 @@ def plan_prepaid_account(
     dedicated_bundle: bool | None = None,
     shield_reason: str | None = None,
     shield_evaluated: bool = False,
-    enforcement_health: EnforcementHealth | None = None,
     notice_suppression_reason: str | None = None,
 ) -> PrepaidEnforcementPlanItem:
     """Classify one account without mutating it."""
@@ -625,7 +535,7 @@ def plan_prepaid_account(
     elif not zero_grace and grace.phase != "actionable":
         action = PrepaidEnforcementAction.waiting
         reason = "deactivation_grace_not_elapsed"
-    elif window_reason := _window_block_reason(db, now=now, policy=policy):
+    elif window_reason := _window_block_reason(db, now=now):
         action = PrepaidEnforcementAction.deferred
         reason = window_reason
         reason_source = PrepaidEnforcementReasonSource.WINDOW
@@ -647,14 +557,8 @@ def plan_prepaid_account(
                 reason = shield_reason
                 reason_source = PrepaidEnforcementReasonSource.SHIELD
             else:
-                health = enforcement_health or billing_enforcement_health(db)
-                if not health.ok:
-                    action = PrepaidEnforcementAction.health_blocked
-                    reason = ",".join(health.reasons) or "enforcement_health_failed"
-                    reason_source = PrepaidEnforcementReasonSource.HEALTH
-                else:
-                    action = PrepaidEnforcementAction.suspend
-                    reason = "low_balance_deactivation_due"
+                action = PrepaidEnforcementAction.suspend
+                reason = "low_balance_deactivation_due"
 
     return PrepaidEnforcementPlanItem(
         account_id=str(account.id),
@@ -672,6 +576,7 @@ def plan_prepaid_account(
         suspended_subscription_count=suspended_count,
         active_prepaid_lock_count=active_prepaid_lock_count,
         covered_subscription_ids=funding.covered_subscription_ids,
+        non_billable_subscription_ids=funding.non_billable_subscription_ids,
         actionable_uncovered_subscription_ids=(
             funding.actionable_uncovered_subscription_ids
         ),
@@ -696,9 +601,8 @@ def plan_prepaid_enforcement(
     now: datetime | None = None,
     account_ids: Sequence[UUID | str] | None = None,
     limit: int | None = None,
-    activation_at: datetime | None = None,
 ) -> PrepaidEnforcementPlan:
-    """Build a deterministic, side-effect-free production readiness report."""
+    """Build a deterministic, side-effect-free enforcement report."""
     generated_at = _as_utc(now) if now is not None else datetime.now(UTC)
     raw_ids = (
         list(account_ids)
@@ -750,12 +654,6 @@ def plan_prepaid_enforcement(
         subscriptions_by_account[subscription.subscriber_id].append(subscription)
 
     policy = resolve_prepaid_enforcement_policy(db)
-    if activation_at is not None:
-        policy = replace(
-            policy,
-            activation_at=_as_utc(activation_at),
-            activation_error=None,
-        )
     funding_by_account = {
         account.id: resolve_prepaid_funding(db, account, now=generated_at)
         for account in accounts
@@ -765,7 +663,6 @@ def plan_prepaid_enforcement(
     dedicated_accounts = _dedicated_bundle_account_ids(db, resolved_ids)
     shield_reasons = _bulk_dunning_shield_reasons(db, set(resolved_ids))
     notice_reasons = prepaid_notice_suppression_reasons(db, resolved_ids)
-    health = billing_enforcement_health(db)
 
     items = tuple(
         plan_prepaid_account(
@@ -779,14 +676,12 @@ def plan_prepaid_enforcement(
             dedicated_bundle=account.id in dedicated_accounts,
             shield_reason=shield_reasons.get(account.id),
             shield_evaluated=True,
-            enforcement_health=health,
             notice_suppression_reason=notice_reasons.get(account.id),
         )
         for account in accounts
     )
     return PrepaidEnforcementPlan(
         generated_at=generated_at,
-        control_enabled=prepaid_balance_enforcement_enabled(db),
         policy=policy,
         funding_owner="financial.prepaid_funding_reconstruction",
         funding_observed_at=generated_at,

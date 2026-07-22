@@ -192,16 +192,17 @@ The recurring owner also requires a positive contracted
 `Subscription.unit_price`; it never substitutes the current catalog amount for
 missing imported terms. Missing or zero contract prices are reported as
 `prepaid_renewals_missing_price` and must be repaired through the subscription
-owner before recurring renewal is enabled. Payment-triggered renewal consumes
+owner. Payment-triggered renewal consumes
 the same resolver and leaves confirmed money as account credit when contract
 price evidence is missing.
 
-`billing.prepaid_service_renewals` is the temporary production cutover gate for
-the sole renewal owner. The older monthly-prepaid draft-invoice control, alias,
-and scheduled code path are retired by migration 392 and cannot run in parallel
-or be re-enabled by a stale setting row. While canonical renewals are disabled,
-prepaid enforcement adverse actions fail closed. Payment-triggered renewals
-continue through the payment owner and the same canonical price resolver.
+The older monthly-prepaid draft-invoice control, alias, and scheduled code path
+are retired by migration 392. Migration 398 also retires the temporary renewal
+and enforcement runtime controls: the sole renewal owner evaluates due services
+on every scheduled pass. Account quarantine, missing baselines, missing contract
+prices, invalid profiles, and insufficient funding remain explicit outcomes.
+Payment-triggered renewal continues through the payment owner and the same
+canonical price resolver.
 
 The scheduled renewal pass excludes accounts quarantined by the reconstruction
 owner and reports them as `prepaid_renewals_quarantined`. An unexpected
@@ -277,11 +278,10 @@ invokes the payment owner itself.
 
 7. Start the new application and verify the materialized cohort against the
    reviewed positions plus post-baseline native events, and verify that the
-   signed quarantine receives no money-based action. The prepaid enforcement
-   control remains the explicit kill switch, the readiness record owns the
-   intended activation timestamp, and zero-day grace remains explicit
-   configuration. Cutover adds no initial grace or shadow period: when the
-   control and readiness are active, the owner enforces immediately.
+   signed quarantine receives no money-based action. Historical readiness rows
+   remain cutover evidence, not runtime authority. Zero-day grace remains
+   explicit configuration, and the owner begins applying account-scoped policy
+   as soon as the authority baseline exists.
 
 Before step 6, aborting the deployment leaves authority unchanged. Step 6 is
 the final authority cutover. The Alembic downgrade refuses to drop the tables

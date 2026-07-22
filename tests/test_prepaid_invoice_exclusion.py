@@ -122,8 +122,8 @@ def test_renewal_owner_suppresses_legacy_prepaid_invoice_path_even_in_dry_run(
             DomainSetting(
                 domain=SettingDomain.modules,
                 key="billing_prepaid_service_renewals",
-                value_text="true",
-                value_json=True,
+                value_text="false",
+                value_json=False,
                 is_active=True,
             ),
         ]

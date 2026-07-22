@@ -268,7 +268,6 @@ def test_postpaid_enforcement_is_evidenced_and_deferred_outside_window(
         "app.services.collections._core.enforcement_window."
         "resolve_enforcement_window_decision",
         lambda db: EnforcementWindowDecision(
-            mode="enforce",
             inside_window=False,
             block_reason="outside_window",
         ),
@@ -285,7 +284,6 @@ def test_postpaid_enforcement_is_evidenced_and_deferred_outside_window(
 
     assert preview.eligible is False
     assert preview.outcome == "outside_enforcement_window"
-    assert preview.decision_inputs["enforcement_window_mode"] == "enforce"
     assert preview.decision_inputs["enforcement_window_block_reason"] == (
         "outside_window"
     )
@@ -305,34 +303,6 @@ def test_postpaid_enforcement_is_evidenced_and_deferred_outside_window(
     assert result.consequence.eligible is False
     assert result.consequence.outcome == "outside_enforcement_window"
     assert db_session.query(EnforcementLock).count() == 0
-
-
-def test_postpaid_enforcement_audit_mode_does_not_defer(
-    db_session, subscriber_account, subscription, monkeypatch
-):
-    _prepare_postpaid(db_session, subscriber_account, subscription)
-    monkeypatch.setattr(
-        "app.services.collections._core.enforcement_window."
-        "resolve_enforcement_window_decision",
-        lambda db: EnforcementWindowDecision(
-            mode="audit",
-            inside_window=False,
-            block_reason="outside_window",
-        ),
-    )
-
-    preview = preview_financial_access_consequence(
-        db_session,
-        str(subscriber_account.id),
-        action=FinancialAccessAction.suspend,
-        reason=EnforcementReason.overdue,
-        origin=FinancialAccessOrigin.dunning,
-        overdue_days=7,
-    )
-
-    assert preview.eligible is True
-    assert preview.outcome == "suspend_ready"
-    assert preview.decision_inputs["enforcement_window_mode"] == "audit"
 
 
 def test_restore_confirmation_links_lock_case_and_exact_profile(

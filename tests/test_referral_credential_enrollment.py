@@ -56,6 +56,15 @@ from app.web.customer import auth as customer_auth_web
 from tests.referral_program_testkit import ensure_code
 
 
+@pytest.fixture(autouse=True)
+def _allow_immediate_notification_delivery(monkeypatch):
+    """Keep enrollment delivery tests independent of quiet-hour timing."""
+    monkeypatch.setattr(
+        "app.services.notification.quiet_hours_send_at",
+        lambda _db: None,
+    )
+
+
 def _email(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:10]}@example.com"
 

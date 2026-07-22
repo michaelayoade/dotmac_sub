@@ -1,8 +1,8 @@
-"""Fail-closed acceptance check for the prepaid renewal deployment.
+"""Read-only integrity check for the prepaid renewal deployment.
 
 This command composes canonical owners and performs no writes. It verifies the
-running revision, database head, materialized funding authority, readiness and
-enforcement controls, then fingerprints the complete exact-evidence service
+running revision, database head, materialized funding authority, then
+fingerprints the complete exact-evidence service
 coverage cohort. PostgreSQL sessions are read-only, primary execution requires
 ``--allow-primary``, and the session is always rolled back.
 """
@@ -20,21 +20,12 @@ from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
-from app.models.prepaid_enforcement import PrepaidEnforcementReadiness
 from app.models.prepaid_funding import (
     PrepaidFundingBaseline,
     PrepaidFundingReconstructionBatch,
 )
-from app.services import control_registry
 from app.services.prepaid_coverage_reconciliation import (
     preview_prepaid_coverage_reconciliation,
-)
-from app.services.prepaid_enforcement_planner import (
-    prepaid_balance_enforcement_enabled,
-    resolve_prepaid_enforcement_policy,
-)
-from app.services.prepaid_enforcement_readiness import (
-    prepaid_enforcement_readiness_block_reason,
 )
 from scripts.one_off.billing_alignment_audit import _configure_read_only_session
 
@@ -46,7 +37,6 @@ class AcceptanceExpectation:
     minimum_active_baselines: int
     coverage_fingerprint: str
     coverage_subscription_count: int
-    renewal_control_enabled: bool
 
 
 @dataclass(frozen=True)
@@ -55,12 +45,6 @@ class AcceptanceObservation:
     alembic_heads: tuple[str, ...]
     active_baselines: int
     authority_cutover_batches: int
-    active_readiness_records: int
-    enforcement_enabled: bool
-    renewal_control_enabled: bool
-    activation_at: str | None
-    activation_error: str | None
-    readiness_block_reason: str | None
     coverage_fingerprint: str
     coverage_subscription_count: int
     coverage_repairable_count: int
@@ -83,7 +67,6 @@ def _timestamp(value: str) -> datetime:
 
 
 def _collect_observation(db: Session, *, as_of: datetime) -> AcceptanceObservation:
-    policy = resolve_prepaid_enforcement_policy(db)
     coverage = preview_prepaid_coverage_reconciliation(db, as_of=as_of)
     alembic_heads = tuple(
         sorted(
@@ -110,25 +93,6 @@ def _collect_observation(db: Session, *, as_of: datetime) -> AcceptanceObservati
             )
             or 0
         ),
-        active_readiness_records=int(
-            db.scalar(
-                select(func.count(PrepaidEnforcementReadiness.id)).where(
-                    PrepaidEnforcementReadiness.is_active.is_(True)
-                )
-            )
-            or 0
-        ),
-        enforcement_enabled=prepaid_balance_enforcement_enabled(db),
-        renewal_control_enabled=control_registry.is_enabled(
-            db, "billing.prepaid_service_renewals"
-        ),
-        activation_at=(
-            policy.activation_at.isoformat()
-            if policy.activation_at is not None
-            else None
-        ),
-        activation_error=policy.activation_error,
-        readiness_block_reason=prepaid_enforcement_readiness_block_reason(db),
         coverage_fingerprint=coverage.fingerprint,
         coverage_subscription_count=len(coverage.subscription_ids),
         coverage_repairable_count=coverage.repairable_count,
@@ -148,16 +112,6 @@ def evaluate_acceptance(
             observation.active_baselines >= expectation.minimum_active_baselines
         ),
         "single_authority_cutover": observation.authority_cutover_batches == 1,
-        "single_active_readiness": observation.active_readiness_records == 1,
-        "enforcement_enabled": observation.enforcement_enabled,
-        "renewal_control_state": (
-            observation.renewal_control_enabled == expectation.renewal_control_enabled
-        ),
-        "activation_valid": (
-            observation.activation_at is not None
-            and observation.activation_error is None
-        ),
-        "readiness_unblocked": observation.readiness_block_reason is None,
         "coverage_fingerprint": (
             observation.coverage_fingerprint == expectation.coverage_fingerprint
         ),
@@ -191,7 +145,6 @@ def _expectation(args: argparse.Namespace) -> AcceptanceExpectation:
         minimum_active_baselines=args.minimum_active_baselines,
         coverage_fingerprint=fingerprint,
         coverage_subscription_count=args.expected_subscription_count,
-        renewal_control_enabled=args.expected_renewal_control == "enabled",
     )
 
 
@@ -203,11 +156,6 @@ def main() -> int:
     parser.add_argument("--minimum-active-baselines", type=int, required=True)
     parser.add_argument("--expected-coverage-fingerprint", required=True)
     parser.add_argument("--expected-subscription-count", type=int, required=True)
-    parser.add_argument(
-        "--expected-renewal-control",
-        choices=("enabled", "disabled"),
-        required=True,
-    )
     parser.add_argument("--allow-primary", action="store_true")
     parser.add_argument("--statement-timeout-ms", type=int, default=300000)
     args = parser.parse_args()

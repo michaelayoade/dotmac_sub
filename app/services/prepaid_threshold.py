@@ -89,6 +89,7 @@ class PrepaidThresholdDecision:
     unfunded_renewal_requirement: Decimal
     currency: str
     covered_subscription_ids: tuple[UUID, ...] = ()
+    non_billable_subscription_ids: tuple[UUID, ...] = ()
     actionable_uncovered_subscription_ids: tuple[UUID, ...] = ()
     unresolved_projection_subscription_ids: tuple[UUID, ...] = ()
 
@@ -146,10 +147,12 @@ def _decisions(
     required: dict[str, Decimal],
     currency: str,
     covered: dict[str, tuple[UUID, ...]] | None = None,
+    non_billable: dict[str, tuple[UUID, ...]] | None = None,
     actionable: dict[str, tuple[UUID, ...]] | None = None,
     unresolved: dict[str, tuple[UUID, ...]] | None = None,
 ) -> dict[str, PrepaidThresholdDecision]:
     covered = covered or {}
+    non_billable = non_billable or {}
     actionable = actionable or {}
     unresolved = unresolved or {}
     return {
@@ -159,6 +162,7 @@ def _decisions(
             unfunded_renewal_requirement=required.get(account_id, ZERO),
             currency=currency,
             covered_subscription_ids=covered.get(account_id, ()),
+            non_billable_subscription_ids=non_billable.get(account_id, ()),
             actionable_uncovered_subscription_ids=actionable.get(account_id, ()),
             unresolved_projection_subscription_ids=unresolved.get(account_id, ()),
         )
@@ -234,7 +238,25 @@ def resolve_prepaid_threshold_decisions(
             currency=enforcement_currency,
         )
 
-    # 3. Classify current service through the named coverage owner. A future
+    # 3. Resolve explicit customer-billing treatment before payment coverage.
+    from app.services.subscription_billing_treatments import (
+        resolve_subscription_billing_treatments,
+    )
+
+    treatment_decisions = resolve_subscription_billing_treatments(
+        db, subscriptions, as_of=effective_now
+    )
+    non_billable_by_account: dict[str, list[UUID]] = defaultdict(list)
+    standard_subscriptions: list[Subscription] = []
+    for subscription in subscriptions:
+        if treatment_decisions[subscription.id].suppress_customer_billing:
+            non_billable_by_account[str(subscription.subscriber_id)].append(
+                subscription.id
+            )
+        else:
+            standard_subscriptions.append(subscription)
+
+    # 4. Classify standard service through the named coverage owner. A future
     # billing anchor without evidence is unresolved, not paid service.
     from app.services.prepaid_service_coverage import (
         PrepaidCoverageStatus,
@@ -243,13 +265,13 @@ def resolve_prepaid_threshold_decisions(
 
     coverage = resolve_prepaid_service_coverage(
         db,
-        subscriptions,
+        standard_subscriptions,
         as_of=effective_now,
     )
     covered_by_account: dict[str, list[UUID]] = defaultdict(list)
     actionable_by_account: dict[str, list[UUID]] = defaultdict(list)
     unresolved_by_account: dict[str, list[UUID]] = defaultdict(list)
-    for subscription in subscriptions:
+    for subscription in standard_subscriptions:
         account_key = str(subscription.subscriber_id)
         status = coverage[subscription.id].status
         if status == PrepaidCoverageStatus.covered:
@@ -259,11 +281,11 @@ def resolve_prepaid_threshold_decisions(
         else:
             actionable_by_account[account_key].append(subscription.id)
 
-    # 4. Only genuinely due/uncovered services form an access requirement.
+    # 5. Only genuinely due/uncovered standard services form a requirement.
     # Unresolved projections are quarantined from adverse action.
     unfunded = [
         subscription
-        for subscription in subscriptions
+        for subscription in standard_subscriptions
         if coverage[subscription.id].status == PrepaidCoverageStatus.uncovered_due
     ]
     if not unfunded:
@@ -275,6 +297,10 @@ def resolve_prepaid_threshold_decisions(
             covered={
                 key: tuple(sorted(values, key=str))
                 for key, values in covered_by_account.items()
+            },
+            non_billable={
+                key: tuple(sorted(values, key=str))
+                for key, values in non_billable_by_account.items()
             },
             unresolved={
                 key: tuple(sorted(values, key=str))
@@ -307,7 +333,7 @@ def resolve_prepaid_threshold_decisions(
         ).all():
             offer_prices[str(offer_row.offer_id)].append(offer_row)
 
-    # 5. sum the effective price of every due, uncovered subscription.
+    # 6. sum the effective price of every due, uncovered subscription.
     required: dict[str, Decimal] = defaultdict(lambda: ZERO)
     for subscription in unfunded:
         amount: Decimal | None = None
@@ -359,6 +385,10 @@ def resolve_prepaid_threshold_decisions(
         covered={
             key: tuple(sorted(values, key=str))
             for key, values in covered_by_account.items()
+        },
+        non_billable={
+            key: tuple(sorted(values, key=str))
+            for key, values in non_billable_by_account.items()
         },
         actionable={
             key: tuple(sorted(values, key=str))

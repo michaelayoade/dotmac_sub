@@ -9,19 +9,23 @@ from app.models.billing import (
     CreditNote,
     CreditNoteStatus,
     Invoice,
+    InvoiceLine,
     InvoiceStatus,
     LedgerEntry,
     LedgerEntryType,
     LedgerSource,
     Payment,
+    PaymentAllocation,
     PaymentStatus,
 )
+from app.models.catalog import BillingMode, SubscriptionStatus
 from app.models.prepaid_funding import PrepaidFundingReconstructionBatch
 from app.models.splynx_transaction import SplynxBillingTransaction
 from app.services.customer_financial_ledger import (
     calculate_customer_balance,
     customer_financial_balances_by_currency,
     list_customer_financial_events,
+    preview_paid_prepaid_invoice_consumption,
 )
 from app.services.customer_financial_position import (
     prepaid_available_balance,
@@ -30,6 +34,10 @@ from app.services.customer_financial_position import (
 from app.services.prepaid_funding_reconstruction import (
     PrepaidFundingBaselineMissingError,
     verified_prepaid_funding_balance,
+)
+from app.services.prepaid_service_renewals import (
+    confirm_prepaid_service_renewal,
+    preview_prepaid_service_renewal,
 )
 from tests.prepaid_funding_helpers import materialize_test_prepaid_opening_balance
 
@@ -241,6 +249,300 @@ def test_reviewed_opening_position_keeps_late_recorded_backdated_money(
     assert verified_prepaid_funding_balance(db_session, subscriber.id) == Decimal(
         "125.00"
     )
+
+
+def test_paid_prepaid_invoice_consumes_payment_from_canonical_position(
+    db_session, subscriber, subscription
+):
+    position_at = datetime(2026, 7, 20, 7, 58, 22, tzinfo=UTC)
+    paid_at = datetime(2026, 7, 21, 20, 16, 40, tzinfo=UTC)
+    period_end = datetime(2026, 8, 21, tzinfo=UTC)
+    subscription.billing_mode = BillingMode.prepaid
+    subscription.status = SubscriptionStatus.active
+    payment = Payment(
+        account_id=subscriber.id,
+        amount=Decimal("18812.50"),
+        refunded_amount=Decimal("0.00"),
+        currency="NGN",
+        status=PaymentStatus.succeeded,
+        paid_at=paid_at,
+        created_at=paid_at,
+        memo="Prepaid renewal payment",
+    )
+    invoice = Invoice(
+        account_id=subscriber.id,
+        invoice_number="INV-PREPAID-CONSUMED",
+        status=InvoiceStatus.paid,
+        currency="NGN",
+        subtotal=Decimal("17500.00"),
+        tax_total=Decimal("1312.50"),
+        total=Decimal("18812.50"),
+        balance_due=Decimal("0.00"),
+        billing_period_start=paid_at.replace(hour=0, minute=0, second=0),
+        billing_period_end=period_end,
+        issued_at=paid_at,
+        paid_at=paid_at,
+        created_at=paid_at,
+    )
+    db_session.add_all([payment, invoice])
+    db_session.flush()
+    db_session.add_all(
+        [
+            InvoiceLine(
+                invoice_id=invoice.id,
+                subscription_id=subscription.id,
+                description="Prepaid base service",
+                quantity=Decimal("1.000"),
+                unit_price=Decimal("17500.00"),
+                amount=Decimal("17500.00"),
+                metadata_={"kind": "base_subscription"},
+            ),
+            PaymentAllocation(
+                payment_id=payment.id,
+                invoice_id=invoice.id,
+                amount=Decimal("18812.50"),
+            ),
+        ]
+    )
+    db_session.commit()
+    materialize_test_prepaid_opening_balance(
+        db_session,
+        subscriber.id,
+        Decimal("0.00"),
+        position_at=position_at,
+    )
+
+    events = list_customer_financial_events(db_session, subscriber.id)
+
+    assert [event.id.split(":", 1)[0] for event in events] == [
+        "prepaid-opening",
+        "payment",
+        "prepaid-invoice-consumption",
+    ]
+    assert calculate_customer_balance(db_session, subscriber.id) == Decimal("0.00")
+    assert verified_prepaid_funding_balance(db_session, subscriber.id) == Decimal(
+        "0.00"
+    )
+    assert customer_financial_balances_by_currency(
+        db_session,
+        [subscriber.id],
+        start=position_at,
+    ) == {subscriber.id: {"NGN": Decimal("0.00")}}
+    preview = preview_paid_prepaid_invoice_consumption(
+        db_session,
+        account_ids=(subscriber.id,),
+        recorded_after=position_at,
+    )
+    assert preview.projected_count == 1
+    assert preview.already_represented_count == 0
+    assert preview.quarantined_count == 0
+    assert len(preview.fingerprint) == 64
+
+
+def test_documentary_paid_invoice_does_not_duplicate_direct_renewal_debit(
+    db_session, subscriber, subscription
+):
+    position_at = datetime(2026, 7, 20, tzinfo=UTC)
+    paid_at = datetime(2026, 7, 21, tzinfo=UTC)
+    period_end = datetime(2026, 8, 21, tzinfo=UTC)
+    subscription.billing_mode = BillingMode.prepaid
+    subscription.status = SubscriptionStatus.active
+    db_session.add(
+        Payment(
+            account_id=subscriber.id,
+            amount=Decimal("18812.50"),
+            refunded_amount=Decimal("0.00"),
+            currency="NGN",
+            status=PaymentStatus.succeeded,
+            paid_at=paid_at,
+            created_at=paid_at,
+        )
+    )
+    db_session.commit()
+    materialize_test_prepaid_opening_balance(
+        db_session,
+        subscriber.id,
+        Decimal("0.00"),
+        position_at=position_at,
+    )
+    preview = preview_prepaid_service_renewal(
+        db_session,
+        subscription_id=subscription.id,
+        starts_at=paid_at,
+        ends_at=period_end,
+        amount=Decimal("18812.50"),
+        currency="NGN",
+    )
+    confirm_prepaid_service_renewal(
+        db_session,
+        preview,
+        evidence_ref="pytest:direct-renewal-before-documentary-invoice",
+    )
+    invoice = Invoice(
+        account_id=subscriber.id,
+        invoice_number="INV-DOCUMENTARY-ONLY",
+        status=InvoiceStatus.paid,
+        currency="NGN",
+        subtotal=Decimal("17500.00"),
+        tax_total=Decimal("1312.50"),
+        total=Decimal("18812.50"),
+        balance_due=Decimal("0.00"),
+        billing_period_start=paid_at,
+        billing_period_end=period_end,
+        issued_at=paid_at,
+        paid_at=paid_at,
+    )
+    db_session.add(invoice)
+    db_session.flush()
+    db_session.add(
+        InvoiceLine(
+            invoice_id=invoice.id,
+            subscription_id=subscription.id,
+            description="Documentary prepaid base service",
+            quantity=Decimal("1.000"),
+            unit_price=Decimal("17500.00"),
+            amount=Decimal("17500.00"),
+            metadata_={"kind": "base_subscription"},
+        )
+    )
+    db_session.commit()
+
+    events = list_customer_financial_events(db_session, subscriber.id)
+
+    assert not any(
+        event.id == f"prepaid-invoice-consumption:{invoice.id}" for event in events
+    )
+    assert calculate_customer_balance(db_session, subscriber.id) == Decimal("0.00")
+    assert verified_prepaid_funding_balance(db_session, subscriber.id) == Decimal(
+        "0.00"
+    )
+    preview = preview_paid_prepaid_invoice_consumption(
+        db_session,
+        account_ids=(subscriber.id,),
+        recorded_after=position_at,
+    )
+    assert preview.projected_count == 0
+    assert preview.already_represented_count == 1
+    assert preview.quarantined_count == 0
+
+
+def test_malformed_paid_prepaid_invoice_is_quarantined_not_projected(
+    db_session, subscriber, subscription
+):
+    position_at = datetime(2026, 7, 20, tzinfo=UTC)
+    paid_at = position_at + timedelta(days=1)
+    subscription.billing_mode = BillingMode.prepaid
+    subscription.status = SubscriptionStatus.active
+    payment = Payment(
+        account_id=subscriber.id,
+        amount=Decimal("100.00"),
+        refunded_amount=Decimal("0.00"),
+        currency="NGN",
+        status=PaymentStatus.succeeded,
+        paid_at=paid_at,
+        created_at=paid_at,
+    )
+    invoice = Invoice(
+        account_id=subscriber.id,
+        status=InvoiceStatus.paid,
+        currency="NGN",
+        subtotal=Decimal("100.00"),
+        tax_total=Decimal("0.00"),
+        total=Decimal("100.00"),
+        balance_due=Decimal("10.00"),
+        billing_period_start=paid_at,
+        billing_period_end=paid_at + timedelta(days=30),
+        issued_at=paid_at,
+        paid_at=paid_at,
+        created_at=paid_at,
+    )
+    db_session.add_all([payment, invoice])
+    db_session.flush()
+    db_session.add(
+        InvoiceLine(
+            invoice_id=invoice.id,
+            subscription_id=subscription.id,
+            description="Malformed prepaid service",
+            quantity=Decimal("1.000"),
+            unit_price=Decimal("100.00"),
+            amount=Decimal("100.00"),
+            metadata_={"kind": "base_subscription"},
+        )
+    )
+    db_session.commit()
+    materialize_test_prepaid_opening_balance(
+        db_session,
+        subscriber.id,
+        Decimal("0.00"),
+        position_at=position_at,
+    )
+
+    preview = preview_paid_prepaid_invoice_consumption(
+        db_session,
+        account_ids=(subscriber.id,),
+        recorded_after=position_at,
+    )
+
+    assert preview.projected_count == 0
+    assert preview.already_represented_count == 0
+    assert preview.quarantined_count == 1
+    assert preview.items[0].reason == "paid_invoice_has_balance"
+    assert calculate_customer_balance(db_session, subscriber.id) == Decimal("100.00")
+
+
+def test_paid_prepaid_invoice_without_settlement_is_quarantined_not_debited(
+    db_session, subscriber, subscription
+):
+    position_at = datetime(2026, 7, 20, tzinfo=UTC)
+    paid_at = position_at + timedelta(days=1)
+    subscription.billing_mode = BillingMode.prepaid
+    subscription.status = SubscriptionStatus.active
+    invoice = Invoice(
+        account_id=subscriber.id,
+        status=InvoiceStatus.paid,
+        currency="NGN",
+        subtotal=Decimal("100.00"),
+        tax_total=Decimal("0.00"),
+        total=Decimal("100.00"),
+        balance_due=Decimal("0.00"),
+        billing_period_start=paid_at,
+        billing_period_end=paid_at + timedelta(days=30),
+        issued_at=paid_at,
+        paid_at=paid_at,
+        created_at=paid_at,
+    )
+    db_session.add(invoice)
+    db_session.flush()
+    db_session.add(
+        InvoiceLine(
+            invoice_id=invoice.id,
+            subscription_id=subscription.id,
+            description="Unsupported paid prepaid service",
+            quantity=Decimal("1.000"),
+            unit_price=Decimal("100.00"),
+            amount=Decimal("100.00"),
+            metadata_={"kind": "base_subscription"},
+        )
+    )
+    db_session.commit()
+    materialize_test_prepaid_opening_balance(
+        db_session,
+        subscriber.id,
+        Decimal("0.00"),
+        position_at=position_at,
+    )
+
+    preview = preview_paid_prepaid_invoice_consumption(
+        db_session,
+        account_ids=(subscriber.id,),
+        recorded_after=position_at,
+    )
+
+    assert preview.projected_count == 0
+    assert preview.already_represented_count == 0
+    assert preview.quarantined_count == 1
+    assert preview.items[0].reason == "missing_exact_settlement_evidence"
+    assert calculate_customer_balance(db_session, subscriber.id) == Decimal("0.00")
 
 
 def test_bulk_balance_matches_canonical_multi_currency_refund_rules(

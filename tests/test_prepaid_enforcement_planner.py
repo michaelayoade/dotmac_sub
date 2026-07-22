@@ -9,9 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.models.catalog import BillingMode, SubscriptionStatus
-from app.models.domain_settings import DomainSetting, SettingDomain, SettingValueType
 from app.models.notification import Notification
-from app.models.prepaid_enforcement import PrepaidEnforcementReadiness
 from app.models.subscriber import SubscriberStatus
 from app.services.collections.prepaid_balance_sweep import run_prepaid_balance_sweep
 from app.services.prepaid_enforcement_planner import (
@@ -21,7 +19,6 @@ from app.services.prepaid_enforcement_planner import (
     candidate_prepaid_account_ids,
     candidate_prepaid_funding_account_ids,
     plan_prepaid_enforcement,
-    resolve_prepaid_enforcement_policy,
 )
 from tests.prepaid_funding_helpers import materialize_test_prepaid_opening_balance
 
@@ -43,49 +40,7 @@ def _prepare(db, account, subscription) -> None:
     materialize_test_prepaid_opening_balance(db, account.id, Decimal("0.00"))
 
 
-def _enable(db) -> None:
-    activation_at = _MONDAY_NOON - timedelta(days=10)
-    db.add_all(
-        [
-            DomainSetting(
-                domain=SettingDomain.modules,
-                key="collections_prepaid_balance_enforcement",
-                value_type=SettingValueType.boolean,
-                value_text="true",
-                value_json=True,
-                is_active=True,
-            ),
-            DomainSetting(
-                domain=SettingDomain.modules,
-                key="billing_prepaid_service_renewals",
-                value_type=SettingValueType.boolean,
-                value_text="true",
-                value_json=True,
-                is_active=True,
-            ),
-            PrepaidEnforcementReadiness(
-                intended_activation_at=activation_at,
-                funding_observed_at=activation_at,
-                source="test-reconciled-funding",
-                evidence_ref="test:prepaid-readiness",
-                currency="NGN",
-                candidate_account_count=1,
-                candidate_account_ids_hash="0" * 64,
-                configuration_hash="1" * 64,
-                funding_decisions_hash="2" * 64,
-                reconstruction_evidence_sha256="3" * 64,
-                blocker_count=0,
-                verified_by="pytest",
-                verified_at=activation_at,
-                activated_at=activation_at,
-                is_active=True,
-            ),
-        ]
-    )
-    db.commit()
-
-
-def test_disabled_control_reports_configured_zero_grace_without_writes(
+def test_planner_is_permanent_and_read_only_without_control_rows(
     db_session, subscriber_account, subscription
 ):
     _prepare(db_session, subscriber_account, subscription)
@@ -101,11 +56,6 @@ def test_disabled_control_reports_configured_zero_grace_without_writes(
         account_ids=[str(subscriber_account.id)],
     )
 
-    assert plan.control_enabled is False
-    assert "deactivation_days" not in plan.policy.report_values()
-    assert plan.policy.activation_error == (
-        "prepaid_enforcement_readiness_not_recorded"
-    )
     assert plan.action_counts == {"suspend": 1}
     assert plan.items[0].available_balance == Decimal("0.00")
     assert plan.items[0].required_balance >= Decimal("100.00")
@@ -236,26 +186,6 @@ def test_plan_classifies_financial_shield_without_mutation(
     assert subscription.status == SubscriptionStatus.active
 
 
-def test_invalid_blocking_time_is_a_stable_domain_failure(db_session, monkeypatch):
-    from app.services.prepaid_enforcement_planner import settings_spec
-
-    original = settings_spec.resolve_value
-
-    def _setting(db, domain, key):
-        if key == "prepaid_blocking_time":
-            return "not-a-time"
-        return original(db, domain, key)
-
-    monkeypatch.setattr(settings_spec, "resolve_value", _setting)
-
-    with pytest.raises(PrepaidEnforcementError) as captured:
-        resolve_prepaid_enforcement_policy(db_session)
-
-    assert captured.value.code == (
-        "financial.prepaid_enforcement.invalid_blocking_time"
-    )
-
-
 def test_missing_selected_account_is_a_stable_domain_failure(db_session):
     import uuid
 
@@ -294,7 +224,6 @@ def test_plan_always_uses_materialized_funding_owner(
         db_session,
         now=_MONDAY_NOON,
         account_ids=[subscriber_account.id],
-        activation_at=_MONDAY_NOON,
     )
 
     assert plan.generated_at == _MONDAY_NOON
@@ -327,7 +256,6 @@ def test_sweep_does_not_mutate_enforcement_state_drift(
     db_session, subscriber_account, subscription
 ):
     _prepare(db_session, subscriber_account, subscription)
-    _enable(db_session)
     subscriber_account.prepaid_low_balance_at = _MONDAY_NOON - timedelta(days=2)
     subscriber_account.prepaid_deactivation_at = _MONDAY_NOON - timedelta(days=1)
     db_session.commit()
@@ -345,7 +273,6 @@ def test_zero_grace_suspends_even_when_notice_is_fault_suppressed(
     db_session, subscriber_account, subscription, monkeypatch
 ):
     _prepare(db_session, subscriber_account, subscription)
-    _enable(db_session)
 
     def _decisions(db, subscriptions):
         return {
@@ -383,7 +310,6 @@ def test_nonzero_grace_does_not_start_until_warning_is_queued(
     _prepare(db_session, subscriber_account, subscription)
     subscriber_account.grace_period_days = 1
     db_session.commit()
-    _enable(db_session)
 
     def _decisions(db, subscriptions):
         return {

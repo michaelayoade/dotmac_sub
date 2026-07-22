@@ -97,6 +97,10 @@ def test_runtime_has_no_legacy_authority_toggle_or_fallback() -> None:
     assert "_has_legacy_mirror" not in ledger
     assert "INTERNAL_MEMO_PREFIXES" not in ledger
     assert "affects_customer_position" in ledger
+    assert "prepaid_subscription_invoice_ids" in ledger
+    assert "_exactly_settled_invoice_ids" in ledger
+    assert "_paid_prepaid_consumption_filter" in ledger
+    assert "exact_direct_renewal_debit_precedence" in ledger
     assert "PrepaidFundingSnapshot" not in planner
     assert "funding_snapshot" not in planner
     assert "--funding-snapshot" not in planner_script

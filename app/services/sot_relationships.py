@@ -434,8 +434,221 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "currency-typed complete billing headline projection",
                 ),
                 depends_on=(
+                    "financial.credit_notes",
+                    "financial.invoices",
                     "financial.ledger",
+                    "financial.payments",
                     "financial.prepaid_funding_reconstruction",
+                ),
+                notes=(
+                    "Paid prepaid subscription invoices are non-AR documents but "
+                    "become exact customer-position service debits only when fully "
+                    "paid and backed by exact active settlement applications. "
+                    "An exact direct-renewal adjustment and entitlement for the same "
+                    "account, subscription, period, amount, and currency takes "
+                    "precedence so a later documentary invoice cannot debit twice."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name=(
+                                "distinct invoice-receivable and prepaid-funding "
+                                "summaries"
+                            ),
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "reviewed prepaid opening position",
+                                "canonical payment and refund documents",
+                                "canonical collectible invoice documents",
+                                "canonical paid prepaid consumption documents",
+                                "canonical renewal debit evidence",
+                                "canonical credit and adjustment evidence",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="customer-visible financial position",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "reviewed prepaid opening position",
+                                "canonical payment and refund documents",
+                                "canonical collectible invoice documents",
+                                "canonical paid prepaid consumption documents",
+                                "canonical renewal debit evidence",
+                                "canonical credit and adjustment evidence",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="bounded cohort financial projections",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "reviewed prepaid opening position",
+                                "canonical payment and refund documents",
+                                "canonical collectible invoice documents",
+                                "canonical paid prepaid consumption documents",
+                                "canonical renewal debit evidence",
+                                "canonical credit and adjustment evidence",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="currency-typed complete billing headline projection",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical payment and refund documents",
+                                "canonical collectible invoice documents",
+                                "canonical paid prepaid consumption documents",
+                                "canonical credit and adjustment evidence",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="reviewed prepaid opening position",
+                            owner="financial.prepaid_funding_reconstruction",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active currency-bound PrepaidFundingBaseline and its "
+                                "authority-cutover position time"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical payment and refund documents",
+                            owner="financial.payments",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active succeeded or refunded Payment amount, currency, "
+                                "paid time, refund amount, and exact allocation evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical collectible invoice documents",
+                            owner="financial.invoices",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active non-proforma collectible Invoice lifecycle, total, "
+                                "currency, issue time, and reviewed closure evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical paid prepaid consumption documents",
+                            owner="financial.invoices",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active fully paid positive Invoice with an active exact "
+                                "prepaid Subscription line whose total is fully backed by "
+                                "active PaymentAllocation and/or CreditNoteApplication "
+                                "evidence, plus paid time, period, total, and currency"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical renewal debit evidence",
+                            owner="financial.ledger",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "unreversed prepaid_service_renewal AccountAdjustment and "
+                                "its exact active debit-backed ServiceEntitlement"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical credit and adjustment evidence",
+                            owner="financial.ledger",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active customer-position ledger adjustments plus "
+                                "financial.credit_notes document evidence"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary=(
+                            "Callers own the session. Scalar and bounded cohort queries "
+                            "rebuild the signed position from committed canonical evidence "
+                            "without writes or transaction completion."
+                        ),
+                        locking=(
+                            "No read locks. State-changing financial owners lock their "
+                            "canonical rows and re-resolve this projection before writing."
+                        ),
+                        idempotency=(
+                            "The same opening position, time bound, currency, and committed "
+                            "financial evidence produce the same signed result."
+                        ),
+                        retries=(
+                            "Transient reads may be retried; malformed, ambiguous, or "
+                            "missing authority remains a deterministic fail-closed result."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(),
+                        mapping_owner=(
+                            "billing, access, reporting, portal, and reconciliation adapters"
+                        ),
+                        fail_closed_on=(
+                            "missing reviewed prepaid authority for a pre-cutover account",
+                            "cross-currency automation input",
+                            "prepaid invoice without an exact subscription line or complete "
+                            "active settlement applications",
+                        ),
+                    ),
+                    projections=(
+                        ProjectionContract(
+                            name="customer-visible financial position",
+                            input_names=(
+                                "reviewed prepaid opening position",
+                                "canonical payment and refund documents",
+                                "canonical collectible invoice documents",
+                                "canonical paid prepaid consumption documents",
+                                "canonical renewal debit evidence",
+                                "canonical credit and adjustment evidence",
+                            ),
+                            writer="customer.financial_position",
+                            freshness="rebuilt from committed source evidence on every query",
+                            stale_behavior=(
+                                "missing authority and ambiguous currency fail closed; paid "
+                                "prepaid consumption is never left as reusable funding"
+                            ),
+                            drift_signal=(
+                                "scalar and bounded-cohort results differ, or a paid prepaid "
+                                "invoice total remains in spendable funding without an exact "
+                                "direct-renewal precedence match"
+                            ),
+                            rebuild_operation=(
+                                "list_customer_financial_events and "
+                                "customer_financial_balances_by_currency recompute the view"
+                            ),
+                            repair_owner="customer.financial_position",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "collectible-AR-only native balance projection that counted a "
+                            "gross payment but omitted its paid prepaid invoice consumption"
+                        ),
+                        new_owner="customer.financial_position",
+                        verification=(
+                            "Scalar/bulk parity, reviewed-baseline, paid prepaid invoice, "
+                            "direct-renewal precedence, refund, and architecture tests."
+                        ),
+                        cutover_gate=(
+                            "Every prepaid balance display and enforcement reader consumes "
+                            "the rebuilt customer.financial_position projection."
+                        ),
+                        fallback_retirement=(
+                            "No UI, enforcement path, or repair script subtracts invoice "
+                            "applications locally or edits a stored customer balance."
+                        ),
+                    ),
+                    steward="finance operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/designs/PREPAID_INVOICE_DEPOSIT_ALIGNMENT.md",
+                        "docs/designs/PREPAID_SERVICE_COVERAGE.md",
+                    ),
+                    test_refs=(
+                        "tests/test_customer_financial_ledger.py",
+                        "tests/architecture/test_prepaid_funding_reconstruction_ownership.py",
+                    ),
                 ),
             ),
             SOTService(
@@ -1160,8 +1373,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "financial.payments",
                 ),
                 notes=(
-                    "The participant derives direct-transfer availability from the feature "
-                    "control, canonical collection-account destinations, and customer "
+                    "The participant derives direct-transfer availability from canonical "
+                    "active collection-account destinations and customer "
                     "instructions. It is the canonical invoice-intent, proof-link, "
                     "completed-payment, and gateway-expiry projection writer. Cash remains "
                     "authoritative in the payment owner; callers compose or idempotently "
@@ -1176,7 +1389,6 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             ),
                             role=OwnerRole.POLICY,
                             input_names=(
-                                "canonical direct-transfer feature control",
                                 "canonical direct-transfer bank destinations",
                                 "canonical direct-transfer customer instructions",
                             ),
@@ -1250,15 +1462,6 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                     ),
                     authoritative_inputs=(
-                        AuthorityInput(
-                            name="canonical direct-transfer feature control",
-                            owner="control.feature_registry",
-                            kind=AuthorityKind.CONTROL_INPUT,
-                            source=(
-                                "billing.direct_bank_transfer module-composed feature "
-                                "resolution with fail-closed missing behavior"
-                            ),
-                        ),
                         AuthorityInput(
                             name="canonical direct-transfer bank destinations",
                             owner="financial.collection_accounts",
@@ -2364,7 +2567,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "historical invoice closure evidence reconciliation",
                     "invoice settlement access-reconciliation handoff",
                 ),
-                depends_on=("financial.ledger", "financial.billing_accounts"),
+                depends_on=(
+                    "financial.ledger",
+                    "financial.billing_accounts",
+                    "financial.subscription_billing_grants",
+                    "financial.subscription_billing_treatments",
+                ),
             ),
             SOTService(
                 name="financial.credit_notes",
@@ -3304,6 +3512,354 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="financial.subscription_billing_treatments",
+                module="app.services.subscription_billing_treatments",
+                owns=(
+                    "subscription billing-treatment lifecycle",
+                    "effective subscription customer-billing treatment",
+                    "billing-treatment offer and value authorization",
+                ),
+                depends_on=(
+                    "access.subscription_lifecycle",
+                    "auth.permission_gate",
+                    "control.settings_spec",
+                    "events.dispatcher",
+                    "service_intent.catalog_policy",
+                ),
+                notes=(
+                    "The offer and contracted price retain service value. One "
+                    "effective-dated subscription approval records why its customer "
+                    "is not billed; every approval is finite and offer changes "
+                    "require revoke and reapproval."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="subscription billing-treatment lifecycle",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "authenticated billing-treatment command",
+                                "canonical subscription contract",
+                                "canonical recurring service value",
+                                "canonical billing-treatment approval policy",
+                                "current billing-treatment records",
+                            ),
+                            canonical_writer="financial.subscription_billing_treatments",
+                        ),
+                        ConcernContract(
+                            name="effective subscription customer-billing treatment",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical subscription contract",
+                                "canonical recurring service value",
+                                "current billing-treatment records",
+                                "evaluation time",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="billing-treatment offer and value authorization",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical subscription contract",
+                                "canonical recurring service value",
+                                "canonical billing-treatment approval policy",
+                                "current billing-treatment records",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="authenticated billing-treatment command",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "billing:treatment:write principal plus command, "
+                                "correlation, idempotency, actor, scope, and reason"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical subscription contract",
+                            owner="access.subscription_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "Subscription account, offer, lifecycle, billing mode, "
+                                "cadence, price terms, and billing anchor"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical recurring service value",
+                            owner="service_intent.catalog_policy",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="positive recurring price, currency, and cadence",
+                        ),
+                        AuthorityInput(
+                            name="canonical billing-treatment approval policy",
+                            owner="control.settings_spec",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "registered billing setting "
+                                "subscription_billing_treatment_max_days"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="current billing-treatment records",
+                            owner="financial.subscription_billing_treatments",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "effective-dated arrangement approval, authorized offer, "
+                                "value ceiling, cadence, approval-policy snapshot, and "
+                                "revocation evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="evaluation time",
+                            owner="external:system_clock",
+                            kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                            source="UTC policy evaluation time",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "Create and revoke commands enter the owner executor once; "
+                            "preview and treatment resolution are read-only."
+                        ),
+                        locking=(
+                            "The subscription locks before overlap, offer, value, cadence, "
+                            "and preview evidence are rechecked."
+                        ),
+                        idempotency=(
+                            "Unique hashed create and revoke keys replay only the same "
+                            "fingerprinted decision."
+                        ),
+                        retries=(
+                            "Transient conflicts retry with the same key; evidence drift "
+                            "requires a new preview."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "financial.subscription_billing_treatments.active_caller_transaction",
+                            "financial.subscription_billing_treatments.approval_horizon_exceeded",
+                            "financial.subscription_billing_treatments.arrangement_not_found",
+                            "financial.subscription_billing_treatments.command_contract_violation",
+                            "financial.subscription_billing_treatments.idempotency_conflict",
+                            "financial.subscription_billing_treatments.finite_period_required",
+                            "financial.subscription_billing_treatments.invalid_approval_policy",
+                            "financial.subscription_billing_treatments.invalid_command",
+                            "financial.subscription_billing_treatments.invalid_command_context",
+                            "financial.subscription_billing_treatments.invalid_currency",
+                            "financial.subscription_billing_treatments.invalid_period",
+                            "financial.subscription_billing_treatments.invalid_scope",
+                            "financial.subscription_billing_treatments.invalid_transition",
+                            "financial.subscription_billing_treatments.invalid_treatment",
+                            "financial.subscription_billing_treatments.missing_billing_anchor",
+                            "financial.subscription_billing_treatments.missing_contract_price",
+                            "financial.subscription_billing_treatments.missing_sponsor_evidence",
+                            "financial.subscription_billing_treatments.nested_owner_command",
+                            "financial.subscription_billing_treatments.nested_transaction_completion",
+                            "financial.subscription_billing_treatments.overlapping_treatment",
+                            "financial.subscription_billing_treatments.retroactive_treatment",
+                            "financial.subscription_billing_treatments.stale_preview",
+                            "financial.subscription_billing_treatments.subscription_not_collectible",
+                            "financial.subscription_billing_treatments.subscription_not_found",
+                            "financial.subscription_billing_treatments.unaligned_period",
+                            "financial.subscription_billing_treatments.unaligned_start",
+                        ),
+                        mapping_owner="billing-treatment administrative adapters",
+                        fail_closed_on=(
+                            "missing or zero contracted service value",
+                            "missing end or approval beyond the registered horizon",
+                            "overlap or account, offer, price, currency, or cadence drift",
+                            "sponsored service without funding-party evidence",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("subscription_billing_treatment.changed",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility="Additive payload evolution within schema version 1.",
+                        replay="Consumers deduplicate by event and arrangement command id.",
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.CUTOVER_READY,
+                        old_owner=(
+                            "zero prices, zero-price offer switching, billing flags, "
+                            "long grace, and manual restore"
+                        ),
+                        new_owner="financial.subscription_billing_treatments",
+                        verification=(
+                            "Lifecycle, price, plan-change, billing, threshold, API, "
+                            "migration, and architecture tests."
+                        ),
+                        cutover_gate=(
+                            "Every recurring billing and prepaid adverse-decision path "
+                            "consumes the resolved treatment."
+                        ),
+                        fallback_retirement=(
+                            "Zero price, billing flags, anchors, and grace are not "
+                            "complimentary authority."
+                        ),
+                    ),
+                    steward="billing and finance operations",
+                    design_refs=(
+                        "docs/designs/SUBSCRIPTION_BILLING_TREATMENTS.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_subscription_billing_treatments.py",
+                        "tests/test_subscription_billing_treatment_api.py",
+                        "tests/architecture/test_subscription_billing_treatment_ownership.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="financial.subscription_billing_grants",
+                module="app.services.subscription_billing_grants",
+                owns=(
+                    "exact non-cash subscription service-period grant",
+                    "non-cash grant entitlement and billing-anchor projection",
+                ),
+                depends_on=(
+                    "access.subscription_lifecycle",
+                    "events.dispatcher",
+                    "financial.subscription_billing_treatments",
+                    "service_intent.catalog_policy",
+                ),
+                notes=(
+                    "This flush-only participant writes an immutable grant, matching "
+                    "entitlement, and anchor without customer money consequences."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="exact non-cash subscription service-period grant",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "effective subscription billing treatment",
+                                "canonical subscription contract",
+                                "canonical recurring service value",
+                                "requested service period",
+                            ),
+                            canonical_writer="financial.subscription_billing_grants",
+                        ),
+                        ConcernContract(
+                            name="non-cash grant entitlement and billing-anchor projection",
+                            role=OwnerRole.PROJECTION_WRITER,
+                            input_names=(
+                                "exact non-cash service grant",
+                                "canonical subscription contract",
+                            ),
+                            canonical_writer="financial.subscription_billing_grants",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="effective subscription billing treatment",
+                            owner="financial.subscription_billing_treatments",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="effective arrangement and approved boundaries",
+                        ),
+                        AuthorityInput(
+                            name="canonical subscription contract",
+                            owner="access.subscription_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Subscription account, offer, cadence, and anchor",
+                        ),
+                        AuthorityInput(
+                            name="canonical recurring service value",
+                            owner="service_intent.catalog_policy",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="positive contracted recurring amount and currency",
+                        ),
+                        AuthorityInput(
+                            name="requested service period",
+                            owner="financial.subscription_billing_grants",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="complete recurring period requested by its owner",
+                        ),
+                        AuthorityInput(
+                            name="exact non-cash service grant",
+                            owner="financial.subscription_billing_grants",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="append-only SubscriptionBillingGrant evidence",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.PARTICIPANT,
+                        boundary="Flush-only participant; never commits or rolls back.",
+                        locking=(
+                            "Locks the subscription and arrangement before revalidating "
+                            "the grant evidence."
+                        ),
+                        idempotency=(
+                            "Arrangement, subscription, and exact interval form a "
+                            "deterministic key."
+                        ),
+                        retries="The caller retries its complete transaction.",
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "financial.subscription_billing_grants.approved_value_exceeded",
+                            "financial.subscription_billing_grants.arrangement_not_effective",
+                            "financial.subscription_billing_grants.entitlement_conflict",
+                            "financial.subscription_billing_grants.grant_blocked",
+                            "financial.subscription_billing_grants.grant_outside_arrangement",
+                            "financial.subscription_billing_grants.idempotency_conflict",
+                            "financial.subscription_billing_grants.invalid_grant_period",
+                            "financial.subscription_billing_grants.invalid_reference_amount",
+                            "financial.subscription_billing_grants.subscription_not_found",
+                            "financial.subscription_billing_treatments.missing_contract_price",
+                        ),
+                        mapping_owner="prepaid and postpaid recurring-period owners",
+                        fail_closed_on=(
+                            "invalid treatment evidence",
+                            "offer, account, value, currency, cadence, or interval drift",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("subscription_service.granted",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility="Additive payload evolution within schema version 1.",
+                        replay="Consumers deduplicate by event and deterministic grant id.",
+                    ),
+                    projections=(
+                        ProjectionContract(
+                            name="non-cash service entitlement and paid-through projection",
+                            input_names=(
+                                "exact non-cash service grant",
+                                "canonical subscription contract",
+                            ),
+                            writer="financial.subscription_billing_grants",
+                            freshness="Atomic with the exact service grant.",
+                            stale_behavior="Billing is suppressed and drift is reported.",
+                            drift_signal="Grant without exact entitlement or anchor.",
+                            rebuild_operation="Replay stage_subscription_billing_grant.",
+                            repair_owner="financial.subscription_billing_grants",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.CUTOVER_READY,
+                        old_owner="zero-price skips and manually advanced anchors",
+                        new_owner="financial.subscription_billing_grants",
+                        verification="Grant, entitlement, no-money, and architecture tests.",
+                        cutover_gate="Recurring owners grant before skipping customer money.",
+                        fallback_retirement="Future anchors are not grant evidence.",
+                    ),
+                    steward="billing and finance operations",
+                    design_refs=(
+                        "docs/designs/SUBSCRIPTION_BILLING_TREATMENTS.md",
+                        "docs/designs/PREPAID_SERVICE_COVERAGE.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_subscription_billing_treatments.py",
+                        "tests/architecture/test_subscription_billing_treatment_ownership.py",
+                    ),
+                ),
+            ),
+            SOTService(
                 name="financial.prepaid_service_coverage",
                 module="app.services.prepaid_service_coverage",
                 owns=(
@@ -3313,6 +3869,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=(
                     "access.subscription_lifecycle",
                     "financial.prepaid_service_renewals",
+                    "financial.subscription_billing_grants",
                 ),
                 notes=(
                     "Exact entitlement and granted-service intervals are positive "
@@ -3329,6 +3886,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             input_names=(
                                 "canonical subscription projection",
                                 "funded service entitlement intervals",
+                                "non-cash grant service intervals",
                                 "explicit granted-service intervals",
                             ),
                         ),
@@ -3338,6 +3896,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             input_names=(
                                 "canonical subscription projection",
                                 "funded service entitlement intervals",
+                                "non-cash grant service intervals",
                                 "explicit granted-service intervals",
                             ),
                         ),
@@ -3360,6 +3919,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "active ServiceEntitlement interval for the exact "
                                 "subscription"
                             ),
+                        ),
+                        AuthorityInput(
+                            name="non-cash grant service intervals",
+                            owner="financial.subscription_billing_grants",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="grant-linked ServiceEntitlement exact interval",
                         ),
                         AuthorityInput(
                             name="explicit granted-service intervals",
@@ -3577,11 +4142,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             ),
                             freshness=(
                                 "On-demand before repair and continuously re-evaluated by "
-                                "the prepaid enforcement readiness gate."
+                                "the account-scoped prepaid quarantine."
                             ),
                             stale_behavior=(
-                                "A stale fingerprint rejects confirmation; any current "
-                                "repairable or quarantined item blocks adverse enforcement."
+                                "A stale fingerprint rejects confirmation; current gaps are "
+                                "quarantined per account from adverse enforcement."
                             ),
                             drift_signal=(
                                 "The full-cohort preview reports repairable and quarantined "
@@ -3608,8 +4173,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "readiness, and architecture tests."
                         ),
                         cutover_gate=(
-                            "Prepaid adverse enforcement continuously requires zero "
-                            "repairable or quarantined coverage items."
+                            "Accounts with repairable or quarantined coverage evidence "
+                            "remain excluded until reconciled."
                         ),
                         fallback_retirement=(
                             "Paid invoice rows are no longer treated as coverage at read "
@@ -3623,7 +4188,6 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     ),
                     test_refs=(
                         "tests/test_prepaid_coverage_reconciliation.py",
-                        "tests/test_prepaid_enforcement_readiness.py",
                         "tests/architecture/test_prepaid_threshold_boundary.py",
                     ),
                 ),
@@ -3641,6 +4205,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "customer.accounts",
                     "financial.prepaid_currency",
                     "financial.prepaid_service_coverage",
+                    "financial.subscription_billing_treatments",
                     "service_intent.catalog_policy",
                 ),
                 notes=(
@@ -3666,6 +4231,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             input_names=(
                                 "canonical collectible prepaid subscriptions",
                                 "canonical current service coverage",
+                                "effective subscription billing treatment",
                                 "canonical recurring catalog prices",
                                 "canonical prepaid currency",
                                 "prepaid threshold protocol",
@@ -3701,6 +4267,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             source=(
                                 "typed covered, due-uncovered, or unresolved-projection "
                                 "decision for each collectible prepaid subscription"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="effective subscription billing treatment",
+                            owner="financial.subscription_billing_treatments",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "standard, effective non-cash, or protected-drift "
+                                "decision for each collectible subscription"
                             ),
                         ),
                         AuthorityInput(
@@ -4003,13 +4578,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=(
                     "access.subscription_lifecycle",
                     "communications.customer_policy",
-                    "control.feature_registry",
                     "control.settings_spec",
                     "customer.accounts",
                     "financial.prepaid_funding_reconstruction",
                     "financial.access_resolution",
                     "financial.billing_profile",
-                    "financial.billing_health",
                     "financial.dunning",
                     "financial.prepaid_currency",
                     "financial.prepaid_enforcement_state",
@@ -4018,7 +4591,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "service_intent.catalog_policy",
                 ),
                 notes=(
-                    "The production sweep, dry-run, readiness proof, and audit consume one "
+                    "The production sweep, dry-run, and audit consume one "
                     "typed cohort and account plan. Planning is read-only; execution and "
                     "timer/access mutation remain with their canonical writers."
                 ),
@@ -4042,11 +4615,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "canonical prepaid funding decision",
                                 "canonical grace decision",
                                 "canonical financial shields",
-                                "canonical billing health",
                                 "canonical communication suppression",
                                 "canonical service bundle policy",
                                 "canonical prepaid policy settings",
-                                "prepaid enforcement feature control",
                                 "prepaid enforcement protocol",
                                 "evaluation time",
                             ),
@@ -4056,7 +4627,6 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             role=OwnerRole.RESOLVER,
                             input_names=(
                                 "canonical prepaid policy settings",
-                                "prepaid enforcement feature control",
                                 "prepaid enforcement protocol",
                                 "evaluation time",
                             ),
@@ -4119,12 +4689,6 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             ),
                         ),
                         AuthorityInput(
-                            name="canonical billing health",
-                            owner="financial.billing_health",
-                            kind=AuthorityKind.OBSERVATION,
-                            source="bounded enforcement health snapshot and reason codes",
-                        ),
-                        AuthorityInput(
                             name="canonical communication suppression",
                             owner="communications.customer_policy",
                             kind=AuthorityKind.DERIVED_PROJECTION,
@@ -4143,16 +4707,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             owner="control.settings_spec",
                             kind=AuthorityKind.CONTROL_INPUT,
                             source=(
-                                "typed activation, blocking time, weekend, holiday, and "
-                                "communication-template settings"
-                            ),
-                        ),
-                        AuthorityInput(
-                            name="prepaid enforcement feature control",
-                            owner="control.feature_registry",
-                            kind=AuthorityKind.CONTROL_INPUT,
-                            source=(
-                                "effective collections.prepaid_balance_enforcement state"
+                                "customer communication templates plus the shared daily "
+                                "time-of-day enforcement window"
                             ),
                         ),
                         AuthorityInput(
@@ -4188,27 +4744,24 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         retries=(
                             "Transient reads may be retried. Invalid account identifiers, "
-                            "missing accounts, malformed time/holiday settings, and missing "
-                            "policy text remain deterministic failures."
+                            "missing accounts and missing policy text remain deterministic "
+                            "failures."
                         ),
                     ),
                     errors=ErrorContract(
                         domain_codes=(
                             "financial.prepaid_enforcement.account_not_found",
                             "financial.prepaid_enforcement.invalid_account_id",
-                            "financial.prepaid_enforcement.invalid_blocking_time",
-                            "financial.prepaid_enforcement.invalid_holiday",
                             "financial.prepaid_enforcement.missing_policy_text",
                         ),
                         mapping_owner=(
-                            "prepaid sweep, readiness, audit, and operator-report adapters"
+                            "prepaid sweep, audit, and operator-report adapters"
                         ),
                         fail_closed_on=(
                             "missing or invalid selected account",
                             "invalid billing profile, funding, threshold, grace, or currency",
-                            "malformed blocking time or holiday",
                             "missing communication policy text",
-                            "unhealthy enforcement dependencies or active financial shield",
+                            "active financial shield",
                         ),
                     ),
                     migration=MigrationContract(
@@ -4220,17 +4773,16 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         new_owner="financial.prepaid_enforcement",
                         verification=(
-                            "Cohort, repair-only, funding, grace, drift, shield, health, "
-                            "window, readiness, sweep, failure, and architecture tests."
+                            "Cohort, repair-only, funding, grace, drift, shield, window, "
+                            "sweep, failure, and architecture tests."
                         ),
                         cutover_gate=(
-                            "Sweep, dry-run, readiness, deployment acceptance, and funding "
-                            "audit callers consume the canonical planner and typed outcomes."
+                            "Sweep, dry-run, deployment integrity, and funding audit callers "
+                            "consume the canonical planner and typed outcomes."
                         ),
                         fallback_retirement=(
                             "Any-typed identifiers/maps, generic ValueError, untyped policy "
-                            "issues/provenance, silent invalid holidays, and invalid blocking "
-                            "time bypass are removed."
+                            "issues/provenance and parallel calendar skip rules are removed."
                         ),
                     ),
                     steward="billing operations",
@@ -4242,7 +4794,6 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     test_refs=(
                         "tests/test_prepaid_enforcement_planner.py",
                         "tests/test_prepaid_balance_sweep.py",
-                        "tests/test_prepaid_enforcement_readiness.py",
                         "tests/architecture/test_prepaid_enforcement_policy_ownership.py",
                     ),
                 ),
@@ -4400,25 +4951,6 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
-                name="financial.prepaid_enforcement_readiness",
-                module="app.services.prepaid_enforcement_readiness",
-                owns=(
-                    "prepaid independent-funding cutover comparison",
-                    "prepaid enforcement activation prerequisite",
-                    "prepaid funding readiness evidence",
-                ),
-                depends_on=(
-                    "financial.prepaid_funding_reconstruction",
-                    "financial.prepaid_enforcement",
-                    "financial.access_resolution",
-                ),
-                notes=(
-                    "Readiness proves full-cohort parity and gates activation. It "
-                    "never supplies a runtime balance; live suspension and restore "
-                    "always resolve funding from Sub's financial owners."
-                ),
-            ),
-            SOTService(
                 name="financial.prepaid_plan_change",
                 module="app.services.prepaid_plan_changes",
                 owns=(
@@ -4458,6 +4990,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "financial.account_adjustments",
                     "financial.invoices",
                     "financial.prepaid_funding_reconstruction",
+                    "financial.subscription_billing_grants",
+                    "financial.subscription_billing_treatments",
                     "events.dispatcher",
                 ),
                 notes=(
@@ -4777,7 +5311,6 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "financial.access_resolution",
                     "financial.prepaid_enforcement",
                     "financial.prepaid_enforcement_state",
-                    "financial.prepaid_enforcement_readiness",
                 ),
             ),
             SOTService(
@@ -7155,15 +7688,6 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=("customer.identity_scope",),
             ),
             SOTService(
-                name="communications.event_policy",
-                module="app.services.event_notification_policy",
-                owns=(
-                    "event notification enablement",
-                    "balance notification suppression",
-                ),
-                depends_on=("communications.channel_policy",),
-            ),
-            SOTService(
                 name="communications.eligibility",
                 module="app.services.communication_eligibility",
                 owns=(
@@ -7233,7 +7757,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=("notification row lifecycle", "delivery state"),
                 depends_on=(
                     "communications.channel_policy",
-                    "communications.event_policy",
+                    "communications.customer_policy",
                 ),
             ),
             SOTService(
@@ -10757,6 +11281,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "feature-to-module composition",
                 ),
                 depends_on=("control.module_manager", "control.domain_settings"),
+                notes=(
+                    "Optional capabilities only. Core billing, catalog lifecycle, "
+                    "collections, prepaid renewal/enforcement, customer notifications, "
+                    "and event recovery are permanently owned runtime responsibilities "
+                    "and are absent from this registry."
+                ),
             ),
             SOTService(
                 name="control.module_manager",
@@ -12321,7 +12851,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.scheduler_config",
                 owns=(
                     "effective scheduled-task registration",
-                    "task toggle synchronization",
+                    "permanent customer-financial lifecycle task registration",
+                    "optional capability task synchronization",
                     "Celery runtime schedule config",
                 ),
                 depends_on=("control.feature_registry", "runtime.db_sessions"),
@@ -12329,7 +12860,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             SOTService(
                 name="scheduler.operations",
                 module="app.services.scheduler",
-                owns=("ScheduledTask CRUD", "manual task enqueue operations"),
+                owns=(
+                    "ScheduledTask cadence management",
+                    "permanent lifecycle task mutation protection",
+                    "manual task enqueue operations",
+                ),
                 depends_on=("scheduler.registry",),
             ),
             SOTService(
@@ -12341,8 +12876,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         ),
         entrypoints=("app.tasks.*", "app.web.admin.system", "app.main"),
         rule=(
-            "Task cadence and enablement flow through scheduler config and the "
-            "feature control plane; task bodies execute work and report status."
+            "Core customer-financial lifecycle tasks are always registered and cannot "
+            "be disabled, renamed, or deleted. Optional capability scheduling composes "
+            "through the feature control plane; task bodies remain thin adapters."
         ),
     ),
     DomainSOT(
@@ -17014,7 +17550,6 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "control.settings_spec",
                     "events.dispatcher",
                     "observability.audit_log",
-                    "communications.event_policy",
                 ),
                 notes=(
                     "Typed commands lock canonical Referral, ReferralCode, and "

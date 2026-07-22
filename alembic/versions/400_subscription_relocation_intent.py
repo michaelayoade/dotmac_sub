@@ -1,7 +1,7 @@
 """Add structural service-relocation intent and quote evidence.
 
-Revision ID: 398_subscription_relocation_intent
-Revises: 397_validate_payment_prepaid_archive
+Revision ID: 400_subscription_relocation_intent
+Revises: 399_subscription_billing_treatments
 """
 
 from __future__ import annotations
@@ -11,8 +11,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "398_subscription_relocation_intent"
-down_revision = "397_validate_payment_prepaid_archive"
+revision = "400_subscription_relocation_intent"
+down_revision = "399_subscription_billing_treatments"
 branch_labels = None
 depends_on = None
 

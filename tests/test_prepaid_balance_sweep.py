@@ -1,9 +1,8 @@
 """Tests for the balance/expiry-based prepaid enforcement sweep.
 
-This sweep SUSPENDS customers, so it is gated OFF by default and every state
-transition is covered here: flag-off no-op, arm+warn (no suspend on first run),
-suspend after the deactivation window elapses, recovery (clear timers +
-restore), idempotent re-runs, and skip-day deferral of the deactivation step.
+This sweep SUSPENDS customers, so every account-level safety transition is
+covered here: arm+warn, configured grace, suspension, recovery, quarantine,
+financial shields, idempotent re-runs, and the shared daily time window.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -20,7 +19,6 @@ from app.models.catalog import BillingMode, Subscription, SubscriptionStatus
 from app.models.domain_settings import DomainSetting, SettingDomain, SettingValueType
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.notification import Notification
-from app.models.prepaid_enforcement import PrepaidEnforcementReadiness
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services.account_lifecycle import suspend_subscription
 from app.services.collections.prepaid_balance_sweep import run_prepaid_balance_sweep
@@ -33,59 +31,33 @@ from tests.prepaid_funding_helpers import (
     materialize_test_prepaid_opening_balances,
 )
 
-# A fixed weekday noon (UTC) so the default 08:00 blocking_time window is open
-# and weekend skips don't fire unless a test asks for them. 2026-07-06 = Monday.
+# A fixed weekday noon (UTC). 2026-07-06 = Monday.
 _MONDAY_NOON = datetime(2026, 7, 6, 12, 0, tzinfo=UTC)
 _SATURDAY_NOON = datetime(2026, 7, 4, 12, 0, tzinfo=UTC)
 
 
-def _enable_control(
-    db,
-    *,
-    enabled: bool = True,
-    activation_at: datetime | None = _SATURDAY_NOON - timedelta(days=10),
-) -> None:
-    settings = [
-        # Canonical feature control (effective-state SOT): modules-domain row keyed
-        # by the control's dotted key with dots→underscores.
-        DomainSetting(
-            domain=SettingDomain.modules,
-            key="collections_prepaid_balance_enforcement",
-            value_type=SettingValueType.boolean,
-            value_text="true" if enabled else "false",
-            value_json=enabled,
-            is_active=True,
-        ),
-        DomainSetting(
-            domain=SettingDomain.modules,
-            key="billing_prepaid_service_renewals",
-            value_type=SettingValueType.boolean,
-            value_text="true",
-            value_json=True,
-            is_active=True,
-        ),
-    ]
-    if activation_at is not None:
-        settings.append(
-            PrepaidEnforcementReadiness(
-                intended_activation_at=activation_at,
-                funding_observed_at=activation_at,
-                source="test-reconciled-funding",
-                evidence_ref="test:prepaid-readiness",
-                currency="NGN",
-                candidate_account_count=1,
-                candidate_account_ids_hash="0" * 64,
-                configuration_hash="1" * 64,
-                funding_decisions_hash="2" * 64,
-                reconstruction_evidence_sha256="3" * 64,
-                blocker_count=0,
-                verified_by="pytest",
-                verified_at=activation_at,
-                activated_at=activation_at,
+def _record_retired_control_rows(db, **_ignored) -> None:
+    """Keep legacy rows in fixtures to prove runtime behavior ignores them."""
+    db.add_all(
+        [
+            DomainSetting(
+                domain=SettingDomain.modules,
+                key="collections_prepaid_balance_enforcement",
+                value_type=SettingValueType.boolean,
+                value_text="false",
+                value_json=False,
                 is_active=True,
-            )
-        )
-    db.add_all(settings)
+            ),
+            DomainSetting(
+                domain=SettingDomain.modules,
+                key="billing_prepaid_service_renewals",
+                value_type=SettingValueType.boolean,
+                value_text="false",
+                value_json=False,
+                is_active=True,
+            ),
+        ]
+    )
     db.commit()
 
 
@@ -153,22 +125,23 @@ def _prepaid_locks(db, subscription):
 
 
 # ---------------------------------------------------------------------------
-# Flag OFF → complete no-op
+# Retired control rows cannot stop the owner
 # ---------------------------------------------------------------------------
 
 
-def test_flag_off_is_noop(db_session, subscriber_account, subscription):
+def test_missing_control_rows_do_not_disable_sweep(
+    db_session, subscriber_account, subscription
+):
     _make_prepaid(db_session, subscriber_account, subscription, credit=Decimal("0"))
 
     result = run_prepaid_balance_sweep(db_session, now=_MONDAY_NOON)
 
-    assert result == {"skipped": "disabled"}
+    assert result["suspended"] == 1
     db_session.refresh(subscriber_account)
     db_session.refresh(subscription)
-    assert subscriber_account.prepaid_low_balance_at is None
-    assert subscriber_account.prepaid_deactivation_at is None
-    assert subscription.status == SubscriptionStatus.active
-    assert _notices(db_session, subscriber_account) == []
+    assert subscriber_account.prepaid_low_balance_at is not None
+    assert subscriber_account.prepaid_deactivation_at is not None
+    assert subscription.status == SubscriptionStatus.suspended
 
 
 def test_subscription_account_mode_mismatch_blocks_prepaid_enforcement(
@@ -177,7 +150,7 @@ def test_subscription_account_mode_mismatch_blocks_prepaid_enforcement(
     _make_prepaid(db_session, subscriber_account, subscription, credit=Decimal("0"))
     subscriber_account.billing_mode = BillingMode.postpaid
     db_session.commit()
-    _enable_control(db_session)
+    _record_retired_control_rows(db_session)
 
     result = run_prepaid_balance_sweep(db_session, now=_MONDAY_NOON)
 
@@ -193,7 +166,7 @@ def test_prepaid_account_with_postpaid_subscription_is_reviewed_as_mismatch(
     _make_prepaid(db_session, subscriber_account, subscription, credit=Decimal("0"))
     subscription.billing_mode = BillingMode.postpaid
     db_session.commit()
-    _enable_control(db_session)
+    _record_retired_control_rows(db_session)
 
     result = run_prepaid_balance_sweep(db_session, now=_MONDAY_NOON)
 
@@ -251,7 +224,7 @@ def test_sweep_never_processes_quarantined_account_for_money_action(
             subscriber_account.id: "plan_decision_not_replayed",
         },
     )
-    _enable_control(db_session)
+    _record_retired_control_rows(db_session)
 
     processed_ids = set()
     original_process_account = sweep_module._process_account
@@ -284,28 +257,10 @@ def test_sweep_never_processes_quarantined_account_for_money_action(
     assert _notices(db_session, subscriber_account) == []
 
 
-def test_enabled_control_without_activation_time_blocks_adverse_actions(
+def test_existing_configured_grace_timer_is_not_reset(
     db_session, subscriber_account, subscription
 ):
-    _make_prepaid(db_session, subscriber_account, subscription, credit=Decimal("0"))
-    _enable_control(db_session, activation_at=None)
-
-    result = run_prepaid_balance_sweep(db_session, now=_MONDAY_NOON)
-
-    assert result["readiness_blocked"] == 1
-    assert result["warned"] == 0
-    assert result["suspended"] == 0
-    db_session.refresh(subscriber_account)
-    db_session.refresh(subscription)
-    assert subscriber_account.prepaid_low_balance_at is None
-    assert subscription.status == SubscriptionStatus.active
-
-
-def test_activation_does_not_reset_an_existing_configured_grace_timer(
-    db_session, subscriber_account, subscription
-):
-    activation_at = _MONDAY_NOON - timedelta(days=1)
-    _enable_control(db_session, activation_at=activation_at)
+    _record_retired_control_rows(db_session)
     _make_prepaid(db_session, subscriber_account, subscription, credit=Decimal("0"))
     subscriber_account.grace_period_days = 1
     subscriber_account.prepaid_low_balance_at = _MONDAY_NOON - timedelta(days=90)
@@ -318,7 +273,7 @@ def test_activation_does_not_reset_an_existing_configured_grace_timer(
     assert subscription.status == SubscriptionStatus.suspended
 
 
-def test_missing_activation_time_does_not_block_funded_restoration(
+def test_funded_restoration_does_not_require_legacy_readiness(
     db_session, subscriber_account, subscription
 ):
     _make_prepaid(
@@ -336,7 +291,7 @@ def test_missing_activation_time_does_not_block_funded_restoration(
     subscriber_account.prepaid_low_balance_at = _MONDAY_NOON - timedelta(days=30)
     subscriber_account.prepaid_deactivation_at = _MONDAY_NOON - timedelta(days=29)
     db_session.commit()
-    _enable_control(db_session, activation_at=None)
+    _record_retired_control_rows(db_session)
 
     result = run_prepaid_balance_sweep(db_session, now=_MONDAY_NOON)
 
@@ -356,7 +311,7 @@ def test_missing_activation_time_does_not_block_funded_restoration(
 def test_zero_grace_first_run_suspends_immediately(
     db_session, subscriber_account, subscription
 ):
-    _enable_control(db_session)
+    _record_retired_control_rows(db_session)
     _make_prepaid(db_session, subscriber_account, subscription, credit=Decimal("0"))
 
     result = run_prepaid_balance_sweep(db_session, now=_MONDAY_NOON)
@@ -376,7 +331,7 @@ def test_zero_grace_first_run_suspends_immediately(
 def test_nonzero_configured_grace_warns_without_first_sweep_suspension(
     db_session, subscriber_account, subscription
 ):
-    _enable_control(db_session)
+    _record_retired_control_rows(db_session)
     _set_billing_setting(
         db_session,
         "prepaid_default_grace_period_days",
@@ -396,7 +351,7 @@ def test_nonzero_configured_grace_warns_without_first_sweep_suspension(
 def test_positive_but_insufficient_wallet_suspends_when_current_period_unfunded(
     db_session, subscriber_account, subscription
 ):
-    _enable_control(db_session)
+    _record_retired_control_rows(db_session)
     _make_prepaid(
         db_session,
         subscriber_account,
@@ -420,7 +375,7 @@ def test_positive_but_insufficient_wallet_suspends_when_current_period_unfunded(
 def test_low_wallet_does_not_warn_when_prepaid_period_is_already_funded(
     db_session, subscriber_account, subscription
 ):
-    _enable_control(db_session)
+    _record_retired_control_rows(db_session)
     _make_prepaid(
         db_session,
         subscriber_account,
@@ -470,7 +425,7 @@ def test_low_wallet_does_not_warn_when_prepaid_period_is_already_funded(
 def test_future_anchor_without_coverage_is_never_suspended(
     db_session, subscriber_account, subscription
 ):
-    _enable_control(db_session)
+    _record_retired_control_rows(db_session)
     _make_prepaid(
         db_session,
         subscriber_account,
@@ -495,7 +450,7 @@ def test_future_anchor_without_coverage_is_never_suspended(
 def test_prepaid_legacy_invoice_ar_does_not_reduce_wallet_balance(
     db_session, subscriber_account, subscription
 ):
-    _enable_control(db_session)
+    _record_retired_control_rows(db_session)
     _make_prepaid(
         db_session, subscriber_account, subscription, credit=Decimal("100.00")
     )
@@ -536,7 +491,7 @@ def test_prepaid_legacy_invoice_ar_does_not_reduce_wallet_balance(
 def test_imported_line_less_prepaid_ar_does_not_reduce_wallet_balance(
     db_session, subscriber_account, subscription
 ):
-    _enable_control(db_session)
+    _record_retired_control_rows(db_session)
     _make_prepaid(
         db_session, subscriber_account, subscription, credit=Decimal("100.00")
     )
@@ -566,7 +521,7 @@ def test_imported_line_less_prepaid_ar_does_not_reduce_wallet_balance(
 def test_reconciliation_hold_invoice_does_not_reduce_wallet_balance(
     db_session, subscriber_account, subscription, hold_value
 ):
-    _enable_control(db_session)
+    _record_retired_control_rows(db_session)
     _make_prepaid(
         db_session, subscriber_account, subscription, credit=Decimal("100.00")
     )
@@ -600,7 +555,7 @@ def test_reconciliation_hold_invoice_does_not_reduce_wallet_balance(
 def test_suspends_after_deactivation_days_elapsed(
     db_session, subscriber_account, subscription
 ):
-    _enable_control(db_session)
+    _record_retired_control_rows(db_session)
     _make_prepaid(db_session, subscriber_account, subscription, credit=Decimal("0"))
     # The default three-day warning window has elapsed. (Not "just armed" this
     # run, so the deactivation branch runs.)
@@ -624,7 +579,7 @@ def test_suspends_after_deactivation_days_elapsed(
 def test_respects_canonical_account_grace_override(
     db_session, subscriber_account, subscription
 ):
-    _enable_control(db_session)
+    _record_retired_control_rows(db_session)
     _make_prepaid(db_session, subscriber_account, subscription, credit=Decimal("0"))
     subscriber_account.grace_period_days = 5
     # Armed only 2 days ago; 5-day window has NOT elapsed → warn stays, no suspend.
@@ -647,7 +602,7 @@ def test_respects_canonical_account_grace_override(
 def test_funded_recovery_clears_timers_and_restores(
     db_session, subscriber_account, subscription
 ):
-    _enable_control(db_session)
+    _record_retired_control_rows(db_session)
     # Start suspended-for-prepaid with both timers set...
     _make_prepaid(
         db_session, subscriber_account, subscription, credit=Decimal("500.00")
@@ -683,7 +638,7 @@ def test_funded_recovery_clears_timers_and_restores(
 def test_rerun_does_not_rewarn_or_double_suspend(
     db_session, subscriber_account, subscription
 ):
-    _enable_control(db_session)
+    _record_retired_control_rows(db_session)
     _make_prepaid(db_session, subscriber_account, subscription, credit=Decimal("0"))
     subscriber_account.prepaid_low_balance_at = _MONDAY_NOON - timedelta(days=4)
     db_session.commit()
@@ -714,7 +669,7 @@ def test_rerun_does_not_rewarn_or_double_suspend(
 def test_low_balance_rerun_does_not_send_second_warning(
     db_session, subscriber_account, subscription
 ):
-    _enable_control(db_session)
+    _record_retired_control_rows(db_session)
     # A canonical account grace override keeps this focused on warning dedupe.
     subscriber_account.grace_period_days = 5
     _make_prepaid(db_session, subscriber_account, subscription, credit=Decimal("0"))
@@ -731,47 +686,33 @@ def test_low_balance_rerun_does_not_send_second_warning(
 
 
 # ---------------------------------------------------------------------------
-# Skip-day / window defers the DEACTIVATION step (never the warning)
+# The shared daily time window defers the DEACTIVATION step (never the warning)
 # ---------------------------------------------------------------------------
 
 
-def test_skip_weekend_defers_deactivation(db_session, subscriber_account, subscription):
-    _enable_control(db_session)
-    _set_collections_setting(
-        db_session,
-        "prepaid_skip_weekends",
-        json_value=True,
-        text="true",
-        vtype=SettingValueType.boolean,
-    )
+def test_weekend_is_an_ordinary_enforcement_day(
+    db_session, subscriber_account, subscription
+):
+    _record_retired_control_rows(db_session)
     _make_prepaid(db_session, subscriber_account, subscription, credit=Decimal("0"))
     subscriber_account.prepaid_low_balance_at = _SATURDAY_NOON - timedelta(days=4)
     db_session.commit()
 
     result = run_prepaid_balance_sweep(db_session, now=_SATURDAY_NOON)
 
-    assert result["deferred"] == 1
-    assert result["suspended"] == 0
-    db_session.refresh(subscriber_account)
-    db_session.refresh(subscription)
-    # Deactivation deferred: no timer armed, service stays up...
-    assert subscriber_account.prepaid_deactivation_at is None
-    assert subscription.status == SubscriptionStatus.active
-    # ...and once it is a weekday, the deactivation proceeds.
-    followup = run_prepaid_balance_sweep(db_session, now=_MONDAY_NOON)
-    assert followup["suspended"] == 1
+    assert result["suspended"] == 1
     db_session.refresh(subscription)
     assert subscription.status == SubscriptionStatus.suspended
 
 
-def test_blocking_time_window_defers_deactivation(
+def test_shared_time_window_defers_deactivation(
     db_session, subscriber_account, subscription
 ):
-    _enable_control(db_session)
+    _record_retired_control_rows(db_session)
     # Only act at/after 09:00 local (UTC in tests).
     _set_collections_setting(
         db_session,
-        "prepaid_blocking_time",
+        "enforcement_window_start",
         text="09:00",
         vtype=SettingValueType.string,
     )
@@ -794,7 +735,7 @@ def test_active_payment_arrangement_shields_prepaid_suspension(
 
     from app.models.payment_arrangement import ArrangementStatus, PaymentArrangement
 
-    _enable_control(db_session)
+    _record_retired_control_rows(db_session)
     _make_prepaid(db_session, subscriber_account, subscription, credit=Decimal("0"))
     subscriber_account.prepaid_low_balance_at = _MONDAY_NOON - timedelta(days=4)
     db_session.add(
@@ -825,7 +766,7 @@ def test_submitted_payment_proof_shields_prepaid_suspension(
 ):
     from app.models.payment_proof import PaymentProof, PaymentProofStatus
 
-    _enable_control(db_session)
+    _record_retired_control_rows(db_session)
     _make_prepaid(db_session, subscriber_account, subscription, credit=Decimal("0"))
     subscriber_account.prepaid_low_balance_at = _MONDAY_NOON - timedelta(days=4)
     db_session.add(
@@ -849,12 +790,12 @@ def test_submitted_payment_proof_shields_prepaid_suspension(
     assert _prepaid_locks(db_session, subscription) == []
 
 
-def test_billing_health_gate_blocks_prepaid_suspension(
+def test_billing_health_is_observed_but_does_not_block_prepaid_suspension(
     db_session, subscriber_account, subscription, monkeypatch
 ):
     from app.services import billing_enforcement_guards as guards
 
-    _enable_control(db_session)
+    _record_retired_control_rows(db_session)
     _make_prepaid(db_session, subscriber_account, subscription, credit=Decimal("0"))
     subscriber_account.prepaid_low_balance_at = _MONDAY_NOON - timedelta(days=4)
     db_session.commit()
@@ -872,10 +813,10 @@ def test_billing_health_gate_blocks_prepaid_suspension(
 
     db_session.refresh(subscriber_account)
     db_session.refresh(subscription)
-    assert result["suspended"] == 0
-    assert subscriber_account.prepaid_deactivation_at is None
-    assert subscription.status == SubscriptionStatus.active
-    assert _prepaid_locks(db_session, subscription) == []
+    assert result["suspended"] == 1
+    assert subscriber_account.prepaid_deactivation_at is not None
+    assert subscription.status == SubscriptionStatus.suspended
+    assert len(_prepaid_locks(db_session, subscription)) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -887,7 +828,7 @@ def test_billing_health_gate_blocks_prepaid_suspension(
 def test_postpaid_accounts_untouched(
     db_session, subscriber_account, subscription, mode
 ):
-    _enable_control(db_session)
+    _record_retired_control_rows(db_session)
     subscriber_account.billing_mode = mode
     subscriber_account.min_balance = Decimal("100.00")
     subscription.status = SubscriptionStatus.active
@@ -904,7 +845,7 @@ def test_postpaid_accounts_untouched(
 def test_stale_prepaid_timer_is_repaired_after_account_leaves_cohort(
     db_session, subscriber_account, subscription
 ):
-    _enable_control(db_session)
+    _record_retired_control_rows(db_session)
     subscriber_account.status = SubscriberStatus.active
     subscriber_account.is_active = True
     subscriber_account.billing_enabled = False
@@ -930,7 +871,7 @@ def test_suspend_blocked_leaves_timer_unarmed_and_retries(
     re-attempts rather than short-circuiting on a set-but-not-suspended timer."""
     import app.services.collections.prepaid_balance_sweep as sweep
 
-    _enable_control(db_session)
+    _record_retired_control_rows(db_session)
     _make_prepaid(db_session, subscriber_account, subscription, credit=Decimal("0"))
     subscriber_account.prepaid_low_balance_at = _MONDAY_NOON - timedelta(days=4)
     db_session.commit()

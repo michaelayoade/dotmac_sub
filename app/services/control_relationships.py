@@ -120,20 +120,6 @@ CONTROL_RELATIONSHIPS: tuple[ControlRelationship, ...] = (
         ),
     ),
     ControlRelationship(
-        name="prepaid_enforcement_cutover",
-        mode=RelationshipMode.chain,
-        members=(
-            "financial.prepaid_funding_reconciliation",
-            "billing.prepaid_service_renewals",
-            "collections.prepaid_balance_enforcement",
-        ),
-        rule=(
-            "A fresh exact-cohort funding reconciliation, including any signed "
-            "quarantine, and the canonical renewal writer must be active before "
-            "prepaid enforcement is enabled. Every re-enable needs new evidence."
-        ),
-    ),
-    ControlRelationship(
         name="notification_channels",
         mode=RelationshipMode.fanout,
         members=("web", "email", "push", "nextcloud", "whatsapp"),
@@ -673,41 +659,6 @@ def audit_feature_control_relationships(
                 members=("quotes.native_write", "quotes.native_read"),
             )
         )
-    enforcement_enabled = enabled("collections.prepaid_balance_enforcement")
-    if enforcement_enabled:
-        from app.services.prepaid_enforcement_readiness import (
-            prepaid_enforcement_enablement_block_reason,
-            prepaid_enforcement_readiness_block_reason,
-        )
-
-        currently_enabled = control_registry.resolve_control(
-            db, "collections.prepaid_balance_enforcement"
-        ).own_enabled
-        turning_on = (
-            "collections.prepaid_balance_enforcement" in requested
-            and not currently_enabled
-        )
-        reason = (
-            prepaid_enforcement_enablement_block_reason(db)
-            if turning_on
-            else prepaid_enforcement_readiness_block_reason(db)
-        )
-        if reason:
-            findings.append(
-                ControlFinding(
-                    code=reason,
-                    severity="error",
-                    message=(
-                        "Prepaid enforcement requires current exact-cohort "
-                        f"funding readiness record ({reason})."
-                    ),
-                    members=(
-                        "financial.prepaid_funding_reconciliation",
-                        "billing.prepaid_service_renewals",
-                        "collections.prepaid_balance_enforcement",
-                    ),
-                )
-            )
     return findings
 
 

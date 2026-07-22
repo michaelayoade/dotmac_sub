@@ -21,7 +21,6 @@ communications.customer_policy
 communications.customer_read_state
 communications.eligibility
 communications.ephemeral_actions
-communications.event_policy
 communications.intents
 communications.notification_service
 communications.staff_notifications
@@ -37,7 +36,6 @@ customer.accounts
 customer.branding
 customer.data_completeness
 customer.experience_lifecycle
-customer.financial_position
 customer.identity_scope
 customer.lifecycle_audit
 customer.location_capture
@@ -66,7 +64,6 @@ financial.ledger
 financial.payment_arrangements
 financial.payment_routing
 financial.payments
-financial.prepaid_enforcement_readiness
 financial.prepaid_funding_reconstruction
 financial.prepaid_plan_change
 financial.prepaid_service_renewals

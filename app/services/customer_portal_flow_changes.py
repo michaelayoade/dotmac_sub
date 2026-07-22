@@ -25,7 +25,10 @@ from app.services.customer_financial_position import (
     CustomerFinancialPosition,
     get_customer_financial_position,
 )
-from app.services.customer_portal_context import get_available_portal_offers
+from app.services.customer_portal_context import (
+    get_available_portal_offers,
+    offer_has_positive_recurring_price,
+)
 from app.services.customer_portal_flow_common import (
     _compute_total_pages,
     _resolve_next_billing_date,
@@ -840,6 +843,8 @@ def confirm_service_change(
     new_offer = db.get(CatalogOffer, coerce_uuid(offer_id))
     if not new_offer:
         raise ValueError("Selected plan is not available")
+    if not offer_has_positive_recurring_price(new_offer):
+        raise ValueError("This plan is not available for self-service change.")
     # Gate on the same single source as the deferred path: this enforces
     # status==active + show_on_customer_portal + reseller
     # availability, not just is_active — otherwise the instant path could

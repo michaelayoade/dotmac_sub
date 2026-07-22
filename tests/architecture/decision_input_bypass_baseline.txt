@@ -10,7 +10,6 @@ env 2 app/services/auth_cache.py
 env 1 app/services/auth_flow.py
 env 3 app/services/backup_alerts.py
 env 1 app/services/bandwidth_metrics_adapter.py
-env 1 app/services/billing_settings.py
 env 2 app/services/branding_config.py
 env 1 app/services/connectivity_reconciler.py
 env 1 app/services/core_router_metrics.py
@@ -64,7 +63,6 @@ setting 8 app/services/credential_key_rotation.py
 setting 4 app/services/credential_rotation_schedule.py
 setting 4 app/services/customer_location_requests.py
 setting 20 app/services/email.py
-setting 4 app/services/event_notification_policy.py
 setting 4 app/services/field/config.py
 setting 5 app/services/field/geofence.py
 setting 4 app/services/field/transitions.py

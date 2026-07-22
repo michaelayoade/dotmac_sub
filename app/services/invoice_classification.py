@@ -50,12 +50,7 @@ def prepaid_non_ar_invoice_ids():
         Invoice.splynx_invoice_id.is_not(None),
         Invoice.metadata_["imported_via"].as_string() == "system_import_wizard",
     )
-    prepaid_line_invoice_ids = (
-        select(InvoiceLine.invoice_id)
-        .join(Subscription, Subscription.id == InvoiceLine.subscription_id)
-        .where(InvoiceLine.is_active.is_(True))
-        .where(Subscription.billing_mode == BillingMode.prepaid)
-    )
+    prepaid_line_invoice_ids = prepaid_subscription_invoice_ids()
     legacy_line_less_invoice_ids = (
         select(Invoice.id)
         .where(~Invoice.id.in_(active_line_invoice_ids))
@@ -69,6 +64,22 @@ def prepaid_non_ar_invoice_ids():
         )
     )
     return prepaid_line_invoice_ids.union(legacy_line_less_invoice_ids)
+
+
+def prepaid_subscription_invoice_ids():
+    """Invoice ids with an active line owned by a prepaid subscription.
+
+    Unlike :func:`prepaid_non_ar_invoice_ids`, this deliberately excludes the
+    imported line-less compatibility cohort. A paid prepaid service-consumption
+    projection needs an exact subscription relationship; account billing mode
+    or import provenance alone is not sufficient financial evidence.
+    """
+    return (
+        select(InvoiceLine.invoice_id)
+        .join(Subscription, Subscription.id == InvoiceLine.subscription_id)
+        .where(InvoiceLine.is_active.is_(True))
+        .where(Subscription.billing_mode == BillingMode.prepaid)
+    )
 
 
 def collectible_ar_invoice_filter():

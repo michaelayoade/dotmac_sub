@@ -1,38 +1,12 @@
-"""§6.1 billing-path coverage: every active sub maps to an enabled path."""
-
-from __future__ import annotations
+"""Every active subscription maps to the permanent canonical billing path."""
 
 from decimal import Decimal
 
-from app.models.domain_settings import DomainSetting, SettingDomain
-from app.models.subscription_engine import SettingValueType
 from app.services import billing_health
 from app.services.billing_health import BillingHealthSnapshot
 
 
-def test_canonical_prepaid_renewals_default_false(db_session):
-    assert billing_health._prepaid_renewals_enabled(db_session) is False
-
-
-def test_canonical_prepaid_renewals_read_control(db_session):
-    db_session.add(
-        DomainSetting(
-            domain=SettingDomain.modules,
-            key="billing_prepaid_service_renewals",
-            value_text="true",
-            value_type=SettingValueType.boolean,
-        )
-    )
-    db_session.commit()
-    assert billing_health._prepaid_renewals_enabled(db_session) is True
-
-
-def test_coverage_sql_executes_both_branches(db_session, monkeypatch):
-    # flag OFF branch (default) — SQL must execute on SQLite, empty -> (0, 0)
-    monkeypatch.setattr(billing_health, "_prepaid_renewals_enabled", lambda db: False)
-    assert billing_health.billing_path_coverage(db_session) == (0, 0)
-    # flag ON branch (joins catalog_offers) — also executes, empty -> (0, 0)
-    monkeypatch.setattr(billing_health, "_prepaid_renewals_enabled", lambda db: True)
+def test_coverage_sql_executes_without_runtime_control(db_session):
     assert billing_health.billing_path_coverage(db_session) == (0, 0)
 
 
@@ -61,5 +35,4 @@ def test_unbilled_no_path_is_an_anomaly():
 
 
 def test_terminal_account_alone_does_not_page():
-    # lifecycle drift is exported as a metric but is not a paging anomaly
     assert _snap(active_subs_on_terminal_account=2).anomalies == []

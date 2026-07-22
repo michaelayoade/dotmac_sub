@@ -167,7 +167,6 @@ def _create_direct_transfer_intent(
         raise _error(
             "unavailable",
             "Direct bank transfer is not configured",
-            control_enabled=configuration.control_enabled,
             enabled_account_count=len(configuration.enabled_accounts),
         )
 

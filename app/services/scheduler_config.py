@@ -833,13 +833,6 @@ def build_beat_schedule() -> dict:
             session,
             "app.tasks.zabbix_ingestion.dispatch_portal_usage_ingestion",
         )
-        billing_enabled = _effective_bool(
-            session,
-            SettingDomain.billing,
-            "billing_enabled",
-            "BILLING_ENABLED",
-            True,
-        )
         billing_interval_seconds = _effective_int(
             session,
             SettingDomain.billing,
@@ -852,7 +845,7 @@ def build_beat_schedule() -> dict:
             session,
             name="billing_runner",
             task_name="app.tasks.billing.run_invoice_cycle",
-            enabled=billing_enabled,
+            enabled=True,
             interval_seconds=billing_interval_seconds,
         )
         compensation_retry_enabled = _effective_bool(
@@ -881,13 +874,6 @@ def build_beat_schedule() -> dict:
             interval_seconds=compensation_retry_interval_seconds,
         )
         # Overdue invoice detection — independent of billing cycle
-        overdue_enabled = _effective_bool(
-            session,
-            SettingDomain.billing,
-            "overdue_check_enabled",
-            "BILLING_OVERDUE_CHECK_ENABLED",
-            True,
-        )
         overdue_interval = _effective_int(
             session,
             SettingDomain.billing,
@@ -900,20 +886,11 @@ def build_beat_schedule() -> dict:
             session,
             name="overdue_checker",
             task_name="app.tasks.billing.mark_invoices_overdue",
-            enabled=overdue_enabled,
+            enabled=True,
             interval_seconds=overdue_interval,
         )
-        # Dedicated hourly billing-notifications runner. Default OFF: when
-        # enabled it owns the reminder/escalation emits and honours the
-        # configured send window (billing_notif_send_hour); the daily invoice
-        # cycle then skips them. See docs/designs/BILLING_ENFORCEMENT_WINDOW.md.
-        billing_notif_hourly_enabled = _effective_bool(
-            session,
-            SettingDomain.collections,
-            "billing_notifications_hourly_enabled",
-            "BILLING_NOTIFICATIONS_HOURLY_ENABLED",
-            False,
-        )
+        # The permanent hourly notifications runner owns reminders and honours
+        # the configured customer-message send window.
         billing_notif_interval = _effective_int(
             session,
             SettingDomain.collections,
@@ -926,20 +903,11 @@ def build_beat_schedule() -> dict:
             session,
             name="billing_notifications_runner",
             task_name="app.tasks.billing.run_billing_notifications",
-            enabled=billing_notif_hourly_enabled,
+            enabled=True,
             interval_seconds=billing_notif_interval,
         )
-        # Unified billing enforcement. The legacy setting/key remains
-        # ``dunning_enabled`` for operator compatibility, but the scheduled task
-        # now routes through the single billing-enforcement reconciler. Accrual
-        # remains mode-specific; suspension/restore decisions converge there.
-        dunning_enabled = _effective_bool(
-            session,
-            SettingDomain.collections,
-            "dunning_enabled",
-            "DUNNING_ENABLED",
-            True,
-        )
+        # Unified billing enforcement. Accrual remains mode-specific;
+        # suspension/restore decisions converge in the owner.
         dunning_interval_seconds = _effective_int(
             session,
             SettingDomain.collections,
@@ -952,7 +920,7 @@ def build_beat_schedule() -> dict:
             session,
             name="dunning_runner",
             task_name="app.tasks.collections.run_billing_enforcement",
-            enabled=dunning_enabled,
+            enabled=True,
             interval_seconds=dunning_interval_seconds,
         )
         # Bundle-state reconcile: heal any divergent bundle member (base active
@@ -961,19 +929,12 @@ def build_beat_schedule() -> dict:
             session,
             name="bundle_reconcile",
             task_name="app.tasks.collections.run_bundle_reconcile",
-            enabled=dunning_enabled,
+            enabled=True,
             interval_seconds=900,
         )
-        # Balance/expiry-based prepaid enforcement sweep. DEFAULT OFF (its own
-        # control key, routed through the single control-plane resolver): it
-        # arms low-balance/deactivation timers and SUSPENDS depleted prepaid
-        # accounts, so it stays a deliberate opt-in. The sweep also no-ops
-        # internally when the control is off. Cadence is constrained by the
-        # registered setting so the sweep reaches every configured blocking
-        # window instead of being anchored once daily before that window.
-        prepaid_balance_enforcement_enabled = control_registry.is_enabled(
-            session, "collections.prepaid_balance_enforcement"
-        )
+        # Balance/expiry-based prepaid enforcement sweep. Funding, coverage,
+        # quarantine, shields, grace, and the shared time-of-day window decide
+        # each account; there is no global enablement control.
         prepaid_balance_sweep_interval_seconds = _resolve_int(
             session,
             SettingDomain.collections,
@@ -984,11 +945,10 @@ def build_beat_schedule() -> dict:
             session,
             name="prepaid_balance_sweep",
             task_name="app.tasks.collections.prepaid_balance_sweep",
-            enabled=prepaid_balance_enforcement_enabled,
+            enabled=True,
             interval_seconds=prepaid_balance_sweep_interval_seconds,
         )
-        # Billing master-switch config guard — ALWAYS on (independent of
-        # billing_enabled) so an unexpected flip is caught, not silently armed.
+        # Customer-financial lifecycle health observation.
         _sync_scheduled_task(
             session,
             name="billing_switch_guard",
@@ -1048,13 +1008,6 @@ def build_beat_schedule() -> dict:
             interval_seconds=max(funded_inactive_audit_interval_seconds, 86400),
         )
         # Autopay charging (idempotent; due-date gating lives in the service)
-        autopay_enabled = _effective_bool(
-            session,
-            SettingDomain.billing,
-            "autopay_enabled",
-            "BILLING_AUTOPAY_ENABLED",
-            True,
-        )
         autopay_interval_seconds = _effective_int(
             session,
             SettingDomain.billing,
@@ -1067,17 +1020,10 @@ def build_beat_schedule() -> dict:
             session,
             name="autopay_runner",
             task_name="app.tasks.autopay.charge_due_invoices",
-            enabled=autopay_enabled,
+            enabled=True,
             interval_seconds=autopay_interval_seconds,
         )
         # Payment arrangement installment due/overdue/default checks (daily)
-        arrangement_check_enabled = _effective_bool(
-            session,
-            SettingDomain.collections,
-            "arrangement_check_enabled",
-            "ARRANGEMENT_CHECK_ENABLED",
-            True,
-        )
         arrangement_check_interval_seconds = _effective_int(
             session,
             SettingDomain.collections,
@@ -1092,17 +1038,10 @@ def build_beat_schedule() -> dict:
             session,
             name="arrangement_overdue_checker",
             task_name="app.tasks.arrangements.check_overdue_arrangements",
-            enabled=arrangement_check_enabled,
+            enabled=True,
             interval_seconds=arrangement_check_interval_seconds,
         )
         # Sweep stranded top-up intents against the gateway verify API
-        topup_reconciliation_enabled = _effective_bool(
-            session,
-            SettingDomain.billing,
-            "topup_reconciliation_enabled",
-            "BILLING_TOPUP_RECONCILIATION_ENABLED",
-            True,
-        )
         topup_reconciliation_interval_seconds = _effective_int(
             session,
             SettingDomain.billing,
@@ -1117,7 +1056,7 @@ def build_beat_schedule() -> dict:
             session,
             name="topup_reconciliation_runner",
             task_name="app.tasks.payment_reconciliation.reconcile_topups",
-            enabled=topup_reconciliation_enabled,
+            enabled=True,
             interval_seconds=topup_reconciliation_interval_seconds,
         )
         # Suspension-enforcement audit — read-only check that fully-blocked
@@ -1198,13 +1137,6 @@ def build_beat_schedule() -> dict:
             interval_seconds=connectivity_shadow_audit_interval_seconds,
         )
         # Subscription expiration enforcement (runs daily)
-        subscription_expiration_enabled = _effective_bool(
-            session,
-            SettingDomain.catalog,
-            "subscription_expiration_enabled",
-            "SUBSCRIPTION_EXPIRATION_ENABLED",
-            True,
-        )
         subscription_expiration_interval_seconds = _effective_int(
             session,
             SettingDomain.catalog,
@@ -1219,20 +1151,13 @@ def build_beat_schedule() -> dict:
             session,
             name="subscription_expiration_runner",
             task_name="app.tasks.catalog.expire_subscriptions",
-            enabled=subscription_expiration_enabled,
+            enabled=True,
             interval_seconds=subscription_expiration_interval_seconds,
         )
         # Apply admin-scheduled next-cycle plan changes once their effective
         # (next-billing) date arrives. Hourly so a change lands promptly after
         # the boundary; the applier is idempotent (only picks up approved,
         # unapplied rows whose effective_date has passed).
-        scheduled_plan_change_enabled = _effective_bool(
-            session,
-            SettingDomain.catalog,
-            "scheduled_plan_change_enabled",
-            "SCHEDULED_PLAN_CHANGE_ENABLED",
-            True,
-        )
         scheduled_plan_change_interval_seconds = _effective_int(
             session,
             SettingDomain.catalog,
@@ -1247,19 +1172,12 @@ def build_beat_schedule() -> dict:
             session,
             name="scheduled_plan_change_applier",
             task_name="app.tasks.catalog.apply_due_subscription_changes",
-            enabled=scheduled_plan_change_enabled,
+            enabled=True,
             interval_seconds=scheduled_plan_change_interval_seconds,
         )
         # Deferred status commands have their own durable queue. Keep this
-        # runner independent from plan changes so billing can disable its plan
-        # applier without stranding reviewed access/lifecycle actions.
-        scheduled_status_change_enabled = _effective_bool(
-            session,
-            SettingDomain.catalog,
-            "scheduled_status_change_enabled",
-            "SCHEDULED_STATUS_CHANGE_ENABLED",
-            True,
-        )
+        # runner independent from plan changes so reviewed access/lifecycle
+        # actions cannot be stranded.
         scheduled_status_change_interval_seconds = _effective_int(
             session,
             SettingDomain.catalog,
@@ -1274,7 +1192,7 @@ def build_beat_schedule() -> dict:
             session,
             name="scheduled_subscription_status_applier",
             task_name=("app.tasks.catalog.apply_due_subscription_status_commands"),
-            enabled=scheduled_status_change_enabled,
+            enabled=True,
             interval_seconds=scheduled_status_change_interval_seconds,
         )
         # Infrastructure availability snapshot - daily rollup powering the
@@ -1368,13 +1286,6 @@ def build_beat_schedule() -> dict:
             interval_seconds=device_projection_reconcile_interval_seconds,
         )
         # Vacation hold auto-resume - runs hourly to resume expired holds
-        vacation_hold_resume_enabled = _effective_bool(
-            session,
-            SettingDomain.catalog,
-            "vacation_hold_auto_resume_enabled",
-            "VACATION_HOLD_AUTO_RESUME_ENABLED",
-            True,
-        )
         vacation_hold_resume_interval = _effective_int(
             session,
             SettingDomain.catalog,
@@ -1387,15 +1298,8 @@ def build_beat_schedule() -> dict:
             session,
             name="vacation_hold_auto_resume",
             task_name="app.tasks.vacation_holds.resume_expired_holds",
-            enabled=vacation_hold_resume_enabled,
+            enabled=True,
             interval_seconds=vacation_hold_resume_interval,
-        )
-        notification_queue_enabled = _effective_bool(
-            session,
-            SettingDomain.notification,
-            "notification_queue_enabled",
-            "NOTIFICATION_QUEUE_ENABLED",
-            True,
         )
         notification_queue_interval_seconds = _effective_int(
             session,
@@ -1411,7 +1315,7 @@ def build_beat_schedule() -> dict:
             session,
             name="notification_queue_runner",
             task_name="app.tasks.notifications.deliver_notification_queue",
-            enabled=notification_queue_enabled,
+            enabled=True,
             interval_seconds=notification_queue_interval_seconds,
         )
         campaign_processing_enabled = _effective_bool(
@@ -2283,12 +2187,6 @@ def build_beat_schedule() -> dict:
 
         # Durable event outbox recovery. The normal path dispatches immediately
         # after commit; this runner claims rows left pending by a process crash.
-        event_dispatch_enabled = _resolve_bool(
-            session,
-            SettingDomain.scheduler,
-            "event_dispatch_enabled",
-            True,
-        )
         event_dispatch_interval = _resolve_int(
             session,
             SettingDomain.scheduler,
@@ -2299,18 +2197,11 @@ def build_beat_schedule() -> dict:
             session,
             name="event_dispatch_runner",
             task_name="app.tasks.events.dispatch_pending_events",
-            enabled=event_dispatch_enabled,
+            enabled=True,
             interval_seconds=event_dispatch_interval,
         )
 
         # Event retry - retries failed event handlers
-        event_retry_enabled = _effective_bool(
-            session,
-            SettingDomain.scheduler,
-            "event_retry_enabled",
-            "EVENT_RETRY_ENABLED",
-            True,
-        )
         event_retry_interval = _resolve_int(
             session, SettingDomain.scheduler, "event_retry_interval_seconds", 300
         )
@@ -2319,18 +2210,11 @@ def build_beat_schedule() -> dict:
             session,
             name="event_retry_runner",
             task_name="app.tasks.events.retry_failed_events",
-            enabled=event_retry_enabled,
+            enabled=True,
             interval_seconds=event_retry_interval,
         )
 
         # Event stale processing cleanup - marks stuck events as failed
-        event_stale_cleanup_enabled = _effective_bool(
-            session,
-            SettingDomain.scheduler,
-            "event_stale_cleanup_enabled",
-            "EVENT_STALE_CLEANUP_ENABLED",
-            True,
-        )
         event_stale_cleanup_interval = _resolve_int(
             session,
             SettingDomain.scheduler,
@@ -2344,7 +2228,7 @@ def build_beat_schedule() -> dict:
             session,
             name="event_stale_cleanup_runner",
             task_name="app.tasks.events.mark_stale_processing_events",
-            enabled=event_stale_cleanup_enabled,
+            enabled=True,
             interval_seconds=event_stale_cleanup_interval,
         )
 
