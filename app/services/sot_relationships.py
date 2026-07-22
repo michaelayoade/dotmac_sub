@@ -15312,6 +15312,155 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="ui.billing_account_workspace_projection",
+                module="app.services.web_billing_accounts",
+                owns=(
+                    "admin billing-account first-viewport projection",
+                    "admin account-statement currency summary projection",
+                    "admin account-statement row and source-link projection",
+                ),
+                depends_on=(
+                    "customer.accounts",
+                    "customer.financial_position",
+                    "financial.billing_profile",
+                    "financial.ledger",
+                    "financial.prepaid_funding_reconstruction",
+                    "ui.projection_contracts",
+                    "ui.status_presentation",
+                ),
+                notes=(
+                    "Receivables and prepaid funding remain separate. Statement "
+                    "opening, activity, closing, and running balances are grouped "
+                    "by currency and never nominally netted. Financial commands "
+                    "remain with their invoice, payment, credit-note, and ledger owners."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="admin billing-account first-viewport projection",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical billing-account state",
+                                "canonical billing-mode profile",
+                                "canonical customer financial position",
+                                "UI projection vocabulary",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="admin account-statement currency summary projection",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical customer financial events",
+                                "UI projection vocabulary",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="admin account-statement row and source-link projection",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical customer financial events",
+                                "canonical financial document identities",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical billing-account state",
+                            owner="customer.accounts",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Subscriber account identity and lifecycle status",
+                        ),
+                        AuthorityInput(
+                            name="canonical billing-mode profile",
+                            owner="financial.billing_profile",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "effective account/subscription billing mode, source, "
+                                "and invalid reason"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical customer financial position",
+                            owner="customer.financial_position",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "currency-typed invoice receivables and reviewed prepaid "
+                                "funding position"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical customer financial events",
+                            owner="financial.ledger",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "customer_financial_ledger source documents, reviewed "
+                                "opening positions, and native ledger evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical financial document identities",
+                            owner="financial.ledger",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="event-to-invoice, payment, and closure identities",
+                        ),
+                        AuthorityInput(
+                            name="UI projection vocabulary",
+                            owner="ui.projection_contracts",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="StateValue availability semantics and display contracts",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary=(
+                            "The workspace and statement services read on the adapter "
+                            "session and never mutate or complete a transaction."
+                        ),
+                        locking="Read projections acquire no mutation locks.",
+                        idempotency=(
+                            "The same account, date range, and authoritative facts produce "
+                            "the same state, currency lanes, rows, and source links."
+                        ),
+                        retries="Read-only projection calls are safe to retry.",
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(),
+                        mapping_owner="app.web.admin.billing_accounts",
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "templates/admin/billing/account_detail.html generic account "
+                            "balance and cross-currency statement arithmetic"
+                        ),
+                        new_owner="ui.billing_account_workspace_projection",
+                        verification=(
+                            "Billing-account overview, currency separation, CSV parity, "
+                            "source-link, and template-boundary tests."
+                        ),
+                        cutover_gate=(
+                            "The account route and template consume only the owner-provided "
+                            "overview and statement projections."
+                        ),
+                        fallback_retirement=(
+                            "account.balance rendering and scalar multi-currency statement "
+                            "totals are absent."
+                        ),
+                    ),
+                    steward="finance operations",
+                    design_refs=(
+                        "docs/designs/BILLING_ACCOUNT_360.md",
+                        "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_billing_accounts_list.py",
+                        "tests/test_billing_statement_service.py",
+                        "tests/architecture/test_template_projection_boundary.py",
+                    ),
+                ),
+            ),
+            SOTService(
                 name="ui.status_presentation",
                 module="app.services.status_presentation",
                 owns=(

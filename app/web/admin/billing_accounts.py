@@ -246,11 +246,6 @@ def account_detail(
     statement_range = web_billing_statements_service.parse_statement_range(
         statement_start, statement_end
     )
-    statement = web_billing_statements_service.build_account_statement(
-        db,
-        account_id=account_id,
-        date_range=statement_range,
-    )
     from app.web.admin import get_current_user, get_sidebar_stats
 
     return templates.TemplateResponse(
@@ -265,6 +260,49 @@ def account_detail(
             "active_menu": "billing",
             "current_user": get_current_user(request),
             "sidebar_stats": get_sidebar_stats(db),
+            "statement_range": statement_range,
+        },
+    )
+
+
+@router.get(
+    "/accounts/{account_id}/statement",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:account:read"))],
+)
+def account_statement_fragment(
+    request: Request,
+    account_id: UUID,
+    statement_start: str | None = Query(None),
+    statement_end: str | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    statement_range = web_billing_statements_service.parse_statement_range(
+        statement_start, statement_end
+    )
+    if request.headers.get("HX-Request") != "true":
+        return RedirectResponse(
+            url=(
+                f"/admin/billing/accounts/{account_id}"
+                f"?statement_start={statement_range.start_date.isoformat()}"
+                f"&statement_end={statement_range.end_date.isoformat()}"
+            ),
+            status_code=303,
+        )
+    account = web_billing_accounts_service.get_account_detail_identity(
+        db, account_id=str(account_id)
+    )
+    statement = web_billing_statements_service.build_account_statement(
+        db,
+        account_id=account_id,
+        date_range=statement_range,
+    )
+    return templates.TemplateResponse(
+        "admin/billing/_account_statement.html",
+        {
+            "request": request,
+            "account_id": account_id,
+            "recipient_email": account.email,
             "statement_range": statement_range,
             "statement": statement,
         },
