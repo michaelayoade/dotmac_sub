@@ -193,7 +193,9 @@ def test_direct_transfer_configuration_has_one_domain_resolver() -> None:
     assert "resolve_values_atomic(" in owner_source
     assert "DomainSetting" not in owner_source
     assert "select(DomainSetting)" not in portal_source
-    assert "control_registry.is_enabled(" in owner_source
+    assert "control_registry.is_enabled(" not in owner_source
+    assert "collection_account_directory.enabled_transfer_accounts(" in owner_source
+    assert 'key="direct_bank_transfer_enabled"' not in settings_source
     assert 'key="direct_bank_transfer_intent_ttl_days"' in settings_source
     assert "_DIRECT_TRANSFER_TTL" not in portal_source
 

@@ -38,7 +38,6 @@ from app.models.billing import (
     TopupIntent,
 )
 from app.models.domain_settings import SettingDomain
-from app.services import control_registry
 from app.services.billing import collection_account_directory
 from app.services.billing._common import lock_account
 from app.services.common import round_money, to_decimal
@@ -227,9 +226,8 @@ class DirectTransferConfiguredAccount:
 
 @dataclass(frozen=True, slots=True)
 class DirectTransferConfiguration:
-    """Canonical feature/configuration projection for direct bank transfer."""
+    """Canonical collection-account projection for direct bank transfer."""
 
-    control_enabled: bool
     accounts: tuple[DirectTransferConfiguredAccount, ...]
     bank_name: str
     account_name: str
@@ -243,13 +241,11 @@ class DirectTransferConfiguration:
 
     @property
     def enabled(self) -> bool:
-        return self.control_enabled and bool(self.enabled_accounts)
+        return bool(self.enabled_accounts)
 
     def to_adapter_settings(self) -> DirectTransferAdapterSettings:
         return {
-            "direct_bank_transfer_enabled": (
-                "true" if self.control_enabled else "false"
-            ),
+            "direct_bank_transfer_enabled": "true" if self.enabled else "false",
             "direct_bank_transfer_bank_name": self.bank_name,
             "direct_bank_transfer_account_name": self.account_name,
             "direct_bank_transfer_account_number": self.account_number,
@@ -376,7 +372,7 @@ def parse_direct_transfer_accounts(
 
 
 def direct_transfer_configuration(db: Session) -> DirectTransferConfiguration:
-    """Resolve the canonical feature gate and configured bank destinations."""
+    """Resolve configured collection-account destinations."""
 
     resolved = resolve_values_atomic(
         db,
@@ -392,7 +388,6 @@ def direct_transfer_configuration(db: Session) -> DirectTransferConfiguration:
     )
     primary = accounts[0] if accounts else None
     return DirectTransferConfiguration(
-        control_enabled=control_registry.is_enabled(db, "billing.direct_bank_transfer"),
         accounts=accounts,
         bank_name=primary.bank_name if primary else "",
         account_name=primary.account_name if primary else "",

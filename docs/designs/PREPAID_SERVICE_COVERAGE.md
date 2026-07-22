@@ -1,6 +1,6 @@
 # Prepaid Service Coverage and Enforcement
 
-Status: cut over in code; production enablement remains readiness-gated.
+Status: canonical authority active; runtime decisions are account-scoped.
 
 ## Ownership
 
@@ -61,16 +61,11 @@ The competing `billing.prepaid_monthly_invoicing` control, its legacy
 `prepaid_monthly_invoicing_enabled` alias, and the scheduled draft-invoice path
 are retired by migration 392. Downgrade does not recreate that owner.
 
-`billing.prepaid_service_renewals` remains the production writer control. While
-it is off,
-`collections.prepaid_balance_enforcement` is continuously blocked from warnings
-and suspension. Every enforcement OFF-to-ON transition requires a new,
-unactivated readiness record; a previously activated record cannot be reused.
-
-The standalone `collections.prepaid_enforcement_activation_at` setting is
-retired by migration 393. The signed readiness record owns the intended
-activation time; the feature control owns enabled/disabled state. This removes
-a second activation clock without removing the emergency kill switch.
+Migration 398 retires the temporary renewal, enforcement, readiness, and health
+runtime controls. Renewal and enforcement owners always evaluate eligible
+accounts. Coverage gaps, quarantine, missing funding, missing prices, currency
+errors, invalid profiles, shields, and grace remain typed account outcomes.
+Historical readiness rows remain deployment evidence only.
 
 The former `PaymentPrepaidApplication` runtime is also retired. Its rows are
 historical payment-funded-period, ledger, entitlement, and access-recheck
@@ -89,9 +84,8 @@ Migration 397 applies the same fail-closed validation to databases already at
 proposals. The archive is append-only operational evidence and requires a
 separate reviewed retention decision before deletion.
 
-The enforcement kill switch remains. Coverage integrity, canonical-renewal
-availability, currency validity, and fresh enablement readiness are not optional
-health flags and cannot be bypassed by disabling generic health checks.
+Coverage integrity and currency validity remain canonical evidence. Health
+observations report drift for repair and do not become a second decision owner.
 
 ## Coverage reconciliation
 
@@ -123,8 +117,8 @@ python scripts/billing/prepaid_coverage_reconcile.py \
   --reason "<reviewed evidence reason>"
 ```
 
-`--subscription-id` may bound investigation and staged repair. Enforcement
-readiness always evaluates the full cohort.
+`--subscription-id` may bound investigation and staged repair. Full-cohort
+observations remain part of operational acceptance.
 
 ## Continuous acceptance gate
 
@@ -137,27 +131,25 @@ Operations must continuously report:
 - entitlement/anchor mismatch;
 - a fully paid prepaid subscription invoice whose service value remains reusable
   in the customer financial position;
-- due uncovered service while canonical renewals are disabled.
+- due uncovered service with a typed renewal blocker;
 - exact invoice/renewal evidence still requiring entitlement projection;
 - quarantined coverage evidence by stable reason code.
 
-The paid-invoice fallback is removed. Any repairable or quarantined item blocks
-warnings and suspension globally on every sweep, including after initial
-activation. Positive restoration may still proceed from exact coverage, so the
-gate cannot strand a repaired customer. Readiness records the zero-gap evidence
-hash and cannot be recorded while a repairable or quarantined item remains.
+The paid-invoice fallback is removed. Repairable or quarantined evidence blocks
+money-based action for the affected account while unaffected accounts continue.
+Positive restoration may proceed from exact coverage, so a repaired customer is
+not stranded behind a fleet-wide control.
 
 ## Production cutover runbook
 
-1. With enforcement disabled, inventory both
+1. Inventory both
    `payment_prepaid_applications` and `payment_prepaid_applications_archive`.
    Both names existing at once is an ambiguity and blocks deployment. Deploy
    migrations 392 through the current head; migration 394 must leave exactly
    one archive table with the same row count as the legacy source, and migration
    397 must validate its complete schema before any reconciliation apply.
-2. Enable and dry-run `billing.prepaid_service_renewals`; repair missing prices,
-   baseline quarantine, malformed service periods, and parent/subscription
-   lifecycle drift.
+2. Review renewal observations; repair missing prices, baseline quarantine,
+   malformed service periods, and parent/subscription lifecycle drift.
 3. Run the full coverage preview. Apply only exact repairable items. Resolve
    quarantine through the named financial, invoice, extension, or lifecycle
    owner; never edit an entitlement or lock with SQL.
@@ -171,12 +163,12 @@ hash and cannot be recorded while a repairable or quarantined item remains.
    begins from active prepaid locks and consumes the financial-access owner's
    exact restoration preview; it does not use subscriber status, a paid invoice,
    or `next_billing_at`. Verify Sub access state and RADIUS projection.
-6. Record a fresh full-cohort readiness generation with its intended activation
-   time, then deliberately enable `collections.prepaid_balance_enforcement`.
-7. Verify the first sweep and the next scheduled renewal/sweep cycle before
+6. Verify the next scheduled renewal and enforcement passes, including the
+   shared time-of-day window and account-level exclusions.
+7. Verify the next scheduled renewal/sweep cycle before
    closing the cutover. Verify the payment-application archive remains present
-   with its pre-deploy row count. Retain the kill switch; do not recreate retired
-   flags or a payment-application runtime writer.
+   with its pre-deploy row count. Do not recreate retired controls or a
+   payment-application runtime writer.
 
 ## Transaction boundaries
 
