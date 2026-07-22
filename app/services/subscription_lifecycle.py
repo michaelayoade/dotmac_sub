@@ -28,6 +28,7 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
+from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.subscriber import Address, Subscriber
 from app.models.subscription_change import (
     SubscriptionChangeRequest,
@@ -70,6 +71,8 @@ class SubscriptionCommandKind(str, enum.Enum):
     cancel = "cancel"
     expire = "expire"
     change_plan = "change_plan"
+    vacation_hold = "vacation_hold"
+    vacation_resume = "vacation_resume"
 
 
 class SubscriptionEffectiveTiming(str, enum.Enum):
@@ -162,6 +165,7 @@ class SubscriptionLifecycleCommand:
     expected_financial_fingerprint: str | None = None
     expected_field_quote_fingerprint: str | None = None
     idempotency_key: str | None = None
+    vacation_hold_days: int | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.kind, SubscriptionCommandKind):
@@ -187,6 +191,15 @@ class SubscriptionLifecycleCommand:
         elif self.target_offer_id is not None:
             raise SubscriptionLifecycleError(
                 "target_offer_id is only valid for change_plan"
+            )
+        if self.kind == SubscriptionCommandKind.vacation_hold:
+            if self.vacation_hold_days is None or self.vacation_hold_days < 1:
+                raise SubscriptionLifecycleError(
+                    "vacation_hold_days must be positive for vacation_hold"
+                )
+        elif self.vacation_hold_days is not None:
+            raise SubscriptionLifecycleError(
+                "vacation_hold_days is only valid for vacation_hold"
             )
         if self.target_service_address_id is not None:
             if self.kind != SubscriptionCommandKind.change_plan:
@@ -337,6 +350,102 @@ class FieldDeliveryQuote:
             "blocking_reason": self.blocking_reason,
             "payment_required_before_fulfillment": self.fee_amount > Decimal("0.00"),
         }
+
+
+@dataclass(frozen=True)
+class VacationHoldPolicyDecision:
+    eligible: bool
+    reasons: tuple[str, ...]
+    max_days: int
+    max_holds_per_year: int | None
+    cooldown_days: int | None
+    holds_this_year: int
+    last_hold_at: datetime | None
+    days_since_last: int | None
+    active_lock_id: str | None
+    active_lock_resume_at: datetime | None
+
+
+def resolve_vacation_hold_policy(
+    db: Session,
+    subscription: Subscription,
+    *,
+    command_kind: SubscriptionCommandKind,
+    requested_days: int | None = None,
+    now: datetime | None = None,
+) -> VacationHoldPolicyDecision:
+    """Resolve vacation-hold eligibility from settings and lock evidence."""
+
+    from app.models.domain_settings import SettingDomain
+    from app.services.settings_spec import resolve_value
+
+    effective_now = _aware_utc(now) or datetime.now(UTC)
+
+    def _setting_int(key: str, default: int) -> int:
+        value = resolve_value(db, SettingDomain.catalog, key)
+        return int(value) if isinstance(value, (str, int, float)) else default
+
+    max_days = _setting_int("max_suspend_days", 30)
+    max_holds = _setting_int("max_suspend_holds_per_year", 0)
+    cooldown_days = _setting_int("suspend_cooldown_days", 0)
+    year_start = datetime(effective_now.year, 1, 1, tzinfo=UTC)
+    holds = list(
+        db.scalars(
+            select(EnforcementLock)
+            .where(
+                EnforcementLock.subscription_id == subscription.id,
+                EnforcementLock.reason == EnforcementReason.customer_hold,
+            )
+            .order_by(EnforcementLock.created_at.desc())
+        ).all()
+    )
+    holds_this_year = sum(
+        1
+        for lock in holds
+        if (_aware_utc(lock.created_at) or effective_now) >= year_start
+    )
+    last_hold_at = _aware_utc(holds[0].created_at) if holds else None
+    days_since_last = (
+        max(0, (effective_now - last_hold_at).days)
+        if last_hold_at is not None
+        else None
+    )
+    active = next((lock for lock in holds if lock.is_active), None)
+    reasons: list[str] = []
+    if command_kind == SubscriptionCommandKind.vacation_hold:
+        if subscription.status != SubscriptionStatus.active:
+            reasons.append("vacation_hold_requires_active_subscription")
+        if requested_days is None or requested_days < 1 or requested_days > max_days:
+            reasons.append("vacation_hold_duration_out_of_range")
+        if max_holds > 0 and holds_this_year >= max_holds:
+            reasons.append("vacation_hold_annual_limit_reached")
+        if (
+            cooldown_days > 0
+            and days_since_last is not None
+            and days_since_last < cooldown_days
+        ):
+            reasons.append("vacation_hold_cooldown_active")
+    elif command_kind == SubscriptionCommandKind.vacation_resume:
+        if subscription.status != SubscriptionStatus.suspended:
+            reasons.append("vacation_resume_requires_suspended_subscription")
+        if active is None:
+            reasons.append("active_customer_hold_missing")
+    else:
+        reasons.append("unsupported_vacation_command")
+    return VacationHoldPolicyDecision(
+        eligible=not reasons,
+        reasons=tuple(reasons),
+        max_days=max_days,
+        max_holds_per_year=max_holds if max_holds > 0 else None,
+        cooldown_days=cooldown_days if cooldown_days > 0 else None,
+        holds_this_year=holds_this_year,
+        last_hold_at=last_hold_at,
+        days_since_last=days_since_last,
+        active_lock_id=str(active.id) if active is not None else None,
+        active_lock_resume_at=_aware_utc(active.resume_at)
+        if active is not None
+        else None,
+    )
 
 
 @dataclass(frozen=True)
@@ -733,6 +842,8 @@ def _eligibility_reasons(
             SubscriptionStatus.active,
             SubscriptionStatus.suspended,
         },
+        SubscriptionCommandKind.vacation_hold: {SubscriptionStatus.active},
+        SubscriptionCommandKind.vacation_resume: {SubscriptionStatus.suspended},
     }
     if status not in allowed_statuses[command.kind]:
         reasons.append(f"status_{status.value}_not_eligible_for_{command.kind.value}")
@@ -742,6 +853,18 @@ def _eligibility_reasons(
         and (_aware_utc(command.effective_at) or now) < now
     ):
         reasons.append("effective_at_is_in_the_past")
+    if command.kind in {
+        SubscriptionCommandKind.vacation_hold,
+        SubscriptionCommandKind.vacation_resume,
+    }:
+        decision = resolve_vacation_hold_policy(
+            db,
+            subscription,
+            command_kind=command.kind,
+            requested_days=command.vacation_hold_days,
+            now=now,
+        )
+        reasons.extend(decision.reasons)
     if command.kind != SubscriptionCommandKind.change_plan:
         return reasons
     if target_offer is None:
@@ -925,6 +1048,8 @@ def _billing_impact(
         SubscriptionCommandKind.restore: "collection_unchanged",
         SubscriptionCommandKind.cancel: "stop_collection",
         SubscriptionCommandKind.expire: "stop_collection",
+        SubscriptionCommandKind.vacation_hold: "continue_collection_while_held",
+        SubscriptionCommandKind.vacation_resume: "collection_unchanged",
     }.get(command.kind, "collection_unchanged")
     return (
         SubscriptionBillingImpact(
@@ -988,7 +1113,7 @@ def _proposed_status(
     current: SubscriptionStatus, kind: SubscriptionCommandKind
 ) -> SubscriptionStatus:
     if (
-        kind == SubscriptionCommandKind.suspend
+        kind in {SubscriptionCommandKind.suspend, SubscriptionCommandKind.vacation_hold}
         and current in _SUSPENDED_EQUIVALENT_STATUSES
     ):
         return current
@@ -999,6 +1124,8 @@ def _proposed_status(
         SubscriptionCommandKind.restore: SubscriptionStatus.active,
         SubscriptionCommandKind.cancel: SubscriptionStatus.canceled,
         SubscriptionCommandKind.expire: SubscriptionStatus.expired,
+        SubscriptionCommandKind.vacation_hold: SubscriptionStatus.suspended,
+        SubscriptionCommandKind.vacation_resume: SubscriptionStatus.active,
     }.get(kind, current)
 
 
@@ -1011,6 +1138,8 @@ def _session_action(kind: SubscriptionCommandKind) -> SubscriptionSessionAction:
         SubscriptionCommandKind.cancel: SubscriptionSessionAction.deprovision,
         SubscriptionCommandKind.expire: SubscriptionSessionAction.deprovision,
         SubscriptionCommandKind.change_plan: SubscriptionSessionAction.reauthorize,
+        SubscriptionCommandKind.vacation_hold: SubscriptionSessionAction.disconnect,
+        SubscriptionCommandKind.vacation_resume: SubscriptionSessionAction.authorize,
     }.get(kind, SubscriptionSessionAction.none)
 
 

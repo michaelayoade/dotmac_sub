@@ -1459,43 +1459,46 @@ def _get_vacation_hold_usage(
     subscription_id: str,
 ) -> VacationHoldUsage:
     """Get vacation hold usage stats for a subscription this calendar year."""
-    from app.models.enforcement_lock import EnforcementLock, EnforcementReason
-
-    current_year = datetime.now(UTC).year
-    year_start = datetime(current_year, 1, 1, tzinfo=UTC)
-
-    # Count holds created this year (both active and resolved)
-    holds_this_year = (
-        db.query(EnforcementLock)
-        .filter(EnforcementLock.subscription_id == subscription_id)
-        .filter(EnforcementLock.reason == EnforcementReason.customer_hold)
-        .filter(EnforcementLock.created_at >= year_start)
-        .count()
+    from app.services.subscription_lifecycle import (
+        SubscriptionCommandKind,
+        resolve_vacation_hold_policy,
     )
 
-    # Get most recent hold (active or resolved) for cooldown calculation
-    last_hold = (
-        db.query(EnforcementLock)
-        .filter(EnforcementLock.subscription_id == subscription_id)
-        .filter(EnforcementLock.reason == EnforcementReason.customer_hold)
-        .order_by(EnforcementLock.created_at.desc())
-        .first()
+    subscription = db.get(Subscription, coerce_uuid(subscription_id))
+    if subscription is None:
+        return {"holds_this_year": 0, "last_hold_date": None, "days_since_last": None}
+    decision = resolve_vacation_hold_policy(
+        db,
+        subscription,
+        command_kind=SubscriptionCommandKind.vacation_hold,
+        requested_days=1,
     )
-
-    last_hold_date: datetime | None = last_hold.created_at if last_hold else None
-    days_since_last: int | None = None
-    if last_hold_date:
-        # Handle timezone-naive datetimes (e.g., from SQLite in tests)
-        now = datetime.now(UTC)
-        if last_hold_date.tzinfo is None:
-            last_hold_date = last_hold_date.replace(tzinfo=UTC)
-        days_since_last = (now - last_hold_date).days
 
     return {
-        "holds_this_year": holds_this_year,
-        "last_hold_date": last_hold_date,
-        "days_since_last": days_since_last,
+        "holds_this_year": decision.holds_this_year,
+        "last_hold_date": decision.last_hold_at,
+        "days_since_last": decision.days_since_last,
     }
+
+
+def _vacation_reason_message(reason: str, decision) -> str:
+    if reason == "vacation_hold_annual_limit_reached":
+        return (
+            f"You have reached the maximum of {decision.max_holds_per_year} "
+            "vacation holds per year."
+        )
+    if reason == "vacation_hold_cooldown_active":
+        remaining = max(
+            0, (decision.cooldown_days or 0) - (decision.days_since_last or 0)
+        )
+        return (
+            f"Please wait {remaining} more day(s) before using another vacation hold."
+        )
+    if reason == "vacation_hold_duration_out_of_range":
+        return f"Suspension must be between 1 and {decision.max_days} days"
+    if reason == "active_customer_hold_missing":
+        return "Cannot resume: no customer-initiated hold was found."
+    return "This subscription is not eligible for that vacation-hold action."
 
 
 def get_suspend_page(
@@ -1504,12 +1507,9 @@ def get_suspend_page(
     subscription_id: str,
 ) -> dict | None:
     """Build context for the vacation hold confirmation page."""
-    from app.models.domain_settings import SettingDomain
-    from app.services.settings_spec import resolve_value
-
-    max_suspend_days = resolve_value(db, SettingDomain.catalog, "max_suspend_days")
-    max_days = (
-        int(max_suspend_days) if isinstance(max_suspend_days, (str, int, float)) else 30
+    from app.services.subscription_lifecycle import (
+        SubscriptionCommandKind,
+        resolve_vacation_hold_policy,
     )
 
     account_id = optional_customer_account_id(db, customer)
@@ -1520,35 +1520,35 @@ def get_suspend_page(
     if subscription.status != SubscriptionStatus.active:
         return None
 
-    # Get usage limits and current usage
-    max_holds_val = resolve_value(
-        db, SettingDomain.catalog, "max_suspend_holds_per_year"
+    decision = resolve_vacation_hold_policy(
+        db,
+        subscription,
+        command_kind=SubscriptionCommandKind.vacation_hold,
+        requested_days=1,
     )
-    max_holds_per_year = (
-        int(max_holds_val) if isinstance(max_holds_val, (str, int, float)) else 0
-    )
-    cooldown_val = resolve_value(db, SettingDomain.catalog, "suspend_cooldown_days")
-    cooldown_days = (
-        int(cooldown_val) if isinstance(cooldown_val, (str, int, float)) else 0
-    )
-
-    usage = _get_vacation_hold_usage(db, subscription_id)
+    max_days = decision.max_days
+    max_holds_per_year = decision.max_holds_per_year or 0
+    cooldown_days = decision.cooldown_days or 0
+    usage = {
+        "holds_this_year": decision.holds_this_year,
+        "days_since_last": decision.days_since_last,
+    }
     holds_remaining = None
     if max_holds_per_year > 0:
-        holds_remaining = max(0, max_holds_per_year - usage["holds_this_year"])
+        holds_remaining = max(0, max_holds_per_year - decision.holds_this_year)
 
     # Check if user can actually suspend (usage limits)
     can_suspend = True
     block_reason = None
 
-    if max_holds_per_year > 0 and usage["holds_this_year"] >= max_holds_per_year:
+    policy_reasons = tuple(
+        reason
+        for reason in decision.reasons
+        if reason != "vacation_hold_duration_out_of_range"
+    )
+    if policy_reasons:
         can_suspend = False
-        block_reason = f"You have reached the maximum of {max_holds_per_year} vacation holds per year."
-    elif cooldown_days > 0 and usage["days_since_last"] is not None:
-        if usage["days_since_last"] < cooldown_days:
-            can_suspend = False
-            days_remaining = cooldown_days - usage["days_since_last"]
-            block_reason = f"Please wait {days_remaining} more day(s) before using another vacation hold."
+        block_reason = _vacation_reason_message(policy_reasons[0], decision)
 
     offer = subscription.offer
     return {
@@ -1575,66 +1575,58 @@ def apply_service_suspend(
     days: int,
 ) -> dict:
     """Apply a customer-initiated vacation hold on a subscription."""
-    from app.models.domain_settings import SettingDomain
-    from app.models.enforcement_lock import EnforcementReason
-    from app.services.account_lifecycle import suspend_subscription
-    from app.services.settings_spec import resolve_value
-
-    max_suspend_days = resolve_value(db, SettingDomain.catalog, "max_suspend_days")
-    max_days = (
-        int(max_suspend_days) if isinstance(max_suspend_days, (str, int, float)) else 30
+    from app.models.audit import AuditActorType
+    from app.services.subscription_lifecycle import (
+        SubscriptionCommandKind,
+        SubscriptionEffectiveTiming,
+        SubscriptionLifecycleCommand,
+        resolve_subscription_lifecycle,
     )
-    if days < 1 or days > max_days:
-        raise ValueError(f"Suspension must be between 1 and {max_days} days")
+    from app.services.subscription_lifecycle_commands import (
+        execute_subscription_command,
+    )
 
     account_id = optional_customer_account_id(db, customer)
     subscription = db.get(Subscription, subscription_id)
     if not subscription or str(subscription.subscriber_id) != str(account_id):
         raise ValueError("Subscription not found")
 
-    if subscription.status != SubscriptionStatus.active:
-        raise ValueError("Only active subscriptions can be suspended")
-
-    # Check usage limits
-    max_holds_val = resolve_value(
-        db, SettingDomain.catalog, "max_suspend_holds_per_year"
-    )
-    max_holds_per_year = (
-        int(max_holds_val) if isinstance(max_holds_val, (str, int, float)) else 0
-    )
-    cooldown_val = resolve_value(db, SettingDomain.catalog, "suspend_cooldown_days")
-    cooldown_days = (
-        int(cooldown_val) if isinstance(cooldown_val, (str, int, float)) else 0
-    )
-
-    usage = _get_vacation_hold_usage(db, subscription_id)
-
-    if max_holds_per_year > 0 and usage["holds_this_year"] >= max_holds_per_year:
-        raise ValueError(
-            f"You have reached the maximum of {max_holds_per_year} vacation holds per year"
-        )
-
-    if cooldown_days > 0 and usage["days_since_last"] is not None:
-        if usage["days_since_last"] < cooldown_days:
-            days_remaining = cooldown_days - usage["days_since_last"]
-            raise ValueError(
-                f"Please wait {days_remaining} more day(s) before using another vacation hold"
-            )
-
     subscriber_id = str(subscription.subscriber_id)
-    lock = suspend_subscription(
+    snapshot = resolve_subscription_lifecycle(db, subscription_id)
+    outcome = execute_subscription_command(
         db,
-        subscription_id,
-        reason=EnforcementReason.customer_hold,
-        source=f"customer_portal:vacation_hold:{subscriber_id}",
-        notes=f"Customer-initiated vacation hold for {days} days",
+        SubscriptionLifecycleCommand(
+            subscription_id=subscription_id,
+            kind=SubscriptionCommandKind.vacation_hold,
+            source=f"customer:{subscriber_id}:vacation_hold",
+            effective_timing=SubscriptionEffectiveTiming.immediate,
+            reason=f"Customer-initiated vacation hold for {days} days",
+            expected_head=snapshot.head,
+            idempotency_key=(
+                f"customer-vacation-hold:{subscription_id}:{snapshot.head}:{days}"
+            ),
+            vacation_hold_days=days,
+        ),
+        actor_id=subscriber_id,
+        actor_type=AuditActorType.user,
     )
+    if outcome.status.value not in {"applied", "skipped"}:
+        from app.services.subscription_lifecycle import resolve_vacation_hold_policy
 
-    # Set scheduled auto-resume date
-    resume_at = datetime.now(UTC) + timedelta(days=days)
-    lock.resume_at = resume_at
+        decision = resolve_vacation_hold_policy(
+            db,
+            subscription,
+            command_kind=SubscriptionCommandKind.vacation_hold,
+            requested_days=days,
+        )
+        raise ValueError(_vacation_reason_message(outcome.error_code or "", decision))
+    lock_id = outcome.artifact_ids[0] if outcome.artifact_ids else None
+    from app.models.enforcement_lock import EnforcementLock
 
-    db.flush()
+    lock = db.get(EnforcementLock, coerce_uuid(lock_id)) if lock_id else None
+    if lock is None or lock.resume_at is None:
+        raise ValueError("Vacation hold did not return exact lock evidence")
+    resume_at = lock.resume_at
 
     logger.info(
         "Customer %s suspended subscription %s for %d days (vacation hold, resume_at=%s)",
@@ -1658,29 +1650,26 @@ def get_resume_page(
     subscription_id: str,
 ) -> dict | None:
     """Build context for the resume service confirmation page."""
-    from app.models.enforcement_lock import EnforcementLock, EnforcementReason
+    from app.models.enforcement_lock import EnforcementLock
+    from app.services.subscription_lifecycle import (
+        SubscriptionCommandKind,
+        resolve_vacation_hold_policy,
+    )
 
     account_id = optional_customer_account_id(db, customer)
     subscription = db.get(Subscription, subscription_id)
     if not subscription or str(subscription.subscriber_id) != str(account_id):
         return None
 
-    # Only allow resume for suspended subscriptions with customer_hold lock
-    if subscription.status != SubscriptionStatus.suspended:
-        return None
-
-    # Check for active customer_hold lock
-    lock = (
-        db.query(EnforcementLock)
-        .filter(
-            EnforcementLock.subscription_id == coerce_uuid(subscription_id),
-            EnforcementLock.reason == EnforcementReason.customer_hold,
-            EnforcementLock.is_active.is_(True),
-        )
-        .first()
+    decision = resolve_vacation_hold_policy(
+        db,
+        subscription,
+        command_kind=SubscriptionCommandKind.vacation_resume,
     )
-    if not lock:
-        # No customer-initiated hold found - cannot self-service resume
+    if not decision.eligible or decision.active_lock_id is None:
+        return None
+    lock = db.get(EnforcementLock, coerce_uuid(decision.active_lock_id))
+    if lock is None:
         return None
 
     offer = subscription.offer
@@ -1699,44 +1688,58 @@ def apply_service_resume(
     subscription_id: str,
 ) -> dict:
     """Resume a customer-initiated vacation hold on a subscription."""
-    from app.models.enforcement_lock import EnforcementLock, EnforcementReason
-    from app.services.account_lifecycle import restore_subscription
+    from app.models.audit import AuditActorType
+    from app.models.enforcement_lock import EnforcementLock
+    from app.services.subscription_lifecycle import (
+        SubscriptionCommandKind,
+        SubscriptionEffectiveTiming,
+        SubscriptionLifecycleCommand,
+        resolve_subscription_lifecycle,
+        resolve_vacation_hold_policy,
+    )
+    from app.services.subscription_lifecycle_commands import (
+        execute_subscription_command,
+    )
 
     account_id = optional_customer_account_id(db, customer)
     subscription = db.get(Subscription, subscription_id)
     if not subscription or str(subscription.subscriber_id) != str(account_id):
         raise ValueError("Subscription not found")
 
-    if subscription.status != SubscriptionStatus.suspended:
-        raise ValueError("Subscription is not suspended")
-
-    # Check for active customer_hold lock
-    lock = (
-        db.query(EnforcementLock)
-        .filter(
-            EnforcementLock.subscription_id == coerce_uuid(subscription_id),
-            EnforcementLock.reason == EnforcementReason.customer_hold,
-            EnforcementLock.is_active.is_(True),
-        )
-        .first()
+    decision = resolve_vacation_hold_policy(
+        db,
+        subscription,
+        command_kind=SubscriptionCommandKind.vacation_resume,
     )
-    if not lock:
-        raise ValueError(
-            "Cannot resume: no customer-initiated hold found. "
-            "Please contact support if your service was suspended for another reason."
+    if not decision.eligible or decision.active_lock_id is None:
+        reason = (
+            decision.reasons[0] if decision.reasons else "active_customer_hold_missing"
         )
+        raise ValueError(_vacation_reason_message(reason, decision))
+    lock = db.get(EnforcementLock, coerce_uuid(decision.active_lock_id))
+    if lock is None:
+        raise ValueError("Cannot resume: exact customer-hold evidence is missing")
 
     subscriber_id = str(subscription.subscriber_id)
-    restored = restore_subscription(
+    snapshot = resolve_subscription_lifecycle(db, subscription_id)
+    outcome = execute_subscription_command(
         db,
-        subscription_id,
-        trigger="customer",
-        resolved_by=f"customer_portal:resume:{subscriber_id}",
-        reason=EnforcementReason.customer_hold,
-        notes="Customer-initiated resume via portal",
+        SubscriptionLifecycleCommand(
+            subscription_id=subscription_id,
+            kind=SubscriptionCommandKind.vacation_resume,
+            source=f"customer:{subscriber_id}:vacation_resume",
+            effective_timing=SubscriptionEffectiveTiming.immediate,
+            reason="Customer-initiated resume via portal",
+            expected_head=snapshot.head,
+            idempotency_key=f"customer-vacation-resume:{lock.id}",
+        ),
+        actor_id=subscriber_id,
+        actor_type=AuditActorType.user,
     )
-
-    db.flush()
+    if outcome.status.value not in {"applied", "skipped"}:
+        raise ValueError(outcome.message)
+    db.refresh(subscription)
+    restored = subscription.status == SubscriptionStatus.active
 
     logger.info(
         "Customer %s resumed subscription %s (vacation hold lifted, restored=%s)",
