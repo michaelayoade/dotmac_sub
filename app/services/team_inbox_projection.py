@@ -1,0 +1,447 @@
+"""Typed Team Inbox list/detail/UI projection owner."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import dataclass
+from enum import StrEnum
+from uuid import UUID
+
+from sqlalchemy.orm import Session
+
+from app.models.team_inbox import InboxChannelType, InboxConversationStatus
+from app.services import (
+    subscriber_summary,
+    team_inbox_contact_links,
+    team_inbox_metrics,
+    team_inbox_operations,
+    team_inbox_read,
+    team_inbox_read_state,
+)
+from app.services.list_query import (
+    ListDefinition,
+    ListFieldDefinition,
+    ListQuery,
+    PageMeta,
+    request_needs_canonicalization,
+)
+
+
+class InboxListSort(StrEnum):
+    priority = "priority"
+    last_message_at = "last_message_at"
+    created_at = "created_at"
+
+
+class InboxSortDirection(StrEnum):
+    ascending = "asc"
+    descending = "desc"
+
+
+INBOX_LIST_DEFINITION = ListDefinition(
+    key="team_inbox",
+    fields=(
+        ListFieldDefinition("status", "Status", filterable=True),
+        ListFieldDefinition("channel_type", "Channel", filterable=True),
+        ListFieldDefinition("service_team_id", "Team", filterable=True),
+        ListFieldDefinition("assigned_person_id", "Assignee", filterable=True),
+        ListFieldDefinition("contact_resolution_status", "Contact", filterable=True),
+        ListFieldDefinition("needs_response", "Needs response", filterable=True),
+        ListFieldDefinition("muted", "Muted", filterable=True),
+        ListFieldDefinition("snoozed", "Snoozed", filterable=True),
+        ListFieldDefinition("open_only", "Open only", filterable=True),
+        ListFieldDefinition("unassigned", "Unassigned", filterable=True),
+        ListFieldDefinition("unread", "Unread", filterable=True),
+        ListFieldDefinition("priority_at_most", "Max priority", filterable=True),
+        ListFieldDefinition("priority", "Priority", sortable=True),
+        ListFieldDefinition("last_message_at", "Last activity", sortable=True),
+        ListFieldDefinition("created_at", "Created", sortable=True),
+    ),
+    default_sort=InboxListSort.priority.value,
+    default_sort_dir=InboxSortDirection.ascending.value,
+    per_page_options=(10, 25, 50, 100),
+    default_per_page=25,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class InboxQueueRequest:
+    search: str | None = None
+    status: str | None = None
+    channel_type: str | None = None
+    service_team_id: str | UUID | None = None
+    assigned_person_id: str | UUID | None = None
+    needs_response: bool = False
+    contact_resolution_status: str | None = None
+    priority_at_most: int | None = None
+    muted: bool | None = None
+    snoozed: bool | None = None
+    open_only: bool = False
+    unassigned: bool = False
+    unread: bool = False
+    sort_by: str | None = None
+    sort_dir: str | None = None
+    page: int = 1
+    per_page: int = 25
+    selected_conversation_id: str | UUID | None = None
+    actor_person_id: UUID | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ContactLinkCandidate:
+    id: str
+    label: str
+
+
+@dataclass(frozen=True, slots=True)
+class ContactLinkCandidateSet:
+    subscribers: tuple[ContactLinkCandidate, ...]
+    resellers: tuple[ContactLinkCandidate, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class InboxActionEligibility:
+    can_reply: bool
+    can_resolve: bool
+    can_reopen: bool
+    can_link_contact: bool
+    can_mark_read: bool
+    reason: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class InboxConversationProjection:
+    timeline: team_inbox_read.InboxConversationTimeline
+    subscriber_summary: Mapping[str, object] | None
+    contact_link_candidates: ContactLinkCandidateSet
+    label_options: tuple[team_inbox_operations.LabelOption, ...]
+    conversation_labels: tuple[team_inbox_operations.LabelOption, ...]
+    macro_options: tuple[team_inbox_operations.MacroOption, ...]
+    template_options: tuple[team_inbox_operations.MessageTemplateOption, ...]
+    action_eligibility: InboxActionEligibility
+    is_unread: bool
+
+
+@dataclass(frozen=True, slots=True)
+class InboxServiceTeamOption:
+    id: UUID
+    name: str
+
+
+@dataclass(frozen=True, slots=True)
+class InboxQueueProjection:
+    rows: tuple[team_inbox_read.InboxConversationListRow, ...]
+    queue_metrics: team_inbox_operations.InboxQueueMetrics
+    operator_unread_count: int
+    count: int
+    list_query: ListQuery
+    page_meta: PageMeta
+    status: str
+    channel_type: str
+    service_team_id: str
+    assigned_person_id: str
+    needs_response: bool
+    contact_resolution_status: str
+    priority_at_most: int | None
+    muted: bool | None
+    snoozed: bool | None
+    open_only: bool
+    unassigned: bool
+    unread: bool
+    service_team_options: tuple[InboxServiceTeamOption, ...]
+    status_options: tuple[str, ...]
+    channel_options: tuple[str, ...]
+    label_options: tuple[team_inbox_operations.LabelOption, ...]
+    saved_filters: tuple[team_inbox_operations.SavedFilterOption, ...]
+    selected: InboxConversationProjection | None
+    canonical_url: str | None
+
+
+def _uuid(value: object) -> UUID | None:
+    candidate = str(value or "").strip()
+    if not candidate:
+        return None
+    try:
+        return UUID(candidate)
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def _candidate_terms(
+    timeline: team_inbox_read.InboxConversationTimeline,
+) -> tuple[str, ...]:
+    values: list[object] = [
+        timeline.contact_address,
+        timeline.subject,
+        timeline.external_thread_id,
+    ]
+    if timeline.metadata:
+        resolution = timeline.metadata.get("contact_resolution")
+        if isinstance(resolution, dict):
+            values.extend(
+                (
+                    resolution.get("normalized_contact"),
+                    resolution.get("subscriber_id"),
+                    resolution.get("reseller_id"),
+                )
+            )
+    terms: list[str] = []
+    for value in values:
+        candidate = str(value or "").strip()
+        if len(candidate) >= 3 and candidate not in terms:
+            terms.append(candidate)
+    return tuple(terms[:6])
+
+
+def contact_link_candidates(
+    db: Session,
+    timeline: team_inbox_read.InboxConversationTimeline,
+) -> ContactLinkCandidateSet:
+    values = team_inbox_contact_links.contact_link_candidates(
+        db, list(_candidate_terms(timeline))
+    )
+    return ContactLinkCandidateSet(
+        subscribers=tuple(
+            ContactLinkCandidate(id=str(item["id"]), label=str(item["label"]))
+            for item in values.get("subscribers", [])
+        ),
+        resellers=tuple(
+            ContactLinkCandidate(id=str(item["id"]), label=str(item["label"]))
+            for item in values.get("resellers", [])
+        ),
+    )
+
+
+def get_conversation_projection(
+    db: Session,
+    *,
+    conversation_id: UUID,
+    actor_person_id: UUID | None,
+) -> InboxConversationProjection | None:
+    timeline = team_inbox_read.get_conversation_timeline(db, conversation_id)
+    if timeline is None:
+        return None
+    is_resolved = timeline.status == InboxConversationStatus.resolved.value
+    summary = subscriber_summary.subscriber_summary(db, timeline.subscriber_id)
+    return InboxConversationProjection(
+        timeline=timeline,
+        subscriber_summary=summary,
+        contact_link_candidates=contact_link_candidates(db, timeline),
+        label_options=tuple(team_inbox_operations.list_labels(db)),
+        conversation_labels=tuple(
+            team_inbox_operations.conversation_labels(db, conversation_id)
+        ),
+        macro_options=tuple(
+            team_inbox_operations.list_macros(db, person_id=actor_person_id)
+        ),
+        template_options=tuple(
+            team_inbox_operations.list_templates(db, channel_type=timeline.channel_type)
+        ),
+        action_eligibility=InboxActionEligibility(
+            can_reply=not is_resolved,
+            can_resolve=not is_resolved,
+            can_reopen=is_resolved,
+            can_link_contact=bool(timeline.contact_address),
+            can_mark_read=actor_person_id is not None,
+            reason="Resolved conversations must be reopened before replying."
+            if is_resolved
+            else None,
+        ),
+        is_unread=(
+            team_inbox_read_state.conversation_is_unread(
+                db,
+                conversation_id=conversation_id,
+                person_id=actor_person_id,
+            )
+            if actor_person_id is not None
+            else False
+        ),
+    )
+
+
+def build_queue_projection(
+    db: Session,
+    request: InboxQueueRequest,
+) -> InboxQueueProjection:
+    """Own filter normalization, sort, pagination, cohorts, and UI state."""
+
+    search = request.search
+    raw_status = request.status
+    raw_channel = request.channel_type
+    raw_team_id = request.service_team_id
+    raw_assignee_id = request.assigned_person_id
+    raw_team_text = str(raw_team_id) if raw_team_id is not None else None
+    raw_assignee_text = str(raw_assignee_id) if raw_assignee_id is not None else None
+    needs_response = request.needs_response
+    raw_contact_status = request.contact_resolution_status
+    raw_priority = request.priority_at_most
+    muted = request.muted
+    snoozed = request.snoozed
+    open_only = request.open_only
+    unassigned = request.unassigned
+    unread = request.unread
+    raw_sort = request.sort_by
+    raw_direction = request.sort_dir
+    raw_page = request.page
+    raw_per_page = request.per_page
+
+    status = (
+        raw_status
+        if raw_status in {item.value for item in InboxConversationStatus}
+        else None
+    )
+    channel = (
+        raw_channel
+        if raw_channel in {item.value for item in InboxChannelType}
+        else None
+    )
+    team_id = _uuid(raw_team_id)
+    assignee_id = _uuid(raw_assignee_id)
+    contact_status = str(raw_contact_status or "").strip() or None
+    priority = (
+        raw_priority if raw_priority is not None and 0 <= raw_priority <= 999 else None
+    )
+    sort = (
+        InboxListSort(raw_sort).value
+        if raw_sort in {item.value for item in InboxListSort}
+        else INBOX_LIST_DEFINITION.default_sort
+    )
+    direction = (
+        InboxSortDirection(raw_direction).value
+        if raw_direction in {item.value for item in InboxSortDirection}
+        else None
+    )
+    safe_per_page = (
+        raw_per_page
+        if raw_per_page in INBOX_LIST_DEFINITION.per_page_options
+        else INBOX_LIST_DEFINITION.default_per_page
+    )
+    requested_query = INBOX_LIST_DEFINITION.build_query(
+        search=search,
+        filters={
+            "status": status,
+            "channel_type": channel,
+            "service_team_id": str(team_id) if team_id else None,
+            "assigned_person_id": str(assignee_id) if assignee_id else None,
+            "contact_resolution_status": contact_status,
+            "needs_response": "true" if needs_response else None,
+            "muted": ("true" if muted else "false") if muted is not None else None,
+            "snoozed": ("true" if snoozed else "false")
+            if snoozed is not None
+            else None,
+            "open_only": "true" if open_only else None,
+            "unassigned": "true" if unassigned else None,
+            "unread": "true" if unread else None,
+            "priority_at_most": str(priority) if priority is not None else None,
+        },
+        sort_by=sort,
+        sort_dir=direction,
+        page=max(1, raw_page),
+        per_page=safe_per_page,
+    )
+
+    def fetch(query: ListQuery) -> team_inbox_read.InboxConversationListResult:
+        return team_inbox_read.list_conversations(
+            db,
+            search=query.search,
+            status=status,
+            channel_type=channel,
+            service_team_id=team_id,
+            assigned_person_id=assignee_id,
+            needs_response=needs_response,
+            contact_resolution_status=contact_status,
+            priority_at_most=priority,
+            muted=muted,
+            snoozed=snoozed,
+            open_only=open_only,
+            unassigned=unassigned,
+            operator_person_id=request.actor_person_id,
+            unread_only=unread,
+            order_by=query.sort_by,
+            order_dir=query.sort_dir,
+            limit=query.per_page,
+            offset=query.offset,
+        )
+
+    result = fetch(requested_query)
+    page_meta = PageMeta.from_query(requested_query, result.count)
+    list_query = requested_query.with_page(page_meta.page)
+    if list_query.page != requested_query.page:
+        result = fetch(list_query)
+    canonical_url = None
+    if request_needs_canonicalization(
+        list_query,
+        search=search,
+        filters={
+            "status": raw_status,
+            "channel_type": raw_channel,
+            "service_team_id": raw_team_text,
+            "assigned_person_id": raw_assignee_text,
+            "contact_resolution_status": raw_contact_status,
+            "needs_response": "true" if needs_response else None,
+            "muted": ("true" if muted else "false") if muted is not None else None,
+            "snoozed": ("true" if snoozed else "false")
+            if snoozed is not None
+            else None,
+            "open_only": "true" if open_only else None,
+            "unassigned": "true" if unassigned else None,
+            "unread": "true" if unread else None,
+            "priority_at_most": str(raw_priority) if raw_priority is not None else None,
+        },
+        sort_by=raw_sort,
+        sort_dir=raw_direction,
+        page=raw_page,
+        per_page=raw_per_page,
+    ):
+        canonical_url = list_query.url("/admin/inbox")
+
+    selected_id = _uuid(request.selected_conversation_id)
+    selected = (
+        get_conversation_projection(
+            db,
+            conversation_id=selected_id,
+            actor_person_id=request.actor_person_id,
+        )
+        if selected_id is not None
+        else None
+    )
+    service_teams = team_inbox_metrics.active_service_team_options(db)
+    return InboxQueueProjection(
+        rows=tuple(result.items),
+        queue_metrics=team_inbox_operations.queue_metrics(db),
+        operator_unread_count=(
+            team_inbox_read_state.unread_conversation_count(
+                db, person_id=request.actor_person_id
+            )
+            if request.actor_person_id is not None
+            else 0
+        ),
+        count=result.count,
+        list_query=list_query,
+        page_meta=page_meta,
+        status=status or "",
+        channel_type=channel or "",
+        service_team_id=str(team_id) if team_id else "",
+        assigned_person_id=str(assignee_id) if assignee_id else "",
+        needs_response=needs_response,
+        contact_resolution_status=contact_status or "",
+        priority_at_most=priority,
+        muted=muted,
+        snoozed=snoozed,
+        open_only=open_only,
+        unassigned=unassigned,
+        unread=unread,
+        service_team_options=tuple(
+            InboxServiceTeamOption(id=team.id, name=team.name) for team in service_teams
+        ),
+        status_options=tuple(item.value for item in InboxConversationStatus),
+        channel_options=tuple(item.value for item in InboxChannelType),
+        label_options=tuple(team_inbox_operations.list_labels(db)),
+        saved_filters=tuple(
+            team_inbox_operations.list_saved_filters(
+                db, person_id=request.actor_person_id
+            )
+        ),
+        selected=selected,
+        canonical_url=canonical_url,
+    )

@@ -58,13 +58,13 @@ def _make_subscriber(db_session):
 
 
 def test_customer_session_disabled_returns_503(db_session):
-    from app.services import chat_session
+    from app.services import chat_session, team_inbox_widget
 
     sub = _make_subscriber(db_session)
     with _chat_settings(enabled=False):
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(team_inbox_widget.TeamInboxWidgetError) as exc:
             chat_session.broker_customer_session(db_session, str(sub.id))
-    assert exc.value.status_code == 503
+    assert exc.value.code == "communications.team_inbox_widget.disabled"
 
 
 def test_customer_session_happy_path(db_session):

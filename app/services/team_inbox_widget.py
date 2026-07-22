@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, TypeVar
 
-from fastapi import HTTPException, status
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
@@ -22,19 +21,46 @@ from app.models.team_inbox import (
 from app.services import auth_flow as auth_flow_service
 from app.services import team_inbox_realtime
 from app.services.common import coerce_uuid
+from app.services.customer_support_links import (
+    ticket_customer_link_filter,
+    ticket_customer_linked_ids,
+)
+from app.services.domain_errors import DomainError
+from app.services.owner_commands import (
+    CommandContext,
+    OwnerCommandDefinition,
+    execute_owner_command,
+)
 from app.services.realtime_platform import EventType
 
 T = TypeVar("T")
+OWNER = "communications.team_inbox_widget"
+_WIDGET_COMMAND = OwnerCommandDefinition(
+    owner=OWNER,
+    concern="authenticated visitor message and read-state commands",
+    name="execute_team_inbox_widget_command",
+)
+
+
+class TeamInboxWidgetError(DomainError):
+    """Stable visitor-widget failure mapped by transport adapters."""
+
+
+def _error(suffix: str, message: str) -> TeamInboxWidgetError:
+    return TeamInboxWidgetError(code=f"{OWNER}.{suffix}", message=message)
 
 
 def _commit(db: Session, action: Callable[[], T]) -> T:
-    try:
-        result = action()
-        db.commit()
-        return result
-    except Exception:
-        db.rollback()
-        raise
+    return execute_owner_command(
+        db,
+        definition=_WIDGET_COMMAND,
+        context=CommandContext.system(
+            actor="transport:team-inbox-widget",
+            scope="team-inbox:widget-command",
+            reason="execute authenticated visitor Inbox command",
+        ),
+        operation=action,
+    )
 
 
 @dataclass(frozen=True)
@@ -48,10 +74,7 @@ class WidgetPrincipal:
 
 def _require_enabled() -> None:
     if not settings.chat_live_enabled:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Live chat is not enabled.",
-        )
+        raise _error("disabled", "Live chat is not enabled.")
 
 
 def _jwt_payload(
@@ -92,13 +115,13 @@ def decode_widget_token(db: Session, token: str) -> WidgetPrincipal:
             algorithms=[auth_flow_service._jwt_algorithm(db)],  # noqa: SLF001
         )
     except JWTError as exc:
-        raise HTTPException(status_code=401, detail="Invalid visitor token") from exc
+        raise _error("invalid_token", "Invalid visitor token.") from exc
     if payload.get("type") != "chat_widget":
-        raise HTTPException(status_code=401, detail="Invalid visitor token")
+        raise _error("invalid_token", "Invalid visitor token.")
     conversation_id = coerce_uuid(payload.get("conversation_id"))
     session_id = str(payload.get("session_id") or "").strip()
     if conversation_id is None or not session_id:
-        raise HTTPException(status_code=401, detail="Invalid visitor token")
+        raise _error("invalid_token", "Invalid visitor token.")
     return WidgetPrincipal(
         conversation_id=conversation_id,
         session_id=session_id,
@@ -113,6 +136,94 @@ def _thread_id(
 ) -> str:
     context = ticket_id or project_id or "general"
     return f"chat_widget:{surface}:{entity_id}:{context}"[:255]
+
+
+def _owned_ticket(db: Session, subscriber_id: uuid.UUID, ticket_id: str) -> bool:
+    from app.models.support import Ticket
+
+    native_id = coerce_uuid(ticket_id)
+    return native_id is not None and (
+        db.query(Ticket.id)
+        .filter(
+            Ticket.id == native_id,
+            ticket_customer_link_filter(Ticket, subscriber_id),
+        )
+        .first()
+        is not None
+    )
+
+
+def _owned_project(db: Session, subscriber_id: uuid.UUID, project_id: str) -> bool:
+    from app.models.project import Project
+
+    native_id = coerce_uuid(project_id)
+    return native_id is not None and (
+        db.query(Project.id)
+        .filter(
+            Project.id == native_id,
+            Project.subscriber_id == subscriber_id,
+            Project.is_active.is_(True),
+        )
+        .first()
+        is not None
+    )
+
+
+def _reseller_owns(
+    db: Session, reseller_id: uuid.UUID, subscriber_id: uuid.UUID | None
+) -> bool:
+    from app.services import reseller_portal
+
+    return subscriber_id is not None and (
+        reseller_portal.owned_account(db, str(reseller_id), str(subscriber_id))
+        is not None
+    )
+
+
+def _customer_context(
+    db: Session,
+    subscriber_id: uuid.UUID,
+    *,
+    ticket_id: str | None,
+    project_id: str | None,
+) -> tuple[str | None, str | None]:
+    if ticket_id and not _owned_ticket(db, subscriber_id, ticket_id):
+        ticket_id = None
+    if project_id and not _owned_project(db, subscriber_id, project_id):
+        project_id = None
+    return ticket_id, project_id
+
+
+def _reseller_context(
+    db: Session,
+    reseller_id: uuid.UUID,
+    *,
+    ticket_id: str | None,
+    project_id: str | None,
+) -> tuple[str | None, str | None]:
+    from app.models.project import Project
+    from app.models.support import Ticket
+
+    if ticket_id:
+        native_id = coerce_uuid(ticket_id)
+        ticket = db.get(Ticket, native_id) if native_id is not None else None
+        if ticket is None or not any(
+            _reseller_owns(db, reseller_id, coerce_uuid(owner_id))
+            for owner_id in ticket_customer_linked_ids(ticket)
+        ):
+            ticket_id = None
+    if project_id:
+        native_id = coerce_uuid(project_id)
+        owner_id = (
+            db.query(Project.subscriber_id)
+            .filter(Project.id == native_id, Project.is_active.is_(True))
+            .scalar()
+            if native_id is not None
+            else None
+        )
+        if not _reseller_owns(db, reseller_id, owner_id):
+            project_id = None
+    return ticket_id, project_id
 
 
 def _conversation(
@@ -216,7 +327,7 @@ def broker_customer_session(
     _require_enabled()
     sub = db.get(Subscriber, coerce_uuid(subscriber_id))
     if sub is None:
-        raise HTTPException(status_code=404, detail="Subscriber not found")
+        raise _error("subscriber_not_found", "Subscriber not found.")
     name = (
         sub.display_name
         or " ".join(part for part in [sub.first_name, sub.last_name] if part).strip()
@@ -248,6 +359,34 @@ def broker_customer_session(
     )
 
 
+def broker_customer_session_committed(
+    db: Session,
+    subscriber_id: str,
+    *,
+    ticket_id: str | None = None,
+    project_id: str | None = None,
+) -> dict[str, str | None]:
+    def action() -> dict[str, str | None]:
+        subscriber_uuid = coerce_uuid(subscriber_id)
+        subscriber = db.get(Subscriber, subscriber_uuid) if subscriber_uuid else None
+        if subscriber is None:
+            raise _error("subscriber_not_found", "Subscriber not found.")
+        scoped_ticket, scoped_project = _customer_context(
+            db,
+            subscriber.id,
+            ticket_id=ticket_id,
+            project_id=project_id,
+        )
+        return broker_customer_session(
+            db,
+            str(subscriber.id),
+            ticket_id=scoped_ticket,
+            project_id=scoped_project,
+        )
+
+    return _commit(db, action)
+
+
 def broker_reseller_session(
     db: Session,
     reseller_id: str,
@@ -259,7 +398,7 @@ def broker_reseller_session(
     _require_enabled()
     reseller = db.get(Reseller, coerce_uuid(reseller_id))
     if reseller is None:
-        raise HTTPException(status_code=404, detail="Reseller not found")
+        raise _error("reseller_not_found", "Reseller not found.")
     email: str | None = None
     name: str | None = None
     if principal.get("principal_type") == "reseller_user":
@@ -287,6 +426,36 @@ def broker_reseller_session(
         surface="reseller_portal",
         reseller_id=reseller.id,
     )
+
+
+def broker_reseller_session_committed(
+    db: Session,
+    reseller_id: str,
+    principal: dict[str, object],
+    *,
+    ticket_id: str | None = None,
+    project_id: str | None = None,
+) -> dict[str, str | None]:
+    def action() -> dict[str, str | None]:
+        reseller_uuid = coerce_uuid(reseller_id)
+        reseller = db.get(Reseller, reseller_uuid) if reseller_uuid else None
+        if reseller is None:
+            raise _error("reseller_not_found", "Reseller not found.")
+        scoped_ticket, scoped_project = _reseller_context(
+            db,
+            reseller.id,
+            ticket_id=ticket_id,
+            project_id=project_id,
+        )
+        return broker_reseller_session(
+            db,
+            str(reseller.id),
+            principal,
+            ticket_id=scoped_ticket,
+            project_id=scoped_project,
+        )
+
+    return _commit(db, action)
 
 
 def list_session_messages(
@@ -335,10 +504,10 @@ def add_visitor_message(
 ) -> dict[str, Any]:
     clean_body = str(body or "").strip()
     if not clean_body:
-        raise HTTPException(status_code=400, detail="Message body is required")
+        raise _error("message_required", "Message body is required.")
     conversation = db.get(InboxConversation, principal.conversation_id)
     if conversation is None or not conversation.is_active:
-        raise HTTPException(status_code=404, detail="Conversation not found")
+        raise _error("conversation_not_found", "Conversation not found.")
     now = datetime.now(UTC)
     metadata = {
         "source": "native_chat_widget",
@@ -374,6 +543,7 @@ def add_visitor_message(
         },
     )
     team_inbox_realtime.publish_conversation_event(
+        db,
         str(conversation.id),
         event_type=EventType.MESSAGE_NEW,
         payload=payload,
@@ -383,7 +553,7 @@ def add_visitor_message(
 
 def _require_session_match(principal: WidgetPrincipal, session_id: str) -> None:
     if principal.session_id != session_id:
-        raise HTTPException(status_code=403, detail="Session mismatch")
+        raise _error("session_mismatch", "Session mismatch.")
 
 
 def add_visitor_message_committed(
@@ -409,7 +579,7 @@ def add_visitor_message_committed(
 def mark_session_read(db: Session, *, principal: WidgetPrincipal) -> dict[str, bool]:
     conversation = db.get(InboxConversation, principal.conversation_id)
     if conversation is None:
-        raise HTTPException(status_code=404, detail="Conversation not found")
+        raise _error("conversation_not_found", "Conversation not found.")
     metadata = dict(conversation.metadata_ or {})
     metadata["visitor_last_read_at"] = datetime.now(UTC).isoformat()
     conversation.metadata_ = metadata
@@ -442,7 +612,7 @@ def record_session_satisfaction_committed(
     def _record() -> dict[str, bool]:
         conversation = db.get(InboxConversation, principal.conversation_id)
         if conversation is None:
-            raise HTTPException(status_code=404, detail="Conversation not found")
+            raise _error("conversation_not_found", "Conversation not found.")
         team_inbox_operations.set_satisfaction(
             db,
             conversation=conversation,

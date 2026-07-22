@@ -17,7 +17,7 @@ from app.models.team_inbox import (
     InboxMessage,
     InboxMessageDirection,
 )
-from app.services import team_inbox_media
+from app.services import team_inbox_media, team_inbox_read_state
 
 
 @dataclass(frozen=True)
@@ -119,6 +119,7 @@ class InboxConversationListRow:
     latest_delivery_status: str | None
     active_assigned_person_id: str | None
     needs_response: bool
+    is_unread: bool
     team_count: int
 
 
@@ -235,6 +236,8 @@ def list_conversations(
     snoozed: bool | None = None,
     open_only: bool = False,
     unassigned: bool = False,
+    operator_person_id: UUID | None = None,
+    unread_only: bool = False,
     order_by: str | None = None,
     order_dir: str = "desc",
     limit: int = 50,
@@ -354,7 +357,9 @@ def list_conversations(
             InboxConversation.id.asc(),
         )
     total = query.count()
-    needs_python_filter = bool(needs_response or contact_resolution_status)
+    needs_python_filter = bool(
+        needs_response or contact_resolution_status or unread_only
+    )
     rows = (
         ordered_query.all()
         if needs_python_filter
@@ -404,6 +409,17 @@ def list_conversations(
             continue
         if contact_resolution_status and resolution_status != contact_resolution_status:
             continue
+        row_is_unread = (
+            team_inbox_read_state.conversation_is_unread(
+                db,
+                conversation_id=conversation.id,
+                person_id=operator_person_id,
+            )
+            if operator_person_id is not None
+            else False
+        )
+        if unread_only and not row_is_unread:
+            continue
         items.append(
             InboxConversationListRow(
                 id=str(conversation.id),
@@ -436,6 +452,7 @@ def list_conversations(
                 if active_assignment is not None
                 else None,
                 needs_response=row_needs_response,
+                is_unread=row_is_unread,
                 team_count=int(team_counts.get(conversation.id, 0)),
             )
         )

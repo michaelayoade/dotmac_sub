@@ -21,6 +21,11 @@ from app.models.party import (
 from app.models.subscriber import Reseller, Subscriber
 from app.models.team_inbox import InboxContactLink, InboxConversation
 from app.services.common import coerce_uuid
+from app.services.owner_commands import (
+    CommandContext,
+    OwnerCommandDefinition,
+    execute_owner_command,
+)
 from app.services.team_inbox_channel_receive import _normalize_contact
 
 
@@ -58,16 +63,25 @@ class ContactLinkResult:
 
 
 T = TypeVar("T")
+OWNER = "communications.team_inbox_contact_resolution"
+_CONTACT_LINK_COMMAND = OwnerCommandDefinition(
+    owner=OWNER,
+    concern="reviewed contact association and projection repair",
+    name="execute_team_inbox_contact_link_command",
+)
 
 
 def _commit(db: Session, action: Callable[[], T]) -> T:
-    try:
-        result = action()
-        db.commit()
-        return result
-    except Exception:
-        db.rollback()
-        raise
+    return execute_owner_command(
+        db,
+        definition=_CONTACT_LINK_COMMAND,
+        context=CommandContext.system(
+            actor="system:team-inbox-contact-adapter",
+            scope="team-inbox:contact-link-command",
+            reason="execute reviewed Team Inbox contact association",
+        ),
+        operation=action,
+    )
 
 
 def _subscriber_label(row: Subscriber) -> str:

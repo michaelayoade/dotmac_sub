@@ -65,6 +65,17 @@ class InboxTeamSource(enum.Enum):
     manual = "manual"
 
 
+class InboxObservationKind(enum.Enum):
+    message = "message"
+    delivery_receipt = "delivery_receipt"
+
+
+class InboxObservationStatus(enum.Enum):
+    recorded = "recorded"
+    processed = "processed"
+    rejected = "rejected"
+
+
 class TeamInboxEmailRoute(Base):
     __tablename__ = "team_inbox_email_routes"
     __table_args__ = (
@@ -536,6 +547,112 @@ class InboxMessage(Base):
 
     conversation = relationship("InboxConversation", back_populates="messages")
     notification = relationship("Notification")
+
+
+class InboxProviderObservation(Base):
+    """Durable normalized provider fact admitted before Inbox consequences."""
+
+    __tablename__ = "inbox_provider_observations"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider",
+            "provider_account_scope",
+            "provider_event_id",
+            name="uq_inbox_provider_observations_identity",
+        ),
+        Index(
+            "ix_inbox_provider_observations_status",
+            "processing_status",
+            "recorded_at",
+        ),
+        Index(
+            "ix_inbox_provider_observations_message",
+            "external_message_id",
+            "observation_kind",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    provider: Mapped[str] = mapped_column(String(80), nullable=False)
+    provider_account_scope: Mapped[str] = mapped_column(String(160), nullable=False)
+    provider_event_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    observation_kind: Mapped[str] = mapped_column(String(40), nullable=False)
+    channel_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    external_message_id: Mapped[str | None] = mapped_column(String(255))
+    external_thread_id: Mapped[str | None] = mapped_column(String(255))
+    payload_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    normalized_payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    processing_status: Mapped[str] = mapped_column(
+        String(40), default=InboxObservationStatus.recorded.value, nullable=False
+    )
+    conversation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("inbox_conversations.id", ondelete="SET NULL")
+    )
+    message_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("inbox_messages.id", ondelete="SET NULL")
+    )
+    error_code: Mapped[str | None] = mapped_column(String(120))
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+
+
+class InboxConversationReadState(Base):
+    """Canonical per-operator read cursor for one Inbox conversation."""
+
+    __tablename__ = "inbox_conversation_read_states"
+    __table_args__ = (
+        UniqueConstraint(
+            "conversation_id",
+            "person_id",
+            name="uq_inbox_conversation_read_states_person",
+        ),
+        Index("ix_inbox_conversation_read_states_person", "person_id", "last_read_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("inbox_conversations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    person_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    last_read_message_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("inbox_messages.id", ondelete="SET NULL")
+    )
+    last_read_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+
+    conversation = relationship("InboxConversation")
+    last_read_message = relationship("InboxMessage")
 
 
 class InboxMediaAsset(Base):

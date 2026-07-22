@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -94,7 +95,6 @@ def _whatsapp_attachments(message: dict[str, Any]) -> list[dict[str, Any]]:
         "longitude": payload.get("longitude"),
         "name": payload.get("name"),
         "address": payload.get("address"),
-        "raw": message,
     }
     return [{key: value for key, value in attachment.items() if value is not None}]
 
@@ -110,7 +110,8 @@ def _iter_meta_whatsapp_messages(payload: dict[str, Any]):
             if not isinstance(value, dict):
                 continue
             raw_metadata = value.get("metadata")
-            metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
+            metadata = dict(raw_metadata) if isinstance(raw_metadata, dict) else {}
+            metadata.setdefault("account_scope", entry.get("id"))
             raw_contacts = value.get("contacts")
             contacts = raw_contacts if isinstance(raw_contacts, list) else []
             names_by_wa_id: dict[str, object] = {}
@@ -139,7 +140,13 @@ def _iter_meta_whatsapp_messages(payload: dict[str, Any]):
                     "contact_name": names_by_wa_id.get(sender),
                     "metadata": metadata,
                     "attachments": _whatsapp_attachments(message),
-                    "raw_message": message,
+                    "observed_at": (
+                        datetime.fromtimestamp(
+                            float(str(message.get("timestamp"))), tz=UTC
+                        )
+                        if str(message.get("timestamp") or "").isdigit()
+                        else datetime.now(UTC)
+                    ),
                 }
 
 
@@ -153,6 +160,8 @@ def _iter_meta_whatsapp_statuses(payload: dict[str, Any]):
             value = change.get("value")
             if not isinstance(value, dict):
                 continue
+            raw_metadata = value.get("metadata")
+            metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
             raw_statuses = value.get("statuses")
             statuses = raw_statuses if isinstance(raw_statuses, list) else []
             for status_item in statuses:
@@ -168,7 +177,9 @@ def _iter_meta_whatsapp_statuses(payload: dict[str, Any]):
                     "timestamp": status_item.get("timestamp"),
                     "recipient_id": status_item.get("recipient_id"),
                     "errors": status_item.get("errors"),
-                    "raw": status_item,
+                    "provider_account_scope": metadata.get("phone_number_id")
+                    or metadata.get("display_phone_number")
+                    or entry.get("id"),
                 }
 
 
@@ -220,7 +231,7 @@ async def receive_meta_whatsapp_webhook(
                     "contact_name": item.get("contact_name"),
                     "metadata": item.get("metadata"),
                     "attachments": item.get("attachments"),
-                    "raw": item.get("raw_message"),
+                    "observed_at": item.get("observed_at"),
                 }
             )
         for item in _iter_meta_whatsapp_statuses(payload):
@@ -245,7 +256,7 @@ async def receive_meta_whatsapp_webhook(
             return dict(receipt.consequence_json)
         try:
             results, status_results = (
-                team_inbox_channel_receive.receive_whatsapp_webhook_batch(
+                team_inbox_channel_receive.receive_whatsapp_webhook_batch_committed(
                     db,
                     provider="meta_cloud_api",
                     payloads=inbound_payloads,
