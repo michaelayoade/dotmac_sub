@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from decimal import Decimal
 from types import SimpleNamespace
 from typing import cast
 
@@ -15,6 +16,7 @@ from app.models.billing import Invoice, InvoiceStatus
 from app.models.catalog import (
     CatalogOffer,
     OfferStatus,
+    PriceType,
     Subscription,
 )
 from app.models.provisioning import AppointmentStatus, InstallAppointment, ServiceOrder
@@ -62,6 +64,18 @@ def _same_region_compatibility(
 ) -> bool:
     return str(current_offer.region_zone_id or "") == str(
         candidate_offer.region_zone_id or ""
+    )
+
+
+def offer_has_positive_recurring_price(offer: CatalogOffer) -> bool:
+    """Fail closed unless one active customer-billable recurring price exists."""
+    recurring_prices = [
+        price
+        for price in offer.prices or []
+        if price.is_active and price.price_type == PriceType.recurring
+    ]
+    return len(recurring_prices) == 1 and Decimal(recurring_prices[0].amount) > Decimal(
+        "0.00"
     )
 
 
@@ -620,6 +634,14 @@ def get_available_portal_offers(
     if subscription is not None and not subscriber_id:
         subscriber_id = subscription.subscriber_id
 
+    if subscription is not None:
+        from app.services.subscription_billing_treatments import (
+            subscription_has_open_billing_treatment,
+        )
+
+        if subscription_has_open_billing_treatment(db, subscription.id):
+            return []
+
     if not subscription or not subscription.offer_id:
         return _filter_by_reseller_availability(
             db,
@@ -673,6 +695,7 @@ def get_available_portal_offers(
             and current_family
             and str(offer.plan_family or "").strip() == current_family
             and (not allowed_ids or str(offer.id) in allowed_ids)
+            and offer_has_positive_recurring_price(offer)
         ],
     )
 

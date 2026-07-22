@@ -127,6 +127,7 @@ class PrepaidEnforcementPlanItem:
     suspended_subscription_count: int
     active_prepaid_lock_count: int
     covered_subscription_ids: tuple[UUID, ...]
+    non_billable_subscription_ids: tuple[UUID, ...]
     actionable_uncovered_subscription_ids: tuple[UUID, ...]
     unresolved_projection_subscription_ids: tuple[UUID, ...]
     prepaid_low_balance_at: datetime | None
@@ -155,6 +156,9 @@ class PrepaidEnforcementPlanItem:
             "active_prepaid_lock_count": self.active_prepaid_lock_count,
             "covered_subscription_ids": [
                 str(value) for value in self.covered_subscription_ids
+            ],
+            "non_billable_subscription_ids": [
+                str(value) for value in self.non_billable_subscription_ids
             ],
             "actionable_uncovered_subscription_ids": [
                 str(value) for value in self.actionable_uncovered_subscription_ids
@@ -672,6 +676,7 @@ def plan_prepaid_account(
         suspended_subscription_count=suspended_count,
         active_prepaid_lock_count=active_prepaid_lock_count,
         covered_subscription_ids=funding.covered_subscription_ids,
+        non_billable_subscription_ids=funding.non_billable_subscription_ids,
         actionable_uncovered_subscription_ids=(
             funding.actionable_uncovered_subscription_ids
         ),

@@ -1108,6 +1108,19 @@ def run_invoice_cycle(
 
     subscriptions = active_subscriptions + pending_subscriptions
 
+    from app.services.subscription_billing_grants import (
+        SubscriptionBillingGrantError,
+        stage_subscription_billing_grant,
+    )
+    from app.services.subscription_billing_treatments import (
+        SubscriptionBillingTreatmentError,
+        resolve_subscription_billing_treatments,
+    )
+
+    billing_treatments = resolve_subscription_billing_treatments(
+        db, subscriptions, as_of=run_at
+    )
+
     invoices: dict[tuple[str, datetime, datetime, BillingMode], Invoice] = {}
     newly_created_invoices: list[Invoice] = []
     summary: dict[str, Any] = {
@@ -1125,6 +1138,9 @@ def run_invoice_cycle(
         "credit_settled_invoices": 0,
         "accounts_restored": 0,
         "zero_amount_advanced": 0,
+        "non_cash_service_grants": 0,
+        "non_cash_service_grants_replayed": 0,
+        "billing_treatment_blocked": 0,
         "prepaid_legacy_invoice_path_retired": True,
         **prepaid_renewal_summary,
     }
@@ -1217,6 +1233,73 @@ def run_invoice_cycle(
         line_amount = _prorated_amount(
             amount, period_start, period_end, usage_start, usage_end
         )
+        treatment = billing_treatments[subscription.id]
+        if treatment.suppress_customer_billing:
+            if not treatment.grantable:
+                summary["billing_treatment_blocked"] += 1
+                summary["skipped"] += 1
+                logger.error(
+                    "billing_treatment_drift_blocked",
+                    extra={
+                        "event": "billing_treatment_drift_blocked",
+                        "subscription_id": str(subscription.id),
+                        "arrangement_id": (
+                            str(treatment.arrangement_id)
+                            if treatment.arrangement_id
+                            else None
+                        ),
+                        "reason": treatment.drift_reason,
+                    },
+                )
+                continue
+            grant_start = max(
+                period_start, _as_utc(treatment.starts_at) or period_start
+            )
+            grant_end = _period_end(grant_start, effective_cycle)
+            if end_at is not None and end_at < grant_end:
+                grant_end = end_at
+            if dry_run:
+                summary["non_cash_service_grants"] += 1
+                summary["skipped"] += 1
+                continue
+            try:
+                grant = stage_subscription_billing_grant(
+                    db,
+                    subscription=subscription,
+                    decision=treatment,
+                    starts_at=grant_start,
+                    ends_at=grant_end,
+                    actor="system:billing_automation",
+                    correlation_id=run_uuid,
+                    reference_amount=line_amount,
+                )
+            except (
+                SubscriptionBillingGrantError,
+                SubscriptionBillingTreatmentError,
+            ) as exc:
+                summary["billing_treatment_blocked"] += 1
+                summary["skipped"] += 1
+                logger.error(
+                    "billing_treatment_grant_blocked",
+                    extra={
+                        "event": "billing_treatment_grant_blocked",
+                        "subscription_id": str(subscription.id),
+                        "arrangement_id": (
+                            str(treatment.arrangement_id)
+                            if treatment.arrangement_id
+                            else None
+                        ),
+                        "code": exc.code,
+                    },
+                )
+                continue
+            summary[
+                "non_cash_service_grants_replayed"
+                if grant.replayed
+                else "non_cash_service_grants"
+            ] += 1
+            summary["skipped"] += 1
+            continue
         if line_amount <= Decimal("0.00"):
             if not dry_run:
                 subscription.next_billing_at = period_end

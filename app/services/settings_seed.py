@@ -1789,6 +1789,12 @@ def seed_billing_settings(db: Session) -> None:
     )
     billing_settings.ensure_by_key(
         db,
+        key="subscription_billing_treatment_max_days",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("BILLING_SUBSCRIPTION_TREATMENT_MAX_DAYS", "366"),
+    )
+    billing_settings.ensure_by_key(
+        db,
         key="topup_preset_amounts",
         value_type=SettingValueType.string,
         value_text=os.getenv(
