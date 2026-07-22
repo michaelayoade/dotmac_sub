@@ -43,6 +43,7 @@ from app.services import (
     quotes_mirror,
     reseller_crm_views,
     reseller_portal,
+    team_inbox_widget,
 )
 from app.services.auth_dependencies import require_user_auth
 
@@ -266,9 +267,13 @@ def my_reseller_chat_session(
     ``ticket_id``/``project_id`` to scope the chat to a customer's record.
     """
     reseller_id = _reseller_id(db, principal)
-    return chat_session_service.broker_reseller_session(
-        db, reseller_id, principal, ticket_id=ticket_id, project_id=project_id
-    )
+    try:
+        return chat_session_service.broker_reseller_session(
+            db, reseller_id, principal, ticket_id=ticket_id, project_id=project_id
+        )
+    except team_inbox_widget.TeamInboxWidgetError as exc:
+        status_code = 404 if exc.code.endswith("_not_found") else 503
+        raise HTTPException(status_code=status_code, detail=exc.message) from exc
 
 
 @router.get("/dashboard")

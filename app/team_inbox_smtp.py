@@ -24,7 +24,7 @@ from email.message import EmailMessage
 from typing import Any
 
 from app.config import settings
-from app.services import team_inbox_smtp_inbound
+from app.services import team_inbox_health, team_inbox_smtp_inbound
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +124,7 @@ def wait_for_probe_delivery(
     while True:
         db = session_factory()
         try:
-            delivered = team_inbox_smtp_inbound.verify_smtp_probe_delivery(
+            delivered = team_inbox_health.verify_smtp_probe_delivery(
                 db,
                 external_message_id=message_id,
             )

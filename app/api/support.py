@@ -5,7 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.db import get_db
+from app.db import finish_read_transaction, get_db
 from app.schemas.common import ListResponse
 from app.schemas.dispatch import WorkOrderHeaderRead
 from app.schemas.support import (
@@ -297,6 +297,7 @@ def escalate_inbox_conversation(
     db: Session = Depends(get_db),
 ):
     actor_id = _actor_id(auth)
+    finish_read_transaction(db)
     result = team_inbox_assignment.escalate_conversation_committed(
         db,
         conversation_id=conversation_id,
@@ -412,6 +413,7 @@ def reply_to_inbox_conversation(
     auth=Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
+    finish_read_transaction(db)
     result = team_inbox_outbound.send_inbox_reply_for_conversation_committed(
         db,
         conversation_id=conversation_id,
@@ -469,6 +471,7 @@ def link_inbox_conversation_contact(
     auth=Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
+    finish_read_transaction(db)
     try:
         result = team_inbox_contact_links.link_conversation_contact_by_id_committed(
             db,

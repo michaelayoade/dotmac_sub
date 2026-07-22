@@ -20,19 +20,33 @@ from app.models.team_inbox import (
     InboxTeamRole,
     InboxTeamSource,
 )
+from app.services.owner_commands import (
+    CommandContext,
+    OwnerCommandDefinition,
+    execute_owner_command,
+)
 
 DEFAULT_MAX_CONCURRENT_CONVERSATIONS = 3
 T = TypeVar("T")
+OWNER = "communications.team_inbox_routing"
+_ROUTING_COMMAND = OwnerCommandDefinition(
+    owner=OWNER,
+    concern="routing assignment and escalation transitions",
+    name="execute_team_inbox_routing_command",
+)
 
 
 def _commit(db: Session, action: Callable[[], T]) -> T:
-    try:
-        result = action()
-        db.commit()
-        return result
-    except Exception:
-        db.rollback()
-        raise
+    return execute_owner_command(
+        db,
+        definition=_ROUTING_COMMAND,
+        context=CommandContext.system(
+            actor="system:team-inbox-routing-adapter",
+            scope="team-inbox:routing-command",
+            reason="execute Team Inbox routing transition",
+        ),
+        operation=action,
+    )
 
 
 @dataclass(frozen=True)

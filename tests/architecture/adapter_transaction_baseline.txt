@@ -30,7 +30,6 @@ commit 5 app/tasks/ont_runtime_status.py
 commit 1 app/tasks/ont_signal_observations.py
 commit 2 app/tasks/radius.py
 commit 26 app/tasks/router_sync.py
-commit 3 app/tasks/team_inbox.py
 commit 1 app/tasks/topology_lldp.py
 commit 1 app/tasks/topology_outage.py
 commit 1 app/tasks/topology_ufiber_link.py

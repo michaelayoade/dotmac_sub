@@ -76,7 +76,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     )
     assert sot_relationships.dependencies_for("party.contact_inbox_audit") == (
         "party.registry",
-        "communications.team_inbox",
+        "communications.team_inbox_contact_resolution",
     )
     assert sot_relationships.dependencies_for("communications.campaigns") == (
         "communications.eligibility",
@@ -683,11 +683,13 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "runtime.db_sessions",
         "observability.recording",
     )
-    assert sot_relationships.dependencies_for("communications.team_inbox") == (
-        "party.registry",
-        "customer.identity_scope",
-        "communications.channel_policy",
-        "communications.notification_service",
+    assert sot_relationships.dependencies_for("communications.team_inbox_commands") == (
+        "auth.permission_gate",
+        "communications.team_inbox_threads",
+        "communications.team_inbox_contact_resolution",
+        "communications.team_inbox_routing",
+        "communications.team_inbox_outbound_intents",
+        "communications.team_inbox_operator_state",
     )
     assert sot_relationships.dependencies_for("sessions.enforcement") == (
         "financial.access_resolution",
@@ -1112,15 +1114,19 @@ def test_domain_sot_relationships_resolve_owning_service_by_concern():
     assert read_state_service.module == "app.services.customer_portal_notifications"
 
     team_inbox_service = sot_relationships.owning_service_for(
-        "admin inbox mutation transactions"
+        "operator conversation and collaboration commands"
     )
 
     assert team_inbox_service is not None
-    assert team_inbox_service.name == "communications.team_inbox"
+    assert team_inbox_service.name == "communications.team_inbox_commands"
     assert team_inbox_service.module == "app.services.team_inbox_commands"
+    contact_resolution_service = sot_relationships.owning_service_for(
+        "reviewed contact association and projection repair"
+    )
+    assert contact_resolution_service is not None
     assert (
-        "InboxContactLink canonical contact-point routing projection"
-        in team_inbox_service.owns
+        contact_resolution_service.name
+        == "communications.team_inbox_contact_resolution"
     )
 
 

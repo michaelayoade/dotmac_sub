@@ -25,7 +25,6 @@ app.services.catalog.credentials
 app.services.catalog.offer_addons
 app.services.catalog.offers
 app.services.catalog.radius
-app.services.chat_session
 app.services.collections.prepaid_balance_sweep
 app.services.comms
 app.services.connectivity_backup
@@ -171,17 +170,11 @@ app.services.subscription_lifecycle_events
 app.services.support_automation
 app.services.system_jobs
 app.services.table_config
-app.services.team_inbox_assignment
 app.services.team_inbox_channel_receive
-app.services.team_inbox_contact_links
 app.services.team_inbox_media
 app.services.team_inbox_operations
-app.services.team_inbox_outbound
-app.services.team_inbox_receive
 app.services.team_inbox_rfc822
 app.services.team_inbox_routing
-app.services.team_inbox_smtp_inbound
-app.services.team_inbox_widget
 app.services.ticket_assignment.admin
 app.services.ticket_assignment.engine
 app.services.ticket_assignment.selectors

@@ -130,8 +130,8 @@ def test_meta_inbox_webhook_creates_facebook_messenger_message(db_session, monke
     assert message.external_message_id == "m_fb_1"
     assert message.from_address == "123456789012345"
     assert message.body == "Hello support"
-    assert message.metadata_["provider"] == "meta"
-    assert message.metadata_["platform"] == InboxChannelType.facebook_messenger.value
+    assert message.metadata_["provider"] == "meta_social"
+    assert "platform" not in message.metadata_
 
 
 def test_meta_inbox_webhook_creates_instagram_dm_message(db_session, monkeypatch):
@@ -249,4 +249,4 @@ def test_meta_inbox_webhook_preserves_attachment_messages(db_session, monkeypatc
     assert message.body == "[image]"
     assert message.metadata_["attachments"][0]["type"] == "image"
     assert message.metadata_["attachments"][0]["url"] == "https://example.test/i.jpg"
-    assert message.metadata_["raw"]["message"]["attachments"][0]["type"] == "image"
+    assert "raw" not in message.metadata_

@@ -27,19 +27,33 @@ from app.services.communication_intents import (
     submit,
 )
 from app.services.customer_identity_normalization import normalize_phone_identifier
+from app.services.owner_commands import (
+    CommandContext,
+    OwnerCommandDefinition,
+    execute_owner_command,
+)
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 T = TypeVar("T")
+OWNER = "communications.team_inbox_outbound_intents"
+_OUTBOUND_COMMAND = OwnerCommandDefinition(
+    owner=OWNER,
+    concern="transactional outbound communication intent",
+    name="execute_team_inbox_outbound_intent",
+)
 
 
 def _commit(db: Session, action: Callable[[], T]) -> T:
-    try:
-        result = action()
-        db.commit()
-        return result
-    except Exception:
-        db.rollback()
-        raise
+    return execute_owner_command(
+        db,
+        definition=_OUTBOUND_COMMAND,
+        context=CommandContext.system(
+            actor="system:team-inbox-outbound-adapter",
+            scope="team-inbox:outbound-intent",
+            reason="create transactional Team Inbox communication intent",
+        ),
+        operation=action,
+    )
 
 
 @dataclass(frozen=True)
@@ -88,52 +102,6 @@ def _owner_team_id(conversation: InboxConversation) -> UUID | None:
         return conversation.primary_service_team_id
     link = _owner_team_link(conversation)
     return link.service_team_id if link is not None else None
-
-
-def apply_whatsapp_delivery_status(
-    db: Session,
-    status_item: dict[str, Any],
-) -> dict[str, object]:
-    provider_message_id = str(status_item["message_id"])
-    message = (
-        db.query(InboxMessage)
-        .filter(InboxMessage.channel_type == InboxChannelType.whatsapp.value)
-        .filter(InboxMessage.direction == InboxMessageDirection.outbound.value)
-        .filter(InboxMessage.external_message_id == provider_message_id)
-        .order_by(InboxMessage.created_at.desc())
-        .first()
-    )
-    if message is None:
-        return {
-            "kind": "not_found",
-            "provider_message_id": provider_message_id,
-            "status": status_item["status"],
-        }
-
-    metadata = dict(message.metadata_ or {})
-    history = metadata.get("delivery_status_history")
-    if not isinstance(history, list):
-        history = []
-    event = {
-        "status": status_item["status"],
-        "timestamp": status_item.get("timestamp"),
-        "recipient_id": status_item.get("recipient_id"),
-        "errors": status_item.get("errors"),
-    }
-    history.append({key: value for key, value in event.items() if value is not None})
-    metadata["delivery_status"] = status_item["status"]
-    metadata["delivery_status_at"] = status_item.get("timestamp")
-    metadata["delivery_recipient_id"] = status_item.get("recipient_id")
-    if status_item.get("errors") is not None:
-        metadata["delivery_errors"] = status_item["errors"]
-    metadata["delivery_status_history"] = history[-20:]
-    message.metadata_ = metadata
-    return {
-        "kind": "updated",
-        "message_id": str(message.id),
-        "provider_message_id": provider_message_id,
-        "status": status_item["status"],
-    }
 
 
 def _reply_subject(conversation: InboxConversation, explicit: str | None) -> str:
@@ -237,6 +205,7 @@ def _queue_outbox_reply(
     conversation.last_message_at = queued_at
     db.flush()
     team_inbox_realtime.publish_conversation_event(
+        db,
         str(conversation.id),
         event_type=team_inbox_realtime.EventType.MESSAGE_NEW,
         payload=team_inbox_realtime.message_event_payload(

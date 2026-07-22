@@ -132,6 +132,7 @@ from app.services import (
     customer_work_order_selfcare,
     quote_deposits,
     quotes_mirror,
+    team_inbox_widget,
     web_support_tickets,
 )
 from app.services import customer_location_requests as location_service
@@ -869,9 +870,13 @@ def my_chat_session(
     the reference rides in the session so the agent has context.
     """
     subscriber_id = _subscriber_id(principal)
-    return chat_session_service.broker_customer_session(
-        db, subscriber_id, ticket_id=ticket_id, project_id=project_id
-    )
+    try:
+        return chat_session_service.broker_customer_session(
+            db, subscriber_id, ticket_id=ticket_id, project_id=project_id
+        )
+    except team_inbox_widget.TeamInboxWidgetError as exc:
+        status_code = 404 if exc.code.endswith("_not_found") else 503
+        raise HTTPException(status_code=status_code, detail=exc.message) from exc
 
 
 @router.post("/portal/session", response_model=PortalSessionResponse)

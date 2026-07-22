@@ -30,7 +30,7 @@ from app.services import auth_flow as auth_flow_service
 from app.services import autopay as autopay_service
 from app.services import billing_payment_receipts as payment_receipts_service
 from app.services import chat_session as chat_session_service
-from app.services import crm_portal, customer_portal
+from app.services import crm_portal, customer_portal, team_inbox_widget
 from app.services import customer_portal_bandwidth as customer_portal_bandwidth_service
 from app.services import customer_portal_contacts as customer_portal_contacts_service
 from app.services import customer_portal_flow_payment_methods as customer_cards
@@ -352,7 +352,11 @@ def customer_portal_chat_session(
     subscriber_id = optional_customer_subscriber_id(db, customer)
     if not subscriber_id:
         raise HTTPException(status_code=409, detail="Customer account is incomplete")
-    return chat_session_service.broker_customer_session(db, str(subscriber_id))
+    try:
+        return chat_session_service.broker_customer_session(db, str(subscriber_id))
+    except team_inbox_widget.TeamInboxWidgetError as exc:
+        status_code = 404 if exc.code.endswith("_not_found") else 503
+        raise HTTPException(status_code=status_code, detail=exc.message) from exc
 
 
 @router.get("/support", response_class=HTMLResponse)

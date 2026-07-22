@@ -28,25 +28,56 @@ from app.services import (
     team_inbox_outbound,
 )
 from app.services.common import coerce_uuid
+from app.services.domain_errors import DomainError
+from app.services.owner_commands import (
+    CommandContext,
+    OwnerCommandDefinition,
+    execute_owner_command,
+)
 
 T = TypeVar("T")
 
 
-class InboxCommandError(ValueError):
+OWNER = "communications.team_inbox_commands"
+_ADMIN_MUTATION = OwnerCommandDefinition(
+    owner=OWNER,
+    concern="operator conversation and collaboration commands",
+    name="execute_team_inbox_admin_mutation",
+)
+
+
+class InboxCommandError(DomainError, ValueError):
     """Base error safe for an admin adapter to render."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        suffix: str = "rejected",
+        details: dict[str, object] | None = None,
+    ) -> None:
+        super().__init__(code=f"{OWNER}.{suffix}", message=message, details=details)
 
 
 class ConversationNotFoundError(InboxCommandError):
-    pass
+    def __init__(self, message: str = "Conversation not found.") -> None:
+        super().__init__(message, suffix="conversation_not_found")
 
 
 class MessageNotFoundError(InboxCommandError):
-    pass
+    def __init__(self, message: str = "Message not found.") -> None:
+        super().__init__(message, suffix="message_not_found")
 
 
 class InboxCommandRejected(InboxCommandError):
     def __init__(self, message: str, *, conversation_id: UUID | str | None = None):
-        super().__init__(message)
+        super().__init__(
+            message,
+            suffix="command_rejected",
+            details={"conversation_id": str(conversation_id)}
+            if conversation_id
+            else None,
+        )
         self.conversation_id = str(conversation_id) if conversation_id else None
 
 
@@ -76,14 +107,23 @@ class StatusOutcome:
     already_set: bool
 
 
-def _commit(db: Session, action: Callable[[], T]) -> T:
-    try:
-        result = action()
-        db.commit()
-        return result
-    except Exception:
-        db.rollback()
-        raise
+def _commit(
+    db: Session,
+    action: Callable[[], T],
+    *,
+    context: CommandContext | None = None,
+) -> T:
+    command_context = context or CommandContext.system(
+        actor="system:team-inbox-admin-adapter",
+        scope="team-inbox:operator-command",
+        reason="execute typed Team Inbox operator command",
+    )
+    return execute_owner_command(
+        db,
+        definition=_ADMIN_MUTATION,
+        context=command_context,
+        operation=action,
+    )
 
 
 def _active_conversation(db: Session, conversation_id: str | UUID) -> InboxConversation:
