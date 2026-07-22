@@ -47,6 +47,10 @@ event enable/disable controls are not part of this authority boundary.
   lifecycle authorities.
 - Number allocation, proration, backdated-period handling, and lifecycle
   consequences follow their named owner contracts rather than runtime toggles.
+- Lifecycle state, reason-scoped enforcement locks, and their durable event rows
+  commit or roll back together. Delivery starts only after commit. A failed
+  RADIUS, session, or financial-access consequence is reported by its handler so
+  the durable event remains retryable; it is never logged as successful work.
 
 ## Authority boundary
 
@@ -88,6 +92,8 @@ idempotency contracts; they do not change money ownership.
   lifecycle tasks.
 - Enforcement tests prove weekends and holidays are ordinary days and only the
   shared time-of-day window defers consequences.
+- Lifecycle tests prove rollback emits no external consequence, and enforcement
+  handler tests prove incomplete projections remain durable retry work.
 - Account quarantine, shields, grace, funding, coverage, payment, renewal,
   suspension, restoration, notification, and idempotency suites remain green.
 - Alembic has one head and migration 398 removes the retired rows while enabling

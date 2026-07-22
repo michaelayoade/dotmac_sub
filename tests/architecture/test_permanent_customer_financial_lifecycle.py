@@ -72,3 +72,9 @@ def test_account_approval_remains_a_canonical_fact():
     access = _read("app/services/access_resolution.py")
     assert "billing_enabled: Mapped[bool]" in subscriber
     assert "account_billing_enabled" in access
+
+
+def test_lifecycle_events_cannot_bypass_the_post_commit_outbox():
+    lifecycle = _read("app/services/account_lifecycle.py")
+    assert "defer_until_commit=False" not in lifecycle
+    assert "from app.services.events import emit_event as" not in lifecycle

@@ -52,7 +52,7 @@ from app.models.enforcement_lock import (
     EnforcementReason,
 )
 from app.models.subscriber import Subscriber, SubscriberStatus
-from app.services.events import emit_event as _emit_event
+from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.prepaid_enforcement_state import clear_prepaid_enforcement_timers
 
@@ -60,11 +60,6 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
-
-
-def emit_event(db, event_type, payload, **kwargs):  # noqa: ANN001, ANN201
-    kwargs.setdefault("defer_until_commit", False)
-    return _emit_event(db, event_type, payload, **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -532,6 +527,45 @@ def restore_subscription(
 
     compute_account_status(db, str(subscription.subscriber_id))
     return restored
+
+
+def resolve_stale_lock_without_restoration(
+    db: Session,
+    subscription_id: str,
+    *,
+    trigger: str,
+    resolved_by: str,
+    reason: EnforcementReason,
+    notes: str | None = None,
+    emit: bool = True,
+) -> int:
+    """Resolve an obsolete reason lock without activating a non-service.
+
+    Financial reconciliation uses this only when its locked preview proves the
+    linked subscription is no longer restorable service (for example terminal
+    after leaving the prepaid cohort). Suspended services must use
+    ``restore_subscription`` so status and access consequences stay atomic.
+    """
+    subscription = db.execute(
+        select(Subscription).where(Subscription.id == subscription_id).with_for_update()
+    ).scalar_one_or_none()
+    if subscription is None:
+        raise ValueError(f"Subscription {subscription_id} not found")
+    if subscription.status in SUSPENDED_EQUIVALENT:
+        raise ValueError(
+            "A suspended subscription lock must be resolved through restoration"
+        )
+    resolved_count, _remaining = resolve_locks_for_trigger(
+        db,
+        subscription,
+        trigger=trigger,
+        resolved_by=resolved_by,
+        reason=reason,
+        notes=notes,
+        emit=emit,
+    )
+    compute_account_status(db, str(subscription.subscriber_id))
+    return resolved_count
 
 
 def activate_subscription(

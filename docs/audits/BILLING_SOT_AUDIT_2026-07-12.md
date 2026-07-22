@@ -1,5 +1,9 @@
 # Billing domain — source-of-truth audit
 
+> Historical evidence only. Runtime enablement, readiness, coverage, funding,
+> enforcement, and operator instructions are superseded by
+> `docs/FINANCIAL_ACCESS_ENFORCEMENT.md` and ADR 0003.
+
 **Date:** 2026-07-12
 **Scope:** `financial_access` domain of `docs/SOT_RELATIONSHIP_MAP.md`, plus the billing
 projections into `dotmac_crm` and `dotmac_erp`.
