@@ -1,0 +1,60 @@
+{% extends "admin/base.html" %}
+{% block title %}Service-change reconciliation{% endblock %}
+{% block content %}
+<div class="space-y-6">
+  <div>
+    <h1 class="text-2xl font-semibold text-slate-900 dark:text-white">Service-change reconciliation</h1>
+    <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">Interrupted chains detected only from canonical payment, fulfillment, RADIUS, and provisioning evidence.</p>
+  </div>
+
+  {% if request.query_params.get('feedback_message') %}
+  <div class="rounded-lg border p-4 text-sm {{ 'border-emerald-300 bg-emerald-50 text-emerald-800' if request.query_params.get('feedback_status') == 'success' else 'border-red-300 bg-red-50 text-red-800' }}">
+    {{ request.query_params.get('feedback_message') }}
+  </div>
+  {% endif %}
+
+  <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900">
+    <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+      <thead class="bg-slate-50 dark:bg-slate-800">
+        <tr>
+          <th class="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-500">Request</th>
+          <th class="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-500">State</th>
+          <th class="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-500">Findings</th>
+          <th class="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-500">Reviewed repair</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+      {% for item in inspection.items %}
+        <tr>
+          <td class="px-4 py-4 text-sm text-slate-700 dark:text-slate-200">
+            <div class="font-mono text-xs">{{ item.request_id }}</div>
+            <div class="mt-1 text-xs text-slate-500">Subscription {{ item.subscription_id }}</div>
+          </td>
+          <td class="px-4 py-4 text-sm text-slate-700 dark:text-slate-200">{{ item.execution_state|replace('_', ' ')|title }}</td>
+          <td class="px-4 py-4 text-sm">
+            {% for finding in item.findings %}
+              <div class="text-slate-700 dark:text-slate-200">{{ finding.code|replace('_', ' ') }}</div>
+              {% if not finding.repairable %}<div class="text-xs text-amber-700">Manual investigation required</div>{% endif %}
+            {% endfor %}
+          </td>
+          <td class="px-4 py-4">
+            {% if item.findings|selectattr('repairable')|list %}
+            <form method="post" action="/admin/provisioning/service-change-reconciliation/{{ item.request_id }}/repair" class="space-y-2">
+              <input type="hidden" name="expected_head" value="{{ item.reviewed_head }}">
+              <input class="w-full rounded border border-slate-300 px-2 py-1 text-sm dark:border-slate-600 dark:bg-slate-800" name="idempotency_key" minlength="16" maxlength="160" required placeholder="Unique repair key">
+              <input class="w-full rounded border border-slate-300 px-2 py-1 text-sm dark:border-slate-600 dark:bg-slate-800" name="reason" minlength="8" maxlength="500" required placeholder="Reviewed reason">
+              <button class="rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700" type="submit">Repair from evidence</button>
+            </form>
+            {% else %}
+            <span class="text-xs text-slate-500">Not automatically repairable</span>
+            {% endif %}
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="4" class="px-4 py-10 text-center text-sm text-slate-500">No interrupted execution chains found.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

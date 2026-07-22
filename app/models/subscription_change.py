@@ -141,6 +141,11 @@ class SubscriptionChangeRequest(Base):
     provisioning_verified_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
     )
+    reconciliation_idempotency_key_hash: Mapped[str | None] = mapped_column(String(64))
+    reconciliation_reviewed_head: Mapped[str | None] = mapped_column(String(64))
+    reconciliation_actor_id: Mapped[str | None] = mapped_column(String(120))
+    reconciliation_reason: Mapped[str | None] = mapped_column(Text)
+    reconciled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status: Mapped[SubscriptionChangeStatus] = mapped_column(
         Enum(SubscriptionChangeStatus), default=SubscriptionChangeStatus.pending
     )

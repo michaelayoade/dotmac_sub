@@ -1,6 +1,6 @@
 # Customer Self-Service Lifecycle
 
-Status: approved target; migration in progress
+Status: implemented
 
 ## Contract
 
@@ -152,11 +152,18 @@ Completed in this slice:
   ledger. Web and `/api/v1/me` expose the same typed command, status,
   subscription, device, operation, and message outcome; mobile provides both
   actions and renders that canonical outcome without inferring device state.
+- Superseded customer device-command wrappers and their duplicate cooldown and
+  validation decisions are retired; web routes, API, and mobile enter the
+  canonical scoped owner directly.
+- Operators now have a permission-gated service-change reconciliation surface.
+  Its read-only inspection reports bounded canonical drift with a reviewed
+  evidence head. Repair requires that exact head, a durable idempotency key,
+  actor, and reason, then resumes only from structural payment, fulfillment,
+  RADIUS, or provisioning evidence. A crash after payment settlement but before
+  fulfillment release is explicitly detectable and repairable.
 
-Still required before this lifecycle is complete:
-
-- remove the remaining superseded customer-route decisions and add the operator
-  reconciliation surface for interrupted execution-chain states.
+The lifecycle migration is complete. Further changes extend this contract and
+must preserve these owners rather than introduce compatibility writers.
 
 No compatibility response or fallback will be retained after each in-repository
 consumer is migrated and the cutover gate is green.
