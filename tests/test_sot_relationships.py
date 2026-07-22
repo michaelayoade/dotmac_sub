@@ -443,7 +443,10 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "access.walled_garden_policy",
     )
     assert sot_relationships.dependencies_for("customer.financial_position") == (
+        "financial.credit_notes",
+        "financial.invoices",
         "financial.ledger",
+        "financial.payments",
         "financial.prepaid_funding_reconstruction",
     )
     assert sot_relationships.dependencies_for("financial.prepaid_enforcement") == (

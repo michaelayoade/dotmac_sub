@@ -434,8 +434,221 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "currency-typed complete billing headline projection",
                 ),
                 depends_on=(
+                    "financial.credit_notes",
+                    "financial.invoices",
                     "financial.ledger",
+                    "financial.payments",
                     "financial.prepaid_funding_reconstruction",
+                ),
+                notes=(
+                    "Paid prepaid subscription invoices are non-AR documents but "
+                    "become exact customer-position service debits only when fully "
+                    "paid and backed by exact active settlement applications. "
+                    "An exact direct-renewal adjustment and entitlement for the same "
+                    "account, subscription, period, amount, and currency takes "
+                    "precedence so a later documentary invoice cannot debit twice."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name=(
+                                "distinct invoice-receivable and prepaid-funding "
+                                "summaries"
+                            ),
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "reviewed prepaid opening position",
+                                "canonical payment and refund documents",
+                                "canonical collectible invoice documents",
+                                "canonical paid prepaid consumption documents",
+                                "canonical renewal debit evidence",
+                                "canonical credit and adjustment evidence",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="customer-visible financial position",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "reviewed prepaid opening position",
+                                "canonical payment and refund documents",
+                                "canonical collectible invoice documents",
+                                "canonical paid prepaid consumption documents",
+                                "canonical renewal debit evidence",
+                                "canonical credit and adjustment evidence",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="bounded cohort financial projections",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "reviewed prepaid opening position",
+                                "canonical payment and refund documents",
+                                "canonical collectible invoice documents",
+                                "canonical paid prepaid consumption documents",
+                                "canonical renewal debit evidence",
+                                "canonical credit and adjustment evidence",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="currency-typed complete billing headline projection",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical payment and refund documents",
+                                "canonical collectible invoice documents",
+                                "canonical paid prepaid consumption documents",
+                                "canonical credit and adjustment evidence",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="reviewed prepaid opening position",
+                            owner="financial.prepaid_funding_reconstruction",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active currency-bound PrepaidFundingBaseline and its "
+                                "authority-cutover position time"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical payment and refund documents",
+                            owner="financial.payments",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active succeeded or refunded Payment amount, currency, "
+                                "paid time, refund amount, and exact allocation evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical collectible invoice documents",
+                            owner="financial.invoices",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active non-proforma collectible Invoice lifecycle, total, "
+                                "currency, issue time, and reviewed closure evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical paid prepaid consumption documents",
+                            owner="financial.invoices",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active fully paid positive Invoice with an active exact "
+                                "prepaid Subscription line whose total is fully backed by "
+                                "active PaymentAllocation and/or CreditNoteApplication "
+                                "evidence, plus paid time, period, total, and currency"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical renewal debit evidence",
+                            owner="financial.ledger",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "unreversed prepaid_service_renewal AccountAdjustment and "
+                                "its exact active debit-backed ServiceEntitlement"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical credit and adjustment evidence",
+                            owner="financial.ledger",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active customer-position ledger adjustments plus "
+                                "financial.credit_notes document evidence"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary=(
+                            "Callers own the session. Scalar and bounded cohort queries "
+                            "rebuild the signed position from committed canonical evidence "
+                            "without writes or transaction completion."
+                        ),
+                        locking=(
+                            "No read locks. State-changing financial owners lock their "
+                            "canonical rows and re-resolve this projection before writing."
+                        ),
+                        idempotency=(
+                            "The same opening position, time bound, currency, and committed "
+                            "financial evidence produce the same signed result."
+                        ),
+                        retries=(
+                            "Transient reads may be retried; malformed, ambiguous, or "
+                            "missing authority remains a deterministic fail-closed result."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(),
+                        mapping_owner=(
+                            "billing, access, reporting, portal, and reconciliation adapters"
+                        ),
+                        fail_closed_on=(
+                            "missing reviewed prepaid authority for a pre-cutover account",
+                            "cross-currency automation input",
+                            "prepaid invoice without an exact subscription line or complete "
+                            "active settlement applications",
+                        ),
+                    ),
+                    projections=(
+                        ProjectionContract(
+                            name="customer-visible financial position",
+                            input_names=(
+                                "reviewed prepaid opening position",
+                                "canonical payment and refund documents",
+                                "canonical collectible invoice documents",
+                                "canonical paid prepaid consumption documents",
+                                "canonical renewal debit evidence",
+                                "canonical credit and adjustment evidence",
+                            ),
+                            writer="customer.financial_position",
+                            freshness="rebuilt from committed source evidence on every query",
+                            stale_behavior=(
+                                "missing authority and ambiguous currency fail closed; paid "
+                                "prepaid consumption is never left as reusable funding"
+                            ),
+                            drift_signal=(
+                                "scalar and bounded-cohort results differ, or a paid prepaid "
+                                "invoice total remains in spendable funding without an exact "
+                                "direct-renewal precedence match"
+                            ),
+                            rebuild_operation=(
+                                "list_customer_financial_events and "
+                                "customer_financial_balances_by_currency recompute the view"
+                            ),
+                            repair_owner="customer.financial_position",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "collectible-AR-only native balance projection that counted a "
+                            "gross payment but omitted its paid prepaid invoice consumption"
+                        ),
+                        new_owner="customer.financial_position",
+                        verification=(
+                            "Scalar/bulk parity, reviewed-baseline, paid prepaid invoice, "
+                            "direct-renewal precedence, refund, and architecture tests."
+                        ),
+                        cutover_gate=(
+                            "Every prepaid balance display and enforcement reader consumes "
+                            "the rebuilt customer.financial_position projection."
+                        ),
+                        fallback_retirement=(
+                            "No UI, enforcement path, or repair script subtracts invoice "
+                            "applications locally or edits a stored customer balance."
+                        ),
+                    ),
+                    steward="finance operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/designs/PREPAID_INVOICE_DEPOSIT_ALIGNMENT.md",
+                        "docs/designs/PREPAID_SERVICE_COVERAGE.md",
+                    ),
+                    test_refs=(
+                        "tests/test_customer_financial_ledger.py",
+                        "tests/architecture/test_prepaid_funding_reconstruction_ownership.py",
+                    ),
                 ),
             ),
             SOTService(

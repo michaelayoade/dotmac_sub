@@ -97,7 +97,14 @@ phantom-ledger cleanups). Separate one-off script, run after Item 1 lands.
 
 1. The monthly-prepaid draft-invoice owner and its control are retired.
    `financial.prepaid_service_renewals` is the only writer for new funded
-   prepaid periods; it writes the debit, entitlement, and anchor atomically.
+   prepaid periods; it writes the debit, entitlement, and anchor atomically. A
+   fully paid prepaid subscription invoice with exact active payment and/or
+   credit-note applications covering its total is the canonical
+   service-consumption document for an invoice-funded period;
+   `customer.financial_position` projects its tax-inclusive total as spent
+   customer value. Invoice-less scheduled/post-credit renewal uses the owner's
+   exact adjustment debit instead. Exact account/subscription/period/amount/
+   currency precedence prevents both representations from being counted.
 2. The prepaid enforcement owner evaluates every eligible account on its
    permanent pass; cleanup scripts must not be used as the suspension signal.
    Canonical funding, current coverage, quarantine, billing profile, shields,
@@ -131,8 +138,10 @@ phantom-ledger cleanups). Separate one-off script, run after Item 1 lands.
    end-to-end: take or create ONE underfunded prepaid **draft** renewal, top up
    enough to cover it, then verify (a) it transitions to `paid`, (b) wallet credit
    is consumed **exactly once** (no double-draw), and (c) if the account was
-   prepaid-suspended, service restore runs. This is the one behaviour the offline
-   tests can't fully prove against real payment/webhook plumbing.
+   prepaid-suspended, service restore runs. The canonical scalar and bounded-cohort
+   financial-position projections must both equal reviewed opening funding plus
+   later credits minus the exact paid invoice total. This is the one behaviour
+   the offline tests cannot fully prove against real payment/webhook plumbing.
 
 **LANDMINE:** do not recreate the retired `settle_credit_on_invoice_enabled`
 path as a shortcut. Item 1's settle is single-invoice and targeted.

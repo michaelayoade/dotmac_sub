@@ -41,9 +41,21 @@ and enters reconciliation, but it does not authorize restoration.
 
 ## Renewal and control-plane cutover
 
-`financial.prepaid_service_renewals` is the only writer of newly funded prepaid
-periods. Its transaction writes the debit, entitlement, paid-through projection,
-and durable outcome together.
+`financial.prepaid_service_renewals` is the only decision owner for newly funded
+prepaid periods. Invoice-less scheduled or post-credit renewals write the debit,
+entitlement, paid-through projection, and durable outcome together. When the
+customer instead funds an exact prepaid invoice, `financial.invoices` owns the
+paid document and `customer.financial_position` projects that fully paid invoice
+as the one customer-position service debit only when active payment and/or
+credit-note applications exactly cover its total. Paid status alone is not
+funding evidence; the renewal consequence must use the
+same invoice period and may not post a second debit.
+
+An exact direct-renewal adjustment and active debit-backed entitlement for the
+same account, subscription, period, amount, and currency takes precedence over a
+later documentary paid invoice. This supports evidence-only reconciliation
+without charging twice. Imported line-less prepaid invoices are never sufficient
+consumption evidence and remain quarantined for review.
 
 The competing `billing.prepaid_monthly_invoicing` control, its legacy
 `prepaid_monthly_invoicing_enabled` alias, and the scheduled draft-invoice path
@@ -117,6 +129,8 @@ Operations must continuously report:
 - overlapping or duplicate current entitlements;
 - renewal debit without exactly one matching entitlement;
 - entitlement/anchor mismatch;
+- a fully paid prepaid subscription invoice whose service value remains reusable
+  in the customer financial position;
 - due uncovered service with a typed renewal blocker;
 - exact invoice/renewal evidence still requiring entitlement projection;
 - quarantined coverage evidence by stable reason code.

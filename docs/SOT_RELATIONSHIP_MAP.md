@@ -140,6 +140,10 @@ do not hand-edit these rows.
 | Service | Concern | Role | Authoritative inputs | Transaction | Migration | Steward | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `customer.name_repairs` | evidence-bound legacy Subscriber name repair | `command_writer` | approved customer-name repair manifest ← `customer.name_repairs`<br>canonical legacy Subscriber name state ← `customer.accounts`<br>immutable CRM overwrite audit evidence ← `observability.audit_log`<br>canonical Party identity binding ← `party.registry` | `owner_managed` | `complete` | customer operations | `docs/PARTY_CUSTOMER_LIFECYCLE.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_restore_crm_placeholder_identity.py`<br>`tests/architecture/test_crm_customer_boundary.py` |
+| `customer.financial_position` | distinct invoice-receivable and prepaid-funding summaries | `resolver` | reviewed prepaid opening position ← `financial.prepaid_funding_reconstruction`<br>canonical payment and refund documents ← `financial.payments`<br>canonical collectible invoice documents ← `financial.invoices`<br>canonical paid prepaid consumption documents ← `financial.invoices`<br>canonical renewal debit evidence ← `financial.ledger`<br>canonical credit and adjustment evidence ← `financial.ledger` | `read_only` | `complete` | finance operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/PREPAID_INVOICE_DEPOSIT_ALIGNMENT.md`<br>`docs/designs/PREPAID_SERVICE_COVERAGE.md`<br>`tests/test_customer_financial_ledger.py`<br>`tests/architecture/test_prepaid_funding_reconstruction_ownership.py` |
+| `customer.financial_position` | customer-visible financial position | `resolver` | reviewed prepaid opening position ← `financial.prepaid_funding_reconstruction`<br>canonical payment and refund documents ← `financial.payments`<br>canonical collectible invoice documents ← `financial.invoices`<br>canonical paid prepaid consumption documents ← `financial.invoices`<br>canonical renewal debit evidence ← `financial.ledger`<br>canonical credit and adjustment evidence ← `financial.ledger` | `read_only` | `complete` | finance operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/PREPAID_INVOICE_DEPOSIT_ALIGNMENT.md`<br>`docs/designs/PREPAID_SERVICE_COVERAGE.md`<br>`tests/test_customer_financial_ledger.py`<br>`tests/architecture/test_prepaid_funding_reconstruction_ownership.py` |
+| `customer.financial_position` | bounded cohort financial projections | `resolver` | reviewed prepaid opening position ← `financial.prepaid_funding_reconstruction`<br>canonical payment and refund documents ← `financial.payments`<br>canonical collectible invoice documents ← `financial.invoices`<br>canonical paid prepaid consumption documents ← `financial.invoices`<br>canonical renewal debit evidence ← `financial.ledger`<br>canonical credit and adjustment evidence ← `financial.ledger` | `read_only` | `complete` | finance operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/PREPAID_INVOICE_DEPOSIT_ALIGNMENT.md`<br>`docs/designs/PREPAID_SERVICE_COVERAGE.md`<br>`tests/test_customer_financial_ledger.py`<br>`tests/architecture/test_prepaid_funding_reconstruction_ownership.py` |
+| `customer.financial_position` | currency-typed complete billing headline projection | `resolver` | canonical payment and refund documents ← `financial.payments`<br>canonical collectible invoice documents ← `financial.invoices`<br>canonical paid prepaid consumption documents ← `financial.invoices`<br>canonical credit and adjustment evidence ← `financial.ledger` | `read_only` | `complete` | finance operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/PREPAID_INVOICE_DEPOSIT_ALIGNMENT.md`<br>`docs/designs/PREPAID_SERVICE_COVERAGE.md`<br>`tests/test_customer_financial_ledger.py`<br>`tests/architecture/test_prepaid_funding_reconstruction_ownership.py` |
 | `customer.reseller_status_actions` | reseller-scoped account-action impact preview | `resolver` | canonical reseller account scope ← `customer.identity_scope`<br>canonical account and subscription lifecycle state ← `access.subscription_lifecycle`<br>reseller account-status action protocol ← `customer.reseller_status_actions` | `coordinator_managed` | `complete` | customer operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_reseller_gaps.py`<br>`tests/test_reseller_portal_services.py`<br>`tests/architecture/test_reseller_status_action_boundary.py` |
 | `customer.reseller_status_actions` | lock-aware account-action eligibility | `policy` | canonical account and subscription lifecycle state ← `access.subscription_lifecycle`<br>canonical enforcement lock and login-conflict state ← `access.subscription_lifecycle`<br>reseller account-status action protocol ← `customer.reseller_status_actions` | `coordinator_managed` | `complete` | customer operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_reseller_gaps.py`<br>`tests/test_reseller_portal_services.py`<br>`tests/architecture/test_reseller_status_action_boundary.py` |
 | `customer.reseller_status_actions` | account-action stale-preview fingerprint | `resolver` | canonical reseller account scope ← `customer.identity_scope`<br>canonical account and subscription lifecycle state ← `access.subscription_lifecycle`<br>canonical enforcement lock and login-conflict state ← `access.subscription_lifecycle`<br>reseller account-status action protocol ← `customer.reseller_status_actions` | `coordinator_managed` | `complete` | customer operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_reseller_gaps.py`<br>`tests/test_reseller_portal_services.py`<br>`tests/architecture/test_reseller_status_action_boundary.py` |
@@ -706,6 +710,14 @@ detailed security and delivery boundary is
    exact subscription period. A completed account-credit application invokes
    it before access restoration; a lapsed service starts on the payment day and
    missed inactive periods are not silently back-billed.
+   A fully paid positive invoice with an active exact prepaid subscription line
+   and complete active payment/credit-note applications is the mutually exclusive
+   invoice-funded representation. Status alone is not funding evidence. It remains non-AR,
+   but `customer.financial_position` projects its tax-inclusive total as the one
+   service-consumption debit. An exact unreversed renewal adjustment plus active
+   debit-backed entitlement for the same account, subscription, period, amount,
+   and currency takes precedence over a later documentary invoice so reviewed
+   evidence reconciliation has zero economic delta.
    Every forward renewal also stages `prepaid_service.renewed` with the exact
    entitlement, debit, period start, and renewed-through boundary in the same
    transaction. Notifications and portal success views consume that outcome;
@@ -1117,8 +1129,11 @@ Payment creation, settlement, and allocation are one coherent owner contract:
 - Prepaid renewal boundary: `financial.payments` ends after confirmed cash,
   invoice allocation, and unallocated-credit evidence are committed. The durable
   `payment.received` event invokes `financial.prepaid_service_renewals`, which is
-  the sole writer of prepaid service debits, entitlements, billing-anchor
-  advancement, and `prepaid_service.renewed` outcomes. Access enforcement has an
+  the sole decision owner of prepaid period funding, entitlements, billing-anchor
+  advancement, and `prepaid_service.renewed` outcomes. Invoice-funded periods use
+  the exact fully paid and fully settlement-backed prepaid invoice as their
+  customer-position debit;
+  invoice-less periods use the owner's exact adjustment debit. Access enforcement has an
   explicit dependency on that owner, while customer notifications and external
   delivery remain independent fanout consequences. The former inline payment
   renewal, operator-selected legacy cycle repair, and plan-driven gap reconciler
@@ -1501,6 +1516,13 @@ evidenced owner contract:
   affordability threshold. The archived Splynx mirror is migration evidence,
   never a runtime fallback. Reason-scoped repair follows the reason owner: an
   ``overdue`` lock is never judged by the prepaid affordability resolver.
+  A paid prepaid subscription invoice is excluded from collectible AR but is
+  included once as consumed service value only when exact active payment and/or
+  credit-note applications fully back its total. Paid status alone and imported
+  line-less invoices are not sufficient. When the exact same period is already represented by an
+  unreversed renewal adjustment and active debit-backed entitlement, that
+  canonical debit takes precedence and the documentary invoice contributes no
+  second position effect. Scalar and bounded-cohort reads use the same rule.
   Ledger projections require both `is_active` and `affects_customer_position`.
   Those fields are deliberately orthogonal: `is_active` follows the source
   artifact lifecycle, while `affects_customer_position` prevents structural,
