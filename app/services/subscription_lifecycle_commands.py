@@ -382,7 +382,14 @@ def confirm_subscription_service_change(
         request.field_fee_amount = field_quote.fee_amount
         request.field_fee_currency = field_quote.currency
         request.field_quote_fingerprint = field_quote.fingerprint
+        from app.services.subscription_change_execution import stage_relocation_charge
+
+        stage_relocation_charge(db, request)
         db.flush()
+    elif field_quote is None:
+        from app.models.subscription_change import SubscriptionChangeExecutionState
+
+        request.execution_state = SubscriptionChangeExecutionState.payment_settled
     db.commit()
     updated = resolve_subscription_lifecycle(db, command.subscription_id)
     message = (

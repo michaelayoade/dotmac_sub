@@ -428,6 +428,11 @@ def _initialize_handlers(dispatcher: EventDispatcher) -> None:
     dispatcher.register_handler(EnforcementHandler())
     dispatcher.register_handler(CredentialSessionProjectionHandler())
     dispatcher.register_handler(ArrangementHandler())
+    from app.services.events.handlers.subscription_change_execution import (
+        SubscriptionChangeExecutionHandler,
+    )
+
+    dispatcher.register_handler(SubscriptionChangeExecutionHandler())
     dispatcher.register_handler(ReferralHandler())
     dispatcher.register_handler(PrepaidRenewalHandler())
     dispatcher.register_handler(StaffInviteHandler())

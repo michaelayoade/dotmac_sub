@@ -1512,7 +1512,7 @@ class Invoices(ListResponseMixin):
         )
 
     @staticmethod
-    def create(db: Session, payload: InvoiceCreate):
+    def create(db: Session, payload: InvoiceCreate, *, commit: bool = True):
         _validate_account(db, str(payload.account_id))
         data = payload.model_dump()
         fields_set = payload.model_fields_set
@@ -1563,8 +1563,11 @@ class Invoices(ListResponseMixin):
             invoice_id=invoice.id,
         )
         _apply_available_account_credit(db, invoice)
-        db.commit()
-        db.refresh(invoice)
+        if commit:
+            db.commit()
+            db.refresh(invoice)
+        else:
+            db.flush()
 
         return invoice
 

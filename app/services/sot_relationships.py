@@ -14114,6 +14114,178 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="service_intent.subscription_change_execution",
+                module="app.services.subscription_change_execution",
+                owns=(
+                    "relocation charge evidence and settlement admission",
+                    "paid relocation fulfillment release",
+                    "verified service-change finalization",
+                ),
+                depends_on=(
+                    "service_intent.subscription_lifecycle_execution",
+                    "financial.invoices",
+                    "financial.payments",
+                    "operations.service_order_lifecycle",
+                    "operations.work_order_commands",
+                    "operations.provisioning_lifecycle",
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="relocation charge evidence and settlement admission",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "confirmed relocation quote evidence",
+                                "canonical invoice and payment allocation evidence",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="paid relocation fulfillment release",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "canonical invoice and payment allocation evidence",
+                                "canonical subscription-change execution state",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="verified service-change finalization",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "canonical provisioning-readiness decision",
+                                "canonical subscription-change execution state",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="confirmed relocation quote evidence",
+                            owner="service_intent.subscription_lifecycle_execution",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked SubscriptionChangeRequest target address, "
+                                "qualification, exact fee, currency, and quote fingerprint"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical invoice and payment allocation evidence",
+                            owner="financial.payments",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "exact issued Invoice, succeeded Payment, active "
+                                "PaymentAllocation, and paid invoice state"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical subscription-change execution state",
+                            owner="service_intent.subscription_change_execution",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked SubscriptionChangeRequest execution state and "
+                                "structural invoice, payment, service-order, work-order, "
+                                "and readiness-decision links"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical provisioning-readiness decision",
+                            owner="operations.provisioning_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "activated ProvisioningReadinessDecision for the exact "
+                                "linked ServiceOrder"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        boundary=(
+                            "Each event admission locks one change request and stages "
+                            "structural evidence plus delegated owner results before the "
+                            "adapter transaction completes."
+                        ),
+                        locking="The exact SubscriptionChangeRequest is locked first.",
+                        idempotency=(
+                            "Unique structural links and deterministic service/work-order "
+                            "keys replay the original outcome."
+                        ),
+                        retries=(
+                            "Unsettled or unverified observations fail closed and retry "
+                            "after their authoritative evidence changes."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "service_intent.subscription_change_execution.service_change_not_found",
+                            "service_intent.subscription_change_execution.relocation_fee_not_settled",
+                            "service_intent.subscription_change_execution.provisioning_verification_missing",
+                            "service_intent.subscription_change_execution.service_change_not_finalizable",
+                            "service_intent.subscription_change_execution.invalid_command_context",
+                            "service_intent.subscription_change_execution.command_contract_violation",
+                            "service_intent.subscription_change_execution.nested_owner_command",
+                            "service_intent.subscription_change_execution.active_caller_transaction",
+                            "service_intent.subscription_change_execution.nested_transaction_completion",
+                        ),
+                        mapping_owner="event and service-change adapters",
+                        retryable_codes=(
+                            "service_intent.subscription_change_execution.relocation_fee_not_settled",
+                            "service_intent.subscription_change_execution.provisioning_verification_missing",
+                        ),
+                        fail_closed_on=(
+                            "missing or mismatched fee, currency, invoice, allocation, or payment",
+                            "missing field-work or provisioning verification",
+                            "mismatched service-order scope",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "invoice.created",
+                            "service_order.created",
+                            "service_order.completed",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Events carry exact request, invoice, payment, service-order, "
+                            "and readiness identifiers where applicable."
+                        ),
+                        replay=(
+                            "Structural request links and canonical owner records rebuild "
+                            "the execution chain without memo or status inference."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.CUTOVER_READY,
+                        new_owner="service_intent.subscription_change_execution",
+                        old_owner=(
+                            "unimplemented handoff after awaiting_payment with no "
+                            "structural settlement, fulfillment, verification, or "
+                            "finalization evidence chain"
+                        ),
+                        verification=(
+                            "Focused tests cover charge creation, exact settlement, "
+                            "fulfillment release, verification gating, and replay."
+                        ),
+                        cutover_gate=(
+                            "Migration 401 backfills deferred requests and every new "
+                            "priced relocation receives structural evidence."
+                        ),
+                        fallback_retirement=(
+                            "No support-ticket, memo lookup, invoice-status-only, or "
+                            "work-order completion shortcut is retained."
+                        ),
+                    ),
+                    steward="customer service delivery, billing, and network operations",
+                    design_refs=(
+                        "docs/designs/CUSTOMER_SELF_SERVICE_LIFECYCLE.md",
+                        "docs/designs/PROVISIONING_LIFECYCLE_SOT.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_customer_plan_change_prepaid.py",
+                        "tests/architecture/test_provisioning_lifecycle_sot.py",
+                    ),
+                ),
+            ),
+            SOTService(
                 name="service_intent.ont",
                 module="app.services.network.ont_service_intent",
                 owns=("ONT service intent projection",),

@@ -13,9 +13,13 @@ from app.models.audit import AuditEvent
 from app.models.billing import (
     AccountAdjustment,
     Invoice,
+    InvoiceStatus,
     LedgerEntry,
     LedgerEntryType,
     LedgerSource,
+    Payment,
+    PaymentAllocation,
+    PaymentStatus,
 )
 from app.models.catalog import (
     AccessType,
@@ -33,7 +37,10 @@ from app.models.catalog import (
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.qualification import BuildoutStatus, CoverageArea
 from app.models.subscriber import Address, AddressType
-from app.models.subscription_change import SubscriptionChangeRequest
+from app.models.subscription_change import (
+    SubscriptionChangeExecutionState,
+    SubscriptionChangeRequest,
+)
 from app.models.subscription_engine import SettingValueType
 from app.services.billing._common import get_account_credit_balance
 from app.services.customer_portal_context import get_available_portal_offers
@@ -41,6 +48,7 @@ from app.services.customer_portal_flow_changes import (
     confirm_service_change,
     get_plan_change_quote,
 )
+from app.services.subscription_change_execution import settle_relocation_payment
 
 
 def _make_offer(
@@ -506,7 +514,53 @@ def test_wireless_address_relocation_is_qualified_priced_and_awaits_payment(
     assert request.service_qualification_id is not None
     assert request.field_fee_offer_id == fee_offer.id
     assert request.field_fee_amount == Decimal("25000.00")
+    assert request.execution_state == SubscriptionChangeExecutionState.awaiting_payment
+    assert request.field_fee_invoice_id is not None
+    invoice = db_session.get(Invoice, request.field_fee_invoice_id)
+    assert invoice is not None
+    assert invoice.total == Decimal("25000.00")
+    assert invoice.currency == "NGN"
+    assert invoice.metadata_["payment_flow"] == "subscription_relocation"
+    assert invoice.metadata_["subscription_change_request_id"] == str(request.id)
     assert request.confirmation_snapshot["delivery_state"] == "awaiting_payment"
+    assert subscription.service_address_id == current_address.id
+    assert subscription.offer_id == offer.id
+
+    payment = Payment(
+        account_id=subscriber.id,
+        amount=Decimal("25000.00"),
+        currency="NGN",
+        status=PaymentStatus.succeeded,
+        paid_at=datetime.now(UTC),
+        is_active=True,
+    )
+    db_session.add(payment)
+    db_session.flush()
+    db_session.add(
+        PaymentAllocation(
+            payment_id=payment.id,
+            invoice_id=invoice.id,
+            amount=Decimal("25000.00"),
+            is_active=True,
+        )
+    )
+    invoice.status = InvoiceStatus.paid
+    invoice.balance_due = Decimal("0.00")
+    db_session.commit()
+
+    fulfillment = settle_relocation_payment(
+        db_session, request_id=request.id, payment_id=payment.id
+    )
+    db_session.commit()
+    db_session.refresh(request)
+    db_session.refresh(subscription)
+    assert fulfillment.replayed is False
+    assert request.execution_state == (
+        SubscriptionChangeExecutionState.fulfillment_released
+    )
+    assert request.field_fee_payment_id == payment.id
+    assert request.service_order_id == fulfillment.service_order_id
+    assert request.work_order_id == fulfillment.work_order_id
     assert subscription.service_address_id == current_address.id
     assert subscription.offer_id == offer.id
 
