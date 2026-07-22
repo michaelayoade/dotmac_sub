@@ -86,6 +86,19 @@ Dotmac UI standard, interaction behavior follows Carbon's data-table/filter/
 pagination patterns and WCAG 2.2 AA is the accessibility floor. This governs
 behavior and accessibility, not the product's visual theme.
 
+### Portal Account Health contract
+
+Customer dashboard, customer service detail, reseller account detail, and the
+customer mobile app consume `app.services.portal_account_health`. The first
+viewport keeps account lifecycle, billing mode, currency-separated receivables,
+prepaid funding, service access, subscription-scoped live-session evidence,
+connection/outage diagnosis, freshness, and the canonical next action together.
+Jinja surfaces share `templates/components/portal/account_health.html`; mobile
+uses `GET /api/v1/me/account-health`. Neither client derives those semantics or
+issues a parallel connection-status request. See
+`docs/designs/PORTAL_ACCOUNT_SERVICE_HEALTH.md` for ownership, query budget, and
+the retired contracts.
+
 The legacy `/api/v1/tables/customers/data` endpoint is a compatibility adapter,
 not another list owner. It maps its offset parameters and supported aliases into
 the customer `ListQuery`, delegates filtering/counting/stable ordering/paging to

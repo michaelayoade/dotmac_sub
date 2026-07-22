@@ -159,6 +159,53 @@ def get_customer_billing_summary(
     )
 
 
+def get_customer_receivable_summaries(
+    db: Session,
+    account_id: object,
+    *,
+    default_currency: str | None = None,
+    now: datetime | None = None,
+) -> tuple[CustomerBillingSummary, ...]:
+    """Return open receivables as distinct currency lanes.
+
+    A zero position still returns the configured default-currency lane. Unlike
+    ``get_customer_financial_position``, this first-viewport query never nets
+    nominal amounts from different currencies into one displayed number.
+    """
+    from app.services import display_format
+
+    account_uuid = coerce_uuid(account_id)
+    currency_rows = db.scalars(
+        select(func.upper(Invoice.currency))
+        .where(
+            *open_invoice_filters(account_uuid),
+            Invoice.is_proforma.is_not(True),
+            Invoice.currency.is_not(None),
+            Invoice.currency != "",
+        )
+        .distinct()
+        .order_by(func.upper(Invoice.currency))
+    ).all()
+    currencies = tuple(
+        display_format.currency_code(currency) for currency in currency_rows if currency
+    )
+    if not currencies:
+        currencies = (
+            display_format.currency_code(
+                default_currency or display_format.default_currency(db)
+            ),
+        )
+    return tuple(
+        get_customer_billing_summary(
+            db,
+            account_uuid,
+            currency=currency,
+            now=now,
+        )
+        for currency in currencies
+    )
+
+
 def get_customer_financial_position(
     db: Session,
     account_id,

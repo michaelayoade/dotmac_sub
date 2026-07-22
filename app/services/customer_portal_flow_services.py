@@ -40,11 +40,8 @@ from app.services.customer_portal_flow_changes import (
 )
 from app.services.customer_portal_flow_common import (
     _compute_total_pages,
-    _resolve_next_billing_date,
 )
-from app.services.network.radius_sessions import (
-    latest_open_accounting_session_for_subscription,
-)
+from app.services.portal_account_health import build_portal_account_health
 from app.services.provisioning_lifecycle import latest_readiness
 from app.services.web_network_ont_actions import device_actions as ont_device_actions
 
@@ -60,52 +57,6 @@ _PORTAL_VISIBLE_SERVICE_STATUSES = [
     SubscriptionStatus.canceled,
     SubscriptionStatus.expired,
 ]
-
-_RADIUS_CONNECTED_FRESH_SECONDS = 15 * 60
-
-
-def _radius_connection_status(
-    db: Session, subscription: Subscription
-) -> dict[str, Any]:
-    """Summarize the newest open RADIUS accounting session for portal display."""
-    if subscription.status != SubscriptionStatus.active:
-        return {
-            "state": "inactive",
-            "label": "Not connected",
-            "detail": "Service is not active",
-            "session": None,
-            "last_seen_at": None,
-            "framed_ip_address": None,
-        }
-
-    session = latest_open_accounting_session_for_subscription(db, subscription.id)
-    if not session:
-        return {
-            "state": "offline",
-            "label": "Not connected",
-            "detail": "No active RADIUS session",
-            "session": None,
-            "last_seen_at": None,
-            "framed_ip_address": None,
-        }
-
-    last_seen_at = session.last_update_at or session.session_start or session.created_at
-    last_seen_utc = last_seen_at
-    if last_seen_utc and last_seen_utc.tzinfo is None:
-        last_seen_utc = last_seen_utc.replace(tzinfo=UTC)
-    is_fresh = bool(
-        last_seen_utc
-        and last_seen_utc
-        >= datetime.now(UTC) - timedelta(seconds=_RADIUS_CONNECTED_FRESH_SECONDS)
-    )
-    return {
-        "state": "connected" if is_fresh else "stale",
-        "label": "Connected" if is_fresh else "Last seen",
-        "detail": "Active RADIUS session" if is_fresh else "Accounting update is stale",
-        "session": session,
-        "last_seen_at": last_seen_at,
-        "framed_ip_address": session.framed_ip_address,
-    }
 
 
 def _get_fup_status(
@@ -1086,7 +1037,6 @@ def get_service_detail(
     if subscription.offer_id:
         current_offer = db.get(CatalogOffer, subscription.offer_id)
 
-    next_billing_date = _resolve_next_billing_date(db, subscription)
     copy = get_plan_change_copy(subscription)
 
     fup_status = _get_fup_status(
@@ -1124,6 +1074,10 @@ def get_service_detail(
             .one_or_none()
         )
     customer_ont_is_uisp = bool(customer_ont and customer_ont.uisp_device_id)
+    account_health = build_portal_account_health(
+        db,
+        coerce_uuid(account_id),
+    ).for_subscription(subscription.id)
 
     # Renewal context: show renewal banner when contract nearing expiration
     renewal_context: dict[str, Any] = {"show_renewal": False}
@@ -1150,8 +1104,7 @@ def get_service_detail(
         "subscription": subscription,
         "current_offer": current_offer,
         "current_offer_summary": get_offer_price_summary(current_offer),
-        "next_billing_date": next_billing_date,
-        "connection_status": _radius_connection_status(db, subscription),
+        "account_health": account_health,
         "fup_status": fup_status,
         "pppoe_credentials": pppoe_creds,
         "customer_ont": customer_ont,

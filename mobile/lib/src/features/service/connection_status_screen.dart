@@ -8,7 +8,7 @@ import '../../widgets/skeleton.dart';
 import '../../widgets/status_chip.dart';
 
 /// "What's wrong with my connection?" — the outage classifier's per-customer
-/// verdict (GET /me/connection-status). Shows the state, a plain-language
+/// verdict from GET /me/account-health. Shows the state, a plain-language
 /// explanation, and the ONE action to take (when there is one). When the
 /// customer is under a known area outage the server suppresses self-blame
 /// advice and we show the reassuring "we're on it" treatment.
@@ -23,22 +23,37 @@ class ConnectionStatusScreen extends ConsumerWidget {
       body: RefreshIndicator(
         onRefresh: () async {
           ref.invalidate(connectionStatusProvider);
-          await ref.read(connectionStatusProvider.future);
+          await ref.read(accountHealthProvider.future);
         },
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            AsyncValueView<ConnectionStatus>(
+            AsyncValueView<ConnectionStatus?>(
               value: status,
-              onRetry: () => ref.invalidate(connectionStatusProvider),
+              onRetry: () => ref.invalidate(accountHealthProvider),
               skeleton: const CardSkeleton(height: 180),
-              data: (s) => _ConnectionCard(status: s),
+              data: (s) => s == null
+                  ? const _NoDiagnosisCard()
+                  : _ConnectionCard(status: s),
             ),
           ],
         ),
       ),
     );
   }
+}
+
+class _NoDiagnosisCard extends StatelessWidget {
+  const _NoDiagnosisCard();
+
+  @override
+  Widget build(BuildContext context) => const Card(
+        child: Padding(
+          padding: EdgeInsets.all(16),
+          child:
+              Text('Connection diagnosis is not available for this service.'),
+        ),
+      );
 }
 
 class _ConnectionCard extends StatelessWidget {
@@ -66,8 +81,9 @@ class _ConnectionCard extends StatelessWidget {
                     Expanded(
                       child: Text(
                         status.headline,
-                        style: theme.textTheme.titleMedium
-                            ?.copyWith(fontWeight: FontWeight.w600),
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
                   ],
@@ -93,8 +109,11 @@ class _ConnectionCard extends StatelessWidget {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(Icons.lightbulb_outline,
-                      color: theme.colorScheme.primary, size: 22),
+                  Icon(
+                    Icons.lightbulb_outline,
+                    color: theme.colorScheme.primary,
+                    size: 22,
+                  ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Text(
@@ -110,8 +129,9 @@ class _ConnectionCard extends StatelessWidget {
         const SizedBox(height: 12),
         Text(
           _checkedLabel(status.checkedAt),
-          style: theme.textTheme.bodySmall
-              ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
         ),
       ],
     );
@@ -139,10 +159,10 @@ class _AreaOutageNote extends StatelessWidget {
             child: Text(
               "This is a known outage in your area — you don't need to do "
               'anything.',
-              style: Theme.of(context)
-                  .textTheme
-                  .bodySmall
-                  ?.copyWith(color: color, fontWeight: FontWeight.w600),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: color,
+                    fontWeight: FontWeight.w600,
+                  ),
             ),
           ),
         ],

@@ -127,7 +127,6 @@ network.operation_dispatch
 network.operation_ledger
 network.outage_impact
 network.outage_lifecycle
-network.radius_sessions
 network.routeros_sot
 network.splitter_inventory
 observability.audit_log

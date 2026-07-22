@@ -28,6 +28,7 @@ from app.services.list_query import (
     request_needs_canonicalization,
 )
 from app.services.owner_commands import CommandContext
+from app.services.portal_account_health import build_portal_account_health
 from app.web.reseller.branding import get_reseller_templates
 
 logger = logging.getLogger(__name__)
@@ -365,6 +366,12 @@ def reseller_account_detail(
             "current_user": context["current_user"],
             "reseller": context["reseller"],
             "account": detail,
+            # Build only after the canonical reseller/account scope check above;
+            # the shared projection never receives an unverified foreign id.
+            "account_health": build_portal_account_health(
+                db,
+                UUID(detail["id"]),
+            ),
             # Eligibility/reason owned by the backend; the raw preview dict on
             # `account.status_actions` still supplies each POST's fingerprint.
             "status_action_contracts": reseller_portal.account_status_action_contracts(

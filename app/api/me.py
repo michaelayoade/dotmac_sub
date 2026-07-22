@@ -92,7 +92,7 @@ from app.schemas.portal import (
     TechnicianRatingResponse,
     WorkOrderItem,
 )
-from app.schemas.service_status import ServiceStatusResponse
+from app.schemas.portal_account_health import PortalAccountHealthRead
 from app.schemas.subscriber import (
     AccountDeletionRequest,
     AccountDeletionResponse,
@@ -142,7 +142,6 @@ from app.services import notification as notification_service
 from app.services import portal_session as portal_session_service
 from app.services import push as push_service
 from app.services import referrals as referrals_service
-from app.services import status_presentation as status_presentation_service
 from app.services import support as support_service
 from app.services import usage as usage_service
 from app.services import usage_summary as usage_summary_service
@@ -157,7 +156,6 @@ from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.owner_commands import CommandContext
 from app.services.sales import selfserve as selfserve_service
-from app.services.topology import connection_status as connection_status_service
 
 router = APIRouter(prefix="/me", tags=["me"])
 logger = logging.getLogger(__name__)
@@ -369,26 +367,17 @@ def my_subscriptions(
     )
 
 
-@router.get("/service-status", response_model=ServiceStatusResponse)
-def my_service_status(
+@router.get("/account-health", response_model=PortalAccountHealthRead)
+def my_account_health(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """Truthful "is my service good, and when does it lapse" view.
+    """Canonical financial, access, session, connection, and outage health."""
+    from app.services.portal_account_health import build_portal_account_health
 
-    Service expiry is not date-driven: prepaid lapses on balance exhaustion
-    (balance + grace/deactivation timers below), postpaid only via dunning on
-    overdue invoices. `next_charge_at` is the next charge/invoice date, never an
-    expiry — clients should read this endpoint (and `status`) rather than infer
-    expiry from `next_billing_at`.
-
-    `primary_action` and per-service `action` are the customer-action contract:
-    clients must not treat a blocked/suspended status as proof that payment will
-    restore service or derive a restoration amount from their invoice cache.
-    """
-    from app.services.service_status import build_service_status
-
-    return build_service_status(db, _subscriber_id(principal))
+    return PortalAccountHealthRead.model_validate(
+        build_portal_account_health(db, UUID(_subscriber_id(principal)))
+    )
 
 
 @router.get("/quota-buckets", response_model=ListResponse[QuotaBucketRead])
@@ -466,48 +455,6 @@ def my_plan_change_quote(
     if quote is None:
         raise HTTPException(status_code=404, detail="Plan not available")
     return quote
-
-
-# Calm, non-alarming fallback when the caller has no resolvable active service
-# (mirrors the portal /connection surface so the two never disagree).
-_NO_SERVICE_CONNECTION_STATUS = {
-    "state": "connected",
-    "status_presentation": status_presentation_service.connection_health_status_presentation(
-        "connected"
-    ).model_dump(mode="json"),
-    "headline": "No active service",
-    "message": "We couldn't find an active service on your account to check.",
-    "advice": None,
-    "medium": None,
-    "area_outage": False,
-    "checked_at": None,
-}
-
-
-@router.get("/connection-status")
-def my_connection_status_detail(
-    db: Session = Depends(get_db),
-    principal: dict = Depends(require_user_auth),
-) -> dict:
-    """Richer connection status for the caller's active service (outage
-    classifier P4): the per-customer last-mile verdict with area-outage blame
-    suppression, from ``topology.connection_status``.
-
-    Bearer-auth sibling of the portal ``/portal/connection/status.json`` — same
-    customer-safe payload ``{state, status_presentation, headline, message,
-    advice, medium, area_outage, checked_at}`` (no node names / signal values /
-    internals), so the mobile app can reach the richer surface the cookie-only
-    portal route isn't reachable for. Self-scoped: only ever the caller's own
-    subscription.
-    """
-    _subscriber_id(principal)  # enforce a subscriber principal (403 otherwise)
-    try:
-        subscription = bandwidth_samples.get_user_active_subscription(db, principal)
-    except HTTPException:
-        subscription = None
-    if subscription is None:
-        return dict(_NO_SERVICE_CONNECTION_STATUS)
-    return connection_status_service.connection_status(db, subscription)
 
 
 @router.post(

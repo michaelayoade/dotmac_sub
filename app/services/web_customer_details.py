@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -85,7 +85,8 @@ from app.services.invoice_collectibility import (
 )
 from app.services.network._common import decode_huawei_hex_serial
 from app.services.network.radius_sessions import (
-    latest_open_accounting_sessions_by_subscription,
+    SubscriptionSessionSnapshot,
+    subscription_session_snapshots,
 )
 from app.services.nin_matching import mask_nin
 from app.services.status_presentation import (
@@ -101,11 +102,6 @@ from app.services.subscription_lifecycle_policy import (
 )
 
 logger = logging.getLogger(__name__)
-
-if TYPE_CHECKING:
-    from app.models.usage import RadiusAccountingSession
-
-_RADIUS_CONNECTED_FRESH_SECONDS = 15 * 60
 
 RESOLVED_TICKET_STATUSES = {
     "resolved",
@@ -1201,72 +1197,36 @@ def _build_map_payload(primary_address, customer_name: str):
 
 def _connection_status_for_session(
     subscription: Subscription,
-    session: RadiusAccountingSession | None,
+    session: SubscriptionSessionSnapshot,
 ) -> dict[str, object]:
-    def snapshot(
-        state: str,
-        *,
-        detail: str,
-        last_seen_at: datetime | None,
-        identifier: str | None,
-    ) -> dict[str, object]:
-        presentation = access_session_status_presentation(state)
-        return {
-            "state": state,
-            "label": presentation.label,
-            "detail": detail,
-            "last_seen_at": last_seen_at,
-            "identifier": identifier,
-            "status_presentation": presentation.model_dump(mode="json"),
-        }
-
-    if subscription.status != SubscriptionStatus.active:
-        return snapshot(
-            "inactive",
-            detail="Service is not active",
-            last_seen_at=None,
-            identifier=None,
-        )
-    if not session:
-        return snapshot(
-            "offline",
-            detail="No open RADIUS accounting session",
-            last_seen_at=None,
-            identifier=None,
-        )
-
-    last_seen_at = session.last_update_at or session.session_start or session.created_at
-    last_seen_utc = last_seen_at
-    if last_seen_utc and last_seen_utc.tzinfo is None:
-        last_seen_utc = last_seen_utc.replace(tzinfo=UTC)
-    is_fresh = bool(
-        last_seen_utc
-        and last_seen_utc
-        >= datetime.now(UTC) - timedelta(seconds=_RADIUS_CONNECTED_FRESH_SECONDS)
-    )
-    return snapshot(
-        "connected" if is_fresh else "stale",
-        detail=(
-            "Open RADIUS accounting session"
-            if is_fresh
-            else "Open session has stale accounting updates"
-        ),
-        last_seen_at=last_seen_at,
-        identifier=session.framed_ip_address or session.session_id,
-    )
+    state = session.state.value
+    presentation = access_session_status_presentation(state)
+    detail = {
+        "connected": "Canonical live RADIUS session",
+        "stale": "Live session mirror has stale updates",
+        "offline": "No trustworthy live RADIUS session",
+        "inactive": "Service is not active",
+    }[state]
+    return {
+        "state": state,
+        "label": presentation.label,
+        "detail": detail,
+        "last_seen_at": session.observed_at,
+        "identifier": session.framed_ip_address or session.acct_session_id,
+        "status_presentation": presentation.model_dump(mode="json"),
+    }
 
 
 def _build_network_connection_snapshot(
     db: Session, subscriptions: list[Subscription]
 ) -> tuple[dict[str, object], dict[str, dict[str, object]]]:
-    sub_ids = [sub.id for sub in subscriptions if getattr(sub, "id", None)]
-    sessions_by_sub = latest_open_accounting_sessions_by_subscription(db, sub_ids)
+    sessions_by_sub = subscription_session_snapshots(db, subscriptions)
 
     by_subscription: dict[str, dict[str, object]] = {}
     for sub in subscriptions:
         by_subscription[str(sub.id)] = _connection_status_for_session(
             sub,
-            sessions_by_sub.get(sub.id),
+            sessions_by_sub[sub.id],
         )
 
     connected = [

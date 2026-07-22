@@ -8,7 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 Widget _app(ConnectionStatus status) => ProviderScope(
       overrides: [
-        connectionStatusProvider.overrideWith((ref) => status),
+        connectionStatusProvider.overrideWith((ref) => AsyncData(status)),
       ],
       child: const MaterialApp(home: ConnectionStatusScreen()),
     );
@@ -45,49 +45,38 @@ void main() {
 
     test('maps each state string, unknown for anything else', () {
       expect(
-          ConnectionHealth.fromWire('connected'), ConnectionHealth.connected);
+        ConnectionHealth.fromWire('connected'),
+        ConnectionHealth.connected,
+      );
       expect(ConnectionHealth.fromWire('trouble'), ConnectionHealth.trouble);
       expect(ConnectionHealth.fromWire('outage'), ConnectionHealth.outage);
       expect(ConnectionHealth.fromWire('weird'), ConnectionHealth.unknown);
       expect(ConnectionHealth.fromWire(null), ConnectionHealth.unknown);
     });
-
-    test('tolerates the calm no-service fallback (null advice/medium/checked)',
-        () {
-      final s = ConnectionStatus.fromJson({
-        'state': 'connected',
-        'headline': 'No active service',
-        'message': 'Nothing to check.',
-        'advice': null,
-        'medium': null,
-        'area_outage': false,
-        'checked_at': null,
-      });
-      expect(s.isConnected, isTrue);
-      expect(s.advice, isNull);
-      expect(s.medium, isNull);
-      expect(s.checkedAt, isNull);
-      expect(s.statusPresentation.tone, StatusTone.neutral);
-    });
   });
 
   group('ConnectionStatusScreen', () {
-    testWidgets('trouble: shows headline, message and the advice card',
-        (tester) async {
-      await tester.pumpWidget(_app(const ConnectionStatus(
-        state: ConnectionHealth.trouble,
-        statusPresentation: StatusPresentation(
-          value: 'trouble',
-          label: 'Connection issue',
-          tone: StatusTone.warning,
-          icon: 'alert',
+    testWidgets('trouble: shows headline, message and the advice card', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _app(
+          const ConnectionStatus(
+            state: ConnectionHealth.trouble,
+            statusPresentation: StatusPresentation(
+              value: 'trouble',
+              label: 'Connection issue',
+              tone: StatusTone.warning,
+              icon: 'alert',
+            ),
+            headline: 'Router not responding',
+            message: "Your router isn't responding.",
+            advice: 'Reboot your router',
+            medium: 'fiber',
+            areaOutage: false,
+          ),
         ),
-        headline: 'Router not responding',
-        message: "Your router isn't responding.",
-        advice: 'Reboot your router',
-        medium: 'fiber',
-        areaOutage: false,
-      )));
+      );
       await tester.pumpAndSettle();
 
       expect(find.text('Router not responding'), findsOneWidget);
@@ -99,22 +88,26 @@ void main() {
     testWidgets(
         'area outage: shows the "we\'re on it" note and SUPPRESSES '
         'any self-blame advice', (tester) async {
-      await tester.pumpWidget(_app(const ConnectionStatus(
-        state: ConnectionHealth.outage,
-        statusPresentation: StatusPresentation(
-          value: 'outage',
-          label: 'Area outage',
-          tone: StatusTone.negative,
-          icon: 'alert',
+      await tester.pumpWidget(
+        _app(
+          const ConnectionStatus(
+            state: ConnectionHealth.outage,
+            statusPresentation: StatusPresentation(
+              value: 'outage',
+              label: 'Area outage',
+              tone: StatusTone.negative,
+              icon: 'alert',
+            ),
+            headline: 'Service interruption in your area',
+            message: 'A known interruption is affecting your area.',
+            // Even if advice leaks through, the UI must not render self-blame
+            // during a known area outage.
+            advice: 'Reboot your router',
+            medium: 'fiber',
+            areaOutage: true,
+          ),
         ),
-        headline: 'Service interruption in your area',
-        message: 'A known interruption is affecting your area.',
-        // Even if advice leaks through, the UI must not render self-blame
-        // during a known area outage.
-        advice: 'Reboot your router',
-        medium: 'fiber',
-        areaOutage: true,
-      )));
+      );
       await tester.pumpAndSettle();
 
       expect(find.textContaining('known outage in your area'), findsOneWidget);
@@ -122,18 +115,22 @@ void main() {
     });
 
     testWidgets('connected: renders the healthy headline', (tester) async {
-      await tester.pumpWidget(_app(const ConnectionStatus(
-        state: ConnectionHealth.connected,
-        statusPresentation: StatusPresentation(
-          value: 'connected',
-          label: 'Connected',
-          tone: StatusTone.positive,
-          icon: 'check',
+      await tester.pumpWidget(
+        _app(
+          const ConnectionStatus(
+            state: ConnectionHealth.connected,
+            statusPresentation: StatusPresentation(
+              value: 'connected',
+              label: 'Connected',
+              tone: StatusTone.positive,
+              icon: 'check',
+            ),
+            headline: "You're connected",
+            message: 'Your connection looks healthy.',
+            areaOutage: false,
+          ),
         ),
-        headline: "You're connected",
-        message: 'Your connection looks healthy.',
-        areaOutage: false,
-      )));
+      );
       await tester.pumpAndSettle();
 
       expect(find.text("You're connected"), findsOneWidget);

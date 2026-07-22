@@ -67,6 +67,7 @@ class ImpersonationController extends Notifier<ImpersonationState?> {
   /// Cached customer-scope data must not leak across identities.
   void _refreshCustomerData() {
     ref.invalidate(subscriptionsProvider);
+    ref.invalidate(accountHealthProvider);
     ref.invalidate(invoicesProvider);
     ref.invalidate(quotaBucketsProvider);
     ref.invalidate(accountingSessionsProvider);
@@ -78,4 +79,5 @@ class ImpersonationController extends Notifier<ImpersonationState?> {
 
 final impersonationProvider =
     NotifierProvider<ImpersonationController, ImpersonationState?>(
-        ImpersonationController.new);
+  ImpersonationController.new,
+);
