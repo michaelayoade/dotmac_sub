@@ -5,14 +5,14 @@
 Historical provenance is preserved. `WorkOrder.crm_ticket_id` remains the
 external CRM observation and never becomes a lifecycle authority.
 `WorkOrder.origin_ticket_id` is the native, authoritative Ticket relationship.
-Migration `401_support_ticket_work_order_provenance` links the two only through
+Migration `402_support_ticket_work_order_provenance` links the two only through
 the exact imported Ticket provenance at
 `support_tickets.metadata.crm_ticket_id`; it does not erase the CRM value.
 
 ## Expand and preflight
 
 Migration 382 already added the nullable native foreign key. Before applying
-migration 401, take the normal database backup and run these checks:
+migration 402, take the normal database backup and run these checks:
 
 ```sql
 SELECT metadata::jsonb ->> 'crm_ticket_id', count(*)
