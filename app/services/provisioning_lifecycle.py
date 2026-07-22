@@ -31,6 +31,7 @@ from app.models.provisioning import (
     ServiceOrderStatus,
     ServiceOrderType,
 )
+from app.models.subscription_change import SubscriptionChangeRequest
 from app.models.work_order import WorkOrder
 from app.services import service_order_lifecycle
 from app.services.domain_errors import DomainError
@@ -264,18 +265,33 @@ def _evaluate_facts(
         )
     )
 
-    work_orders = (
-        list(
-            db.scalars(
-                select(WorkOrder).where(
-                    WorkOrder.project_task_id == task.id,
-                    WorkOrder.is_active.is_(True),
+    relocation_request = db.scalar(
+        select(SubscriptionChangeRequest).where(
+            SubscriptionChangeRequest.service_order_id == order.id
+        )
+    )
+    requires_field_work = requires_project or relocation_request is not None
+    work_orders: list[WorkOrder]
+    if relocation_request is not None and relocation_request.work_order_id is not None:
+        relocation_work_order = db.get(WorkOrder, relocation_request.work_order_id)
+        work_orders = (
+            [relocation_work_order]
+            if relocation_work_order is not None and relocation_work_order.is_active
+            else []
+        )
+    else:
+        work_orders = (
+            list(
+                db.scalars(
+                    select(WorkOrder).where(
+                        WorkOrder.project_task_id == task.id,
+                        WorkOrder.is_active.is_(True),
+                    )
                 )
             )
+            if task is not None
+            else []
         )
-        if task is not None
-        else []
-    )
     field_passed = not work_orders or (
         all(item.status in WORK_ORDER_TERMINAL_VALUES for item in work_orders)
         and any(item.status == "completed" for item in work_orders)
@@ -285,10 +301,10 @@ def _evaluate_facts(
             ProvisioningReadinessCheckKind.field_work,
             (
                 ProvisioningReadinessCheckResult.passed
-                if task_valid and field_passed
+                if ((task_valid or relocation_request is not None) and field_passed)
                 else (
                     ProvisioningReadinessCheckResult.failed
-                    if requires_project
+                    if requires_field_work
                     else ProvisioningReadinessCheckResult.not_applicable
                 )
             ),
@@ -296,13 +312,23 @@ def _evaluate_facts(
                 "field_work_completed"
                 if work_orders and field_passed
                 else "field_work_not_required"
-                if task_valid and not work_orders
+                if (task_valid or relocation_request is not None) and not work_orders
                 else "field_work_incomplete"
-                if requires_project
+                if requires_field_work
                 else "field_work_not_required"
             ),
-            "project_task_work_orders",
-            task.id if task else None,
+            (
+                "subscription_change_work_order"
+                if relocation_request is not None
+                else "project_task_work_orders"
+            ),
+            (
+                relocation_request.work_order_id
+                if relocation_request is not None
+                else task.id
+                if task
+                else None
+            ),
         )
     )
 

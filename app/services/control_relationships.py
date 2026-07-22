@@ -187,6 +187,12 @@ HANDLER_CONTROLS: dict[str, HandlerControl] = {
     "ArrangementHandler": HandlerControl(
         "ArrangementHandler", HandlerStage.state, 20, ("payment_arrangements",)
     ),
+    "SubscriptionChangeExecutionHandler": HandlerControl(
+        "SubscriptionChangeExecutionHandler",
+        HandlerStage.state,
+        25,
+        ("subscription_change_payment_release",),
+    ),
     "ReferralHandler": HandlerControl(
         "ReferralHandler", HandlerStage.state, 30, ("referral_qualification",)
     ),
@@ -308,6 +314,12 @@ def handler_event_types(handler_name: str) -> frozenset[str] | None:
         return None
     if handler_name == "ArrangementHandler":
         from app.services.events.handlers.arrangements import HANDLED_EVENT_TYPES
+
+        return frozenset(item.value for item in HANDLED_EVENT_TYPES)
+    if handler_name == "SubscriptionChangeExecutionHandler":
+        from app.services.events.handlers.subscription_change_execution import (
+            HANDLED_EVENT_TYPES,
+        )
 
         return frozenset(item.value for item in HANDLED_EVENT_TYPES)
     if handler_name == "EnforcementHandler":

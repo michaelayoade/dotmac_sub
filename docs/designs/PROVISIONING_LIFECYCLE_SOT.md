@@ -52,6 +52,15 @@ visits. If visits exist, every active work order must be terminal and at least
 one must be completed. Work-order completion is evidence; it does not itself
 complete a project task or activate service.
 
+For an existing-subscription relocation, the canonical relationship is
+`SubscriptionChangeRequest.service_order_id` plus its exact
+`SubscriptionChangeRequest.work_order_id`. This branch does not manufacture a
+new-install sales order or project. The readiness owner requires that linked
+native work order to be completed, along with the normal provisioning-run and
+IP-assignment checks. Its activated decision is the only evidence accepted by
+`service_intent.subscription_change_execution` for the final address/offer
+command.
+
 ## Readiness facts and decisions
 
 `ProvisioningReadinessDecision` is append-only and idempotent on

@@ -36,6 +36,7 @@ downstream records; none may independently decide the customer lifecycle.
 | Support-to-field handoff | `support.ticket_work_order_handoff` |
 | Work-order execution | `operations.work_order_commands` |
 | Provisioning readiness/result | `operations.provisioning_lifecycle` |
+| Deferred change payment admission, fulfillment release, and verified finalization | `service_intent.subscription_change_execution` |
 | Cross-surface read projection | `ui.portal_account_health_projection` |
 
 ## Change classes
@@ -120,16 +121,29 @@ Completed in this slice:
 - Fixed-wireless/radio relocation is serviceability-qualified and catalog-
   priced, and confirmation remains `awaiting_payment` without prematurely
   changing the subscription.
+- Priced relocation confirmation creates and structurally links the exact
+  issued invoice. Canonical paid-invoice allocation evidence advances the
+  locked request from `awaiting_payment` and creates one idempotent service
+  order plus native work order; invoice status or memo text alone is never
+  settlement evidence.
+- Relocation work-order completion is now an explicit provisioning-readiness
+  input. The final address/offer application is admitted only from the
+  `activated` readiness decision for the exact linked service order, and the
+  request preserves invoice, payment, service-order, work-order, and readiness
+  identifiers for audit and repair.
+- The execution owner exposes deterministic drift audit and idempotent repair
+  for paid-but-unreleased and verified-but-not-finalized requests; it never
+  repairs from memo text, portal state, or unverified provider payloads.
 
 Still required before this lifecycle is complete:
 
-- implement the remote provisioning verifier and the field fulfillment/service
-  order handoff; for a priced relocation this includes invoice/payment evidence,
-  then a service order and work order, and finally a subscription command only
-  after verified delivery;
+- implement the remote-reprovision branch's controller-specific verifier (the
+  field relocation settlement, service-order/work-order handoff, provisioning
+  gate, and verified final subscription command are implemented);
 - route vacation hold/resume through the lifecycle command owner;
 - expose scoped reboot/Wi-Fi command outcomes consistently on web and mobile;
-- remove the superseded customer-route decisions and add repair/audit tooling.
+- remove the remaining superseded customer-route decisions and add the operator
+  reconciliation surface for interrupted execution-chain states.
 
 No compatibility response or fallback will be retained after each in-repository
 consumer is migrated and the cutover gate is green.
