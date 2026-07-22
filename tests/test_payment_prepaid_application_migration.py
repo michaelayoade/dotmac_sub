@@ -1,12 +1,23 @@
 from __future__ import annotations
 
 import importlib.util
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from unittest.mock import MagicMock
+from uuid import UUID
 
 import pytest
 import sqlalchemy as sa
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
+
+from scripts.migration.payment_prepaid_application_archive_schema import (
+    ARCHIVE_TABLE,
+    INDEX_CONTRACTS,
+    LEGACY_TABLE,
+    archive_table_elements,
+    validate_archive_schema,
+)
 
 
 def _load_migration():
@@ -45,86 +56,122 @@ def _load_archive_compatibility():
     return module
 
 
-def _legacy_connection(*, populated: bool):
+def _load_forward_validation():
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "alembic/versions/397_validate_payment_prepaid_application_archive.py"
+    )
+    spec = importlib.util.spec_from_file_location("migration_397", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_REFERENCE_TABLES = (
+    "payments",
+    "payment_settlements",
+    "subscribers",
+    "subscriptions",
+    "ledger_entries",
+    "service_entitlements",
+    "payment_allocations",
+    "invoices",
+    "invoice_closures",
+)
+
+
+def _connection_with_references():
     engine = sa.create_engine("sqlite://")
     connection = engine.connect()
     metadata = sa.MetaData()
-    legacy = sa.Table(
-        "payment_prepaid_applications",
-        metadata,
-        sa.Column("id", sa.String, primary_key=True),
-        sa.Column("payment_id", sa.String, nullable=False),
-        sa.Column("settlement_id", sa.String, nullable=False),
-        sa.Column("account_id", sa.String, nullable=False),
-        sa.Column("subscription_id", sa.String, nullable=False),
-        sa.Column("credit_ledger_entry_id", sa.String, nullable=False),
-        sa.Column("debit_ledger_entry_id", sa.String, nullable=False),
-        sa.Column("entitlement_id", sa.String, nullable=False),
-        sa.Column("retired_allocation_id", sa.String, nullable=True),
-        sa.Column("historical_invoice_id", sa.String, nullable=True),
-        sa.Column("invoice_closure_id", sa.String, nullable=True),
-        sa.Column("origin", sa.String, nullable=False),
-        sa.Column("amount", sa.Numeric(12, 2), nullable=False),
-        sa.Column("currency", sa.String, nullable=False),
-        sa.Column("period_start", sa.String, nullable=False),
-        sa.Column("period_end", sa.String, nullable=False),
-        sa.Column("reason", sa.Text, nullable=False),
-        sa.Column("preview_fingerprint", sa.String, nullable=False),
-        sa.Column("idempotency_key", sa.String, nullable=False),
-        sa.Column("access_recheck_status", sa.String, nullable=False),
-        sa.Column("access_recheck_error", sa.String, nullable=True),
-        sa.Column("access_rechecked_at", sa.String, nullable=True),
-        sa.Column("created_at", sa.String, nullable=False),
-        sa.Column("updated_at", sa.String, nullable=False),
-    )
-    sa.Index(
-        "uq_payment_prepaid_applications_idempotency_key",
-        legacy.c.idempotency_key,
-        unique=True,
-    )
+    for table_name in _REFERENCE_TABLES:
+        sa.Table(table_name, metadata, sa.Column("id", sa.String, primary_key=True))
     metadata.create_all(connection)
+    return connection
+
+
+def _create_complete_table(connection, table_name: str, *, populated: bool) -> None:
+    metadata = sa.MetaData()
+    for reference_table in _REFERENCE_TABLES:
+        sa.Table(
+            reference_table,
+            metadata,
+            sa.Column("id", sa.String, primary_key=True),
+            extend_existing=True,
+        )
+    table = sa.Table(table_name, metadata, *archive_table_elements())
+    table.create(connection)
+    for index_name, columns, unique in INDEX_CONTRACTS:
+        sa.Index(
+            index_name,
+            *(table.c[column] for column in columns),
+            unique=unique,
+        ).create(connection)
     if populated:
+        reference_ids = {
+            "payments": UUID("00000000-0000-0000-0000-000000000002"),
+            "payment_settlements": UUID("00000000-0000-0000-0000-000000000003"),
+            "subscribers": UUID("00000000-0000-0000-0000-000000000004"),
+            "subscriptions": UUID("00000000-0000-0000-0000-000000000005"),
+            "ledger_entries": UUID("00000000-0000-0000-0000-000000000006"),
+            "service_entitlements": UUID("00000000-0000-0000-0000-000000000008"),
+        }
+        for reference_table, identifier in reference_ids.items():
+            reference = sa.Table(
+                reference_table, sa.MetaData(), autoload_with=connection
+            )
+            connection.execute(
+                reference.insert(),
+                {"id": str(identifier)},
+            )
+        ledger_entries = sa.Table(
+            "ledger_entries", sa.MetaData(), autoload_with=connection
+        )
         connection.execute(
-            legacy.insert(),
+            ledger_entries.insert(),
+            {"id": "00000000-0000-0000-0000-000000000007"},
+        )
+        connection.execute(
+            table.insert(),
             {
-                "id": "00000000-0000-0000-0000-000000000001",
-                "payment_id": "00000000-0000-0000-0000-000000000002",
-                "settlement_id": "00000000-0000-0000-0000-000000000003",
-                "account_id": "00000000-0000-0000-0000-000000000004",
-                "subscription_id": "00000000-0000-0000-0000-000000000005",
-                "credit_ledger_entry_id": ("00000000-0000-0000-0000-000000000006"),
-                "debit_ledger_entry_id": "00000000-0000-0000-0000-000000000007",
-                "entitlement_id": "00000000-0000-0000-0000-000000000008",
+                "id": UUID("00000000-0000-0000-0000-000000000001"),
+                "payment_id": reference_ids["payments"],
+                "settlement_id": reference_ids["payment_settlements"],
+                "account_id": reference_ids["subscribers"],
+                "subscription_id": reference_ids["subscriptions"],
+                "credit_ledger_entry_id": reference_ids["ledger_entries"],
+                "debit_ledger_entry_id": UUID("00000000-0000-0000-0000-000000000007"),
+                "entitlement_id": reference_ids["service_entitlements"],
                 "retired_allocation_id": None,
                 "historical_invoice_id": None,
                 "invoice_closure_id": None,
                 "origin": "post_settlement",
                 "amount": Decimal("18812.50"),
                 "currency": "NGN",
-                "period_start": "2026-07-20T00:00:00+00:00",
-                "period_end": "2026-08-20T00:00:00+00:00",
+                "period_start": datetime(2026, 7, 20, tzinfo=UTC),
+                "period_end": datetime(2026, 8, 20, tzinfo=UTC),
                 "reason": "reviewed exact payment-funded period evidence",
                 "preview_fingerprint": "a" * 64,
                 "idempotency_key": "archive-migration-test",
                 "access_recheck_status": "completed",
                 "access_recheck_error": None,
-                "access_rechecked_at": "2026-07-20T00:01:00+00:00",
-                "created_at": "2026-07-20T00:00:00+00:00",
-                "updated_at": "2026-07-20T00:01:00+00:00",
+                "access_rechecked_at": datetime(2026, 7, 20, 0, 1, tzinfo=UTC),
+                "created_at": datetime(2026, 7, 20, tzinfo=UTC),
+                "updated_at": datetime(2026, 7, 20, 0, 1, tzinfo=UTC),
             },
         )
+
+
+def _connection_with_table(table_name: str, *, populated: bool):
+    connection = _connection_with_references()
+    _create_complete_table(connection, table_name, populated=populated)
     return connection
 
 
-def _run_retirement(monkeypatch, migration, connection) -> None:
-    monkeypatch.setattr(migration.op, "get_bind", lambda: connection)
-
-    def rename_table(source: str, target: str) -> None:
-        assert source == "payment_prepaid_applications"
-        assert target == "payment_prepaid_applications_archive"
-        connection.exec_driver_sql(f'ALTER TABLE "{source}" RENAME TO "{target}"')
-
-    monkeypatch.setattr(migration.op, "rename_table", rename_table)
+def _run_migration(monkeypatch, migration, connection) -> None:
+    context = MigrationContext.configure(connection)
+    monkeypatch.setattr(migration, "op", Operations(context))
 
 
 def test_payment_prepaid_application_revision_is_linear_and_structural():
@@ -143,203 +190,136 @@ def test_payment_prepaid_application_revision_is_linear_and_structural():
 
 def test_payment_prepaid_application_retirement_archives_an_empty_table(monkeypatch):
     migration = _load_retirement()
-    connection = _legacy_connection(populated=False)
-    _run_retirement(monkeypatch, migration, connection)
+    connection = _connection_with_table(LEGACY_TABLE, populated=False)
+    _run_migration(monkeypatch, migration, connection)
 
     migration.upgrade()
 
     inspector = sa.inspect(connection)
-    assert not inspector.has_table("payment_prepaid_applications")
-    assert inspector.has_table("payment_prepaid_applications_archive")
-    assert (
-        connection.scalar(
-            sa.text("SELECT COUNT(*) FROM payment_prepaid_applications_archive")
-        )
-        == 0
-    )
+    assert not inspector.has_table(LEGACY_TABLE)
+    assert inspector.has_table(ARCHIVE_TABLE)
+    assert validate_archive_schema(connection, expected_row_count=0) == 0
 
 
 def test_payment_prepaid_application_retirement_preserves_production_shaped_evidence(
     monkeypatch,
 ):
     migration = _load_retirement()
-    connection = _legacy_connection(populated=True)
-    _run_retirement(monkeypatch, migration, connection)
+    connection = _connection_with_table(LEGACY_TABLE, populated=True)
+    _run_migration(monkeypatch, migration, connection)
 
     migration.upgrade()
 
     inspector = sa.inspect(connection)
-    assert not inspector.has_table("payment_prepaid_applications")
-    assert inspector.has_table("payment_prepaid_applications_archive")
-    archive = sa.Table(
-        "payment_prepaid_applications_archive",
-        sa.MetaData(),
-        autoload_with=connection,
+    assert not inspector.has_table(LEGACY_TABLE)
+    assert inspector.has_table(ARCHIVE_TABLE)
+    assert validate_archive_schema(connection, expected_row_count=1) == 1
+    archive = sa.Table(ARCHIVE_TABLE, sa.MetaData(), autoload_with=connection)
+    row = (
+        connection.execute(
+            sa.select(
+                archive.c.amount,
+                archive.c.origin,
+                archive.c.access_recheck_status,
+                archive.c.preview_fingerprint,
+            )
+        )
+        .mappings()
+        .one()
     )
-    row = connection.execute(sa.select(archive)).mappings().one()
-    assert set(row) == {
-        "id",
-        "payment_id",
-        "settlement_id",
-        "account_id",
-        "subscription_id",
-        "credit_ledger_entry_id",
-        "debit_ledger_entry_id",
-        "entitlement_id",
-        "retired_allocation_id",
-        "historical_invoice_id",
-        "invoice_closure_id",
-        "origin",
-        "amount",
-        "currency",
-        "period_start",
-        "period_end",
-        "reason",
-        "preview_fingerprint",
-        "idempotency_key",
-        "access_recheck_status",
-        "access_recheck_error",
-        "access_rechecked_at",
-        "created_at",
-        "updated_at",
-    }
-    assert row["id"] == "00000000-0000-0000-0000-000000000001"
-    assert row["amount"] == Decimal("18812.50")
+    assert Decimal(str(row["amount"])) == Decimal("18812.50")
     assert row["origin"] == "post_settlement"
     assert row["access_recheck_status"] == "completed"
     assert row["preview_fingerprint"] == "a" * 64
-    assert {index["name"] for index in inspector.get_indexes(archive.name)} == {
-        "uq_payment_prepaid_applications_idempotency_key"
-    }
 
 
 def test_payment_prepaid_application_retirement_fails_on_ambiguous_tables(
     monkeypatch,
 ):
     migration = _load_retirement()
-    connection = _legacy_connection(populated=True)
-    connection.exec_driver_sql(
-        "CREATE TABLE payment_prepaid_applications_archive (id TEXT PRIMARY KEY)"
-    )
-    _run_retirement(monkeypatch, migration, connection)
+    connection = _connection_with_table(LEGACY_TABLE, populated=True)
+    connection.exec_driver_sql(f"CREATE TABLE {ARCHIVE_TABLE} (id TEXT PRIMARY KEY)")
+    _run_migration(monkeypatch, migration, connection)
 
     with pytest.raises(RuntimeError, match="both .* exist"):
         migration.upgrade()
 
 
-def test_payment_prepaid_application_retirement_is_idempotent_with_archive(
+def test_payment_prepaid_application_retirement_rejects_neither_table(monkeypatch):
+    migration = _load_retirement()
+    connection = _connection_with_references()
+    _run_migration(monkeypatch, migration, connection)
+
+    with pytest.raises(RuntimeError, match="neither .* nor .* exists"):
+        migration.upgrade()
+
+
+def test_payment_prepaid_application_retirement_accepts_verified_archive_only(
     monkeypatch,
 ):
     migration = _load_retirement()
-    bind = MagicMock()
-    rename_table = MagicMock()
-    monkeypatch.setattr(migration.op, "get_bind", lambda: bind)
-    monkeypatch.setattr(
-        migration,
-        "_has_table",
-        lambda _bind, table_name: table_name == migration._ARCHIVE_TABLE,
-    )
-    monkeypatch.setattr(migration.op, "rename_table", rename_table)
+    connection = _connection_with_table(ARCHIVE_TABLE, populated=True)
+    _run_migration(monkeypatch, migration, connection)
 
     migration.upgrade()
 
-    rename_table.assert_not_called()
-    bind.scalar.assert_not_called()
+    assert validate_archive_schema(connection, expected_row_count=1) == 1
+
+
+def test_payment_prepaid_application_retirement_rejects_malformed_archive_only(
+    monkeypatch,
+):
+    migration = _load_retirement()
+    connection = _connection_with_references()
+    connection.exec_driver_sql(f"CREATE TABLE {ARCHIVE_TABLE} (id TEXT PRIMARY KEY)")
+    _run_migration(monkeypatch, migration, connection)
+
+    with pytest.raises(RuntimeError, match="schema validation failed"):
+        migration.upgrade()
 
 
 def test_archive_compatibility_revision_creates_the_complete_empty_shape(monkeypatch):
     migration = _load_archive_compatibility()
-    bind = MagicMock()
-    create_table = MagicMock()
-    create_index = MagicMock()
-    monkeypatch.setattr(migration.op, "get_bind", lambda: bind)
-    monkeypatch.setattr(migration, "_has_table", lambda *_args: False)
-    monkeypatch.setattr(migration.op, "create_table", create_table)
-    monkeypatch.setattr(migration.op, "create_index", create_index)
+    connection = _connection_with_references()
+    _run_migration(monkeypatch, migration, connection)
 
     migration.upgrade()
 
-    table_args = create_table.call_args.args
-    assert table_args[0] == "payment_prepaid_applications_archive"
-    assert {arg.name for arg in table_args[1:] if isinstance(arg, sa.Column)} == {
-        "id",
-        "payment_id",
-        "settlement_id",
-        "account_id",
-        "subscription_id",
-        "credit_ledger_entry_id",
-        "debit_ledger_entry_id",
-        "entitlement_id",
-        "retired_allocation_id",
-        "historical_invoice_id",
-        "invoice_closure_id",
-        "origin",
-        "amount",
-        "currency",
-        "period_start",
-        "period_end",
-        "reason",
-        "preview_fingerprint",
-        "idempotency_key",
-        "access_recheck_status",
-        "access_recheck_error",
-        "access_rechecked_at",
-        "created_at",
-        "updated_at",
-    }
-    assert {
-        element.target_fullname
-        for arg in table_args[1:]
-        if isinstance(arg, sa.ForeignKeyConstraint)
-        for element in arg.elements
-    } == {
-        "payments.id",
-        "payment_settlements.id",
-        "subscribers.id",
-        "subscriptions.id",
-        "ledger_entries.id",
-        "service_entitlements.id",
-        "payment_allocations.id",
-        "invoices.id",
-        "invoice_closures.id",
-    }
-    assert {
-        arg.name for arg in table_args[1:] if isinstance(arg, sa.CheckConstraint)
-    } == {
-        "ck_payment_prepaid_applications_amount_positive",
-        "ck_payment_prepaid_applications_period_order",
-        "ck_payment_prepaid_applications_origin",
-        "ck_payment_prepaid_applications_access_status",
-    }
-    assert create_index.call_count == 8
-    assert {call.args[2][0] for call in create_index.call_args_list} == {
-        "payment_id",
-        "settlement_id",
-        "credit_ledger_entry_id",
-        "debit_ledger_entry_id",
-        "entitlement_id",
-        "retired_allocation_id",
-        "invoice_closure_id",
-        "idempotency_key",
-    }
+    assert validate_archive_schema(connection, expected_row_count=0) == 0
 
 
-def test_archive_compatibility_revision_is_idempotent_when_archive_exists(
+def test_archive_compatibility_revision_validates_populated_archive(
     monkeypatch,
 ):
     migration = _load_archive_compatibility()
-    create_table = MagicMock()
-    monkeypatch.setattr(migration.op, "get_bind", MagicMock())
-    monkeypatch.setattr(
-        migration,
-        "_has_table",
-        lambda _bind, table_name: table_name == migration._ARCHIVE_TABLE,
-    )
-    monkeypatch.setattr(migration.op, "create_table", create_table)
+    connection = _connection_with_table(ARCHIVE_TABLE, populated=True)
+    _run_migration(monkeypatch, migration, connection)
 
     migration.upgrade()
 
-    create_table.assert_not_called()
+    assert validate_archive_schema(connection, expected_row_count=1) == 1
+
+
+def test_archive_compatibility_revision_rejects_malformed_archive(monkeypatch):
+    migration = _load_archive_compatibility()
+    connection = _connection_with_references()
+    connection.exec_driver_sql(f"CREATE TABLE {ARCHIVE_TABLE} (id TEXT PRIMARY KEY)")
+    _run_migration(monkeypatch, migration, connection)
+
+    with pytest.raises(RuntimeError, match="schema validation failed"):
+        migration.upgrade()
+
+
+def test_archive_compatibility_revision_rejects_incomplete_archive_index_contract(
+    monkeypatch,
+):
+    migration = _load_archive_compatibility()
+    connection = _connection_with_table(ARCHIVE_TABLE, populated=False)
+    connection.exec_driver_sql("DROP INDEX uq_payment_prepaid_applications_payment_id")
+    _run_migration(monkeypatch, migration, connection)
+
+    with pytest.raises(RuntimeError, match="index mismatch"):
+        migration.upgrade()
 
 
 @pytest.mark.parametrize("archive_exists", [False, True])
@@ -348,18 +328,50 @@ def test_archive_compatibility_revision_fails_if_legacy_table_remains(
     archive_exists,
 ):
     migration = _load_archive_compatibility()
-    create_table = MagicMock()
-    monkeypatch.setattr(migration.op, "get_bind", MagicMock())
-    monkeypatch.setattr(
-        migration,
-        "_has_table",
-        lambda _bind, table_name: (
-            table_name == migration._LEGACY_TABLE or archive_exists
-        ),
-    )
-    monkeypatch.setattr(migration.op, "create_table", create_table)
+    connection = _connection_with_table(LEGACY_TABLE, populated=False)
+    if archive_exists:
+        connection.exec_driver_sql(
+            f"CREATE TABLE {ARCHIVE_TABLE} (id TEXT PRIMARY KEY)"
+        )
+    _run_migration(monkeypatch, migration, connection)
 
     with pytest.raises(RuntimeError, match="still exists"):
         migration.upgrade()
 
-    create_table.assert_not_called()
+
+@pytest.mark.parametrize("state", ["missing", "legacy", "both", "malformed"])
+def test_forward_validation_rejects_invalid_existing_396_state(monkeypatch, state):
+    migration = _load_forward_validation()
+    connection = _connection_with_references()
+    if state in {"legacy", "both"}:
+        _create_complete_table(connection, LEGACY_TABLE, populated=False)
+    if state == "both":
+        connection.exec_driver_sql(
+            f"CREATE TABLE {ARCHIVE_TABLE} (id TEXT PRIMARY KEY)"
+        )
+    if state == "malformed":
+        connection.exec_driver_sql(
+            f"CREATE TABLE {ARCHIVE_TABLE} (id TEXT PRIMARY KEY)"
+        )
+    _run_migration(monkeypatch, migration, connection)
+
+    with pytest.raises(RuntimeError):
+        migration.upgrade()
+
+
+def test_forward_validation_accepts_complete_populated_archive(monkeypatch):
+    migration = _load_forward_validation()
+    connection = _connection_with_table(ARCHIVE_TABLE, populated=True)
+    _run_migration(monkeypatch, migration, connection)
+
+    migration.upgrade()
+
+    assert validate_archive_schema(connection, expected_row_count=1) == 1
+
+
+def test_archive_is_excluded_from_alembic_autogenerate():
+    source = (Path(__file__).resolve().parents[1] / "alembic/env.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert '"payment_prepaid_applications_archive"' in source

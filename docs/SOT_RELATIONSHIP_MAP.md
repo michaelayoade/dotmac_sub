@@ -1131,7 +1131,11 @@ Payment creation, settlement, and allocation are one coherent owner contract:
   retention; deletion requires a separate reviewed decision. Revision
   `396_payment_prepaid_application_archive` supplies only an empty compatibility
   archive to databases that had already passed the original empty-table-only
-  retirement.
+  retirement. Revisions 394 and 396 validate the complete archive schema and
+  reject missing, ambiguous, or malformed evidence state. Revision
+  `397_validate_payment_prepaid_archive` applies the same fail-closed contract
+  to databases already stamped at 396. Alembic autogeneration excludes the
+  archive so runtime-model retirement cannot propose physical evidence deletion.
 - Cutover gate: pending/no-money tests, stale-preview rejection, idempotent
   creation/settlement/allocation replay, exact settlement/allocation/prepaid
   links, provider replay, explicit historical reconciliation, canonical renewal
