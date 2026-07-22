@@ -7122,6 +7122,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "device operation re-execution eligibility",
                     "immutable redrive lineage and reviewed-head evidence",
                     "typed recovery eligibility and retry limits",
+                    "customer subscription/device command scope and typed outcomes",
                 ),
                 depends_on=("network.identity",),
                 notes=(
@@ -7135,6 +7136,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "remain immutable; approved retries create linked operations "
                     "through app.services.network_operation_recovery. Unregistered "
                     "device writes fail closed."
+                    " Customer reboot and Wi-Fi adapters delegate subscription,"
+                    " subscriber, and active assignment scope to"
+                    " app.services.customer_device_commands; its stable outcome"
+                    " carries the exact subscription, device, and operation IDs."
                 ),
             ),
             SOTService(
