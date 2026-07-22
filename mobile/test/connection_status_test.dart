@@ -7,11 +7,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 Widget _app(ConnectionStatus status) => ProviderScope(
-  overrides: [
-    connectionStatusProvider.overrideWith((ref) => AsyncData(status)),
-  ],
-  child: const MaterialApp(home: ConnectionStatusScreen()),
-);
+      overrides: [
+        connectionStatusProvider.overrideWith((ref) => AsyncData(status)),
+      ],
+      child: const MaterialApp(home: ConnectionStatusScreen()),
+    );
 
 void main() {
   group('ConnectionStatus.fromJson', () {
@@ -85,7 +85,8 @@ void main() {
       expect(find.byIcon(Icons.warning_amber_rounded), findsOneWidget);
     });
 
-    testWidgets('area outage: shows the "we\'re on it" note and SUPPRESSES '
+    testWidgets(
+        'area outage: shows the "we\'re on it" note and SUPPRESSES '
         'any self-blame advice', (tester) async {
       await tester.pumpWidget(
         _app(

@@ -37,29 +37,30 @@ class AccountHealth {
       .toList(growable: false);
 
   factory AccountHealth.fromJson(Map<String, dynamic> json) => AccountHealth(
-    accountId: json['account_id'].toString(),
-    accountNumber: json['account_number'] as String?,
-    subscriberNumber: json['subscriber_number'] as String?,
-    displayName: json['display_name'] as String? ?? 'Customer',
-    lifecycle: StatusPresentation.fromJson(
-      (json['lifecycle'] as Map).cast<String, dynamic>(),
-    ),
-    financial: AccountFinancialHealth.fromJson(
-      (json['financial'] as Map).cast<String, dynamic>(),
-    ),
-    services: ((json['services'] as List?) ?? const [])
-        .whereType<Map>()
-        .map(
-          (item) => AccountServiceHealth.fromJson(item.cast<String, dynamic>()),
-        )
-        .toList(growable: false),
-    primaryAction: json['primary_action'] is Map
-        ? AccountHealthAction.fromJson(
-            (json['primary_action'] as Map).cast<String, dynamic>(),
-          )
-        : null,
-    asOf: DateTime.parse(json['as_of'].toString()).toLocal(),
-  );
+        accountId: json['account_id'].toString(),
+        accountNumber: json['account_number'] as String?,
+        subscriberNumber: json['subscriber_number'] as String?,
+        displayName: json['display_name'] as String? ?? 'Customer',
+        lifecycle: StatusPresentation.fromJson(
+          (json['lifecycle'] as Map).cast<String, dynamic>(),
+        ),
+        financial: AccountFinancialHealth.fromJson(
+          (json['financial'] as Map).cast<String, dynamic>(),
+        ),
+        services: ((json['services'] as List?) ?? const [])
+            .whereType<Map>()
+            .map(
+              (item) =>
+                  AccountServiceHealth.fromJson(item.cast<String, dynamic>()),
+            )
+            .toList(growable: false),
+        primaryAction: json['primary_action'] is Map
+            ? AccountHealthAction.fromJson(
+                (json['primary_action'] as Map).cast<String, dynamic>(),
+              )
+            : null,
+        asOf: DateTime.parse(json['as_of'].toString()).toLocal(),
+      );
 }
 
 class AccountFinancialHealth {
@@ -127,9 +128,9 @@ class MoneyAmount {
   final String currency;
 
   factory MoneyAmount.fromJson(Map<String, dynamic> json) => MoneyAmount(
-    amount: _toDouble(json['amount']) ?? 0,
-    currency: json['currency'] as String? ?? 'NGN',
-  );
+        amount: _toDouble(json['amount']) ?? 0,
+        currency: json['currency'] as String? ?? 'NGN',
+      );
 }
 
 class ReceivableLane {
@@ -146,11 +147,11 @@ class ReceivableLane {
   final int overdueCount;
 
   factory ReceivableLane.fromJson(Map<String, dynamic> json) => ReceivableLane(
-    currency: json['currency'] as String? ?? 'NGN',
-    outstanding: _toDouble(json['outstanding']) ?? 0,
-    overdue: _toDouble(json['overdue']) ?? 0,
-    overdueCount: json['overdue_count'] as int? ?? 0,
-  );
+        currency: json['currency'] as String? ?? 'NGN',
+        outstanding: _toDouble(json['outstanding']) ?? 0,
+        overdue: _toDouble(json['overdue']) ?? 0,
+        overdueCount: json['overdue_count'] as int? ?? 0,
+      );
 }
 
 class AccountServiceHealth {

@@ -141,11 +141,7 @@ class PortalAccountHealth:
 
     def for_subscription(self, subscription_id: UUID) -> PortalAccountHealth:
         service = next(
-            (
-                item
-                for item in self.services
-                if item.subscription_id == subscription_id
-            ),
+            (item for item in self.services if item.subscription_id == subscription_id),
             None,
         )
         if service is None:

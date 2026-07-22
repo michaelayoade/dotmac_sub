@@ -337,9 +337,8 @@ void main() {
         'offer_id': 'o1',
         'status': 'active',
         'billing_mode': 'prepaid',
-        'next_billing_at': DateTime.now()
-            .add(const Duration(days: 2))
-            .toIso8601String(),
+        'next_billing_at':
+            DateTime.now().add(const Duration(days: 2)).toIso8601String(),
       });
       expect(soon.expiresSoon, isTrue);
       final postpaid = Subscription.fromJson({
@@ -348,20 +347,19 @@ void main() {
         'offer_id': 'o1',
         'status': 'active',
         'billing_mode': 'postpaid',
-        'next_billing_at': DateTime.now()
-            .add(const Duration(days: 2))
-            .toIso8601String(),
+        'next_billing_at':
+            DateTime.now().add(const Duration(days: 2)).toIso8601String(),
       });
       expect(postpaid.expiresSoon, isFalse);
     });
 
     Subscription withStatus(String status) => Subscription(
-      id: 's',
-      accountId: 'a',
-      offerId: 'o',
-      status: status,
-      billingMode: 'prepaid',
-    );
+          id: 's',
+          accountId: 'a',
+          offerId: 'o',
+          status: status,
+          billingMode: 'prepaid',
+        );
 
     test('isCurrent excludes terminal/historical statuses', () {
       for (final status in [
@@ -654,7 +652,7 @@ void main() {
         'status': 'active',
         'user_agent':
             'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15) AppleWebKit/537.36 '
-            '(KHTML, like Gecko) Chrome/120 Safari/537.36',
+                '(KHTML, like Gecko) Chrome/120 Safari/537.36',
       });
       expect(s.isCurrent, isFalse);
       expect(s.deviceLabel, contains('Macintosh'));

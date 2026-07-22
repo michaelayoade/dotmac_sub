@@ -48,11 +48,12 @@ class _NoDiagnosisCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => const Card(
-    child: Padding(
-      padding: EdgeInsets.all(16),
-      child: Text('Connection diagnosis is not available for this service.'),
-    ),
-  );
+        child: Padding(
+          padding: EdgeInsets.all(16),
+          child:
+              Text('Connection diagnosis is not available for this service.'),
+        ),
+      );
 }
 
 class _ConnectionCard extends StatelessWidget {
@@ -159,9 +160,9 @@ class _AreaOutageNote extends StatelessWidget {
               "This is a known outage in your area — you don't need to do "
               'anything.',
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: color,
-                fontWeight: FontWeight.w600,
-              ),
+                    color: color,
+                    fontWeight: FontWeight.w600,
+                  ),
             ),
           ),
         ],

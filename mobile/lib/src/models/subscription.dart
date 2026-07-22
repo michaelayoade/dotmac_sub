@@ -29,7 +29,7 @@ class Subscription {
     this.serverIsExpired,
     this.hasServerExpiry = false,
   }) : statusPresentation =
-           statusPresentation ?? StatusPresentation.neutralFallback(status);
+            statusPresentation ?? StatusPresentation.neutralFallback(status);
 
   final String id;
   final String accountId;

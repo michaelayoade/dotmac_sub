@@ -79,7 +79,8 @@ void main() {
       expect(find.textContaining('10.0.0.5'), findsOneWidget);
     });
 
-    testWidgets('trouble: amber treatment shows the classifier headline, the '
+    testWidgets(
+        'trouble: amber treatment shows the classifier headline, the '
         'ONE action (advice), and drills in', (tester) async {
       await tester.pumpWidget(
         _host(
@@ -167,7 +168,8 @@ void main() {
       },
     );
 
-    testWidgets('FALLBACK: classifier null + no session → session-derived '
+    testWidgets(
+        'FALLBACK: classifier null + no session → session-derived '
         '"Not connected"', (tester) async {
       await tester.pumpWidget(
         _host(

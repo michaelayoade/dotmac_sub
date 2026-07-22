@@ -67,24 +67,23 @@ class DashboardScreen extends ConsumerWidget {
         : accountHealth?.forSubscription(currentService.id);
     final unavailableServices =
         accountHealth?.unavailableServices ?? const <AccountServiceHealth>[];
-    final statusAction = unavailableServices.isNotEmpty
-        ? accountHealth?.primaryAction
-        : null;
+    final statusAction =
+        unavailableServices.isNotEmpty ? accountHealth?.primaryAction : null;
     final funding = accountHealth?.financial.prepaidFunding.value;
     final fundingDisplay = accountHealth == null
         ? null
         : funding == null
-        ? '—'
-        : Fmt.moneyCompact(funding.amount, funding.currency);
+            ? '—'
+            : Fmt.moneyCompact(funding.amount, funding.currency);
     final receivableLanes = accountHealth?.financial.receivables.value;
     final amountDueDisplay = receivableLanes == null
         ? null
         : receivableLanes.length == 1
-        ? Fmt.moneyCompact(
-            receivableLanes.first.outstanding,
-            receivableLanes.first.currency,
-          )
-        : '${receivableLanes.length} currencies';
+            ? Fmt.moneyCompact(
+                receivableLanes.first.outstanding,
+                receivableLanes.first.currency,
+              )
+            : '${receivableLanes.length} currencies';
     final hasAmountDue =
         receivableLanes?.any((lane) => lane.outstanding > 0) ?? false;
     // Defined-window total (today) instead of summing the latest 50 sessions.
@@ -111,14 +110,13 @@ class DashboardScreen extends ConsumerWidget {
     String mbps(double? b) => (b == null || b <= 0)
         ? '—'
         : (b / 1e6).toStringAsFixed(b >= 1e7 ? 0 : 1);
-    final peakHasData =
-        (peakDownBps != null && peakDownBps > 0) ||
+    final peakHasData = (peakDownBps != null && peakDownBps > 0) ||
         (peakUpBps != null && peakUpBps > 0);
     final peakValue = !peakLoaded
         ? null // still loading
         : (!peakHasData
-              ? '—'
-              : '↑${mbps(peakUpBps)} ↓${mbps(peakDownBps)} Mbps');
+            ? '—'
+            : '↑${mbps(peakUpBps)} ↓${mbps(peakDownBps)} Mbps');
 
     // Current period's quota bucket for the current service, when the plan is
     // capped — drives the usage bar on the service card.
@@ -248,7 +246,7 @@ class DashboardScreen extends ConsumerWidget {
             _StatusBanner(
               attentionMessage: unavailableServices.isNotEmpty
                   ? statusAction?.message ??
-                        'A service is unavailable — contact support for help.'
+                      'A service is unavailable — contact support for help.'
                   : null,
               known: accountHealth != null,
               onTap: statusAction == null
@@ -276,7 +274,7 @@ class DashboardScreen extends ConsumerWidget {
               builder: (context, ref, _) {
                 final orders =
                     ref.watch(workOrdersProvider).asData?.value.workOrders ??
-                    const <WorkOrderItem>[];
+                        const <WorkOrderItem>[];
                 WorkOrderItem? active;
                 for (final w in orders) {
                   if (w.status == 'in_progress') {
@@ -323,7 +321,7 @@ class DashboardScreen extends ConsumerWidget {
               builder: (context, ref, _) {
                 final projects =
                     ref.watch(projectsProvider).asData?.value.projects ??
-                    const <ProjectItem>[];
+                        const <ProjectItem>[];
                 ProjectItem? install;
                 for (final p in projects) {
                   if (p.progressPct < 100) {
@@ -388,10 +386,9 @@ class DashboardScreen extends ConsumerWidget {
                   value: cycleSummary == null
                       ? null
                       : dataPeriod == null
-                      ? '—'
-                      : Fmt.bytes(dataPeriod),
-                  highlight:
-                      (fup?.isApproaching ?? false) ||
+                          ? '—'
+                          : Fmt.bytes(dataPeriod),
+                  highlight: (fup?.isApproaching ?? false) ||
                       (fup?.needsAttention ?? false),
                   onTap: () => context.go('/usage'),
                 ),
@@ -401,8 +398,7 @@ class DashboardScreen extends ConsumerWidget {
                     icon: Icons.data_saver_off_outlined,
                     label: quotaLeftLabel,
                     value: quotaLeftValue,
-                    highlight:
-                        (currentQuota != null &&
+                    highlight: (currentQuota != null &&
                             (currentQuota.usedFraction ?? 0) >= 0.9) ||
                         (fup?.isApproaching ?? false) ||
                         (fup?.needsAttention ?? false),
@@ -422,8 +418,7 @@ class DashboardScreen extends ConsumerWidget {
                   label: expiryStatLabel,
                   value: expiryStatValue,
                   // Urgent when expiring within 3 days or genuinely expired.
-                  highlight:
-                      (currentService?.expiresSoon ?? false) ||
+                  highlight: (currentService?.expiresSoon ?? false) ||
                       (currentService?.isExpired ?? false),
                   onTap: () => context.go('/billing'),
                 ),
@@ -467,11 +462,9 @@ class DashboardScreen extends ConsumerWidget {
                         _ServiceSwitcher(
                           services: services,
                           selectedId: selected.id,
-                          onSelect: (id) =>
-                              ref
-                                      .read(selectedServiceIdProvider.notifier)
-                                      .state =
-                                  id,
+                          onSelect: (id) => ref
+                              .read(selectedServiceIdProvider.notifier)
+                              .state = id,
                         ),
                         const SizedBox(height: 10),
                       ],
@@ -729,18 +722,18 @@ class _StatusBanner extends StatelessWidget {
             'Loading your account…',
           )
         : attentionMessage != null
-        ? (
-            scheme.errorContainer,
-            scheme.onErrorContainer,
-            Icons.warning_amber_rounded,
-            attentionMessage!,
-          )
-        : (
-            scheme.primaryContainer,
-            scheme.onPrimaryContainer,
-            Icons.check_circle_outline,
-            'All services active',
-          );
+            ? (
+                scheme.errorContainer,
+                scheme.onErrorContainer,
+                Icons.warning_amber_rounded,
+                attentionMessage!,
+              )
+            : (
+                scheme.primaryContainer,
+                scheme.onPrimaryContainer,
+                Icons.check_circle_outline,
+                'All services active',
+              );
     final radius = BorderRadius.circular(14);
     return Material(
       color: bg,
@@ -828,20 +821,19 @@ class _FupBanner extends StatelessWidget {
     final bg = blocked
         ? scheme.errorContainer
         : approaching
-        ? scheme.secondaryContainer
-        : scheme.tertiaryContainer;
+            ? scheme.secondaryContainer
+            : scheme.tertiaryContainer;
     final fg = blocked
         ? scheme.onErrorContainer
         : approaching
-        ? scheme.onSecondaryContainer
-        : scheme.onTertiaryContainer;
-    final text =
-        fup.summary ??
+            ? scheme.onSecondaryContainer
+            : scheme.onTertiaryContainer;
+    final text = fup.summary ??
         (blocked
             ? 'Service paused — fair-usage limit reached'
             : approaching
-            ? 'Approaching your fair-usage limit'
-            : 'Speed reduced — fair-usage limit reached');
+                ? 'Approaching your fair-usage limit'
+                : 'Speed reduced — fair-usage limit reached');
     return Material(
       color: bg,
       borderRadius: BorderRadius.circular(14),
@@ -856,8 +848,8 @@ class _FupBanner extends StatelessWidget {
                 blocked
                     ? Icons.block
                     : approaching
-                    ? Icons.data_usage
-                    : Icons.speed,
+                        ? Icons.data_usage
+                        : Icons.speed,
                 color: fg,
               ),
               const SizedBox(width: 10),
@@ -1093,23 +1085,22 @@ class _CurrentServiceCard extends StatelessWidget {
         : switch (days) {
             // Postpaid / no date expiry: show the next bill date, not a
             // (meaningless) validity countdown.
-            null =>
-              s.nextBillingAt != null
-                  ? (
-                      theme.colorScheme.outline,
-                      'Next bill',
-                      Fmt.date(s.nextBillingAt),
-                    )
-                  : (theme.colorScheme.outline, null, null),
+            null => s.nextBillingAt != null
+                ? (
+                    theme.colorScheme.outline,
+                    'Next bill',
+                    Fmt.date(s.nextBillingAt),
+                  )
+                : (theme.colorScheme.outline, null, null),
             0 => (theme.colorScheme.error, 'Validity', 'Expires today'),
             // Active service with a momentarily-stale billing date: running, not
             // expired — show nothing rather than alarm next to the IP.
             < 0 => (theme.colorScheme.outline, null, null),
             <= 3 => (
-              context.semantic.warning,
-              'Validity',
-              '$days day${days == 1 ? '' : 's'} left',
-            ),
+                context.semantic.warning,
+                'Validity',
+                '$days day${days == 1 ? '' : 's'} left',
+              ),
             _ => (context.semantic.success, 'Validity', '$days days left'),
           };
 
@@ -1212,8 +1203,7 @@ class _CurrentServiceCard extends StatelessWidget {
                   // status string alone is never treated as proof that payment
                   // will reactivate service.
                   final serverAction = action;
-                  final showContractRenewal =
-                      serverAction == null &&
+                  final showContractRenewal = serverAction == null &&
                       s.isActive &&
                       days != null &&
                       days >= 0 &&
@@ -1235,7 +1225,7 @@ class _CurrentServiceCard extends StatelessWidget {
                             onPressed: serverAction == null
                                 ? () => context.go('/billing')
                                 : () =>
-                                      _openServiceAction(context, serverAction),
+                                    _openServiceAction(context, serverAction),
                             label: Text(serverAction?.label ?? 'Renew'),
                           ),
                         ),
@@ -1310,6 +1300,6 @@ class _MessageCard extends StatelessWidget {
   final String message;
   @override
   Widget build(BuildContext context) => Card(
-    child: Padding(padding: const EdgeInsets.all(16), child: Text(message)),
-  );
+        child: Padding(padding: const EdgeInsets.all(16), child: Text(message)),
+      );
 }
