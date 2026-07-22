@@ -471,9 +471,7 @@ class DashboardScreen extends ConsumerWidget {
                       _CurrentServiceCard(
                         service: selected,
                         quota: currentQuota,
-                        action: accountHealth
-                            ?.forSubscription(selected.id)
-                            ?.nextAction,
+                        health: accountHealth?.forSubscription(selected.id),
                       ),
                     ],
                   );
@@ -1065,9 +1063,9 @@ class _AddFundsCard extends StatelessWidget {
 }
 
 class _CurrentServiceCard extends StatelessWidget {
-  const _CurrentServiceCard({required this.service, this.quota, this.action});
+  const _CurrentServiceCard({required this.service, this.quota, this.health});
   final Subscription service;
-  final AccountHealthAction? action;
+  final AccountServiceHealth? health;
 
   /// Current period's quota bucket, when the plan is capped — renders a thin
   /// usage bar so an approaching cap is visible without opening Usage.
@@ -1196,13 +1194,37 @@ class _CurrentServiceCard extends StatelessWidget {
                   },
                 ),
               ],
+              if (health?.pendingChange != null) ...[
+                const SizedBox(height: 10),
+                Builder(
+                  builder: (context) {
+                    final change = health!.pendingChange!;
+                    return Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: context.semantic.warning.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        '${change.deliveryMode == 'field_migration' ? 'Field migration' : change.deliveryMode == 'remote_reprovision' ? 'Remote service change' : 'Plan change'} '
+                        '${change.status}: ${change.targetOfferName}',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: context.semantic.warning,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ],
               const SizedBox(height: 8),
               Builder(
                 builder: (context) {
                   // Suspended/stopped actions come only from Account Health. A
                   // status string alone is never treated as proof that payment
                   // will reactivate service.
-                  final serverAction = action;
+                  final serverAction = health?.nextAction;
                   final showContractRenewal = serverAction == null &&
                       s.isActive &&
                       days != null &&

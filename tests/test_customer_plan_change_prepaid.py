@@ -30,10 +30,17 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
+from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.qualification import BuildoutStatus, CoverageArea
+from app.models.subscriber import Address, AddressType
 from app.models.subscription_change import SubscriptionChangeRequest
+from app.models.subscription_engine import SettingValueType
 from app.services.billing._common import get_account_credit_balance
 from app.services.customer_portal_context import get_available_portal_offers
-from app.services.customer_portal_flow_changes import apply_instant_plan_change
+from app.services.customer_portal_flow_changes import (
+    confirm_service_change,
+    get_plan_change_quote,
+)
 
 
 def _make_offer(
@@ -48,12 +55,17 @@ def _make_offer(
     show_on_customer_portal: bool = True,
     is_active: bool = True,
     status: OfferStatus = OfferStatus.active,
+    access_type: AccessType = AccessType.fiber,
+    speed_download_mbps: int | None = None,
+    speed_upload_mbps: int | None = None,
 ) -> CatalogOffer:
     offer = CatalogOffer(
         name=name,
         code=name.lower().replace(" ", "-"),
         service_type=service_type,
-        access_type=AccessType.fiber,
+        access_type=access_type,
+        speed_download_mbps=speed_download_mbps,
+        speed_upload_mbps=speed_upload_mbps,
         price_basis=PriceBasis.flat,
         billing_cycle=BillingCycle.monthly,
         billing_mode=billing_mode,
@@ -168,7 +180,7 @@ def _confirmation_kwargs(db_session, subscription, target_offer) -> dict[str, ob
     }
 
 
-def test_get_available_portal_offers_only_returns_same_family_compatible_offers(
+def test_get_available_portal_offers_ignores_plan_family_but_keeps_compatibility(
     db_session, subscriber
 ):
     current_offer = _make_offer(
@@ -183,7 +195,7 @@ def test_get_available_portal_offers_only_returns_same_family_compatible_offers(
         amount=Decimal("150.00"),
         plan_family="unlimited",
     )
-    _make_offer(
+    cross_family_offer = _make_offer(
         db_session,
         name="Dedicated 1",
         amount=Decimal("300.00"),
@@ -209,6 +221,7 @@ def test_get_available_portal_offers_only_returns_same_family_compatible_offers(
     assert {str(offer.id) for offer in offers} == {
         str(current_offer.id),
         str(allowed_offer.id),
+        str(cross_family_offer.id),
     }
 
 
@@ -239,12 +252,13 @@ def test_zero_price_offer_is_not_available_for_customer_plan_change(
     assert zero_price_offer.id not in {offer.id for offer in offers}
 
     with pytest.raises(ValueError, match="not available for self-service change"):
-        apply_instant_plan_change(
+        confirm_service_change(
             db_session,
             {"account_id": str(subscriber.id), "subscriber_id": str(subscriber.id)},
             str(subscription.id),
             str(zero_price_offer.id),
             preview_fingerprint="x" * 64,
+            preview_effective_at=datetime(2026, 5, 15, tzinfo=UTC),
             idempotency_key=f"test-plan-{uuid4()}",
             confirmation_origin="test",
         )
@@ -253,7 +267,9 @@ def test_zero_price_offer_is_not_available_for_customer_plan_change(
     assert subscription.offer_id == current_offer.id
 
 
-def test_change_plan_page_separates_migration_offers(db_session, subscriber):
+def test_change_plan_page_classifies_cross_family_from_network_intent(
+    db_session, subscriber
+):
     from app.services import customer_portal_flow_changes as flow
 
     current_offer = _make_offer(
@@ -268,7 +284,7 @@ def test_change_plan_page_separates_migration_offers(db_session, subscriber):
         amount=Decimal("150.00"),
         plan_family="unlimited",
     )
-    migration_offer = _make_offer(
+    cross_family_offer = _make_offer(
         db_session,
         name="Dedicated 1",
         amount=Decimal("300.00"),
@@ -292,14 +308,221 @@ def test_change_plan_page_separates_migration_offers(db_session, subscriber):
     assert {str(offer.id) for offer in page["available_offers"]} == {
         str(current_offer.id),
         str(instant_offer.id),
+        str(cross_family_offer.id),
     }
-    assert {str(offer.id) for offer in page["migration_offers"]} == {
-        str(migration_offer.id),
-    }
-    assert str(migration_offer.id) in page["migration_offer_summaries"]
+    assert (
+        page["available_offer_delivery_modes"][str(cross_family_offer.id)]
+        == "commercial_only"
+    )
 
 
-def test_validate_plan_change_rejects_cross_family_change(db_session, subscriber):
+@pytest.mark.parametrize(
+    ("target_access", "target_speed", "expected_mode"),
+    [
+        (AccessType.fiber, 100, "remote_reprovision"),
+        (AccessType.fixed_wireless, None, "field_migration"),
+    ],
+)
+def test_confirm_service_change_queues_delivery_without_ticket_or_plan_swap(
+    db_session,
+    subscriber,
+    target_access,
+    target_speed,
+    expected_mode,
+):
+    current_offer = _make_offer(
+        db_session,
+        name="Current Fibre",
+        amount=Decimal("100.00"),
+        plan_family="unlimited",
+    )
+    target_offer = _make_offer(
+        db_session,
+        name=f"Target {expected_mode}",
+        amount=Decimal("150.00"),
+        plan_family="dedicated",
+        access_type=target_access,
+        speed_download_mbps=target_speed,
+    )
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current_offer,
+        next_billing_at=datetime(2026, 6, 1, tzinfo=UTC),
+        start_at=datetime(2026, 5, 1, tzinfo=UTC),
+    )
+
+    confirmation = _confirmation_kwargs(db_session, subscription, target_offer)
+    result = confirm_service_change(
+        db_session,
+        {"account_id": str(subscriber.id), "subscriber_id": str(subscriber.id)},
+        str(subscription.id),
+        str(target_offer.id),
+        **confirmation,
+    )
+    replay = confirm_service_change(
+        db_session,
+        {"account_id": str(subscriber.id), "subscriber_id": str(subscriber.id)},
+        str(subscription.id),
+        str(target_offer.id),
+        **confirmation,
+    )
+
+    db_session.refresh(subscription)
+    request = db_session.get(SubscriptionChangeRequest, result["change_request_id"])
+    assert result["status"] == "scheduled"
+    assert result["delivery_mode"] == expected_mode
+    assert replay["replayed"] is True
+    assert replay["change_request_id"] == result["change_request_id"]
+    assert subscription.offer_id == current_offer.id
+    assert request is not None
+    assert request.status.value == "pending"
+    assert request.confirmation_snapshot["delivery_mode"] == expected_mode
+    assert request.confirmation_snapshot["delivery_state"] == "awaiting_verification"
+
+
+def test_wireless_address_relocation_is_qualified_priced_and_awaits_payment(
+    db_session, subscriber
+):
+    offer = _make_offer(
+        db_session,
+        name="Wireless 50",
+        amount=Decimal("18500.00"),
+        plan_family="wireless",
+        access_type=AccessType.fixed_wireless,
+        speed_download_mbps=50,
+    )
+    fee_offer = _make_offer(
+        db_session,
+        name="Wireless relocation",
+        amount=Decimal("0.00"),
+        plan_family="field_fee",
+        access_type=AccessType.fixed_wireless,
+        show_on_customer_portal=False,
+    )
+    db_session.add(
+        OfferPrice(
+            offer_id=fee_offer.id,
+            price_type=PriceType.one_time,
+            amount=Decimal("25000.00"),
+            currency="NGN",
+            is_active=True,
+        )
+    )
+    current_address = Address(
+        subscriber_id=subscriber.id,
+        address_type=AddressType.service,
+        label="Current site",
+        address_line1="1 Current Street",
+        city="Abuja",
+        region="FCT",
+        latitude=9.05,
+        longitude=7.48,
+        is_primary=True,
+    )
+    target_address = Address(
+        subscriber_id=subscriber.id,
+        address_type=AddressType.service,
+        label="New site",
+        address_line1="2 New Street",
+        city="Abuja",
+        region="FCT",
+        latitude=9.06,
+        longitude=7.49,
+    )
+    db_session.add_all([current_address, target_address])
+    db_session.add(
+        CoverageArea(
+            name="Abuja wireless",
+            buildout_status=BuildoutStatus.ready,
+            serviceable=True,
+            geometry_geojson={
+                "type": "Polygon",
+                "coordinates": [
+                    [
+                        [7.0, 8.5],
+                        [8.0, 8.5],
+                        [8.0, 9.5],
+                        [7.0, 9.5],
+                        [7.0, 8.5],
+                    ]
+                ],
+            },
+            constraints={"allowed_tech": ["fixed_wireless"]},
+        )
+    )
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.projects,
+            key="wireless_relocation_offer_id",
+            value_type=SettingValueType.string,
+            value_text=str(fee_offer.id),
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        offer,
+        next_billing_at=datetime(2026, 6, 1, tzinfo=UTC),
+        start_at=datetime(2026, 5, 1, tzinfo=UTC),
+    )
+    subscription.service_address_id = current_address.id
+    db_session.commit()
+
+    quote = get_plan_change_quote(
+        db_session,
+        {"account_id": str(subscriber.id)},
+        str(subscription.id),
+        str(offer.id),
+        target_service_address_id=str(target_address.id),
+    )
+
+    assert quote is not None
+    assert quote["delivery_mode"] == "field_migration"
+    assert quote["field_delivery_quote"]["qualification_status"] == "eligible"
+    assert quote["field_delivery_quote"]["fee_amount"] == 25000.0
+    assert quote["field_delivery_quote"]["eligible"] is True
+
+    result = confirm_service_change(
+        db_session,
+        {"account_id": str(subscriber.id), "subscriber_id": str(subscriber.id)},
+        str(subscription.id),
+        str(offer.id),
+        target_service_address_id=str(target_address.id),
+        preview_fingerprint=quote["preview_fingerprint"],
+        field_quote_fingerprint=quote["field_delivery_quote"]["preview_fingerprint"],
+        preview_effective_at=datetime.fromisoformat(quote["preview_effective_at"]),
+        idempotency_key=f"wireless-relocation-{uuid4()}",
+        confirmation_origin="test",
+    )
+
+    request = db_session.get(SubscriptionChangeRequest, result["change_request_id"])
+    db_session.refresh(subscription)
+    assert result["status"] == "scheduled"
+    assert request is not None
+    assert request.target_service_address_id == target_address.id
+    assert request.service_qualification_id is not None
+    assert request.field_fee_offer_id == fee_offer.id
+    assert request.field_fee_amount == Decimal("25000.00")
+    assert request.confirmation_snapshot["delivery_state"] == "awaiting_payment"
+    assert subscription.service_address_id == current_address.id
+    assert subscription.offer_id == offer.id
+
+
+def test_legacy_plan_migration_ticket_route_is_retired():
+    from app.services import customer_portal_flow_changes as flow
+    from app.web.customer import router as customer_router
+
+    paths = {getattr(route, "path", "") for route in customer_router.routes}
+    assert "/services/{subscription_id}/migration-request" not in paths
+    assert not hasattr(flow, "request_plan_migration")
+
+
+def test_validate_plan_change_allows_cross_family_compatible_change(
+    db_session, subscriber, monkeypatch
+):
     from app.schemas.catalog import SubscriptionUpdate
     from app.services import catalog as catalog_service
 
@@ -323,73 +546,16 @@ def test_validate_plan_change_rejects_cross_family_change(db_session, subscriber
         start_at=datetime(2026, 5, 1, tzinfo=UTC),
     )
 
-    with pytest.raises(HTTPException) as exc:
-        catalog_service.subscriptions.update(
-            db_session,
-            str(subscription.id),
-            SubscriptionUpdate(offer_id=target_offer.id),
-        )
-
-    assert exc.value.status_code == 400
-    assert "same plan family" in exc.value.detail.lower()
-
-
-def test_request_plan_migration_includes_requested_offer(
-    db_session, subscriber, monkeypatch
-):
-    from app.services import crm_portal
-    from app.services import customer_portal_flow_changes as flow
-
-    current_offer = _make_offer(
+    _stub_plan_change_side_effects(monkeypatch)
+    catalog_service.subscriptions.update(
         db_session,
-        name="Unlimited Basic",
-        amount=Decimal("100.00"),
-        plan_family="unlimited",
-    )
-    target_offer = _make_offer(
-        db_session,
-        name="Dedicated 1",
-        amount=Decimal("300.00"),
-        plan_family="dedicated",
-    )
-    subscription = _make_subscription(
-        db_session,
-        subscriber,
-        current_offer,
-        next_billing_at=datetime(2026, 6, 1, tzinfo=UTC),
-        start_at=datetime(2026, 5, 1, tzinfo=UTC),
-    )
-
-    captured: dict[str, str] = {}
-
-    def fake_ticket_create(
-        db, customer, subscriber_lookup, title, description, priority
-    ):
-        captured["subscriber_lookup"] = subscriber_lookup
-        captured["title"] = title
-        captured["description"] = description
-        captured["priority"] = priority
-        return {"success": True, "ticket": {"id": "ticket-123"}}
-
-    monkeypatch.setattr(crm_portal, "handle_ticket_create", fake_ticket_create)
-
-    result = flow.request_plan_migration(
-        db_session,
-        {"account_id": str(subscriber.id), "subscriber_id": str(subscriber.id)},
         str(subscription.id),
-        target_family="dedicated",
-        requested_offer_id=str(target_offer.id),
-        notes="Please move me.",
+        SubscriptionUpdate(offer_id=target_offer.id),
+        skip_proration_artifacts=True,
     )
 
-    assert result["ticket"]["id"] == "ticket-123"
-    assert captured["title"] == "Request Plan Migration"
-    assert captured["priority"] == "normal"
-    assert f"Subscription: {subscription.id}" in captured["description"]
-    assert "Current offer: Unlimited Basic" in captured["description"]
-    assert "Requested family: dedicated" in captured["description"]
-    assert "Requested offer: Dedicated 1" in captured["description"]
-    assert "Customer notes: Please move me." in captured["description"]
+    db_session.refresh(subscription)
+    assert subscription.offer_id == target_offer.id
 
 
 def test_prepaid_upgrade_returns_insufficient_balance_without_mutation(
@@ -432,7 +598,7 @@ def test_prepaid_upgrade_returns_insufficient_balance_without_mutation(
     # its frozen pricing timestamp instead of recalculating three seconds later.
     _freeze_subscription_now(monkeypatch, datetime(2026, 5, 16, 12, 0, 3, tzinfo=UTC))
 
-    result = apply_instant_plan_change(
+    result = confirm_service_change(
         db_session,
         {
             "account_id": str(subscriber.id),
@@ -545,7 +711,7 @@ def test_prepaid_upgrade_with_exact_funding_preserves_anniversary_and_posts_debi
 
     confirmation = _confirmation_kwargs(db_session, subscription, target_offer)
     _freeze_subscription_now(monkeypatch, datetime(2026, 5, 16, 12, 0, 3, tzinfo=UTC))
-    result = apply_instant_plan_change(
+    result = confirm_service_change(
         db_session,
         {
             "account_id": str(subscriber.id),
@@ -653,7 +819,7 @@ def test_plan_change_confirmation_rejects_stale_financial_position(
     db_session.commit()
 
     with pytest.raises(HTTPException) as exc:
-        apply_instant_plan_change(
+        confirm_service_change(
             db_session,
             {"account_id": str(subscriber.id), "subscriber_id": str(subscriber.id)},
             str(subscription.id),
@@ -707,7 +873,7 @@ def test_prepaid_downgrade_links_credit_note_and_exact_ledger_evidence(
     )
     _freeze_subscription_now(monkeypatch, datetime(2026, 5, 16, 12, tzinfo=UTC))
 
-    result = apply_instant_plan_change(
+    result = confirm_service_change(
         db_session,
         {"account_id": str(subscriber.id), "subscriber_id": str(subscriber.id)},
         str(subscription.id),
@@ -763,14 +929,14 @@ def test_plan_change_confirmation_idempotently_replays_exact_evidence(
     db_session.commit()
     confirmation = _confirmation_kwargs(db_session, subscription, target_offer)
 
-    first = apply_instant_plan_change(
+    first = confirm_service_change(
         db_session,
         {"account_id": str(subscriber.id), "subscriber_id": str(subscriber.id)},
         str(subscription.id),
         str(target_offer.id),
         **confirmation,
     )
-    second = apply_instant_plan_change(
+    second = confirm_service_change(
         db_session,
         {"account_id": str(subscriber.id), "subscriber_id": str(subscriber.id)},
         str(subscription.id),
@@ -792,7 +958,7 @@ def test_plan_change_confirmation_idempotently_replays_exact_evidence(
     )
 
 
-def test_apply_instant_plan_change_emits_single_upgrade_event(
+def test_confirm_service_change_emits_single_upgrade_event(
     db_session, subscriber, monkeypatch
 ):
     from app.services.events.types import EventType
@@ -832,7 +998,7 @@ def test_apply_instant_plan_change_emits_single_upgrade_event(
     )
     db_session.commit()
 
-    apply_instant_plan_change(
+    confirm_service_change(
         db_session,
         {
             "account_id": str(subscriber.id),
@@ -875,7 +1041,7 @@ def test_no_provisioning_before_payment_coverage(db_session, subscriber, monkeyp
         change_service.subscription_change_requests, "apply", apply_mock
     )
 
-    result = apply_instant_plan_change(
+    result = confirm_service_change(
         db_session,
         {
             "account_id": str(subscriber.id),
@@ -1281,7 +1447,7 @@ def test_archived_status_offer_hidden_even_when_is_active_drifted(
     assert {str(offer.id) for offer in offers} == {str(current_offer.id)}
 
 
-def test_submit_change_plan_rejects_cross_family_at_create(
+def test_submit_change_plan_accepts_cross_family_when_catalog_compatible(
     db_session, subscriber, monkeypatch
 ):
     from app.services import customer_portal_flow_changes as flow
@@ -1314,18 +1480,19 @@ def test_submit_change_plan_rejects_cross_family_at_create(
     )
     customer = {"account_id": str(subscriber.id), "subscriber_id": str(subscriber.id)}
 
-    with pytest.raises(ValueError, match="not available for self-service"):
-        flow.submit_change_plan(
-            db_session,
-            customer,
-            str(subscription.id),
-            str(cross_family_offer.id),
-            "2099-01-01",
-        )
-    assert created == []
+    result = flow.submit_change_plan(
+        db_session,
+        customer,
+        str(subscription.id),
+        str(cross_family_offer.id),
+        "2099-01-01",
+    )
+
+    assert result == {"success": True}
+    assert created[0]["new_offer_id"] == str(cross_family_offer.id)
 
 
-def test_submit_change_plan_accepts_same_family_offer(
+def test_submit_change_plan_accepts_compatible_offer(
     db_session, subscriber, monkeypatch
 ):
     from app.services import customer_portal_flow_changes as flow
@@ -1370,7 +1537,7 @@ def test_submit_change_plan_accepts_same_family_offer(
     assert created[0]["new_offer_id"] == str(target_offer.id)
 
 
-def test_apply_instant_plan_change_rejects_archived_offer(
+def test_confirm_service_change_rejects_archived_offer(
     db_session, subscriber, monkeypatch
 ):
     """The instant web path must reject an archived-but-is_active offer — it
@@ -1405,7 +1572,7 @@ def test_apply_instant_plan_change_rejects_archived_offer(
     )
 
     with pytest.raises(ValueError, match="not available for self-service change"):
-        apply_instant_plan_change(
+        confirm_service_change(
             db_session,
             {"account_id": str(subscriber.id), "subscriber_id": str(subscriber.id)},
             str(subscription.id),
@@ -1419,18 +1586,11 @@ def test_apply_instant_plan_change_rejects_archived_offer(
     assert subscription.offer_id == current_offer.id  # unchanged
 
 
-def test_get_available_portal_offers_excludes_empty_family(db_session, subscriber):
-    """Offers with no plan_family are not instant-change eligible.
-
-    Regression: the change-plan page listed empty-family offers as "instant
-    changes in your current plan family", but _validate_plan_change rejects any
-    change where either family is empty, so applying 400'd. The instant list
-    must require a non-empty, matching family on both sides.
-    """
+def test_get_available_portal_offers_allows_unclassified_family(db_session, subscriber):
     current_offer = _make_offer(
         db_session, name="Unclassified A", amount=Decimal("100.00"), plan_family=None
     )
-    _make_offer(
+    target_offer = _make_offer(
         db_session, name="Unclassified B", amount=Decimal("150.00"), plan_family=None
     )
     subscription = _make_subscription(
@@ -1443,7 +1603,10 @@ def test_get_available_portal_offers_excludes_empty_family(db_session, subscribe
 
     offers = get_available_portal_offers(db_session, subscription)
 
-    assert offers == []
+    assert {str(offer.id) for offer in offers} == {
+        str(current_offer.id),
+        str(target_offer.id),
+    }
 
 
 def test_plan_change_refreshes_unit_price(db_session, subscriber, monkeypatch):
@@ -1837,7 +2000,7 @@ def test_plan_change_blocked_when_account_in_arrears(
     _add_overdue_invoice(db_session, subscriber, Decimal("5000.00"))
 
     with pytest.raises(ValueError, match="overdue balance"):
-        apply_instant_plan_change(
+        confirm_service_change(
             db_session,
             {"account_id": str(subscriber.id), "subscriber_id": str(subscriber.id)},
             str(subscription.id),
@@ -1880,7 +2043,7 @@ def test_postpaid_plan_change_applies_when_no_arrears(
         start_at=datetime(2026, 6, 1, tzinfo=UTC),
     )
 
-    result = apply_instant_plan_change(
+    result = confirm_service_change(
         db_session,
         {"account_id": str(subscriber.id), "subscriber_id": str(subscriber.id)},
         str(subscription.id),

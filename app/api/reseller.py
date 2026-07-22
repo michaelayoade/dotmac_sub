@@ -24,6 +24,12 @@ from app.schemas.billing import (
     BillingAccountCreditAllocationPreviewRequest,
     BillingAccountCreditAllocationResultRead,
 )
+from app.schemas.catalog import (
+    PlanChangePageResponse,
+    PlanChangeSubmitRequest,
+    PlanChangeSubmitResponse,
+    PlanOfferSummary,
+)
 from app.schemas.chat import ChatSessionResponse
 from app.schemas.portal import (
     TechnicianLocation,
@@ -31,6 +37,7 @@ from app.schemas.portal import (
     TechnicianRatingResponse,
 )
 from app.services import chat_session as chat_session_service
+from app.services import customer_portal_flow_changes as customer_changes
 from app.services import (
     customer_work_order_selfcare,
     quotes_mirror,
@@ -107,6 +114,142 @@ def _reseller_id(db: Session, principal: dict) -> str:
     if not reseller_id:
         raise HTTPException(status_code=403, detail="A reseller account is required")
     return reseller_id
+
+
+def _managed_customer(
+    db: Session, principal: dict, account_id: str
+) -> tuple[str, dict]:
+    reseller_id = _reseller_id(db, principal)
+    account = reseller_portal.owned_account(db, reseller_id, account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="Account not found")
+    return reseller_id, {
+        "account_id": str(account.id),
+        "subscriber_id": principal.get("subscriber_id"),
+    }
+
+
+def _plan_offer_summary(offer, summary) -> PlanOfferSummary | None:
+    if offer is None:
+        return None
+    return PlanOfferSummary(
+        id=offer.id,
+        name=offer.name or "Plan",
+        amount=float(getattr(summary, "amount", 0) or 0),
+        currency=getattr(summary, "currency", "NGN"),
+        period_label=getattr(summary, "period_label", "/cycle"),
+    )
+
+
+@router.get(
+    "/accounts/{account_id}/subscriptions/{subscription_id}/service-change",
+    response_model=PlanChangePageResponse,
+)
+def reseller_service_change_options(
+    account_id: str,
+    subscription_id: str,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> PlanChangePageResponse:
+    """Canonical service-change options for one managed customer service."""
+    _reseller, customer = _managed_customer(db, principal, account_id)
+    ctx = customer_changes.get_change_plan_page(db, customer, subscription_id)
+    if ctx is None:
+        raise HTTPException(status_code=404, detail="Service not found")
+    summaries = ctx.get("available_offer_summaries", {})
+    offers = [
+        _plan_offer_summary(offer, summaries.get(str(offer.id)))
+        for offer in ctx.get("available_offers", [])
+    ]
+    return PlanChangePageResponse(
+        current_offer=_plan_offer_summary(
+            ctx.get("current_offer"), ctx.get("current_offer_summary")
+        ),
+        available_offers=[offer for offer in offers if offer is not None],
+        prepaid_funding=ctx.get("prepaid_funding"),
+        postpaid_receivables=ctx.get("postpaid_receivables", 0),
+        collection_blocking_balance=ctx.get("collection_blocking_balance", 0),
+        next_billing_date=ctx.get("next_billing_date"),
+        billing_message=ctx.get("billing_message"),
+        service_addresses=ctx.get("service_addresses", []),
+        current_service_address_id=ctx.get("current_service_address_id"),
+    )
+
+
+@router.get(
+    "/accounts/{account_id}/subscriptions/{subscription_id}/service-change/quote"
+)
+def reseller_service_change_quote(
+    account_id: str,
+    subscription_id: str,
+    offer_id: str,
+    target_service_address_id: str | None = None,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> dict:
+    """Exact shared plan, serviceability, and field-fee preview."""
+    _reseller, customer = _managed_customer(db, principal, account_id)
+    quote = customer_changes.get_plan_change_quote(
+        db,
+        customer,
+        subscription_id,
+        offer_id,
+        target_service_address_id=target_service_address_id,
+    )
+    if quote is None:
+        raise HTTPException(status_code=404, detail="Service change not available")
+    return quote
+
+
+@router.post(
+    "/accounts/{account_id}/subscriptions/{subscription_id}/service-change",
+    response_model=PlanChangeSubmitResponse,
+)
+def reseller_service_change_submit(
+    account_id: str,
+    subscription_id: str,
+    payload: PlanChangeSubmitRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> PlanChangeSubmitResponse:
+    """Confirm a managed service change through the same lifecycle owner."""
+    _reseller, customer = _managed_customer(db, principal, account_id)
+    try:
+        result = customer_changes.confirm_service_change(
+            db,
+            customer,
+            subscription_id,
+            str(payload.offer_id),
+            payload.notes,
+            target_service_address_id=(
+                str(payload.target_service_address_id)
+                if payload.target_service_address_id
+                else None
+            ),
+            preview_fingerprint=payload.preview_fingerprint or "",
+            field_quote_fingerprint=payload.field_quote_fingerprint,
+            preview_effective_at=payload.preview_effective_at,
+            idempotency_key=payload.idempotency_key or "",
+            confirmation_origin="reseller_api",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not result.get("success", False):
+        raise HTTPException(status_code=402, detail="Additional funding is required")
+    delivery_mode = str(result.get("delivery_mode") or "commercial_only")
+    return PlanChangeSubmitResponse(
+        success=True,
+        status=(
+            "applied"
+            if result.get("status") in {"applied", "skipped"}
+            else f"pending_{delivery_mode}"
+        ),
+        message=result.get("message"),
+        change_request_id=result.get("change_request_id"),
+        account_adjustment_id=result.get("account_adjustment_id"),
+        credit_note_id=result.get("credit_note_id"),
+        ledger_entry_id=result.get("ledger_entry_id"),
+    )
 
 
 @router.post("/chat/session", response_model=ChatSessionResponse)

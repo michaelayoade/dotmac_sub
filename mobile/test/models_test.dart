@@ -462,17 +462,44 @@ void main() {
       () {
         final q = PlanChangeQuote.fromJson({
           'preview_fingerprint': List.filled(64, 'n').join(),
+          'preview_effective_at': '2026-07-22T10:00:00Z',
           'has_financial_effect': false,
           'postpaid_receivables': 750.0,
           'collection_blocking_balance': 0.0,
           'access_consequence': 'none_plan_change_only',
+          'delivery_mode': 'remote_reprovision',
         });
         expect(q.hasProration, isFalse);
         expect(q.hasFinancialEffect, isFalse);
         expect(q.previewFingerprint, hasLength(64));
+        expect(q.previewEffectiveAt, isNotNull);
         expect(q.postpaidReceivables, 750.0);
+        expect(q.deliveryMode, 'remote_reprovision');
+        expect(q.appliesImmediately, isFalse);
+        expect(q.requiresSiteVisit, isFalse);
       },
     );
+
+    test('field delivery requires a site visit', () {
+      final q = PlanChangeQuote.fromJson({
+        'delivery_mode': 'field_migration',
+        'field_delivery_quote': {
+          'target_service_address_id': 'address-2',
+          'target_address_label': 'New site, Abuja',
+          'qualification_status': 'eligible',
+          'eligible': true,
+          'preview_fingerprint': List.filled(64, 'f').join(),
+          'fee_amount': '25000.00',
+          'currency': 'NGN',
+        },
+      });
+      expect(q.deliveryLabel, 'Field migration');
+      expect(q.requiresSiteVisit, isTrue);
+      expect(q.fieldDeliveryQuote?.targetServiceAddressId, 'address-2');
+      expect(q.fieldDeliveryQuote?.qualificationStatus, 'eligible');
+      expect(q.fieldDeliveryQuote?.feeAmount, 25000.0);
+      expect(q.fieldDeliveryQuote?.eligible, isTrue);
+    });
 
     test('flags a shortfall as needing top-up', () {
       final q = PlanChangeQuote.fromJson({
@@ -810,6 +837,13 @@ void main() {
               'currency': 'NGN',
               'restores_service': false,
             },
+            'pending_change': {
+              'request_id': 'change-1',
+              'status': 'pending',
+              'target_offer_name': 'Wireless 100',
+              'effective_date': '2026-07-25',
+              'delivery_mode': 'remote_reprovision',
+            },
           },
         ],
         'as_of': '2026-07-22T10:00:00Z',
@@ -819,6 +853,11 @@ void main() {
       expect(health.services.single.session.isOnline, isTrue);
       expect(health.services.single.connection.value?.isConnected, isTrue);
       expect(health.services.single.nextAction?.isFinancial, isTrue);
+      expect(health.services.single.pendingChange?.requestId, 'change-1');
+      expect(
+        health.services.single.pendingChange?.deliveryMode,
+        'remote_reprovision',
+      );
       expect(health.primaryAction?.kind, 'top_up');
     });
 

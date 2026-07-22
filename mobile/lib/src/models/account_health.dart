@@ -1,3 +1,4 @@
+import '../core/parsers.dart';
 import 'connection_status.dart';
 import 'status_presentation.dart';
 
@@ -169,6 +170,7 @@ class AccountServiceHealth {
     this.nextChargeAt,
     this.expiresAt,
     this.nextAction,
+    this.pendingChange,
   });
 
   final String subscriptionId;
@@ -184,6 +186,7 @@ class AccountServiceHealth {
   final DateTime? nextChargeAt;
   final DateTime? expiresAt;
   final AccountHealthAction? nextAction;
+  final PendingServiceChange? pendingChange;
 
   bool get usable => accessState == 'available';
 
@@ -218,6 +221,54 @@ class AccountServiceHealth {
                 (json['next_action'] as Map).cast<String, dynamic>(),
               )
             : null,
+        pendingChange: json['pending_change'] is Map
+            ? PendingServiceChange.fromJson(
+                (json['pending_change'] as Map).cast<String, dynamic>(),
+              )
+            : null,
+      );
+}
+
+class PendingServiceChange {
+  const PendingServiceChange({
+    required this.requestId,
+    required this.status,
+    required this.targetOfferName,
+    required this.effectiveDate,
+    required this.deliveryMode,
+    required this.deliveryState,
+    this.targetServiceAddress,
+    this.fieldFeeAmount,
+    this.fieldFeeCurrency,
+  });
+
+  final String requestId;
+  final String status;
+  final String targetOfferName;
+  final DateTime effectiveDate;
+  final String deliveryMode;
+  final String deliveryState;
+  final String? targetServiceAddress;
+  final double? fieldFeeAmount;
+  final String? fieldFeeCurrency;
+
+  bool get requiresSiteVisit => deliveryMode == 'field_migration';
+
+  factory PendingServiceChange.fromJson(Map<String, dynamic> json) =>
+      PendingServiceChange(
+        requestId: json['request_id'].toString(),
+        status: json['status'] as String? ?? 'pending',
+        targetOfferName:
+            json['target_offer_name'] as String? ?? 'Requested plan',
+        effectiveDate: DateTime.parse(
+          json['effective_date'].toString(),
+        ).toLocal(),
+        deliveryMode: json['delivery_mode'] as String? ?? 'unknown',
+        deliveryState:
+            json['delivery_state'] as String? ?? 'awaiting_verification',
+        targetServiceAddress: json['target_service_address'] as String?,
+        fieldFeeAmount: asDoubleOrNull(json['field_fee_amount']),
+        fieldFeeCurrency: json['field_fee_currency'] as String?,
       );
 }
 

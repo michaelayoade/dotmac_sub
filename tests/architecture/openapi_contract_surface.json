@@ -5741,7 +5741,7 @@
     "422": "a11c9d9b2af8"
    }
   },
-  "GET /api/v1/me/subscriptions/{subscription_id}/plan-change": {
+  "GET /api/v1/me/subscriptions/{subscription_id}/service-change": {
    "params": [
     "header:authorization",
     "header:x-api-key",
@@ -5753,16 +5753,17 @@
     "422": "a11c9d9b2af8"
    }
   },
-  "GET /api/v1/me/subscriptions/{subscription_id}/plan-change/quote": {
+  "GET /api/v1/me/subscriptions/{subscription_id}/service-change/quote": {
    "params": [
     "header:authorization",
     "header:x-api-key",
     "path:subscription_id!",
-    "query:offer_id!"
+    "query:offer_id!",
+    "query:target_service_address_id"
    ],
    "request": null,
    "responses": {
-    "200": "e20b6154407f",
+    "200": "547c44a00c54",
     "422": "a11c9d9b2af8"
    }
   },
@@ -8551,6 +8552,34 @@
    "request": null,
    "responses": {
     "200": "10d9f93a0f64",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/reseller/accounts/{account_id}/subscriptions/{subscription_id}/service-change": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:account_id!",
+    "path:subscription_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "29fa4f784200",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/reseller/accounts/{account_id}/subscriptions/{subscription_id}/service-change/quote": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:account_id!",
+    "path:subscription_id!",
+    "query:offer_id!",
+    "query:target_service_address_id"
+   ],
+   "request": null,
+   "responses": {
+    "200": "10dc3020f92c",
     "422": "a11c9d9b2af8"
    }
   },
@@ -15041,7 +15070,7 @@
     "422": "a11c9d9b2af8"
    }
   },
-  "POST /api/v1/me/subscriptions/{subscription_id}/plan-change": {
+  "POST /api/v1/me/subscriptions/{subscription_id}/service-change": {
    "params": [
     "header:authorization",
     "header:x-api-key",
@@ -16876,6 +16905,19 @@
    "request": "23000296dc2c",
    "responses": {
     "201": "c5ab27f8af02",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/reseller/accounts/{account_id}/subscriptions/{subscription_id}/service-change": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:account_id!",
+    "path:subscription_id!"
+   ],
+   "request": "6e8e12755bd0",
+   "responses": {
+    "200": "e6ba0888b0c1",
     "422": "a11c9d9b2af8"
    }
   },
@@ -19106,8 +19148,8 @@
   "PipelineStageUpdate": "0229c1f4ad1f",
   "PipelineUpdate": "c8204907f5dd",
   "PlanCategory": "2dda6b51303f",
-  "PlanChangePageResponse": "86dd61b452e7",
-  "PlanChangeSubmitRequest": "2f1700661976",
+  "PlanChangePageResponse": "2068e44dbc6f",
+  "PlanChangeSubmitRequest": "b34494ee5b1c",
   "PlanChangeSubmitResponse": "75b8e6d7a4a9",
   "PlanOfferSummary": "8169cadb9660",
   "PolicyDunningStepCreate": "647c1fa3b400",
@@ -19136,7 +19178,8 @@
   "PortalAccountHealthRead": "183a6ecd1950",
   "PortalConnectionDiagnosisRead": "eb9756d33f61",
   "PortalFinancialHealthRead": "788493dff6ef",
-  "PortalServiceHealthRead": "ac52ab57d66f",
+  "PortalPendingServiceChangeRead": "a0c087379d4b",
+  "PortalServiceHealthRead": "65e99a7f147f",
   "PortalSessionRead": "8fe0c72ef283",
   "PortalSessionResponse": "a40ab1015c3f",
   "PriceBasis": "f0f72bcdeeae",
@@ -19277,6 +19320,7 @@
   "ScheduledTaskCreate": "c2447ba32ccf",
   "ScheduledTaskRead": "56b8c0be8019",
   "ScheduledTaskUpdate": "8b3f05042775",
+  "ServiceAddressOption": "8493ad1e1c0c",
   "ServiceOrderCreate": "995a484dafee",
   "ServiceOrderRead": "a38ef1cbbf41",
   "ServiceOrderStatus": "e5e20d64713c",

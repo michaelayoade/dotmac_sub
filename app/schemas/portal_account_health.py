@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
-from typing import Generic, TypeVar
+from typing import Generic, Literal, TypeVar
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
@@ -75,6 +75,22 @@ class PortalConnectionDiagnosisRead(BaseModel):
     checked_at: datetime
 
 
+class PortalPendingServiceChangeRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    request_id: UUID
+    status: str
+    target_offer_name: str
+    effective_date: date
+    delivery_mode: Literal[
+        "commercial_only", "remote_reprovision", "field_migration", "unknown"
+    ]
+    delivery_state: str
+    target_service_address: str | None = None
+    field_fee_amount: Decimal | None = None
+    field_fee_currency: str | None = None
+
+
 class PortalServiceHealthRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -91,6 +107,7 @@ class PortalServiceHealthRead(BaseModel):
     next_charge_at: datetime | None
     expires_at: datetime | None
     next_action: ServiceStatusAction | None
+    pending_change: PortalPendingServiceChangeRead | None
 
 
 class PortalAccountHealthRead(BaseModel):

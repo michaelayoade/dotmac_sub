@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import logging
 import math
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -42,6 +44,22 @@ from app.services.common import (
 from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ServiceQualificationPreview:
+    """Read-only serviceability decision for one exact location and medium."""
+
+    address_id: UUID | None
+    latitude: float
+    longitude: float
+    requested_tech: str | None
+    coverage_area_id: UUID | None
+    status: QualificationStatus
+    buildout_status: BuildoutStatus | None
+    estimated_install_window: str | None
+    reasons: tuple[str, ...]
+    metadata: dict | None
 
 
 def _extract_polygon(geometry: dict) -> list[tuple[float, float]]:
@@ -122,6 +140,116 @@ def _haversine_km(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
     )
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return radius * c
+
+
+def preview_service_qualification(
+    db: Session, payload: ServiceQualificationRequest
+) -> ServiceQualificationPreview:
+    """Resolve serviceability without writing or completing a transaction."""
+    lat = payload.latitude
+    lon = payload.longitude
+    if payload.address_id:
+        address = db.get(Address, payload.address_id)
+        if not address:
+            raise HTTPException(status_code=404, detail="Address not found")
+        if address.latitude is None or address.longitude is None:
+            raise HTTPException(status_code=400, detail="Address missing coordinates")
+        lat = address.latitude
+        lon = address.longitude
+    if lat is None or lon is None:
+        raise HTTPException(status_code=400, detail="Latitude/longitude required")
+
+    query = db.query(CoverageArea).filter(CoverageArea.is_active.is_(True))
+    if payload.zone_key:
+        query = query.filter(CoverageArea.zone_key == payload.zone_key)
+    candidates = query.order_by(
+        CoverageArea.priority.desc(), CoverageArea.created_at.desc()
+    ).all()
+
+    matches: list[CoverageArea] = []
+    for candidate in candidates:
+        if (
+            candidate.min_latitude is not None
+            and candidate.max_latitude is not None
+            and candidate.min_longitude is not None
+            and candidate.max_longitude is not None
+        ):
+            if not (candidate.min_latitude <= lat <= candidate.max_latitude):
+                continue
+            if not (candidate.min_longitude <= lon <= candidate.max_longitude):
+                continue
+        if _point_in_polygon(lon, lat, _extract_polygon(candidate.geometry_geojson)):
+            matches.append(candidate)
+
+    reasons: list[str] = []
+    status = QualificationStatus.ineligible
+    area = matches[0] if matches else None
+    buildout_status = area.buildout_status if area else None
+    estimated_install_window = area.buildout_window if area else None
+    if not area:
+        reasons.append("no_coverage")
+    else:
+        if not area.serviceable:
+            reasons.append("not_serviceable")
+        if area.buildout_status != BuildoutStatus.ready:
+            reasons.append(f"buildout_status:{area.buildout_status.value}")
+        constraints = area.constraints or {}
+        allowed_tech = constraints.get("allowed_tech")
+        if allowed_tech and payload.requested_tech:
+            if payload.requested_tech not in allowed_tech:
+                reasons.append("tech_not_supported")
+        if constraints.get("capacity_available") is False:
+            reasons.append("capacity_unavailable")
+        max_distance_km = constraints.get("max_distance_km")
+        if max_distance_km is not None:
+            centroid_lon, centroid_lat = _centroid(
+                _extract_polygon(area.geometry_geojson)
+            )
+            if _haversine_km(lon, lat, centroid_lon, centroid_lat) > float(
+                max_distance_km
+            ):
+                reasons.append("distance_exceeds")
+        if not reasons:
+            status = QualificationStatus.eligible
+        elif area.buildout_status != BuildoutStatus.ready and all(
+            reason.startswith("buildout_status") for reason in reasons
+        ):
+            status = QualificationStatus.needs_buildout
+
+    return ServiceQualificationPreview(
+        address_id=payload.address_id,
+        latitude=lat,
+        longitude=lon,
+        requested_tech=payload.requested_tech,
+        coverage_area_id=area.id if area else None,
+        status=status,
+        buildout_status=buildout_status,
+        estimated_install_window=estimated_install_window,
+        reasons=tuple(reasons),
+        metadata=payload.metadata_,
+    )
+
+
+def record_service_qualification(
+    db: Session, preview: ServiceQualificationPreview
+) -> ServiceQualification:
+    """Persist exact preview evidence inside the caller-owned transaction."""
+    qualification = ServiceQualification(
+        coverage_area_id=preview.coverage_area_id,
+        address_id=preview.address_id,
+        latitude=preview.latitude,
+        longitude=preview.longitude,
+        requested_tech=preview.requested_tech,
+        status=preview.status,
+        buildout_status=preview.buildout_status,
+        estimated_install_window=preview.estimated_install_window,
+        reasons=list(preview.reasons),
+        metadata_=preview.metadata,
+        created_at=datetime.now(UTC),
+    )
+    db.add(qualification)
+    db.flush()
+    return qualification
 
 
 class CoverageAreas(ListResponseMixin):
@@ -246,103 +374,16 @@ class ServiceQualifications(ListResponseMixin):
 
     @staticmethod
     def check(db: Session, payload: ServiceQualificationRequest):
-        lat = payload.latitude
-        lon = payload.longitude
-        if payload.address_id:
-            address = db.get(Address, payload.address_id)
-            if not address:
-                raise HTTPException(status_code=404, detail="Address not found")
-            if address.latitude is None or address.longitude is None:
-                raise HTTPException(
-                    status_code=400, detail="Address missing coordinates"
-                )
-            lat = address.latitude
-            lon = address.longitude
-        if lat is None or lon is None:
-            raise HTTPException(status_code=400, detail="Latitude/longitude required")
-
-        query = db.query(CoverageArea).filter(CoverageArea.is_active.is_(True))
-        if payload.zone_key:
-            query = query.filter(CoverageArea.zone_key == payload.zone_key)
-        candidates = query.order_by(
-            CoverageArea.priority.desc(), CoverageArea.created_at.desc()
-        ).all()
-
-        matches: list[CoverageArea] = []
-        for candidate in candidates:
-            if (
-                candidate.min_latitude is not None
-                and candidate.max_latitude is not None
-                and candidate.min_longitude is not None
-                and candidate.max_longitude is not None
-            ):
-                if not (candidate.min_latitude <= lat <= candidate.max_latitude):
-                    continue
-                if not (candidate.min_longitude <= lon <= candidate.max_longitude):
-                    continue
-            polygon = _extract_polygon(candidate.geometry_geojson)
-            if _point_in_polygon(lon, lat, polygon):
-                matches.append(candidate)
-
-        reasons: list[str] = []
-        status = QualificationStatus.ineligible
-        area = matches[0] if matches else None
-        buildout_status = area.buildout_status if area else None
-        estimated_install_window = area.buildout_window if area else None
-
-        if not area:
-            reasons.append("no_coverage")
-        else:
-            if not area.serviceable:
-                reasons.append("not_serviceable")
-            if area.buildout_status != BuildoutStatus.ready:
-                reasons.append(f"buildout_status:{area.buildout_status.value}")
-            constraints = area.constraints or {}
-            allowed_tech = constraints.get("allowed_tech")
-            if allowed_tech and payload.requested_tech:
-                if payload.requested_tech not in allowed_tech:
-                    reasons.append("tech_not_supported")
-            capacity_available = constraints.get("capacity_available")
-            if capacity_available is False:
-                reasons.append("capacity_unavailable")
-            max_distance_km = constraints.get("max_distance_km")
-            if max_distance_km is not None:
-                centroid_lon, centroid_lat = _centroid(
-                    _extract_polygon(area.geometry_geojson)
-                )
-                distance = _haversine_km(lon, lat, centroid_lon, centroid_lat)
-                if distance > float(max_distance_km):
-                    reasons.append("distance_exceeds")
-
-            if not reasons:
-                status = QualificationStatus.eligible
-            elif area.buildout_status != BuildoutStatus.ready and all(
-                reason.startswith("buildout_status") for reason in reasons
-            ):
-                status = QualificationStatus.needs_buildout
-
-        qualification = ServiceQualification(
-            coverage_area_id=area.id if area else None,
-            address_id=payload.address_id,
-            latitude=lat,
-            longitude=lon,
-            requested_tech=payload.requested_tech,
-            status=status,
-            buildout_status=buildout_status,
-            estimated_install_window=estimated_install_window,
-            reasons=reasons,
-            metadata=payload.metadata_,
-            created_at=datetime.now(UTC),
-        )
-        db.add(qualification)
+        preview = preview_service_qualification(db, payload)
+        qualification = record_service_qualification(db, preview)
         db.commit()
         db.refresh(qualification)
         if (
-            status == QualificationStatus.needs_buildout
+            qualification.status == QualificationStatus.needs_buildout
             and qualification.coverage_area_id
             and (qualification.address_id or payload.address_id)
         ):
-            if buildout_status not in {
+            if qualification.buildout_status not in {
                 BuildoutStatus.planned,
                 BuildoutStatus.in_progress,
             }:

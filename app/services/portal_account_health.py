@@ -10,15 +10,20 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import StrEnum
 from uuid import UUID
 
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.orm import Session, selectinload
 
-from app.models.catalog import BillingMode, SubscriptionStatus
+from app.models.catalog import BillingMode, Subscription, SubscriptionStatus
 from app.models.subscriber import Subscriber
+from app.models.subscription_change import (
+    SubscriptionChangeRequest,
+    SubscriptionChangeStatus,
+)
 from app.schemas.service_status import ServiceStatusAction, ServiceStatusItem
 from app.schemas.status_presentation import StatusPresentation
 from app.services import display_format
@@ -47,6 +52,7 @@ from app.services.status_presentation import (
     service_access_status_presentation,
     subscription_status_presentation,
 )
+from app.services.subscription_lifecycle import classify_service_change_delivery
 from app.services.topology.connection_status import assess
 from app.services.ui_contracts import StateValue
 
@@ -95,6 +101,19 @@ class PortalConnectionDiagnosis:
 
 
 @dataclass(frozen=True, slots=True)
+class PortalPendingServiceChange:
+    request_id: UUID
+    status: str
+    target_offer_name: str
+    effective_date: date
+    delivery_mode: str
+    delivery_state: str
+    target_service_address: str | None
+    field_fee_amount: Decimal | None
+    field_fee_currency: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class PortalServiceHealth:
     subscription_id: UUID
     offer_name: str
@@ -110,6 +129,7 @@ class PortalServiceHealth:
     expires_at: datetime | None
     next_action: ServiceStatusAction | None
     customer_action_url: str | None
+    pending_change: PortalPendingServiceChange | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -312,6 +332,7 @@ def _service_health(
     subscription,
     status_item: ServiceStatusItem | None,
     session: SubscriptionSessionSnapshot,
+    pending_change: PortalPendingServiceChange | None,
 ) -> PortalServiceHealth:
     if status_item is None:
         access_state = PortalServiceAccessState.unavailable
@@ -351,7 +372,84 @@ def _service_health(
         expires_at=expires_at,
         next_action=action,
         customer_action_url=_customer_action_url(action),
+        pending_change=pending_change,
     )
+
+
+def _pending_service_changes(
+    db: Session,
+    subscriptions: list[Subscription],
+) -> dict[UUID, PortalPendingServiceChange]:
+    subscription_ids = [subscription.id for subscription in subscriptions]
+    if not subscription_ids:
+        return {}
+    rows = db.scalars(
+        select(SubscriptionChangeRequest)
+        .where(SubscriptionChangeRequest.subscription_id.in_(subscription_ids))
+        .where(
+            SubscriptionChangeRequest.status.in_(
+                {
+                    SubscriptionChangeStatus.pending,
+                    SubscriptionChangeStatus.approved,
+                }
+            )
+        )
+        .where(SubscriptionChangeRequest.applied_at.is_(None))
+        .where(SubscriptionChangeRequest.is_active.is_(True))
+        .options(
+            selectinload(SubscriptionChangeRequest.current_offer),
+            selectinload(SubscriptionChangeRequest.requested_offer),
+            selectinload(SubscriptionChangeRequest.target_service_address),
+        )
+        .order_by(
+            SubscriptionChangeRequest.effective_date.asc(),
+            SubscriptionChangeRequest.created_at.asc(),
+        )
+    ).all()
+    changes: dict[UUID, PortalPendingServiceChange] = {}
+    for row in rows:
+        if row.subscription_id in changes:
+            continue
+        delivery_mode = (
+            classify_service_change_delivery(
+                row.current_offer,
+                row.requested_offer,
+                service_address_changed=row.target_service_address_id is not None,
+            ).value
+            if row.current_offer is not None and row.requested_offer is not None
+            else "unknown"
+        )
+        confirmation = row.confirmation_snapshot or {}
+        target_address = row.target_service_address
+        changes[row.subscription_id] = PortalPendingServiceChange(
+            request_id=row.id,
+            status=row.status.value,
+            target_offer_name=(
+                row.requested_offer.name if row.requested_offer else "Requested plan"
+            ),
+            effective_date=row.effective_date,
+            delivery_mode=delivery_mode,
+            delivery_state=str(
+                confirmation.get("delivery_state") or "awaiting_verification"
+            ),
+            target_service_address=(
+                ", ".join(
+                    part
+                    for part in (
+                        target_address.label,
+                        target_address.address_line1,
+                        target_address.city,
+                        target_address.region,
+                    )
+                    if part
+                )
+                if target_address is not None
+                else None
+            ),
+            field_fee_amount=row.field_fee_amount,
+            field_fee_currency=row.field_fee_currency,
+        )
+    return changes
 
 
 def build_portal_account_health(
@@ -366,6 +464,7 @@ def build_portal_account_health(
 
     subscriptions = list_current_service_subscriptions(db, str(resolved_account_id))
     sessions = subscription_session_snapshots(db, subscriptions)
+    pending_changes = _pending_service_changes(db, subscriptions)
     status_items, primary_action, as_of = _status_items(db, resolved_account_id)
     service_rows = tuple(
         _service_health(
@@ -373,6 +472,7 @@ def build_portal_account_health(
             subscription,
             status_items.get(subscription.id),
             sessions[subscription.id],
+            pending_changes.get(subscription.id),
         )
         for subscription in subscriptions
     )

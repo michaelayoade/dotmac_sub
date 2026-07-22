@@ -89,6 +89,7 @@ from app.services.network.radius_sessions import (
     subscription_session_snapshots,
 )
 from app.services.nin_matching import mask_nin
+from app.services.portal_account_health import build_portal_account_health
 from app.services.status_presentation import (
     access_session_status_presentation,
     account_status_presentation,
@@ -1764,6 +1765,7 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
         connection_by_subscription,
         additional_routes_by_subscriber,
     )
+    account_health = build_portal_account_health(db, customer.id)
     pending_location_request = (
         db.query(CustomerLocationChangeRequest)
         .filter(CustomerLocationChangeRequest.subscriber_id == customer.id)
@@ -1823,6 +1825,7 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
         "network_connection_status": network_connection_status,
         "connection_by_subscription": connection_by_subscription,
         "network_access_cards": network_access_cards,
+        "account_health": account_health,
         "access_repair_state": _build_access_repair_state(
             db,
             customer,

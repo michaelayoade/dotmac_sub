@@ -407,7 +407,7 @@ def _offer_summary(offer, summary) -> PlanOfferSummary | None:
 
 
 @router.get(
-    "/subscriptions/{subscription_id}/plan-change",
+    "/subscriptions/{subscription_id}/service-change",
     response_model=PlanChangePageResponse,
 )
 def my_plan_change_options(
@@ -438,19 +438,26 @@ def my_plan_change_options(
         ),
         next_billing_date=ctx.get("next_billing_date"),
         billing_message=ctx.get("billing_message"),
+        service_addresses=ctx.get("service_addresses", []),
+        current_service_address_id=ctx.get("current_service_address_id"),
     )
 
 
-@router.get("/subscriptions/{subscription_id}/plan-change/quote")
+@router.get("/subscriptions/{subscription_id}/service-change/quote")
 def my_plan_change_quote(
     subscription_id: str,
     offer_id: str,
+    target_service_address_id: str | None = None,
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ) -> dict:
     """Prorated quote for switching this service to a single target offer."""
     quote = customer_changes.get_plan_change_quote(
-        db, _customer(db, principal), subscription_id, offer_id
+        db,
+        _customer(db, principal),
+        subscription_id,
+        offer_id,
+        target_service_address_id=target_service_address_id,
     )
     if quote is None:
         raise HTTPException(status_code=404, detail="Plan not available")
@@ -458,7 +465,7 @@ def my_plan_change_quote(
 
 
 @router.post(
-    "/subscriptions/{subscription_id}/plan-change",
+    "/subscriptions/{subscription_id}/service-change",
     response_model=PlanChangeSubmitResponse,
 )
 def my_plan_change_submit(
@@ -469,10 +476,10 @@ def my_plan_change_submit(
 ):
     """Apply a plan change for the caller's own service.
 
-    Mirrors the web portal: same-family changes apply instantly when the
-    customer is eligible (no arrears, sufficient prepaid funds); a cross-family
-    change is queued as a migration support ticket. apply_instant_plan_change
-    verifies ownership, availability, arrears, and prepaid affordability.
+    Commercial-only changes apply immediately. Remote reprovisioning and field
+    migrations persist a reviewed change intent until the appropriate delivery
+    owner records verification. Plan family never decides the branch and this
+    endpoint never creates a support ticket.
     """
     customer = _customer(db, principal)
     account_id = require_customer_account_id(db, customer)
@@ -482,45 +489,26 @@ def my_plan_change_submit(
     if not subscription or str(subscription.subscriber_id) != str(account_id):
         raise HTTPException(status_code=404, detail="Service not found")
     try:
-        result = customer_changes.apply_instant_plan_change(
+        result = customer_changes.confirm_service_change(
             db=db,
             customer=customer,
             subscription_id=subscription_id,
             offer_id=str(payload.offer_id),
+            target_service_address_id=(
+                str(payload.target_service_address_id)
+                if payload.target_service_address_id
+                else None
+            ),
             notes=payload.notes,
             preview_fingerprint=payload.preview_fingerprint or "",
+            field_quote_fingerprint=payload.field_quote_fingerprint,
             preview_effective_at=payload.preview_effective_at,
             idempotency_key=payload.idempotency_key or "",
             confirmation_origin="customer_api",
         )
     except ValueError as exc:
-        message = str(exc)
-        # Cross-family changes can't apply instantly — queue a migration ticket.
-        if "same plan family" in message.lower():
-            from app.models.catalog import CatalogOffer
-            from app.services.common import coerce_uuid
-
-            offer = db.get(CatalogOffer, coerce_uuid(str(payload.offer_id)))
-            target_family = str(getattr(offer, "plan_family", "") or "").strip()
-            if target_family:
-                customer_changes.request_plan_migration(
-                    db=db,
-                    customer=customer,
-                    subscription_id=subscription_id,
-                    target_family=target_family,
-                    requested_offer_id=str(payload.offer_id),
-                    notes=payload.notes,
-                )
-                return PlanChangeSubmitResponse(
-                    success=True,
-                    status="migration_requested",
-                    message=(
-                        "This plan needs a migration. We've opened a support "
-                        "request to move you."
-                    ),
-                )
         # Arrears / validation errors → 400 with the clear message.
-        raise HTTPException(status_code=400, detail=message) from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if not result.get("success", False):
         # Insufficient prepaid funding for the prorated upgrade.
@@ -534,10 +522,16 @@ def my_plan_change_submit(
                 else "Insufficient prepaid funding to apply this upgrade."
             ),
         )
+    delivery_mode = str(result.get("delivery_mode") or "commercial_only")
+    status = (
+        "applied"
+        if result.get("status") in {"applied", "skipped"}
+        else f"pending_{delivery_mode}"
+    )
     return PlanChangeSubmitResponse(
         success=True,
-        status="applied",
-        message="Your plan has been changed.",
+        status=status,
+        message=str(result.get("message") or "Your service change is confirmed."),
         change_request_id=result.get("change_request_id"),
         account_adjustment_id=result.get("account_adjustment_id"),
         credit_note_id=result.get("credit_note_id"),

@@ -521,8 +521,10 @@ def test_canonical_prepaid_funding_renewal_creates_entitlement(
         .one()
     )
     assert entitlement.amount_funded == Decimal("1000.00")
-    assert entitlement.starts_at == _utc_naive(datetime(2026, 8, 5, tzinfo=UTC))
-    assert entitlement.ends_at == subscription.next_billing_at
+    assert _utc_naive(entitlement.starts_at) == _utc_naive(
+        datetime(2026, 8, 5, tzinfo=UTC)
+    )
+    assert _utc_naive(entitlement.ends_at) == _utc_naive(subscription.next_billing_at)
     event = (
         db_session.query(EventStore)
         .filter_by(

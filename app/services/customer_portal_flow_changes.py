@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.catalog import CatalogOffer, PriceType, Subscription
-from app.models.subscriber import Subscriber
+from app.models.subscriber import Address, Subscriber
 from app.models.subscription_change import (
     SubscriptionChangeRequest,
     SubscriptionChangeStatus,
@@ -50,12 +50,6 @@ _CYCLE_LABELS = {
     "monthly": "/month",
     "quarterly": "/quarter",
     "annual": "/year",
-}
-
-_PLAN_FAMILY_LABELS = {
-    "unlimited": "Unlimited",
-    "dedicated": "Dedicated",
-    "home_flex": "Home Flex",
 }
 
 
@@ -129,6 +123,7 @@ def _build_plan_change_quote(
     *,
     prepaid_funding_before: Decimal | None = None,
     effective_at: datetime | None = None,
+    target_service_address_id: str | None = None,
 ) -> dict[str, object]:
     from app.services.subscription_lifecycle import (
         SubscriptionCommandKind,
@@ -143,6 +138,7 @@ def _build_plan_change_quote(
             kind=SubscriptionCommandKind.change_plan,
             source="customer_portal:plan_change_quote",
             target_offer_id=str(target_offer.id),
+            target_service_address_id=target_service_address_id,
             effective_at=effective_at,
         ),
         current_balance=prepaid_funding_before,
@@ -151,10 +147,30 @@ def _build_plan_change_quote(
     quote = details.get("quote")
     if not isinstance(quote, dict):
         return {}
-    return quote
+    field_quote = (
+        preview.field_delivery_quote.as_dict()
+        if preview.field_delivery_quote is not None
+        else None
+    )
+    return {
+        **quote,
+        "delivery_mode": (
+            preview.delivery_mode.value if preview.delivery_mode is not None else None
+        ),
+        "field_delivery_quote": field_quote,
+    }
 
 
 def _serialize_plan_change_quote(quote: dict[str, object]) -> dict[str, object]:
+    raw_field_quote = quote.get("field_delivery_quote")
+    field_quote = (
+        {
+            **raw_field_quote,
+            "fee_amount": _to_float(raw_field_quote.get("fee_amount")),
+        }
+        if isinstance(raw_field_quote, dict)
+        else None
+    )
     return {
         "current_remaining_value": _to_float(
             quote.get("current_remaining_value", Decimal("0.00"))
@@ -183,7 +199,8 @@ def _serialize_plan_change_quote(quote: dict[str, object]) -> dict[str, object]:
             quote.get("remaining_cycle_seconds", 0) or 0
         ),
         "total_cycle_seconds": _to_int(quote.get("total_cycle_seconds", 0) or 0),
-        "can_apply_immediately": bool(quote.get("can_apply_immediately", False)),
+        "can_apply_immediately": bool(quote.get("can_apply_immediately", False))
+        and not (field_quote is not None and not field_quote.get("eligible", False)),
         "is_upgrade": bool(quote.get("is_upgrade", False)),
         "is_downgrade": bool(quote.get("is_downgrade", False)),
         "reason": quote.get("reason"),
@@ -195,72 +212,63 @@ def _serialize_plan_change_quote(quote: dict[str, object]) -> dict[str, object]:
         "access_consequence": str(
             quote.get("access_consequence") or "none_plan_change_only"
         ),
+        "delivery_mode": str(quote.get("delivery_mode") or "unknown"),
+        "field_delivery_quote": field_quote,
     }
 
 
-def _build_migration_options(
-    db: Session,
-    subscription: Subscription,
-) -> list[dict[str, str]]:
-    options: list[dict[str, str]] = []
-    seen: set[str] = set()
-    for offer in _build_migration_offers(db, subscription):
-        family = str(offer.plan_family or "").strip().lower()
-        if family in seen:
-            continue
-        seen.add(family)
-        options.append(
-            {
-                "family": family,
-                "label": _PLAN_FAMILY_LABELS.get(
-                    family, family.replace("_", " ").title()
-                ),
-            }
-        )
-    return options
-
-
-def _build_migration_offers(
-    db: Session,
-    subscription: Subscription,
-) -> list[CatalogOffer]:
-    current_offer = (
-        db.get(CatalogOffer, subscription.offer_id) if subscription.offer_id else None
+def _service_address_options(db: Session, subscription: Subscription) -> list[dict]:
+    rows = (
+        db.query(Address)
+        .filter(Address.subscriber_id == subscription.subscriber_id)
+        .order_by(Address.is_primary.desc(), Address.created_at.asc())
+        .all()
     )
-    if not current_offer:
-        return []
+    return [
+        {
+            "id": str(address.id),
+            "label": ", ".join(
+                part
+                for part in (
+                    address.label,
+                    address.address_line1,
+                    address.city,
+                    address.region,
+                )
+                if part
+            ),
+            "has_coordinates": (
+                address.latitude is not None and address.longitude is not None
+            ),
+            "is_current": str(address.id) == str(subscription.service_address_id),
+        }
+        for address in rows
+    ]
 
-    # No subscription arg on purpose (migration targets live in OTHER plan
-    # families), but reseller scoping still applies via the subscriber.
-    all_portal_offers = get_available_portal_offers(
-        db, subscriber_id=subscription.subscriber_id
-    )
-    offers: list[CatalogOffer] = []
-    for offer in all_portal_offers:
-        if not offer_has_positive_recurring_price(offer):
-            continue
-        family = str(offer.plan_family or "").strip().lower()
-        if not family or family == str(current_offer.plan_family or "").strip().lower():
-            continue
-        if offer.service_type != current_offer.service_type:
-            continue
-        if offer.billing_mode != current_offer.billing_mode:
-            continue
-        if str(offer.region_zone_id or "") != str(current_offer.region_zone_id or ""):
-            continue
-        offers.append(offer)
-    return offers
+
+def _offer_delivery_modes(
+    current_offer: CatalogOffer | None,
+    offers: list[CatalogOffer],
+) -> dict[str, str]:
+    if current_offer is None:
+        return {}
+    from app.services.subscription_lifecycle import classify_service_change_delivery
+
+    return {
+        str(offer.id): classify_service_change_delivery(current_offer, offer).value
+        for offer in offers
+    }
 
 
 # Editor contract for the customer plan-change form (ui.form_contracts pilot).
-# The command owner (apply_instant_plan_change) re-checks every prerequisite at
-# execution time; this rendered contract is disclosure, not enforcement.
+# The lifecycle command owner re-checks every prerequisite at execution time;
+# this rendered contract is disclosure, not enforcement.
 PLAN_CHANGE_FORM = register_form_contract(
     FormContract(
         key="customer.plan_change",
         title="Change plan",
         entity="subscription",
-        command_owner="customer_portal_flow_changes.apply_instant_plan_change",
+        command_owner="service_intent.subscription_lifecycle_execution",
         consequences=(
             FormConsequence(
                 "proration",
@@ -269,12 +277,13 @@ PLAN_CHANGE_FORM = register_form_contract(
             ),
             FormConsequence(
                 "reprovision",
-                "Your connection is re-provisioned to the new plan's speed right away",
+                "A network profile change is queued for remote provisioning and "
+                "verification before your subscription changes",
             ),
             FormConsequence(
-                "cross_family",
-                "Choosing a plan from a different family submits a migration "
-                "request for our team instead of changing instantly",
+                "field_fulfillment",
+                "A physical access change is queued for field fulfillment; a work "
+                "order is created only when a site visit is actually required",
             ),
         ),
     )
@@ -365,8 +374,6 @@ def get_change_plan_page(
     # proration calc per available offer, making this page take ~46s for large
     # catalogs and time out on submit (which could saturate workers / crash the app).
     quote_map: dict[str, dict[str, object]] = {}
-    migration_offers = _build_migration_offers(db, subscription)
-
     return {
         "subscription": subscription,
         "current_offer": current_offer,
@@ -375,11 +382,16 @@ def get_change_plan_page(
             str(offer.id): get_offer_price_summary(offer) for offer in available_offers
         },
         "available_offers": available_offers,
-        "migration_offers": migration_offers,
-        "migration_offer_summaries": {
-            str(offer.id): get_offer_price_summary(offer) for offer in migration_offers
-        },
+        "available_offer_delivery_modes": _offer_delivery_modes(
+            current_offer, available_offers
+        ),
         "available_offer_change_quotes": quote_map,
+        "service_addresses": _service_address_options(db, subscription),
+        "current_service_address_id": (
+            str(subscription.service_address_id)
+            if subscription.service_address_id
+            else None
+        ),
         "prepaid_funding": prepaid_funding,
         "postpaid_receivables": (
             financial_position.open_invoice_balance
@@ -387,7 +399,6 @@ def get_change_plan_page(
             else Decimal("0.00")
         ),
         "collection_blocking_balance": arrears_amount,
-        "migration_options": _build_migration_options(db, subscription),
         "selected_offer_id": None,
         "insufficient_funding": None,
         "next_billing_date": next_billing_date,
@@ -405,6 +416,7 @@ def get_plan_change_quote(
     customer: dict,
     subscription_id: str,
     offer_id: str,
+    target_service_address_id: str | None = None,
 ) -> dict | None:
     """Build the prorated plan-change quote for a single target offer (lazy).
 
@@ -425,12 +437,23 @@ def get_plan_change_quote(
     if not account_id or str(subscription.subscriber_id) != str(account_id):
         return None
 
+    if str(target_service_address_id or "") == str(
+        subscription.service_address_id or ""
+    ):
+        target_service_address_id = None
+
     # Only quote offers that are actually offered to this subscription.
     available_offers = get_available_portal_offers(db, subscription)
     target_offer = next(
         (o for o in available_offers if str(o.id) == str(offer_id)), None
     )
-    if target_offer is None or str(target_offer.id) == str(subscription.offer_id):
+    address_changes = bool(
+        target_service_address_id
+        and str(target_service_address_id) != str(subscription.service_address_id or "")
+    )
+    if target_offer is None or (
+        str(target_offer.id) == str(subscription.offer_id) and not address_changes
+    ):
         return None
 
     prepaid_funding = _customer_credit_balance(db, str(subscription.subscriber_id))
@@ -440,6 +463,7 @@ def get_plan_change_quote(
             subscription,
             target_offer,
             prepaid_funding_before=prepaid_funding,
+            target_service_address_id=target_service_address_id,
         )
     )
 
@@ -474,17 +498,14 @@ def submit_change_plan(
         db.get(Subscriber, coerce_uuid(subscriber_id)) if subscriber_id else None
     )
 
-    # Fail fast on offers the customer could never change to (cross-family,
-    # hidden, archived, reseller-restricted): apply-time validation would only
+    # Fail fast on offers the customer could never change to (hidden, archived,
+    # region-incompatible, reseller-restricted): apply-time validation would only
     # surface the rejection after the request sat in the approval queue.
     available = get_available_portal_offers(db, subscription)
     if str(offer_id) not in {str(offer.id) for offer in available}:
-        raise ValueError(
-            "This plan is not available for self-service change. "
-            "Contact support to migrate to it."
-        )
+        raise ValueError("This plan is not available for self-service change.")
 
-    # Same block-until-settled policy as apply_instant_plan_change: an account
+    # Same block-until-settled policy as confirm_service_change: an account
     # in arrears must clear overdue invoices before any plan change (including a
     # future-dated request).
     arrears = _collection_blocking_balance(db, str(subscription.subscriber_id))
@@ -530,7 +551,6 @@ def get_change_plan_error_context(
         else None
     )
     available_offers = get_available_portal_offers(db, subscription)
-    migration_offers = _build_migration_offers(db, subscription) if subscription else []
     current_offer = (
         db.get(CatalogOffer, subscription.offer_id)
         if subscription and subscription.offer_id
@@ -552,14 +572,21 @@ def get_change_plan_error_context(
             str(offer.id): get_offer_price_summary(offer) for offer in available_offers
         },
         "available_offers": available_offers,
-        "migration_offers": migration_offers,
-        "migration_offer_summaries": {
-            str(offer.id): get_offer_price_summary(offer) for offer in migration_offers
-        },
+        "available_offer_delivery_modes": _offer_delivery_modes(
+            current_offer, available_offers
+        ),
         "available_offer_change_quotes": (
             page_data.get("available_offer_change_quotes", {})
             if page_data is not None
             else {}
+        ),
+        "service_addresses": (
+            _service_address_options(db, subscription) if subscription else []
+        ),
+        "current_service_address_id": (
+            str(subscription.service_address_id)
+            if subscription and subscription.service_address_id
+            else None
         ),
         "prepaid_funding": (
             error_position.prepaid_available_balance
@@ -576,9 +603,6 @@ def get_change_plan_error_context(
             if error_position is not None
             else Decimal("0.00")
         ),
-        "migration_options": _build_migration_options(db, subscription)
-        if subscription
-        else [],
         "selected_offer_id": selected_offer_id,
         "insufficient_funding": insufficient_funding,
         "next_billing_date": next_billing_date,
@@ -708,7 +732,7 @@ def get_plan_change_copy(subscription: Subscription) -> dict[str, str]:
         return {
             "timing_message": "Select a new plan. Changes take effect immediately.",
             "billing_message": (
-                "Because this subscription is prepaid, any same-family upgrade uses "
+                "Because this subscription is prepaid, an immediate upgrade uses "
                 "prepaid funding for the prorated difference over the rest of this billing cycle."
             ),
         }
@@ -721,23 +745,33 @@ def get_plan_change_copy(subscription: Subscription) -> dict[str, str]:
     }
 
 
-def apply_instant_plan_change(
+def confirm_service_change(
     db: Session,
     customer: dict,
     subscription_id: str,
     offer_id: str,
     notes: str | None = None,
     *,
+    target_service_address_id: str | None = None,
     preview_fingerprint: str,
+    field_quote_fingerprint: str | None = None,
     preview_effective_at: datetime | None = None,
     idempotency_key: str,
     confirmation_origin: str,
 ) -> dict:
-    """Instantly apply a plan change for the customer."""
+    """Confirm a customer service change through the canonical delivery owner."""
     from fastapi import HTTPException
 
-    from app.services import subscription_changes as change_service
-    from app.services.catalog.subscriptions import _validate_plan_change
+    from app.models.audit import AuditActorType
+    from app.services.subscription_lifecycle import (
+        SubscriptionCommandKind,
+        SubscriptionCommandOutcomeStatus,
+        SubscriptionLifecycleCommand,
+        resolve_subscription_lifecycle,
+    )
+    from app.services.subscription_lifecycle_commands import (
+        confirm_subscription_service_change,
+    )
 
     subscription = catalog_service.subscriptions.get(
         db=db, subscription_id=subscription_id
@@ -748,6 +782,10 @@ def apply_instant_plan_change(
     account_id = optional_customer_account_id(db, customer)
     if not account_id or str(subscription.subscriber_id) != str(account_id):
         raise ValueError("Subscription does not belong to this account")
+    if str(target_service_address_id or "") == str(
+        subscription.service_address_id or ""
+    ):
+        target_service_address_id = None
 
     replay = (
         db.query(SubscriptionChangeRequest)
@@ -755,22 +793,39 @@ def apply_instant_plan_change(
             SubscriptionChangeRequest.confirmation_idempotency_key
             == idempotency_key.strip()
         )
-        .first()
+        .one_or_none()
     )
     if replay is not None:
         if (
             str(replay.subscription_id) != str(subscription.id)
             or str(replay.requested_offer_id) != str(offer_id)
             or replay.confirmation_preview_fingerprint != preview_fingerprint.strip()
+            or str(replay.target_service_address_id or "")
+            != str(target_service_address_id or "")
         ):
             raise HTTPException(
                 status_code=409,
-                detail=("Plan-change idempotency key belongs to another confirmation"),
+                detail="Plan-change idempotency key belongs to another confirmation",
             )
-        if replay.status == SubscriptionChangeStatus.applied:
+        if replay.status in {
+            SubscriptionChangeStatus.pending,
+            SubscriptionChangeStatus.approved,
+            SubscriptionChangeStatus.applied,
+        }:
+            confirmation = replay.confirmation_snapshot or {}
+            pending = replay.status != SubscriptionChangeStatus.applied
             return {
                 "success": True,
                 "replayed": True,
+                "status": "scheduled" if pending else "applied",
+                "delivery_mode": str(
+                    confirmation.get("delivery_mode") or "commercial_only"
+                ),
+                "message": (
+                    "Existing service change is still awaiting delivery verification"
+                    if pending
+                    else "Service change was already applied"
+                ),
                 "change_request_id": str(replay.id),
                 "account_adjustment_id": (
                     str(replay.account_adjustment_id)
@@ -788,26 +843,20 @@ def apply_instant_plan_change(
     new_offer = db.get(CatalogOffer, coerce_uuid(offer_id))
     if not new_offer:
         raise ValueError("Selected plan is not available")
+    if not offer_has_positive_recurring_price(new_offer):
+        raise ValueError("This plan is not available for self-service change.")
     # Gate on the same single source as the deferred path: this enforces
-    # status==active + show_on_customer_portal + plan_family + reseller
+    # status==active + show_on_customer_portal + reseller
     # availability, not just is_active — otherwise the instant path could
-    # switch a customer onto an archived/hidden/cross-family offer by POSTing
+    # switch a customer onto an archived or hidden offer by POSTing
     # its id directly (the deferred/mobile path was already guarded).
     available = get_available_portal_offers(db, subscription)
     if str(new_offer.id) not in {str(o.id) for o in available}:
-        raise ValueError(
-            "This plan is not available for self-service change. "
-            "Contact support to migrate to it."
-        )
+        raise ValueError("This plan is not available for self-service change.")
 
     current_offer = (
         db.get(CatalogOffer, subscription.offer_id) if subscription.offer_id else None
     )
-    try:
-        _validate_plan_change(db, subscription, str(new_offer.id))
-    except HTTPException as exc:
-        raise ValueError(str(exc.detail)) from exc
-
     # Block self-service plan changes while the account is in arrears. Policy:
     # the customer must settle overdue invoices first (covers prepaid AND
     # postpaid — the old affordability gate only looked at prepaid funding
@@ -849,6 +898,7 @@ def apply_instant_plan_change(
         new_offer,
         prepaid_funding_before=prepaid_funding,
         effective_at=preview_effective_at,
+        target_service_address_id=target_service_address_id,
     )
     if str(quote.get("preview_fingerprint") or "") != preview_fingerprint.strip():
         raise HTTPException(
@@ -880,22 +930,61 @@ def apply_instant_plan_change(
         db.get(Subscriber, coerce_uuid(subscriber_id)) if subscriber_id else None
     )
 
-    change_request = change_service.subscription_change_requests.confirm_immediate(
-        db=db,
+    reviewed = resolve_subscription_lifecycle(db, subscription_id)
+    command = SubscriptionLifecycleCommand(
         subscription_id=subscription_id,
-        new_offer_id=offer_id,
-        preview_fingerprint=preview_fingerprint,
-        preview_effective_at=preview_effective_at,
+        kind=SubscriptionCommandKind.change_plan,
+        source=confirmation_origin,
+        effective_at=preview_effective_at,
+        target_offer_id=offer_id,
+        target_service_address_id=target_service_address_id,
+        reason=notes or "Customer-confirmed plan change",
+        expected_head=reviewed.head,
+        expected_financial_fingerprint=preview_fingerprint,
+        expected_field_quote_fingerprint=field_quote_fingerprint,
         idempotency_key=idempotency_key,
-        confirmation_origin=confirmation_origin,
-        confirmation_snapshot=_serialize_plan_change_quote(quote),
-        requested_by_person_id=str(subscriber.id) if subscriber else None,
-        actor_id=str(subscriber.id) if subscriber else None,
-        notes=notes,
     )
+    outcome = confirm_subscription_service_change(
+        db,
+        command,
+        actor_id=str(subscriber.id) if subscriber else None,
+        actor_type=(AuditActorType.user if subscriber else AuditActorType.system),
+    )
+    if outcome.status not in {
+        SubscriptionCommandOutcomeStatus.applied,
+        SubscriptionCommandOutcomeStatus.scheduled,
+        SubscriptionCommandOutcomeStatus.skipped,
+    }:
+        status_code = (
+            409
+            if outcome.status == SubscriptionCommandOutcomeStatus.superseded
+            or outcome.error_code
+            in {"plan_change_financial_preview_stale", "subscription_head_changed"}
+            else 400
+        )
+        raise HTTPException(status_code=status_code, detail=outcome.message)
+    change_request = (
+        db.get(SubscriptionChangeRequest, coerce_uuid(outcome.artifact_ids[0]))
+        if outcome.artifact_ids
+        else db.query(SubscriptionChangeRequest)
+        .filter(
+            SubscriptionChangeRequest.confirmation_idempotency_key
+            == idempotency_key.strip()
+        )
+        .one_or_none()
+    )
+    if change_request is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Plan-change result evidence is unavailable",
+        )
 
     return {
         "success": True,
+        "status": outcome.status.value,
+        "delivery_mode": str(quote.get("delivery_mode") or "unknown"),
+        "message": outcome.message,
+        "replayed": outcome.replayed,
         "old_offer_name": old_name,
         "new_offer_name": new_name,
         "old_price": old_price,
@@ -921,67 +1010,6 @@ def apply_instant_plan_change(
     }
 
 
-def request_plan_migration(
-    db: Session,
-    customer: dict,
-    subscription_id: str,
-    *,
-    target_family: str,
-    requested_offer_id: str | None = None,
-    notes: str | None = None,
-) -> dict:
-    """Create a support ticket for a cross-family migration request."""
-    from app.services import crm_portal
-
-    subscription = catalog_service.subscriptions.get(
-        db=db, subscription_id=subscription_id
-    )
-    if not subscription:
-        raise ValueError("Subscription not found")
-
-    account_id = optional_customer_account_id(db, customer)
-    if not account_id or str(subscription.subscriber_id) != str(account_id):
-        raise ValueError("Subscription does not belong to this account")
-
-    current_offer = (
-        db.get(CatalogOffer, subscription.offer_id) if subscription.offer_id else None
-    )
-    requested_offer = (
-        db.get(CatalogOffer, coerce_uuid(requested_offer_id))
-        if requested_offer_id
-        else None
-    )
-    subscriber_lookup = str(subscription.subscriber_id)
-    title = "Request Plan Migration"
-    description_lines = [
-        f"Subscription: {subscription.id}",
-        (
-            f"Current offer: {current_offer.name if current_offer else subscription.offer_id}"
-        ),
-        (
-            "Current family: "
-            f"{str(getattr(current_offer, 'plan_family', '') or 'unclassified')}"
-        ),
-        f"Requested family: {target_family}",
-    ]
-    if requested_offer:
-        description_lines.append(f"Requested offer: {requested_offer.name}")
-    if notes:
-        description_lines.extend(["", f"Customer notes: {notes.strip()}"])
-
-    result = crm_portal.handle_ticket_create(
-        db,
-        customer,
-        subscriber_lookup,
-        title,
-        "\n".join(description_lines),
-        "normal",
-    )
-    if not result.get("success"):
-        raise ValueError(result.get("error") or "Unable to create ticket.")
-    return result
-
-
 __all__ = [
     "get_change_plan_page",
     "submit_change_plan",
@@ -991,6 +1019,5 @@ __all__ = [
     "get_offer_price_summary",
     "get_plan_change_copy",
     "get_plan_change_quote",
-    "apply_instant_plan_change",
-    "request_plan_migration",
+    "confirm_service_change",
 ]

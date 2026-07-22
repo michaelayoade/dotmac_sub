@@ -3706,6 +3706,18 @@ SETTINGS_SPECS: list[SettingSpec] = [
         ),
         min_value=0,
     ),
+    # Catalog-backed field-delivery charges. The configured offer must expose
+    # one active one-time price; a wireless relocation fails closed when this
+    # setting is empty or invalid, so neither portal can quote a free move by
+    # accident.
+    SettingSpec(
+        domain=SettingDomain.projects,
+        key="wireless_relocation_offer_id",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default=None,
+        label="Wireless/radio relocation fee catalog offer",
+    ),
     # write-flip flag:
     # OFF = quote acceptance write-through to the CRM (mirror path); ON =
     # native accept (sales/selfserve.accept_with_deposit → native sales

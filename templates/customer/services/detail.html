@@ -19,7 +19,8 @@
     'archived': 'inactive',
 }.get(status_value, 'default') %}
 <div class="space-y-6">
-    {% if request.query_params.get('plan_changed') == 'true' %}
+    {% set service_change = request.query_params.get('service_change') %}
+    {% if service_change == 'applied' %}
     <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-900 dark:bg-emerald-900/20">
         <div class="flex items-center gap-3">
             <svg class="h-5 w-5 flex-shrink-0 text-emerald-600 dark:text-emerald-400" fill="currentColor" viewBox="0 0 20 20">
@@ -30,6 +31,16 @@
             </p>
             <p class="text-sm text-emerald-700/80 dark:text-emerald-300/80">{{ billing_message }}</p>
         </div>
+    </div>
+    {% elif service_change in ['remote_reprovision', 'field_migration'] %}
+    <div class="rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-900 dark:bg-amber-900/20">
+        <p class="text-sm font-medium text-amber-800 dark:text-amber-200">
+            {% if service_change == 'remote_reprovision' %}
+            Your service change is confirmed and awaiting remote provisioning verification. No site visit or support ticket is required.
+            {% else %}
+            Your service migration is confirmed and awaiting field fulfillment. A work order is used only for the required site work.
+            {% endif %}
+        </p>
     </div>
     {% endif %}
     {% if request.query_params.get('suspended') == 'true' %}

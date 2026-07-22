@@ -742,17 +742,6 @@ def _validate_plan_change(
         raise HTTPException(status_code=404, detail="Target offer not found")
 
     old_offer = db.get(CatalogOffer, subscription.offer_id)
-    old_family = str(getattr(old_offer, "plan_family", "") or "").strip().lower()
-    new_family = str(getattr(new_offer, "plan_family", "") or "").strip().lower()
-
-    if not old_family or not new_family or old_family != new_family:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "This plan migration requires support. Instant self-service changes "
-                "are only available within the same plan family."
-            ),
-        )
 
     # Service type check: don't allow residential → business cross-change
     if old_offer and new_offer:

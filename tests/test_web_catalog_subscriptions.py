@@ -2886,7 +2886,7 @@ def test_bulk_change_plan_excludes_suspended_by_default(
     from app.schemas.catalog import CatalogOfferCreate
     from app.services.web_catalog_subscriptions import bulk_change_plan
 
-    # Same plan_family so the change-plan family guard permits the migration.
+    # Commercial family does not decide delivery; catalog compatibility does.
     catalog_offer.plan_family = "std"
     target = catalog_service.offers.create(
         db_session,
@@ -2928,7 +2928,7 @@ def test_bulk_change_plan_include_suspended_opt_in(
     from app.schemas.catalog import CatalogOfferCreate
     from app.services.web_catalog_subscriptions import bulk_change_plan
 
-    # Same plan_family so the change-plan family guard permits the migration.
+    # Commercial family does not decide delivery; catalog compatibility does.
     catalog_offer.plan_family = "std"
     target = catalog_service.offers.create(
         db_session,
