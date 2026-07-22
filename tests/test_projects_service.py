@@ -10,8 +10,8 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from fastapi import HTTPException
 
+from app.models.audit import AuditEvent
 from app.models.notification import Notification, NotificationChannel
 from app.models.project import (
     ProjectTask,
@@ -30,11 +30,14 @@ from app.schemas.project import (
     ProjectTaskUpdate,
     ProjectUpdate,
 )
+from app.services.owner_commands import CommandContext
 from app.services.projects import (
     FIBER_INSTALLATION_STAGE_ORDER,
     FIBER_INSTALLATION_STAGE_TITLES,
+    ProjectServiceError,
     project_tasks,
     projects,
+    reconcile_project_projection,
 )
 
 
@@ -54,6 +57,51 @@ def _tasks_for(db_session, project):
         .filter(ProjectTask.project_id == project.id)
         .order_by(ProjectTask.created_at.asc())
         .all()
+    )
+
+
+def test_project_owner_command_is_atomic_and_stages_audit(db_session, subscriber):
+    project = _create_fiber_project(db_session, subscriber)
+
+    assert not db_session.in_transaction()
+    audit = (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.entity_type == "project")
+        .filter(AuditEvent.entity_id == str(project.id))
+        .filter(AuditEvent.action == "create")
+        .one()
+    )
+    assert audit.request_id
+
+
+def test_reconcile_project_projection_repairs_missing_sla_clock(db_session, subscriber):
+    project = _create_fiber_project(db_session, subscriber)
+    db_session.query(SlaClock).filter(
+        SlaClock.entity_type == WorkflowEntityType.project.value,
+        SlaClock.entity_id == project.id,
+    ).delete(synchronize_session=False)
+    db_session.commit()
+
+    outcome = reconcile_project_projection(
+        db_session,
+        project_id=project.id,
+        context=CommandContext.system(
+            actor="system:test",
+            scope="operations:projects:repair",
+            reason="test projection repair",
+            idempotency_key=f"repair:{project.id}",
+        ),
+    )
+
+    assert outcome.repaired_sla_clocks >= 1
+    assert (
+        db_session.query(SlaClock)
+        .filter(
+            SlaClock.entity_type == WorkflowEntityType.project.value,
+            SlaClock.entity_id == project.id,
+        )
+        .count()
+        == 1
     )
 
 
@@ -215,7 +263,7 @@ class TestTaskStateMachine:
     def test_ticket_link_requires_existing_support_ticket(self, db_session, subscriber):
         project = _create_fiber_project(db_session, subscriber)
 
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ProjectServiceError) as exc:
             project_tasks.create(
                 db_session,
                 ProjectTaskCreate(
@@ -224,7 +272,7 @@ class TestTaskStateMachine:
                     ticket_id=uuid.uuid4(),
                 ),
             )
-        assert exc.value.status_code == 404
+        assert exc.value.code == "operations.project_lifecycle.not_found"
 
         ticket = Ticket(title="Install issue", subscriber_id=subscriber.id)
         db_session.add(ticket)
@@ -431,9 +479,9 @@ class TestProjectLifecycle:
         )
         assert any(n.subject.startswith("Project completed:") for n in emails)
 
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ProjectServiceError) as exc:
             projects.update_status(db_session, str(project.id), "not-a-status")
-        assert exc.value.status_code == 400
+        assert exc.value.code == "operations.project_lifecycle.invalid_transition"
 
     def test_update_gantt_date_uses_canonical_update(
         self, db_session, subscriber, emitted_events
@@ -521,9 +569,9 @@ class TestProjectLifecycle:
         assert item["due_date"] is not None
 
     def test_get_missing_project_404(self, db_session):
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ProjectServiceError) as exc:
             projects.get(db_session, str(uuid.uuid4()))
-        assert exc.value.status_code == 404
+        assert exc.value.code == "operations.project_lifecycle.not_found"
 
     def test_list_filters_by_status_and_subscriber(self, db_session, subscriber):
         project = _create_fiber_project(db_session, subscriber)

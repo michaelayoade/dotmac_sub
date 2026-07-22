@@ -26,6 +26,7 @@ from app.services.sot_manifest import (
     TransactionContract,
     TransactionMode,
     contract_validation_errors,
+    owner_command_boundary_error_codes,
 )
 
 
@@ -9520,19 +9521,262 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 name="operations.project_lifecycle",
                 module="app.services.projects",
                 owns=(
-                    "native project field and status mutations",
-                    "project SLA clock synchronization",
-                    "project lifecycle event and notification requests",
+                    "Project and ProjectTask identity and lifecycle",
+                    "project and task allowed status transitions",
+                    "project and task assignment and scheduling",
+                    "project manager assistant manager service-team and task-assignee changes",
+                    "Project-to-ProjectTask and project/task-to-work-order relationships",
+                    "project audit records and transactional domain events",
+                    "project derived-state reconciliation",
                 ),
                 depends_on=(
+                    "auth.permission_gate",
                     "events.dispatcher",
                     "communications.staff_notifications",
+                    "operations.work_order_commands",
                 ),
                 notes=(
                     "Customer and reseller reads consume the read-only "
                     "customer.experience_lifecycle projection. There is no CRM "
                     "project mirror, read-flip fallback, or connector operation "
                     "that can read project/work-order authority."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="Project and ProjectTask identity and lifecycle",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical project aggregate",
+                                "authorized project command",
+                            ),
+                            canonical_writer="operations.project_lifecycle",
+                        ),
+                        ConcernContract(
+                            name="project and task allowed status transitions",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical project aggregate",
+                                "project transition protocol",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="project and task assignment and scheduling",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical project aggregate",
+                                "project assignment decision",
+                                "authorized project command",
+                            ),
+                            canonical_writer="operations.project_lifecycle",
+                        ),
+                        ConcernContract(
+                            name="project manager assistant manager service-team and task-assignee changes",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical project aggregate",
+                                "project assignment decision",
+                                "authorized project command",
+                            ),
+                            canonical_writer="operations.project_lifecycle",
+                        ),
+                        ConcernContract(
+                            name="Project-to-ProjectTask and project/task-to-work-order relationships",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "canonical project aggregate",
+                                "canonical work-order relationship",
+                            ),
+                            canonical_writer="operations.project_lifecycle",
+                        ),
+                        ConcernContract(
+                            name="project audit records and transactional domain events",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "canonical project aggregate",
+                                "authorized project command",
+                            ),
+                            canonical_writer="operations.project_lifecycle",
+                        ),
+                        ConcernContract(
+                            name="project derived-state reconciliation",
+                            role=OwnerRole.RECONCILER,
+                            input_names=("canonical project aggregate",),
+                            canonical_writer="operations.project_lifecycle",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical project aggregate",
+                            owner="operations.project_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="locked native Project, ProjectTask, ProjectTaskAssignee, dependency, comment, and SLA records keyed only by native UUIDs",
+                        ),
+                        AuthorityInput(
+                            name="project transition protocol",
+                            owner="operations.project_lifecycle",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="typed ProjectStatus and ProjectTaskStatus transition tables",
+                        ),
+                        AuthorityInput(
+                            name="authorized project command",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="authenticated actor, scope, reason, correlation id, and idempotency key",
+                        ),
+                        AuthorityInput(
+                            name="project assignment decision",
+                            owner="operations.project_assignment_policy",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="typed rule match and candidate decision; it never mutates a Project aggregate",
+                        ),
+                        AuthorityInput(
+                            name="canonical work-order relationship",
+                            owner="operations.work_order_commands",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="native WorkOrder.project_id and WorkOrder.project_task_id foreign keys",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary="Every public state-changing command enters execute_owner_command once on a transaction-free adapter session; all nested helpers are flush-only.",
+                        locking="Lock Project before its tasks, then tasks by UUID; assignment and relationship changes re-read locked rows in that order.",
+                        idempotency="CommandContext idempotency keys identify externally retryable commands; identical completed intent replays its stable typed outcome and changed-state no-ops are safe.",
+                        retries="Adapters retry serialization failures, deadlocks, and lock timeouts as a complete command; validation, stale-state, authorization, and idempotency conflicts are not retryable.",
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "operations.project_lifecycle.not_found",
+                            "operations.project_lifecycle.invalid_input",
+                            "operations.project_lifecycle.invalid_transition",
+                            "operations.project_lifecycle.stale_state",
+                            "operations.project_lifecycle.idempotency_conflict",
+                            "operations.project_lifecycle.relationship_conflict",
+                            *owner_command_boundary_error_codes(
+                                "operations.project_lifecycle"
+                            ),
+                        ),
+                        mapping_owner="project API, admin-web, job, and assignment adapters",
+                        retryable_codes=("operations.project_lifecycle.stale_state",),
+                        fail_closed_on=(
+                            "unknown native identity",
+                            "stale transition evidence",
+                            "ambiguous assignment target",
+                            "external identifier without native relationship",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "project.created",
+                            "project.updated",
+                            "project.completed",
+                            "project.canceled",
+                            "project_task.created",
+                            "project_task.updated",
+                            "project_task.completed",
+                            "project.assignment_changed",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility="Version 1 payloads are additive and preserve native aggregate identifiers; CRM identifiers are optional provenance only.",
+                        replay="Rebuild consequences from the durable event/audit record; replay never re-runs lifecycle eligibility.",
+                    ),
+                    projections=(
+                        ProjectionContract(
+                            name="project SLA and assignment projections",
+                            input_names=("canonical project aggregate",),
+                            writer="operations.project_lifecycle",
+                            freshness="synchronous in the owner transaction",
+                            stale_behavior="fail closed for action eligibility and expose drift to operators",
+                            drift_signal="reconciliation reports missing, duplicate, or mismatched SLA clocks and task-assignee rows",
+                            rebuild_operation="reconcile_project_projection(project_id) deterministically rebuilds derived rows from the locked native aggregate",
+                            repair_owner="operations.project_lifecycle",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        new_owner="operations.project_lifecycle",
+                        old_owner="legacy Projects/web_projects/ticket_assignment direct writers",
+                        verification="Projects contract, adapter-boundary, assignment ownership, projection parity, and reconciliation tests",
+                        cutover_gate="all project and task mutations delegate to the owner command and architecture guards reject direct adapter writes",
+                        fallback_retirement="HTTP-coupled domain errors, adapter commits, and assignment-engine Project writes removed",
+                    ),
+                    steward="service delivery",
+                    design_refs=(
+                        "docs/designs/PROJECTS_SOT_COMPLETION.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_projects_service.py",
+                        "tests/test_project_assignment_engine.py",
+                        "tests/architecture/test_projects_sot_boundary.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="operations.project_assignment_policy",
+                module="app.services.ticket_assignment.rules",
+                owns=("project assignment-rule evaluation",),
+                depends_on=("operations.project_lifecycle", "control.settings_spec"),
+                notes="Evaluates typed rules and candidates only. It cannot mutate Project, ProjectTask, or assignee rows; the lifecycle owner applies its decision under lock.",
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="project assignment-rule evaluation",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical project assignment facts",
+                                "configured assignment rules",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical project assignment facts",
+                            owner="operations.project_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="native project type, region, service team, and current assignment state",
+                        ),
+                        AuthorityInput(
+                            name="configured assignment rules",
+                            owner="control.settings_spec",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="validated active assignment rule configuration and ordering",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary="Pure rule evaluation inside the lifecycle owner's transaction or a read-only preview.",
+                        locking="No locks and no writes; the lifecycle owner locks and revalidates before applying a decision.",
+                        idempotency="Same normalized facts and rule version produce the same ordered decision.",
+                        retries="Read availability failures may be retried; invalid or ambiguous rules fail closed.",
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "operations.project_assignment_policy.invalid_rule",
+                            "operations.project_assignment_policy.ambiguous_target",
+                        ),
+                        mapping_owner="operations.project_lifecycle and assignment preview adapters",
+                        fail_closed_on=(
+                            "invalid rule",
+                            "ambiguous target",
+                            "unknown candidate identity",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        new_owner="operations.project_assignment_policy",
+                        old_owner="ticket_assignment engine direct Project writer",
+                        verification="assignment policy and architecture boundary tests",
+                        cutover_gate="engine delegates Project writes to operations.project_lifecycle",
+                        fallback_retirement="direct Project and ProjectTask assignment writes removed from ticket_assignment.engine",
+                    ),
+                    steward="service delivery",
+                    design_refs=("docs/designs/PROJECTS_SOT_COMPLETION.md",),
+                    test_refs=(
+                        "tests/test_project_assignment_engine.py",
+                        "tests/architecture/test_projects_sot_boundary.py",
+                    ),
                 ),
             ),
             SOTService(
@@ -15602,6 +15846,84 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "projection declares the list capabilities and normalizes "
                     "request state, then delegates the read. It issues no query of "
                     "its own. Gated by the existing granular project:read."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="admin project searchable fields",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical project list facts",
+                                "shared list contract",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="admin project filter and stable sort semantics",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical project list facts",
+                                "shared list contract",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="admin project list pagination normalization",
+                            role=OwnerRole.POLICY,
+                            input_names=("shared list contract",),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical project list facts",
+                            owner="operations.project_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="native active Project rows and owner-projected action eligibility",
+                        ),
+                        AuthorityInput(
+                            name="shared list contract",
+                            owner="ui.list_contracts",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="typed search, filters, stable sort, pagination, permission scope, and action eligibility request",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary="Typed ProjectListQuery executes without committing or mutating ORM state.",
+                        locking="No locks; stable ordering includes native Project UUID as the final tie-breaker.",
+                        idempotency="Equivalent query and visibility scope return the same page for the same authoritative snapshot.",
+                        retries="Read availability errors may be retried; invalid filters and unauthorized scopes are not retryable.",
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "ui.project_list_projection.invalid_filter",
+                            "ui.project_list_projection.invalid_sort",
+                            "ui.project_list_projection.invalid_page",
+                            "ui.project_list_projection.unauthorized",
+                        ),
+                        mapping_owner="project API and admin-web adapters",
+                        fail_closed_on=(
+                            "unknown filter field",
+                            "unknown sort field",
+                            "missing permission scope",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        new_owner="ui.project_list_projection",
+                        old_owner="route/template-local project list decisions",
+                        verification="typed query contract, API/admin parity, and template projection architecture tests",
+                        cutover_gate="all list routes delegate typed filter, sort, pagination, status, permission, and eligibility inputs",
+                        fallback_retirement="route and template list-policy inference removed",
+                    ),
+                    steward="service delivery UI",
+                    design_refs=(
+                        "docs/designs/PROJECTS_SOT_COMPLETION.md",
+                        "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                    ),
+                    test_refs=(
+                        "tests/test_web_projects_service.py",
+                        "tests/test_projects_api.py",
+                        "tests/architecture/test_projects_sot_boundary.py",
+                    ),
                 ),
             ),
             SOTService(

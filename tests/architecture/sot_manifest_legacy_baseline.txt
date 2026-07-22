@@ -132,7 +132,6 @@ observability.metrics
 observability.recording
 observability.task_reliability
 operations.field_completion
-operations.project_lifecycle
 operations.provisioning_context
 operations.provisioning_workflow
 operations.work_order_commands
@@ -198,7 +197,6 @@ ui.network_device_list_projection
 ui.notification_list_projection
 ui.payment_proof_review_projection
 ui.payments_list_projection
-ui.project_list_projection
 ui.reseller_list_projection
 ui.status_presentation
 ui.subscriber_list_projection
