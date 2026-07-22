@@ -7,7 +7,7 @@ import pytest
 
 MIGRATION = (
     Path(__file__).resolve().parents[1]
-    / "alembic/versions/402_support_ticket_work_order_provenance.py"
+    / "alembic/versions/403_support_ticket_work_order_provenance.py"
 )
 
 
@@ -25,8 +25,8 @@ def test_provenance_backfill_is_exact_verified_and_preserving():
     module = _module()
     source = MIGRATION.read_text(encoding="utf-8")
 
-    assert module.revision == "402_support_ticket_work_order_provenance"
-    assert module.down_revision == "401_service_change_execution_chain"
+    assert module.revision == "403_support_ticket_work_order_provenance"
+    assert module.down_revision == "402_remote_reprovision_verification"
     assert "metadata::jsonb ->> 'crm_ticket_id'" in source
     assert "wo.subscriber_id IS DISTINCT FROM ticket.subscriber_id" in source
     assert "wo.origin_ticket_id IS DISTINCT FROM ticket.id" in source

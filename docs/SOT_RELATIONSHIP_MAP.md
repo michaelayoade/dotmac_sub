@@ -3020,7 +3020,7 @@ reinterpret its presentation.
    infers its project. `work_order.origin_ticket_id` is the only ticket-to-work
    native link; `Ticket.metadata.work_order_id` and native uses of
    `WorkOrder.crm_ticket_id` are retired. Imported CRM values remain external
-   provenance. Migration `402_support_ticket_work_order_provenance` backfills
+   provenance. Migration `403_support_ticket_work_order_provenance` backfills
    exact native links from preserved Ticket CRM provenance, verifies ambiguity
    and subscriber alignment, and retains the external value. `field_visit`
    remains a descriptive tag and has no decision authority.
