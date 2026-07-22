@@ -29,7 +29,11 @@
                     Run Now
                 </button>
             </form>
-            {% if task.enabled %}
+            {% if task_is_permanent %}
+            <span class="inline-flex items-center rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">
+                Permanent lifecycle task
+            </span>
+            {% elif task.enabled %}
             <form method="POST" action="/admin/system/scheduler/{{ task.id }}/disable" class="inline">
                 {% include "components/forms/csrf_input.html" %}
                 <button type="submit" class="inline-flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-700 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-400">
@@ -253,6 +257,7 @@
                 </div>
             </div>
 
+            {% if not task_is_permanent %}
             <!-- Danger Zone -->
             <div class="rounded-xl border border-red-200 bg-white shadow-sm dark:border-red-800/50 dark:bg-slate-800">
                 <div class="border-b border-red-200 px-6 py-4 dark:border-red-800/50">
@@ -268,6 +273,7 @@
                     </form>
                 </div>
             </div>
+            {% endif %}
         </div>
     </div>
 </div>

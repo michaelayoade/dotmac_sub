@@ -1,6 +1,6 @@
 # Billing / dunning enforcement time-of-day window
 
-Status: enforcement gate implemented; rollout defaults to audit. Owner: billing.
+Status: accepted and active. Owner: billing.
 
 ## Problem
 
@@ -16,32 +16,36 @@ enforcement. `billing_notif_send_hour` is exposed in the admin UI
 (`templates/admin/system/config/billing_notifications.html`) but is **inert** —
 nothing reads it.
 
-## What already exists
+## Canonical contract
 
-`app/services/enforcement_window.py` contains the shared wall-clock helpers used
-by billing/dunning paths:
+`app/services/enforcement_window.py` contains the shared wall-clock resolver
+used by billing and collections:
 
 - `scheduler.timezone` (canonical local TZ, default = app TZ)
 - `to_local(db, run_at)` — convert to `scheduler.timezone`
 - `parse_time(value)` — "HH:MM[:SS]" → `time`
 - `window_block_reason(...)` — reason str or `None`
 
+Every calendar day is eligible. The only configurable enforcement timing inputs
+are `collections.enforcement_window_start` and
+`collections.enforcement_window_end`. Weekends and holidays are not alternate
+business states, and there is no audit/enforce runtime mode.
+
 Two distinct timezone concepts remain: celery beat fires on the **celery app
 TZ** (currently UTC); in-task decisions use **`scheduler.timezone`**.
 
 ## Design — two complementary parts
 
-### Part A — Window-guard (in-task safety net)
+### Part A — Window guard
 A shared, settings-driven gate evaluated *inside* the tasks, so customer-impacting
 actions never happen off-hours regardless of trigger (beat / retry / manual
 "Run now" / duplicate beat).
 
-- `app/services/enforcement_window.py` (Phase 1, landed):
+- `app/services/enforcement_window.py`:
   - `to_local(db, run_at)` — convert to `scheduler.timezone`.
   - `parse_time(value)` — "HH:MM[:SS]" → `time`.
-  - `window_block_reason(local_run_at, *, start_time, end_time, skip_weekends,
-    skip_holidays)` → reason str or `None`. Pure; supports midnight-wrapping
-    windows (e.g. 22:00–06:00).
+  - `window_block_reason(local_run_at, *, start_time, end_time)` → reason str or
+    `None`. Pure; supports midnight-wrapping windows (e.g. 22:00–06:00).
 - `within_send_window(db, now)` gates outbound comms
   (`_emit_invoice_reminders` / `_emit_dunning_escalations` in
   `billing_automation.py`); activates `billing_notif_send_hour`.
@@ -75,35 +79,29 @@ daily-anchor window becomes local, and the window-guard (already on
 behavior-affecting step; gate on ops setting `scheduler.timezone` and call it out
 in the deploy note (it shifts when existing daily jobs fire).
 
-## Phases
+## Implementation
 
-1. **Window helper + tests** — `enforcement_window.py`; refactor prepaid to use it
-   (byte-equivalent). *(landed; no behavior change.)*
-2. **Notification gating** *(landed; flag default off → no behavior change)* —
-   `within_send_window` gates a dedicated hourly runner
-   (`app.tasks.billing.run_billing_notifications`, enabled by
-   `collections.billing_notifications_hourly_enabled`); it owns the reminder/
-   escalation emits and the daily cycle skips them when enabled. Activates
-   `billing_notif_send_hour` (sends only during `[send_hour, send_hour+1)` local).
-3. **Cron model + scheduler** *(landed)* — migration 168 (`crontab` enum value +
+1. `within_send_window` gates the permanent hourly notification owner
+   (`app.tasks.billing.run_billing_notifications`) to its configured local
+   delivery window.
+2. Migration 168 added crontab scheduling (`crontab` enum value +
    nullable `cron_expr`); `_cron_to_beat_schedule` parses a 5-field cron;
-   `build_beat_schedule` honours `schedule_type == crontab` rows. Settable via DB
-   now; the admin UI is phase 4.
-4. **Cron admin UI** *(landed)* — edit type/cron/interval, server-side cron validation, active-TZ + next-run preview.
-5. **Unify timezone** — celery app TZ ← `scheduler.timezone`.
-6. **Enforcement gating** — `collections.enforcement_window_mode` selects
-   `audit` or `enforce`. Audit records a closed-window decision without changing
-   eligibility. Enforce makes the canonical financial-access preview ineligible
-   with `outside_enforcement_window`; confirmation recomputes and fingerprints
-   the same decision before recording the deferred consequence.
+   `build_beat_schedule` honours `schedule_type == crontab` rows. The admin UI
+   edits type, cron, cadence, and active timezone.
+3. The canonical financial-access preview defers with
+   `outside_enforcement_window`; confirmation recomputes and fingerprints the
+   same time decision before recording the consequence.
+4. Migration 398 removes the former mode, weekend, holiday, and prepaid-specific
+   timing rows. It retains only the shared start/end window.
 
 ## Risks / rollout
 
-- Defaults preserve current behavior; deploy = no change until settings are set.
 - Enum `ALTER TYPE` migration must run as `postgres` and via `make prod-migrate`
   against the immutable image.
 - TZ unification shifts when existing daily jobs fire (UTC→local) — intended;
   document in the deploy note.
 - Daily-task-fires-outside-window pitfall — covered by the hourly+idempotent
   switch in phases 2 & 6.
-- Enforcement changes land audit-first.
+- A narrow window requires a task cadence that enters it. Permanent lifecycle
+  tasks remain scheduled and idempotent; operators may change cadence or local
+  time, but cannot disable the owner.

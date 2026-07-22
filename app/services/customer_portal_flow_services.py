@@ -1507,10 +1507,6 @@ def get_suspend_page(
     from app.models.domain_settings import SettingDomain
     from app.services.settings_spec import resolve_value
 
-    enabled = resolve_value(db, SettingDomain.catalog, "customer_suspend_enabled")
-    if enabled is False:
-        return None
-
     max_suspend_days = resolve_value(db, SettingDomain.catalog, "max_suspend_days")
     max_days = (
         int(max_suspend_days) if isinstance(max_suspend_days, (str, int, float)) else 30
@@ -1583,10 +1579,6 @@ def apply_service_suspend(
     from app.models.enforcement_lock import EnforcementReason
     from app.services.account_lifecycle import suspend_subscription
     from app.services.settings_spec import resolve_value
-
-    enabled = resolve_value(db, SettingDomain.catalog, "customer_suspend_enabled")
-    if enabled is False:
-        raise ValueError("Self-service suspension is not enabled")
 
     max_suspend_days = resolve_value(db, SettingDomain.catalog, "max_suspend_days")
     max_days = (
@@ -1666,13 +1658,7 @@ def get_resume_page(
     subscription_id: str,
 ) -> dict | None:
     """Build context for the resume service confirmation page."""
-    from app.models.domain_settings import SettingDomain
     from app.models.enforcement_lock import EnforcementLock, EnforcementReason
-    from app.services.settings_spec import resolve_value
-
-    enabled = resolve_value(db, SettingDomain.catalog, "customer_suspend_enabled")
-    if enabled is False:
-        return None
 
     account_id = optional_customer_account_id(db, customer)
     subscription = db.get(Subscription, subscription_id)
@@ -1713,14 +1699,8 @@ def apply_service_resume(
     subscription_id: str,
 ) -> dict:
     """Resume a customer-initiated vacation hold on a subscription."""
-    from app.models.domain_settings import SettingDomain
     from app.models.enforcement_lock import EnforcementLock, EnforcementReason
     from app.services.account_lifecycle import restore_subscription
-    from app.services.settings_spec import resolve_value
-
-    enabled = resolve_value(db, SettingDomain.catalog, "customer_suspend_enabled")
-    if enabled is False:
-        raise ValueError("Self-service suspension is not enabled")
 
     account_id = optional_customer_account_id(db, customer)
     subscription = db.get(Subscription, subscription_id)

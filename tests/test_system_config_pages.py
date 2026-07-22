@@ -237,7 +237,6 @@ def test_billing_config_save_roundtrips_and_applies_spec_types(db_session):
     web_system_config_service.save_billing_config(
         db_session,
         {
-            "billing_enabled": "true",
             "payment_period": "Monthly",  # normaliser lower-cases
             "payment_due_days": "72",
             "minimum_balance": "10.50",
@@ -245,9 +244,6 @@ def test_billing_config_save_roundtrips_and_applies_spec_types(db_session):
     )
 
     rows = _billing_rows(db_session)
-    # Spec-backed boolean gets coerced + typed.
-    assert rows["billing_enabled"].value_text == "true"
-    assert rows["billing_enabled"].value_type == SettingValueType.boolean
     # Spec-backed integer keeps its whole-number text and integer type.
     assert rows["payment_due_days"].value_text == "72"
     assert rows["payment_due_days"].value_type == SettingValueType.integer
@@ -263,11 +259,11 @@ def test_billing_config_save_rejects_non_numeric_integer(db_session):
     with pytest.raises(ValueError):
         web_system_config_service.save_billing_config(
             db_session,
-            {"billing_enabled": "true", "payment_due_days": "abc"},
+            {"payment_due_days": "abc"},
         )
 
     # Nothing is committed when validation fails.
-    assert "billing_enabled" not in _billing_rows(db_session)
+    assert "payment_due_days" not in _billing_rows(db_session)
 
 
 # --- 8.12 Direct bank transfer: config owns accounts, not enablement ---
@@ -445,7 +441,7 @@ def test_modules_save_writes_canonical_feature_and_audit(db_session, monkeypatch
     monkeypatch.setattr(
         admin_system,
         "parse_form_data_sync",
-        lambda _request: {"control__billing.autopay": "off"},
+        lambda _request: {"control__network.ont_reconcile": "off"},
     )
     monkeypatch.setattr(
         admin_system,
@@ -458,7 +454,7 @@ def test_modules_save_writes_canonical_feature_and_audit(db_session, monkeypatch
     row = (
         db_session.query(DomainSetting)
         .filter(DomainSetting.domain == SettingDomain.modules)
-        .filter(DomainSetting.key == "billing_autopay")
+        .filter(DomainSetting.key == "network_ont_reconcile")
         .one()
     )
     assert response.status_code == 303

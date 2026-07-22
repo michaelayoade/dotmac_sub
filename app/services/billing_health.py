@@ -41,7 +41,7 @@ from app.models.domain_settings import SettingDomain
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.scheduler import ScheduledTask
 from app.models.subscriber import Subscriber
-from app.services import control_registry, settings_spec
+from app.services import settings_spec
 from app.services.access_resolution import (
     postpaid_billing_filters,
     prepaid_enforcement_filters,
@@ -156,8 +156,6 @@ class BillingHealthSnapshot:
     active_subs_on_terminal_account: int = 0
     negative_prepaid_balance_count: int = 0
     negative_prepaid_balance_total: Decimal = Decimal("0.00")
-    prepaid_balance_sweep_enabled: bool = False
-    negative_prepaid_with_sweep_disabled_count: int = 0
     billing_profile_mismatch_count: int = 0
     billing_profile_mixed_count: int = 0
     account_credit_invariant_count: int = 0
@@ -189,8 +187,6 @@ class BillingHealthSnapshot:
             out.append("active_subs_without_billing_path")
         if self.negative_prepaid_balance_count > 0:
             out.append("negative_prepaid_balances")
-        if self.negative_prepaid_with_sweep_disabled_count > 0:
-            out.append("negative_prepaid_sweep_disabled")
         if self.billing_profile_mismatch_count > 0:
             out.append("billing_profile_mismatch")
         if self.billing_profile_mixed_count > 0:
@@ -239,16 +235,6 @@ def billing_health_observations(snapshot: BillingHealthSnapshot):  # noqa: ANN20
             "negative_prepaid_balance_total",
             "all",
             snapshot.negative_prepaid_balance_total,
-        ),
-        (
-            "negative_prepaid_sweep_disabled_accounts",
-            "all",
-            snapshot.negative_prepaid_with_sweep_disabled_count,
-        ),
-        (
-            "prepaid_balance_sweep_enabled",
-            "all",
-            1.0 if snapshot.prepaid_balance_sweep_enabled else 0.0,
         ),
         (
             "prepaid_coverage_unresolved",
@@ -571,21 +557,14 @@ def prepaid_coverage_reconciliation_counts(db: Session) -> tuple[int, int]:
     return preview.repairable_count, preview.quarantined_count
 
 
-def _prepaid_renewals_enabled(db: Session) -> bool:
-    """Whether the sole prepaid service-period writer is active."""
-    return control_registry.is_enabled(db, "billing.prepaid_service_renewals")
-
-
 def billing_path_coverage(db: Session) -> tuple[int, int]:
     """§6.1: (unbilled_no_path, active_subs_on_terminal_account).
 
     Mirrors run_invoice_cycle's invoice-row selection. A billable-account active
-    sub is covered iff it is postpaid or the canonical prepaid renewal owner is
-    enabled. ``unbilled_no_path`` is the scalable billing-visibility gap when
-    prepaid renewal ownership is disabled. ``active_subs_on_terminal_account``
-    is an active
-    sub whose account is non-billable, so the cycle never touches it (lifecycle
-    drift, low volume).
+    Every active prepaid subscription has the canonical renewal owner; postpaid
+    subscriptions use invoice generation. ``active_subs_on_terminal_account``
+    is an active sub whose account is non-billable, so the cycle never touches
+    it (lifecycle drift, low volume).
     """
     # Static SQL — the status set is a fixed constant from billing_statuses,
     # never user input, so this is not an injection surface.
@@ -604,37 +583,15 @@ def billing_path_coverage(db: Session) -> tuple[int, int]:
         or 0
     )
 
-    if _prepaid_renewals_enabled(db):
-        return 0, int(terminal)
-    no_path_sql = """
-        SELECT count(*) FROM subscriptions sub
-        JOIN subscribers s ON s.id = sub.subscriber_id
-        WHERE sub.status = 'active'
-          AND s.status IN :billable_statuses
-          AND sub.billing_mode = 'prepaid'
-    """
-    no_path = (
-        db.execute(
-            text(no_path_sql).bindparams(
-                bindparam("billable_statuses", expanding=True)
-            ),
-            {"billable_statuses": BILLABLE_SUBSCRIBER_STATUS_VALUES},
-        ).scalar()
-        or 0
-    )
-    return int(no_path), int(terminal)
+    return 0, int(terminal)
 
 
-def negative_prepaid_balance_exposure(db: Session) -> tuple[int, Decimal, bool, int]:
+def negative_prepaid_balance_exposure(db: Session) -> tuple[int, Decimal]:
     """Negative prepaid wallet exposure using the same balance as enforcement.
 
-    Returns ``(negative_count, negative_total_abs, sweep_enabled,
-    negative_count_if_sweep_disabled)``. This is a monitoring signal only; the
-    prepaid sweep owns any warning/suspension action after an operator enables
-    it.
+    This is a monitoring signal only; the permanent prepaid sweep owns warning,
+    suspension, and restoration consequences.
     """
-    from app.services import control_registry
-
     account_ids = (
         db.execute(
             select(Subscriber.id)
@@ -653,10 +610,7 @@ def negative_prepaid_balance_exposure(db: Session) -> tuple[int, Decimal, bool, 
         if balance < Decimal("0.00"):
             count += 1
             total += abs(balance)
-    sweep_enabled = control_registry.is_enabled(
-        db, "collections.prepaid_balance_enforcement"
-    )
-    return count, total, sweep_enabled, count if not sweep_enabled else 0
+    return count, total
 
 
 def billing_profile_integrity(db: Session) -> tuple[int, int]:
@@ -703,12 +657,9 @@ def billing_health_snapshot(
     last_scanned, eligible, scan_ratio = invoice_scan_coverage(db)
     c24, avg7, ratio, collapsed = payment_volume(db, now=now)
     no_path, terminal = billing_path_coverage(db)
-    (
-        negative_prepaid_count,
-        negative_prepaid_total,
-        prepaid_sweep_enabled,
-        negative_prepaid_sweep_disabled,
-    ) = negative_prepaid_balance_exposure(db)
+    negative_prepaid_count, negative_prepaid_total = negative_prepaid_balance_exposure(
+        db
+    )
     profile_mismatch_count, profile_mixed_count = billing_profile_integrity(db)
     from app.services.billing.account_credit import AccountCreditApplications
 
@@ -737,8 +688,6 @@ def billing_health_snapshot(
         active_subs_on_terminal_account=terminal,
         negative_prepaid_balance_count=negative_prepaid_count,
         negative_prepaid_balance_total=negative_prepaid_total,
-        prepaid_balance_sweep_enabled=prepaid_sweep_enabled,
-        negative_prepaid_with_sweep_disabled_count=negative_prepaid_sweep_disabled,
         billing_profile_mismatch_count=profile_mismatch_count,
         billing_profile_mixed_count=profile_mixed_count,
         account_credit_invariant_count=account_credit_invariant_count,

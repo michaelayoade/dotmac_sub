@@ -114,11 +114,10 @@ def convert_proforma_to_final(db: Session, *, invoice_id: str) -> Invoice:
 
     invoice_number = (invoice.invoice_number or "").strip() or None
     if invoice_number and invoice_number.upper().startswith(PROFORMA_PREFIX):
-        generated = numbering.generate_number(
+        generated = numbering.generate_required_number(
             db,
             SettingDomain.billing,
             "invoice_number",
-            "invoice_number_enabled",
             "invoice_number_prefix",
             "invoice_number_padding",
             "invoice_number_start",

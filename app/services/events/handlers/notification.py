@@ -16,7 +16,6 @@ from app.models.notification import (
     NotificationTemplate,
 )
 from app.schemas.notification import NotificationCreate
-from app.services import event_notification_policy
 from app.services.communication_intents import CommunicationIntent, submit
 from app.services.customer_notification_policy import (
     channel_disabled_in_config,
@@ -509,15 +508,6 @@ class NotificationHandler:
         spec = EVENT_NOTIFICATION_SPECS.get(event.event_type)
         if spec is None:
             return
-        if not event_notification_policy.event_notifications_enabled(
-            db, spec.template_code
-        ):
-            logger.info(
-                "Suppressed notification for event %s: event disabled by settings",
-                event.event_type.value,
-            )
-            return
-
         # Back-office bookkeeping (e.g. the cutover credit reconcile) suppresses
         # customer notifications: the activity is not a real-time customer action,
         # so "Payment received"/"Service resumed" mail would be wrong and, in a
@@ -527,15 +517,6 @@ class NotificationHandler:
         if notifications_suppressed():
             logger.info(
                 "Suppressed notification for event %s (back-office scope)",
-                event.event_type.value,
-            )
-            return
-
-        if event_notification_policy.customer_balance_notifications_suppressed(
-            db, event
-        ):
-            logger.info(
-                "Suppressed customer balance notification for event %s",
                 event.event_type.value,
             )
             return

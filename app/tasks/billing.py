@@ -18,9 +18,6 @@ def _run_invoice_cycle_idempotent() -> dict[str, int]:
 
 @celery_app.task(name="app.tasks.billing.run_invoice_cycle")
 def run_invoice_cycle() -> dict[str, object]:
-    if not scheduled_billing.scheduled_billing_enabled():
-        logger.info("billing invoice cycle skipped: local billing disabled")
-        return {"skipped": "billing_disabled"}
     return cast(dict[str, object], _run_invoice_cycle_idempotent())
 
 
@@ -35,12 +32,7 @@ def mark_invoices_overdue() -> dict[str, int]:
 
 @celery_app.task(name="app.tasks.billing.check_billing_switch")
 def check_billing_switch_task() -> dict:
-    """Config-integrity + billing enforcement health guard.
-
-    This hourly runner is intentionally independent of the billing master
-    switch. If billing is accidentally armed or enforcement/payment intake goes
-    unhealthy, the scheduler still emits an operator-visible critical log.
-    """
+    """Observe customer-financial lifecycle and delivery health."""
     return scheduled_billing.check_billing_switch_health()
 
 
@@ -73,7 +65,5 @@ def audit_funded_inactive_exposure_task() -> dict:
     )
 )
 def run_billing_notifications() -> dict[str, int | bool]:
-    """Hourly task: emit invoice reminders + dunning escalations within the
-    configured send window (no-op outside it). Enable via
-    ``collections.billing_notifications_hourly_enabled``."""
+    """Emit invoice reminders within the configured send window."""
     return scheduled_billing.run_billing_notifications()

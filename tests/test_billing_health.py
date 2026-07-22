@@ -27,7 +27,6 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
-from app.models.domain_settings import DomainSetting, SettingDomain, SettingValueType
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services import billing_health
 from app.services.billing_health import BillingHealthSnapshot
@@ -240,10 +239,6 @@ def test_anomalies_flag_each_signal():
         "negative_prepaid_balances" in _snap(negative_prepaid_balance_count=1).anomalies
     )
     assert (
-        "negative_prepaid_sweep_disabled"
-        in _snap(negative_prepaid_with_sweep_disabled_count=1).anomalies
-    )
-    assert (
         "billing_profile_mismatch" in _snap(billing_profile_mismatch_count=1).anomalies
     )
     assert (
@@ -256,23 +251,7 @@ def test_anomalies_flag_each_signal():
 # ---- negative prepaid exposure -------------------------------------------
 
 
-def _enable_prepaid_balance_sweep(db, enabled: bool) -> None:
-    # Monitoring tests exercise the effective-state projection. Cutover-gate
-    # behavior is covered in test_prepaid_enforcement_readiness.py.
-    db.add(
-        DomainSetting(
-            domain=SettingDomain.modules,
-            key="collections_prepaid_balance_enforcement",
-            value_type=SettingValueType.boolean,
-            value_text="true" if enabled else "false",
-            value_json=enabled,
-            is_active=True,
-        )
-    )
-    db.commit()
-
-
-def test_negative_prepaid_balance_exposure_flags_disabled_sweep(db_session):
+def test_negative_prepaid_balance_exposure(db_session):
     offer = _offer(db_session)
     account = _subscriber(db_session)
     _subscription(db_session, account, offer, billing_mode=BillingMode.prepaid)
@@ -289,47 +268,14 @@ def test_negative_prepaid_balance_exposure_flags_disabled_sweep(db_session):
     db_session.commit()
     materialize_test_prepaid_opening_balance(db_session, account.id, "0.00")
 
-    count, total, sweep_enabled, disabled_count = (
-        billing_health.negative_prepaid_balance_exposure(db_session)
-    )
+    count, total = billing_health.negative_prepaid_balance_exposure(db_session)
 
     assert count == 1
     assert total == Decimal("75.00")
-    assert sweep_enabled is False
-    assert disabled_count == 1
     snap = billing_health.billing_health_snapshot(db_session)
     assert snap.negative_prepaid_balance_count == 1
     assert snap.negative_prepaid_balance_total == Decimal("75.00")
     assert "negative_prepaid_balances" in snap.anomalies
-    assert "negative_prepaid_sweep_disabled" in snap.anomalies
-
-
-def test_negative_prepaid_balance_exposure_respects_enabled_sweep(db_session):
-    offer = _offer(db_session)
-    account = _subscriber(db_session)
-    _subscription(db_session, account, offer, billing_mode=BillingMode.prepaid)
-    db_session.add(
-        LedgerEntry(
-            account_id=account.id,
-            entry_type=LedgerEntryType.debit,
-            source=LedgerSource.adjustment,
-            amount=Decimal("25.00"),
-            currency="NGN",
-            memo="prepaid drawdown",
-        )
-    )
-    db_session.commit()
-    materialize_test_prepaid_opening_balance(db_session, account.id, "0.00")
-    _enable_prepaid_balance_sweep(db_session, True)
-
-    count, total, sweep_enabled, disabled_count = (
-        billing_health.negative_prepaid_balance_exposure(db_session)
-    )
-
-    assert count == 1
-    assert total == Decimal("25.00")
-    assert sweep_enabled is True
-    assert disabled_count == 0
 
 
 def test_negative_prepaid_balance_exposure_has_bounded_query_count(db_session):
@@ -366,16 +312,13 @@ def test_negative_prepaid_balance_exposure_has_bounded_query_count(db_session):
 
     event.listen(db_session.bind, "before_cursor_execute", capture)
     try:
-        count, total, _, _ = billing_health.negative_prepaid_balance_exposure(
-            db_session
-        )
+        count, total = billing_health.negative_prepaid_balance_exposure(db_session)
     finally:
         event.remove(db_session.bind, "before_cursor_execute", capture)
 
     assert count == 20
     assert total == Decimal("200.00")
-    # Includes control-plane/settings resolution; the financial cohort itself
-    # is loaded in a fixed set of bulk queries rather than 6+ queries/account.
+    # The financial cohort is loaded in a fixed set of bulk queries.
     assert len(statements) <= 25
 
 

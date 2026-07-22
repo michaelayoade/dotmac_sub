@@ -27,17 +27,12 @@ from app.services import settings_spec
 
 @dataclass(frozen=True)
 class EnforcementWindowDecision:
-    mode: str
     inside_window: bool
     block_reason: str | None
 
     @property
-    def enforced(self) -> bool:
-        return self.mode == "enforce"
-
-    @property
     def should_defer(self) -> bool:
-        return self.enforced and not self.inside_window
+        return not self.inside_window
 
 
 def resolve_timezone_name(db: Session) -> str:
@@ -74,8 +69,6 @@ def window_block_reason(
     *,
     start_time: time | None = None,
     end_time: time | None = None,
-    skip_weekends: bool = False,
-    skip_holidays: list[str] | None = None,
 ) -> str | None:
     """Why an action should be skipped at ``local_run_at``, or ``None`` to proceed.
 
@@ -90,8 +83,8 @@ def window_block_reason(
       ``blocking_time`` gate).
     * neither: no time gate.
 
-    Weekend/holiday skips apply on top of the time gate. ``skip_holidays`` is a
-    list of ISO date strings (``YYYY-MM-DD``).
+    Calendar-day exclusions are deliberately unsupported. Financial lifecycle
+    enforcement uses the same time-of-day policy every logical day.
     """
     now_t = local_run_at.time()
     if start_time is not None and end_time is not None:
@@ -105,10 +98,6 @@ def window_block_reason(
         if now_t < start_time:
             return "before_window"
 
-    if skip_weekends and local_run_at.weekday() >= 5:
-        return "weekend"
-    if skip_holidays and local_run_at.date().isoformat() in skip_holidays:
-        return "holiday"
     return None
 
 
@@ -145,12 +134,11 @@ def within_send_window(db: Session, run_at: datetime) -> bool:
 def resolve_enforcement_window_decision(
     db: Session, run_at: datetime | None = None
 ) -> EnforcementWindowDecision:
-    """Resolve the configured audit/enforce decision for the current window.
+    """Resolve the configured enforcement window.
 
     Gated by ``collections.enforcement_window_start`` / ``enforcement_window_end``
     ("HH:MM", local ``scheduler.timezone``) plus
-    ``enforcement_skip_weekends`` / ``enforcement_skip_holidays``. Audit mode
-    records a closed window without deferring; enforce mode makes it actionable.
+    The window applies every logical day.
     """
     start_raw = settings_spec.resolve_value(
         db, SettingDomain.collections, "enforcement_window_start"
@@ -160,33 +148,13 @@ def resolve_enforcement_window_decision(
     )
     start = parse_time(str(start_raw) if start_raw is not None else None)
     end = parse_time(str(end_raw) if end_raw is not None else None)
-    skip_weekends = bool(
-        settings_spec.resolve_value(
-            db, SettingDomain.collections, "enforcement_skip_weekends"
-        )
-    )
-    skip_holidays = (
-        settings_spec.resolve_value(
-            db, SettingDomain.collections, "enforcement_skip_holidays"
-        )
-        or []
-    )
-    configured_mode = settings_spec.resolve_value(
-        db, SettingDomain.collections, "enforcement_window_mode"
-    )
-    mode = str(configured_mode or "audit").strip().lower()
-    if mode not in {"audit", "enforce"}:
-        mode = "audit"
     local_run_at = to_local(db, run_at or datetime.now(UTC))
     block_reason = window_block_reason(
         local_run_at,
         start_time=start,
         end_time=end,
-        skip_weekends=skip_weekends,
-        skip_holidays=skip_holidays if isinstance(skip_holidays, list) else None,
     )
     return EnforcementWindowDecision(
-        mode=mode,
         inside_window=block_reason is None,
         block_reason=block_reason,
     )

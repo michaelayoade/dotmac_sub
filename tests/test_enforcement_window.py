@@ -4,11 +4,10 @@ from datetime import UTC, datetime, time
 
 from app.services import enforcement_window as ew
 
-# 2026-01-05 is a Monday; 2026-01-10 Saturday, 2026-01-11 Sunday.
+# 2026-01-05 is a Monday; 2026-01-10 is Saturday.
 MON_9AM = datetime(2026, 1, 5, 9, 0, tzinfo=UTC)
 MON_7AM = datetime(2026, 1, 5, 7, 0, tzinfo=UTC)
 SAT_NOON = datetime(2026, 1, 10, 12, 0, tzinfo=UTC)
-SUN_NOON = datetime(2026, 1, 11, 12, 0, tzinfo=UTC)
 
 
 def test_parse_time_variants():
@@ -65,27 +64,9 @@ def test_window_wrapping_midnight():
     )
 
 
-def test_skip_weekends():
-    assert ew.window_block_reason(SAT_NOON, skip_weekends=True) == "weekend"
-    assert ew.window_block_reason(SUN_NOON, skip_weekends=True) == "weekend"
-    assert ew.window_block_reason(MON_9AM, skip_weekends=True) is None
-    assert ew.window_block_reason(SAT_NOON, skip_weekends=False) is None
-
-
-def test_skip_holidays():
-    holidays = ["2026-01-05", "2026-12-25"]
-    assert ew.window_block_reason(MON_9AM, skip_holidays=holidays) == "holiday"
-    assert ew.window_block_reason(SAT_NOON, skip_holidays=holidays) is None
-    assert ew.window_block_reason(MON_9AM, skip_holidays=[]) is None
-    assert ew.window_block_reason(MON_9AM, skip_holidays=None) is None
-
-
-def test_time_gate_takes_precedence_over_weekend():
-    # outside the time window AND a weekend -> time reason reported first
-    assert (
-        ew.window_block_reason(SAT_NOON, start_time=time(13, 0), skip_weekends=True)
-        == "before_window"
-    )
+def test_same_time_window_applies_on_weekends():
+    assert ew.window_block_reason(SAT_NOON) is None
+    assert ew.window_block_reason(SAT_NOON, start_time=time(13, 0)) == "before_window"
 
 
 def test_resolve_timezone_name_default(monkeypatch):

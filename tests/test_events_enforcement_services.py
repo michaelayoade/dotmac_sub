@@ -1269,7 +1269,11 @@ class TestNotificationHandler:
         handler = NotificationHandler()
         event = Event(
             event_type=EventType.invoice_overdue,
-            payload={"invoice_number": "INV-100", "amount": "5000"},
+            payload={
+                "invoice_number": "INV-100",
+                "amount": "5000",
+                "due_date": "2026-07-21",
+            },
             account_id=subscriber.id,
         )
 
@@ -1286,24 +1290,32 @@ class TestNotificationHandler:
         assert all(row.subscriber_id == subscriber.id for row in notifications)
         assert all(row.category == "billing" for row in notifications)
 
-    def test_balance_notification_switch_suppresses_debt_events(
+    def test_retired_balance_notification_row_does_not_suppress_debt_events(
         self, db_session, subscriber
     ):
+        subscriber.phone = "+2348000000100"
+        db_session.commit()
         self._set_customer_balance_notifications(db_session, False)
 
         handler = NotificationHandler()
         event = Event(
             event_type=EventType.invoice_overdue,
-            payload={"invoice_number": "INV-100", "amount": "5000"},
+            payload={
+                "invoice_number": "INV-100",
+                "amount": "5000",
+                "due_date": "2026-07-21",
+            },
             account_id=subscriber.id,
         )
 
         handler.handle(db_session, event)
         db_session.commit()
 
-        assert db_session.query(Notification).count() == 0
+        assert db_session.query(Notification).count() == 2
 
-    def test_balance_notification_switch_keeps_receipts(self, db_session, subscriber):
+    def test_retired_balance_notification_row_keeps_receipts(
+        self, db_session, subscriber
+    ):
         self._set_customer_balance_notifications(db_session, False)
 
         handler = NotificationHandler()
@@ -1320,7 +1332,7 @@ class TestNotificationHandler:
         assert len(notifications) == 1
         assert notifications[0].event_type == "invoice_paid"
 
-    def test_balance_notification_switch_suppresses_billing_suspension(
+    def test_retired_balance_notification_row_keeps_billing_suspension(
         self, db_session, subscriber
     ):
         subscriber.phone = "+2348000000100"
@@ -1341,9 +1353,9 @@ class TestNotificationHandler:
         handler.handle(db_session, event)
         db_session.commit()
 
-        assert db_session.query(Notification).count() == 0
+        assert db_session.query(Notification).count() == 2
 
-    def test_balance_notification_switch_keeps_admin_suspension(
+    def test_retired_balance_notification_row_keeps_admin_suspension(
         self, db_session, subscriber
     ):
         subscriber.phone = "+2348000000101"

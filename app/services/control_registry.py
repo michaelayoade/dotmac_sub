@@ -5,25 +5,28 @@ capability features, scheduler/task toggles, safety gates, and tuning knobs —
 resolved in different places with different fail directions. That blend is what
 let billing automation be silently half-off.
 
-This module is the single source of truth and the single read path:
+This module is the single source of truth and the single read path for
+capabilities that remain optional:
 
   * Layer 1 — MODULE   : "does this product area exist?"  (modules.* domain)
   * Layer 2 — FEATURE  : "is this capability on?" (composes with its module)
-  * Layer 3 — SAFETY   : guardrails / kill switches — resolved SEPARATELY at
-                         action time (see billing_enforcement_guards /
-                         check_billing_switch), never folded into is_enabled().
+  * Layer 3 — SAFETY   : guardrails for domains that have not completed a
+                         permanent authority cutover.
 
-``is_enabled(db, "billing.autopay")`` is the one call sites should use. A
+``is_enabled(db, "network.ont_reconcile")`` is the one optional-capability
+call sites should use. A
 feature is enabled only if BOTH its module and its own flag are on. Resolution
 order per control: explicit canonical DB row → registry default, with a
 per-control fail direction (``on_missing``). Historical environment and
 database aliases are retained below only as caller-routing metadata for legacy
 scheduler call sites; they never supply an effective value.
 
-The module/feature substrate is :mod:`app.services.module_manager` (already
-fail-open + cached); this layer adds the capability features that have parallel
-scheduler/task keys (billing.invoicing/autopay/collections/overdue, …) and the
-one composed resolver.
+The customer financial lifecycle completed its permanent cutover in 2026-07.
+Billing, catalog, customer, notification, renewal, collection, reconciliation,
+and restoration execution are therefore deliberately absent from this
+registry: no database row, environment value, module card, or scheduler alias
+may disable them. Account policy and external-provider capability are resolved
+by their named domain owners instead of a global feature switch.
 """
 
 from __future__ import annotations
@@ -68,7 +71,7 @@ class LegacyAlias:
 class Control:
     """One control-plane setting with a single, declared meaning."""
 
-    key: str  # canonical dotted key, e.g. "billing.autopay"
+    key: str  # canonical dotted key, e.g. "network.ont_reconcile"
     layer: Layer
     default: bool
     # Fail direction when NO value is found anywhere. Revenue/feature controls
@@ -109,10 +112,6 @@ def _truthy(value: object) -> bool:
 # sites to the canonical control and are never value sources.
 # ---------------------------------------------------------------------------
 
-_B = SettingDomain.billing
-_C = SettingDomain.collections
-_CAT = SettingDomain.catalog
-_N = SettingDomain.notification
 _P = SettingDomain.provisioning
 _NET = SettingDomain.network
 _R = SettingDomain.radius
@@ -124,98 +123,6 @@ _SUB = SettingDomain.subscriber
 
 
 _FEATURE_CONTROLS: tuple[Control, ...] = (
-    Control(
-        key="billing.invoicing",
-        layer=Layer.feature,
-        owner_module="billing",
-        default=True,
-        on_missing=True,
-        legacy=(LegacyAlias(_B, "billing_enabled", "BILLING_ENABLED"),),
-        description="Recurring invoice generation (the billing runner).",
-    ),
-    Control(
-        key="billing.autopay",
-        layer=Layer.feature,
-        owner_module="billing",
-        default=True,
-        on_missing=True,
-        legacy=(LegacyAlias(_B, "autopay_enabled", "BILLING_AUTOPAY_ENABLED"),),
-        description="Auto-charge saved cards for due invoices.",
-    ),
-    Control(
-        key="billing.collections",
-        layer=Layer.feature,
-        owner_module="billing",
-        default=True,
-        on_missing=True,
-        legacy=(LegacyAlias(_C, "dunning_enabled", "DUNNING_ENABLED"),),
-        description="Dunning / collections workflow.",
-    ),
-    Control(
-        key="billing.overdue_marking",
-        layer=Layer.feature,
-        owner_module="billing",
-        default=True,
-        on_missing=True,
-        legacy=(
-            LegacyAlias(_B, "overdue_check_enabled", "BILLING_OVERDUE_CHECK_ENABLED"),
-        ),
-        description="Mark past-due invoices overdue.",
-    ),
-    Control(
-        key="billing.arrangements",
-        layer=Layer.feature,
-        owner_module="billing",
-        default=True,
-        on_missing=True,
-        legacy=(
-            LegacyAlias(_C, "arrangement_check_enabled", "ARRANGEMENT_CHECK_ENABLED"),
-        ),
-        description="Payment-arrangement due checks.",
-    ),
-    Control(
-        key="billing.topup_reconciliation",
-        layer=Layer.feature,
-        owner_module="billing",
-        default=True,
-        on_missing=True,
-        legacy=(
-            LegacyAlias(
-                _B,
-                "topup_reconciliation_enabled",
-                "BILLING_TOPUP_RECONCILIATION_ENABLED",
-            ),
-        ),
-        description="Reconcile pending gateway top-ups.",
-    ),
-    Control(
-        # Cadence runner for billing notifications. DEFAULT OFF historically —
-        # fail-closed so this stays a deliberate opt-in.
-        key="billing.notifications_hourly",
-        layer=Layer.feature,
-        owner_module="billing",
-        default=False,
-        on_missing=False,
-        legacy=(
-            LegacyAlias(
-                _C,
-                "billing_notifications_hourly_enabled",
-                "BILLING_NOTIFICATIONS_HOURLY_ENABLED",
-            ),
-        ),
-        description="Hourly billing-notification send-window runner.",
-    ),
-    Control(
-        # Balance/expiry-based prepaid enforcement sweep. DEFAULT OFF —
-        # fail-closed so arming this customer-suspending sweep is a deliberate
-        # opt-in (Item 2 of the prepaid/invoice/deposit alignment).
-        key="collections.prepaid_balance_enforcement",
-        layer=Layer.feature,
-        owner_module="billing",
-        default=False,
-        on_missing=False,
-        description="Prepaid balance/expiry suspension sweep.",
-    ),
     Control(
         # Master gate for the loyalty + data-capture programme
         # (docs/designs/LOYALTY_AND_CAPTURE.md). DEFAULT OFF: off means no
@@ -236,87 +143,10 @@ _FEATURE_CONTROLS: tuple[Control, ...] = (
         on_missing=False,
         description="Portal/agent location confirm-or-correct prompt.",
     ),
-    Control(
-        key="billing.prepaid_service_renewals",
-        layer=Layer.feature,
-        owner_module="billing",
-        default=False,
-        on_missing=False,
-        description=(
-            "Fund due prepaid monthly periods from verified customer position."
-        ),
-    ),
-    Control(
-        key="billing.direct_bank_transfer",
-        layer=Layer.feature,
-        owner_module="billing",
-        default=False,
-        on_missing=False,
-        legacy=(
-            LegacyAlias(
-                _B,
-                "direct_bank_transfer_enabled",
-                "BILLING_DIRECT_BANK_TRANSFER_ENABLED",
-            ),
-        ),
-        description="Customer-visible direct bank transfer payment option.",
-    ),
-    Control(
-        key="catalog.subscription_expiration",
-        layer=Layer.feature,
-        owner_module="catalog",
-        default=True,
-        on_missing=True,
-        legacy=(
-            LegacyAlias(
-                _CAT,
-                "subscription_expiration_enabled",
-                "SUBSCRIPTION_EXPIRATION_ENABLED",
-            ),
-        ),
-        description="Expire subscriptions at end of term.",
-    ),
-    Control(
-        key="catalog.vacation_hold_resume",
-        layer=Layer.feature,
-        owner_module="catalog",
-        default=True,
-        on_missing=True,
-        legacy=(
-            LegacyAlias(
-                _CAT,
-                "vacation_hold_auto_resume_enabled",
-                "VACATION_HOLD_AUTO_RESUME_ENABLED",
-            ),
-        ),
-        description="Auto-resume expired vacation holds.",
-    ),
-    Control(
-        key="customer.services_view",
-        layer=Layer.feature,
-        owner_module="customer",
-        default=True,
-        on_missing=True,
-        legacy=(
-            LegacyAlias(SettingDomain.modules, "module_customer_services_enabled"),
-        ),
-        description="Show the services view in the customer portal.",
-    ),
     # NOTE: nas_backup_retention intentionally NOT registered — it is network
     # infrastructure housekeeping, not a catalog (product) capability. Leaving it
     # unregistered keeps it on the pure legacy path with no accidental module
     # coupling (disabling a module must not silently stop NAS backup cleanup).
-    Control(
-        key="notifications.queue",
-        layer=Layer.feature,
-        owner_module="notifications",
-        default=True,
-        on_missing=True,
-        legacy=(
-            LegacyAlias(_N, "notification_queue_enabled", "NOTIFICATION_QUEUE_ENABLED"),
-        ),
-        description="Notification delivery queue runner.",
-    ),
     Control(
         key="usage.warnings",
         layer=Layer.feature,
@@ -870,8 +700,12 @@ def update_canonical_feature_controls(
 
 
 def is_enabled(db: Session, key: str) -> bool:
-    """The one resolver. ``key`` is a module ("billing") or a dotted feature
-    ("billing.autopay"). A feature is enabled only if its module is too."""
+    """Resolve an optional capability control.
+
+    Core customer-financial lifecycle services are intentionally absent from
+    this registry: they are permanent runtime responsibilities, not features
+    that operators can disable.
+    """
     control = _CONTROLS.get(key)
     if control is None:
         # Unknown key: be conservative-but-non-breaking — treat a bare module
