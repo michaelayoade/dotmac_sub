@@ -94,14 +94,9 @@ def test_run_billing_notifications_emits_inside_window(monkeypatch):
     db.commit.assert_called_once()
 
 
-def test_daily_invoice_cycle_delegates_reminders_to_the_permanent_runner(
+def test_daily_invoice_cycle_leaves_notifications_to_permanent_hourly_owner(
     db_session, monkeypatch
 ):
-    """The hourly notification runner is permanent and solely owns pre-due
-    reminders so they honour the configured send window. The invoice cycle
-    must therefore neither emit reminders itself nor call the notification
-    owner inline — there is no longer a disabled-runner fallback path.
-    """
     monkeypatch.setattr(
         billing_automation,
         "_emit_invoice_reminders",
@@ -110,7 +105,7 @@ def test_daily_invoice_cycle_delegates_reminders_to_the_permanent_runner(
     monkeypatch.setattr(
         billing_automation,
         "run_billing_notifications",
-        lambda *a, **k: (_ for _ in ()).throw(AssertionError("inline notifications")),
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("inline fallback")),
     )
 
     run_at = datetime(2026, 1, 5, 3, tzinfo=UTC)
