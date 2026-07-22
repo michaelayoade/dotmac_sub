@@ -3,7 +3,7 @@
 
 Preview is the default and performs no writes. Apply requires the exact
 preview ``--as-of`` and ``--fingerprint`` plus an idempotency key, actor, and
-review reason. A full-cohort preview is required before enforcement readiness;
+review reason. A full-cohort preview is the canonical operational evidence;
 ``--subscription-id`` is for bounded investigation and staged repair.
 """
 

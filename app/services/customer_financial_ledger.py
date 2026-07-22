@@ -9,6 +9,9 @@ queried by this runtime projection. Reviewed opening positions are owned by
 
 from __future__ import annotations
 
+import enum
+import hashlib
+import json
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -17,16 +20,19 @@ from types import SimpleNamespace
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, case, func, or_
+from sqlalchemy import and_, case, func, or_, select, union_all
 from sqlalchemy.orm import Session
 
 from app.models.billing import (
+    AccountAdjustment,
     CreditNote,
+    CreditNoteApplication,
     CreditNoteStatus,
     Invoice,
     InvoiceClosure,
     InvoiceClosureOrigin,
     InvoiceClosureType,
+    InvoiceLine,
     InvoiceStatus,
     LedgerEntry,
     LedgerEntryType,
@@ -34,10 +40,15 @@ from app.models.billing import (
     Payment,
     PaymentAllocation,
     PaymentStatus,
+    ServiceEntitlement,
+    ServiceEntitlementStatus,
 )
 from app.models.prepaid_funding import PrepaidFundingBaseline
 from app.services.common import coerce_uuid, round_money
-from app.services.invoice_classification import collectible_ar_invoice_filter
+from app.services.invoice_classification import (
+    collectible_ar_invoice_filter,
+    prepaid_subscription_invoice_ids,
+)
 
 
 @dataclass(frozen=True)
@@ -77,6 +88,49 @@ class CustomerFinancialEvent:
             effective_date=self.occurred_at,
             created_at=self.occurred_at,
             is_active=True,
+        )
+
+
+class PrepaidInvoiceConsumptionDisposition(str, enum.Enum):
+    projected = "projected"
+    already_represented = "already_represented"
+    quarantined = "quarantined"
+
+
+@dataclass(frozen=True)
+class PrepaidInvoiceConsumptionItem:
+    invoice_id: UUID
+    account_id: UUID
+    amount: Decimal
+    currency: str
+    disposition: PrepaidInvoiceConsumptionDisposition
+    reason: str
+
+
+@dataclass(frozen=True)
+class PrepaidInvoiceConsumptionPreview:
+    items: tuple[PrepaidInvoiceConsumptionItem, ...]
+    fingerprint: str
+
+    @property
+    def projected_count(self) -> int:
+        return sum(
+            item.disposition == PrepaidInvoiceConsumptionDisposition.projected
+            for item in self.items
+        )
+
+    @property
+    def already_represented_count(self) -> int:
+        return sum(
+            item.disposition == PrepaidInvoiceConsumptionDisposition.already_represented
+            for item in self.items
+        )
+
+    @property
+    def quarantined_count(self) -> int:
+        return sum(
+            item.disposition == PrepaidInvoiceConsumptionDisposition.quarantined
+            for item in self.items
         )
 
 
@@ -170,6 +224,246 @@ def _invoice_event(invoice: Invoice) -> CustomerFinancialEvent:
         occurred_at=_event_date(invoice.issued_at or invoice.created_at),
         raw=invoice,
     )
+
+
+def _paid_prepaid_invoice_consumption_event(
+    invoice: Invoice,
+) -> CustomerFinancialEvent:
+    """Project one fully funded prepaid invoice as spent customer value.
+
+    A prepaid invoice never becomes collectible AR, but once it is fully paid
+    it is authoritative evidence that the customer consumed that amount for a
+    service period. The ordinary invoice event cannot represent this because it
+    intentionally excludes every prepaid invoice from receivables.
+    """
+    return CustomerFinancialEvent(
+        id=f"prepaid-invoice-consumption:{invoice.id}",
+        account_id=invoice.account_id,
+        entry_type=LedgerEntryType.debit,
+        source=LedgerSource.invoice,
+        amount=_money(invoice.total),
+        currency=invoice.currency or "NGN",
+        memo=(
+            f"Prepaid service consumed by invoice "
+            f"{invoice.invoice_number or invoice.id}"
+        ),
+        occurred_at=_event_date(
+            invoice.paid_at or invoice.issued_at or invoice.created_at
+        ),
+        raw=invoice,
+    )
+
+
+def _direct_renewal_documentary_invoice_ids():
+    """Paid invoice ids whose value is already owned by an exact renewal debit.
+
+    Some reviewed repairs attach invoice documentation after the canonical
+    prepaid renewal adjustment and entitlement already consumed the money. The
+    exact account, subscription, period, amount and currency match prevents the
+    documentary invoice from becoming a second customer-position debit.
+    """
+    return (
+        select(InvoiceLine.invoice_id)
+        .join(Invoice, Invoice.id == InvoiceLine.invoice_id)
+        .join(
+            ServiceEntitlement,
+            ServiceEntitlement.subscription_id == InvoiceLine.subscription_id,
+        )
+        .join(
+            AccountAdjustment,
+            AccountAdjustment.ledger_entry_id
+            == ServiceEntitlement.source_ledger_entry_id,
+        )
+        .where(
+            InvoiceLine.is_active.is_(True),
+            ServiceEntitlement.status == ServiceEntitlementStatus.active,
+            AccountAdjustment.origin == "prepaid_service_renewal",
+            AccountAdjustment.reversed_at.is_(None),
+            AccountAdjustment.account_id == Invoice.account_id,
+            AccountAdjustment.amount == Invoice.total,
+            AccountAdjustment.currency == Invoice.currency,
+            ServiceEntitlement.starts_at == Invoice.billing_period_start,
+            ServiceEntitlement.ends_at == Invoice.billing_period_end,
+        )
+    )
+
+
+def _exactly_settled_invoice_ids():
+    """Invoice ids backed by exact active payment or credit applications.
+
+    ``Invoice.status == paid`` is not funding evidence by itself. Requiring the
+    canonical settlement rows prevents imported or manually toggled invoices
+    from creating a customer-position debit without the matching credit that
+    funded it.
+    """
+    payment_rows = (
+        select(
+            PaymentAllocation.invoice_id.label("invoice_id"),
+            PaymentAllocation.amount.label("amount"),
+        )
+        .join(Payment, Payment.id == PaymentAllocation.payment_id)
+        .where(
+            PaymentAllocation.is_active.is_(True),
+            Payment.is_active.is_(True),
+            Payment.status.in_(
+                (
+                    PaymentStatus.succeeded,
+                    PaymentStatus.partially_refunded,
+                    PaymentStatus.refunded,
+                )
+            ),
+            PaymentAllocation.amount > Decimal("0.00"),
+        )
+    )
+    credit_rows = (
+        select(
+            CreditNoteApplication.invoice_id.label("invoice_id"),
+            CreditNoteApplication.amount.label("amount"),
+        )
+        .join(CreditNote, CreditNote.id == CreditNoteApplication.credit_note_id)
+        .where(
+            CreditNote.is_active.is_(True),
+            CreditNote.status.in_(
+                (
+                    CreditNoteStatus.issued,
+                    CreditNoteStatus.partially_applied,
+                    CreditNoteStatus.applied,
+                )
+            ),
+            CreditNoteApplication.amount > Decimal("0.00"),
+        )
+    )
+    settlement_rows = union_all(payment_rows, credit_rows).subquery()
+    return (
+        select(settlement_rows.c.invoice_id)
+        .join(Invoice, Invoice.id == settlement_rows.c.invoice_id)
+        .group_by(settlement_rows.c.invoice_id, Invoice.total)
+        .having(func.sum(settlement_rows.c.amount) >= Invoice.total)
+    )
+
+
+def _paid_prepaid_consumption_filter():
+    """Exact paid prepaid invoices that own one customer-position debit."""
+    return and_(
+        Invoice.id.in_(prepaid_subscription_invoice_ids()),
+        Invoice.id.in_(_exactly_settled_invoice_ids()),
+        Invoice.id.notin_(_direct_renewal_documentary_invoice_ids()),
+        Invoice.status == InvoiceStatus.paid,
+        Invoice.balance_due <= Decimal("0.00"),
+        Invoice.total > Decimal("0.00"),
+        Invoice.currency.is_not(None),
+        func.length(func.trim(Invoice.currency)) == 3,
+    )
+
+
+def preview_paid_prepaid_invoice_consumption(
+    db: Session,
+    *,
+    account_ids: Iterable[str | UUID] | None = None,
+    recorded_after: datetime | None = None,
+) -> PrepaidInvoiceConsumptionPreview:
+    """Classify the exact paid-prepaid-invoice position cohort read-only.
+
+    The projection itself is a deterministic rebuild and therefore needs no
+    compensating customer write. This preview exists for rollout evidence and
+    monitoring: structurally invalid paid invoices remain visible instead of
+    being silently treated as spendable-funding corrections.
+    """
+    query = (
+        db.query(Invoice)
+        .filter(Invoice.is_active.is_(True))
+        .filter(Invoice.is_proforma.is_(False))
+        .filter(Invoice.status == InvoiceStatus.paid)
+        .filter(Invoice.id.in_(prepaid_subscription_invoice_ids()))
+    )
+    if account_ids is not None:
+        ids = {coerce_uuid(account_id) for account_id in account_ids}
+        if not ids:
+            return PrepaidInvoiceConsumptionPreview(
+                items=(), fingerprint=hashlib.sha256(b"[]").hexdigest()
+            )
+        query = query.filter(Invoice.account_id.in_(ids))
+    if recorded_after is not None:
+        query = query.filter(
+            or_(
+                Invoice.created_at > recorded_after,
+                func.coalesce(
+                    Invoice.paid_at,
+                    Invoice.issued_at,
+                    Invoice.created_at,
+                )
+                > recorded_after,
+            )
+        )
+    invoices = query.order_by(Invoice.account_id, Invoice.id).all()
+    invoice_ids = {invoice.id for invoice in invoices}
+    represented_ids = (
+        set(
+            db.scalars(
+                _direct_renewal_documentary_invoice_ids().where(
+                    InvoiceLine.invoice_id.in_(invoice_ids)
+                )
+            ).all()
+        )
+        if invoice_ids
+        else set()
+    )
+    settled_ids = (
+        set(
+            db.scalars(
+                _exactly_settled_invoice_ids().where(Invoice.id.in_(invoice_ids))
+            ).all()
+        )
+        if invoice_ids
+        else set()
+    )
+    items: list[PrepaidInvoiceConsumptionItem] = []
+    for invoice in invoices:
+        amount = _money(invoice.total)
+        currency = str(invoice.currency or "").strip().upper()
+        if amount <= Decimal("0.00"):
+            disposition = PrepaidInvoiceConsumptionDisposition.quarantined
+            reason = "nonpositive_total"
+        elif _money(invoice.balance_due) > Decimal("0.00"):
+            disposition = PrepaidInvoiceConsumptionDisposition.quarantined
+            reason = "paid_invoice_has_balance"
+        elif len(currency) != 3:
+            disposition = PrepaidInvoiceConsumptionDisposition.quarantined
+            reason = "invalid_currency"
+        elif invoice.id in represented_ids:
+            disposition = PrepaidInvoiceConsumptionDisposition.already_represented
+            reason = "exact_direct_renewal_debit_precedence"
+        elif invoice.id not in settled_ids:
+            disposition = PrepaidInvoiceConsumptionDisposition.quarantined
+            reason = "missing_exact_settlement_evidence"
+        else:
+            disposition = PrepaidInvoiceConsumptionDisposition.projected
+            reason = "paid_prepaid_invoice_consumption"
+        items.append(
+            PrepaidInvoiceConsumptionItem(
+                invoice_id=invoice.id,
+                account_id=invoice.account_id,
+                amount=amount,
+                currency=currency,
+                disposition=disposition,
+                reason=reason,
+            )
+        )
+    payload = [
+        {
+            "invoice_id": str(item.invoice_id),
+            "account_id": str(item.account_id),
+            "amount": str(item.amount),
+            "currency": item.currency,
+            "disposition": item.disposition.value,
+            "reason": item.reason,
+        }
+        for item in items
+    ]
+    fingerprint = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return PrepaidInvoiceConsumptionPreview(items=tuple(items), fingerprint=fingerprint)
 
 
 def _invoice_writeoff_event(closure: InvoiceClosure) -> CustomerFinancialEvent:
@@ -337,6 +631,22 @@ def list_customer_financial_events(
     if currency is not None:
         invoice_query = invoice_query.filter(Invoice.currency == currency)
     events.extend(_invoice_event(invoice) for invoice in invoice_query.all())
+
+    prepaid_consumption_query = (
+        db.query(Invoice)
+        .filter(Invoice.account_id == account_uuid)
+        .filter(Invoice.is_active.is_(True))
+        .filter(Invoice.is_proforma.is_(False))
+        .filter(_paid_prepaid_consumption_filter())
+    )
+    if currency is not None:
+        prepaid_consumption_query = prepaid_consumption_query.filter(
+            Invoice.currency == currency
+        )
+    events.extend(
+        _paid_prepaid_invoice_consumption_event(invoice)
+        for invoice in prepaid_consumption_query.all()
+    )
 
     writeoff_query = (
         db.query(InvoiceClosure)
@@ -559,6 +869,31 @@ def customer_financial_balances_by_currency(
             )
         )
     add(invoice_query.group_by(Invoice.account_id, invoice_currency).all())
+
+    prepaid_consumption_query = (
+        db.query(
+            Invoice.account_id,
+            invoice_currency.label("currency"),
+            (-func.sum(Invoice.total)).label("balance"),
+        )
+        .filter(Invoice.account_id.in_(account_uuids))
+        .filter(Invoice.is_active.is_(True))
+        .filter(Invoice.is_proforma.is_(False))
+        .filter(_paid_prepaid_consumption_filter())
+    )
+    if start is not None:
+        prepaid_consumption_query = prepaid_consumption_query.filter(
+            or_(
+                Invoice.created_at > start,
+                func.coalesce(
+                    Invoice.paid_at,
+                    Invoice.issued_at,
+                    Invoice.created_at,
+                )
+                > start,
+            )
+        )
+    add(prepaid_consumption_query.group_by(Invoice.account_id, invoice_currency).all())
 
     writeoff_currency = func.coalesce(InvoiceClosure.currency, "NGN")
     writeoff_query = (

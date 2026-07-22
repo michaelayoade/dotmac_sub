@@ -19,7 +19,7 @@ GRANT_OWNER = ROOT / "app/services/subscription_billing_grants.py"
 API = ROOT / "app/api/billing_treatments.py"
 SCHEMA = ROOT / "app/schemas/subscription_billing_treatment.py"
 SETTINGS = ROOT / "app/services/settings_spec.py"
-MIGRATION = ROOT / "alembic/versions/398_subscription_billing_treatments.py"
+MIGRATION = ROOT / "alembic/versions/399_subscription_billing_treatments.py"
 
 
 def _source(path: Path) -> str:
@@ -114,7 +114,7 @@ def test_zero_price_offers_are_not_customer_self_service_change_targets() -> Non
 
 def test_migration_preserves_price_and_makes_grants_append_only() -> None:
     source = _source(MIGRATION)
-    assert 'down_revision = "397_validate_payment_prepaid_archive"' in source
+    assert 'down_revision = "398_permanent_financial_lifecycle"' in source
     assert '"billing:treatment:read"' in source
     assert '"billing:treatment:write"' in source
     assert '"billing_cycle"' in source

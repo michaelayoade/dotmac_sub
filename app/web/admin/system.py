@@ -3285,6 +3285,7 @@ def scheduler_task_detail(
         {
             "request": request,
             "task": detail_data["task"],
+            "task_is_permanent": detail_data["task_is_permanent"],
             "next_run": detail_data["next_run"],
             "active_timezone": detail_data["active_timezone"],
             "runs": detail_data["runs"],

@@ -1,7 +1,7 @@
 """Add authoritative subscription billing treatments and non-cash grants.
 
-Revision ID: 398_subscription_billing_treatments
-Revises: 397_validate_payment_prepaid_archive
+Revision ID: 399_subscription_billing_treatments
+Revises: 398_permanent_financial_lifecycle
 """
 
 from __future__ import annotations
@@ -14,8 +14,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "398_subscription_billing_treatments"
-down_revision = "397_validate_payment_prepaid_archive"
+revision = "399_subscription_billing_treatments"
+down_revision = "398_permanent_financial_lifecycle"
 branch_labels = None
 depends_on = None
 

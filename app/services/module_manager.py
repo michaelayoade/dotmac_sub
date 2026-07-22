@@ -23,11 +23,7 @@ _CACHE_DOMAIN = "modules"
 _CACHE_KEY = "states"
 
 MODULE_KEY_MAP: dict[str, str] = {
-    "catalog": "module_catalog_enabled",
-    "customer": "module_customer_enabled",
     "network": "module_network_enabled",
-    "billing": "module_billing_enabled",
-    "notifications": "module_notifications_enabled",
     "integrations": "module_integrations_enabled",
     "crm": "module_crm_enabled",
     "provisioning": "module_provisioning_enabled",
@@ -37,28 +33,20 @@ MODULE_KEY_MAP: dict[str, str] = {
 }
 
 MODULE_LABELS: dict[str, str] = {
-    "billing": "Billing",
-    "catalog": "Catalog",
-    "customer": "Customer",
     "network": "Network",
     "provisioning": "Provisioning",
     "vpn": "VPN",
     "gis": "GIS",
-    "notifications": "Notifications",
     "reports": "Reports",
     "integrations": "Integrations",
     "crm": "CRM",
 }
 
 MODULE_ORDER = [
-    "billing",
-    "catalog",
-    "customer",
     "network",
     "provisioning",
     "vpn",
     "gis",
-    "notifications",
     "reports",
     "integrations",
     "crm",
@@ -101,7 +89,11 @@ def load_module_states(db: Session, *, force_refresh: bool = False) -> dict[str,
     if not force_refresh:
         cached = SettingsCache.get(_CACHE_DOMAIN, _CACHE_KEY)
         if isinstance(cached, dict):
-            return {str(k): _coerce_bool(v) for k, v in cached.items()}
+            return {
+                str(k): _coerce_bool(v)
+                for k, v in cached.items()
+                if str(k) in MODULE_KEY_MAP
+            }
 
     states: dict[str, bool] = {}
     for module_name, setting_key in MODULE_KEY_MAP.items():
@@ -122,16 +114,9 @@ def load_feature_states(
     *,
     force_refresh: bool = False,
 ) -> dict[str, bool]:
-    """Compatibility projection for the customer-layout feature gate.
-
-    The old module manager exposed twenty unrelated switches, nineteen of which
-    had no behavior consumer. The one live switch now resolves through the
-    canonical control registry.
-    """
-    del force_refresh
-    from app.services import control_registry
-
-    return {"services_view": control_registry.is_enabled(db, "customer.services_view")}
+    """Return permanent customer-portal capabilities for legacy layouts."""
+    del db, force_refresh
+    return {"services_view": True}
 
 
 def list_payment_providers(db: Session) -> list[dict[str, Any]]:

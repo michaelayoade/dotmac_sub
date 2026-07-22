@@ -357,8 +357,7 @@ class TestSeedCollectionsSettings:
         )
         assert setting is None
 
-    def test_seeds_prepaid_skip_holidays(self, db_session, monkeypatch):
-        """Test prepaid skip holidays setting is seeded."""
+    def test_does_not_seed_retired_prepaid_skip_holidays(self, db_session, monkeypatch):
         monkeypatch.setenv("PREPAID_SKIP_HOLIDAYS", '["2026-01-01"]')
 
         settings_seed.seed_collections_settings(db_session)
@@ -371,11 +370,9 @@ class TestSeedCollectionsSettings:
             )
             .first()
         )
-        assert setting is not None
-        assert setting.value_json == ["2026-01-01"]
+        assert setting is None
 
     def test_seeds_enforcement_window_policy(self, db_session, monkeypatch):
-        monkeypatch.setenv("ENFORCEMENT_WINDOW_MODE", "enforce")
         monkeypatch.setenv("ENFORCEMENT_WINDOW_START", "09:00")
         monkeypatch.setenv("ENFORCEMENT_WINDOW_END", "17:00")
         monkeypatch.setenv("ENFORCEMENT_SKIP_WEEKENDS", "true")
@@ -400,11 +397,11 @@ class TestSeedCollectionsSettings:
             )
             .all()
         }
-        assert rows["enforcement_window_mode"].value_text == "enforce"
         assert rows["enforcement_window_start"].value_text == "09:00"
         assert rows["enforcement_window_end"].value_text == "17:00"
-        assert rows["enforcement_skip_weekends"].value_json is True
-        assert rows["enforcement_skip_holidays"].value_json == ["2026-01-01"]
+        assert "enforcement_window_mode" not in rows
+        assert "enforcement_skip_weekends" not in rows
+        assert "enforcement_skip_holidays" not in rows
 
     def test_seeds_prepaid_balance_sweep_interval(self, db_session, monkeypatch):
         monkeypatch.setenv("PREPAID_BALANCE_SWEEP_INTERVAL_SECONDS", "1800")
@@ -617,7 +614,9 @@ class TestSeedSchedulerSettings:
         assert setting is not None
         assert setting.value_text == "America/New_York"
 
-    def test_seeds_event_outbox_dispatch_settings(self, db_session, monkeypatch):
+    def test_seeds_event_outbox_cadence_without_dispatch_toggle(
+        self, db_session, monkeypatch
+    ):
         monkeypatch.setenv("EVENT_DISPATCH_ENABLED", "true")
         monkeypatch.setenv("EVENT_DISPATCH_INTERVAL_SECONDS", "30")
         monkeypatch.setenv("EVENT_DISPATCH_BATCH_SIZE", "250")
@@ -639,7 +638,7 @@ class TestSeedSchedulerSettings:
             )
             .all()
         }
-        assert rows["event_dispatch_enabled"].value_json is True
+        assert "event_dispatch_enabled" not in rows
         assert rows["event_dispatch_interval_seconds"].value_text == "30"
         assert rows["event_dispatch_batch_size"].value_text == "250"
 

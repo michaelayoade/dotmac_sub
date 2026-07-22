@@ -190,8 +190,6 @@ def status_allows_notification_for_subscriber(
     """Apply the account-status notification gate for subscriber notifications."""
     if subscriber_id is None:
         return True
-    if resolve_value(db, SettingDomain.notification, "status_gate_enabled") is False:
-        return True
 
     from app.services.notification_status_policy import status_allows_notification
 
@@ -221,15 +219,6 @@ def channel_disabled_in_config(db: Session, channel: NotificationChannel | str) 
     return str(value or "true").strip().lower() in _DISABLED_VALUES
 
 
-def _setting_bool(db: Session, key: str, default: bool = False) -> bool:
-    value = resolve_value(db, SettingDomain.notification, key)
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    return str(value).strip().lower() in {"1", "true", "yes", "on"}
-
-
 def _setting_int(db: Session, key: str, default: int = 0) -> int:
     value = resolve_value(db, SettingDomain.notification, key)
     try:
@@ -247,8 +236,6 @@ def _parse_time(value: object, fallback: time) -> time:
 
 
 def quiet_hours_send_at(db: Session, now: datetime | None = None) -> datetime | None:
-    if not _setting_bool(db, "notification_quiet_hours_enabled", False):
-        return None
     now = now or datetime.now(UTC)
     start = _parse_time(
         resolve_value(db, SettingDomain.notification, "notification_quiet_hours_start"),

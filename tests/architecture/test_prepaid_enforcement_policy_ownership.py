@@ -27,6 +27,7 @@ def test_planner_consumes_config_owners_instead_of_local_policy_values():
     assert "resolve_prepaid_enforcement_policy" in planner
     assert "resolve_grace_decision" in planner
     assert "resolve_prepaid_funding" in planner
+    assert "resolve_enforcement_window_decision" in planner
     assert "timedelta(" not in planner
 
 
@@ -48,7 +49,6 @@ def test_planner_exposes_typed_outcomes_and_transport_neutral_failures():
     planner = _read("app/services/prepaid_enforcement_planner.py")
 
     assert "class PrepaidEnforcementAction(StrEnum)" in planner
-    assert "class PrepaidEnforcementPolicyIssue(StrEnum)" in planner
     assert "class PrepaidEnforcementReasonSource(StrEnum)" in planner
     assert "class PrepaidEnforcementError(DomainError)" in planner
     assert "account_status: SubscriberStatus" in planner
@@ -62,13 +62,13 @@ def test_planner_exposes_typed_outcomes_and_transport_neutral_failures():
     assert ".rollback(" not in planner
 
 
-def test_readiness_is_a_gate_not_a_runtime_balance_source():
-    readiness = _read("app/services/prepaid_enforcement_readiness.py")
+def test_enforcement_uses_account_evidence_not_global_runtime_gates():
+    planner = _read("app/services/prepaid_enforcement_planner.py")
     sweep = _read("app/services/collections/prepaid_balance_sweep.py")
-    assert "record_prepaid_enforcement_readiness" in readiness
-    assert "reconstruction_evidence_sha256" in readiness
-    assert "funding_decisions_hash" in readiness
-    assert "prepaid_enforcement_readiness_block_reason" in sweep
+    assert "control_registry" not in planner
+    assert "prepaid_enforcement_readiness" not in planner
+    assert "billing_enforcement_health" not in planner
+    assert "prepaid_enforcement_readiness" not in sweep
     assert "available_balance=record" not in sweep
     assert "required_balance=record" not in sweep
 

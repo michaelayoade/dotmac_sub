@@ -95,7 +95,7 @@ disabled billing flag, long grace, or future anchor does not prove approval.
 Genuinely free catalog products may retain a zero recurring price; zero price is
 retired only as an account-specific concession mechanism.
 
-1. Apply migration `398_subscription_billing_treatments`.
+1. Apply migration `399_subscription_billing_treatments`.
 2. Grant the new permissions narrowly.
 3. Report and review legacy zero-price/billing-disabled/grace/anchor candidates.
 4. Approve valid cases through the owner command.

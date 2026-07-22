@@ -162,26 +162,18 @@ def _compute_contract_end_at(start_at: datetime, term: ContractTerm) -> datetime
     return None
 
 
-def _generate_proration_if_enabled(
+def _generate_activation_proration(
     db: Session,
     subscription: Subscription,
     from_status: SubscriptionStatus | None,
 ) -> None:
-    """Generate a prorated invoice if proration is enabled and subscription is newly activated."""
+    """Generate the owner-defined proration for a newly activated subscription."""
     from app.services.billing_automation import generate_prorated_invoice
 
     # Only prorate on activation (not resume from suspension)
     if from_status == SubscriptionStatus.suspended:
         return
 
-    # Check if proration is enabled
-    proration_enabled = settings_spec.resolve_value(
-        db, SettingDomain.billing, "proration_enabled"
-    )
-    if proration_enabled is False:
-        return
-
-    # Generate prorated invoice
     try:
         generate_prorated_invoice(db, subscription)
     except Exception as exc:
@@ -436,43 +428,17 @@ def apply_offer_radius_profile(
     return resolved_target
 
 
-def _enforce_or_record_connectivity_gap(
+def _enforce_stopped_or_disabled_connectivity(
     db: Session,
     subscription: Subscription,
     to_status: SubscriptionStatus,
 ) -> None:
-    """Close (or measure) the stopped/disabled connectivity gap.
+    """Project stopped/disabled lifecycle state to connectivity immediately.
 
     Transitions to ``stopped``/``disabled`` emit no enforcement event, so the
-    subscriber keeps connectivity until the next RADIUS orphan sweep. Enforcing
-    immediately is a LIVE behaviour change (it disconnects subscribers who are
-    online today), so it is gated behind the ``enforce_stopped_disabled``
-    radius setting, default OFF.
-
-    Regardless of the flag we always log the would-be disconnect so the impact
-    can be measured before enabling (the suspension audit,
-    ``radius_reconciliation.audit_suspension_enforcement``, also now reports
-    these as leaks). When the flag is ON we run the same RADIUS cleanup as the
-    equivalent suspend (``stopped`` → walled-garden) / cancel (``disabled`` →
-    removed) path.
+    subscriber would otherwise keep connectivity until the next RADIUS orphan
+    sweep. Run the same cleanup as the equivalent suspend or cancel path.
     """
-    enforce_raw = settings_spec.resolve_value(
-        db, SettingDomain.radius, "enforce_stopped_disabled"
-    )
-    enforce_on = enforce_raw is not None and str(enforce_raw).lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-    logger.warning(
-        "connectivity gap: subscription=%s status=%s would_disconnect=True enforce=%s",
-        subscription.id,
-        to_status.value,
-        enforce_on,
-    )
-    if not enforce_on:
-        return
     try:
         if to_status == SubscriptionStatus.disabled:
             from app.services.enforcement import cleanup_subscription_on_cancel
@@ -484,7 +450,7 @@ def _enforce_or_record_connectivity_gap(
             cleanup_subscription_on_suspend(db, str(subscription.id))
     except Exception as exc:
         logger.warning(
-            "Gated stopped/disabled enforcement failed for subscription %s: %s",
+            "Stopped/disabled enforcement failed for subscription %s: %s",
             subscription.id,
             exc,
         )
@@ -555,7 +521,7 @@ def _emit_subscription_status_event(
                 account_id=subscription.subscriber_id,
             )
             # Generate prorated invoice for new activations
-            _generate_proration_if_enabled(db, subscription, from_status)
+            _generate_activation_proration(db, subscription, from_status)
 
     elif to_status == SubscriptionStatus.suspended:
         # Cleanup RADIUS connectivity on suspension
@@ -603,7 +569,7 @@ def _emit_subscription_status_event(
     elif to_status == SubscriptionStatus.stopped:
         # Previously emitted nothing → subscriber kept connectivity until the
         # orphan sweep. Gated enforcement (default off) + always-on audit log.
-        _enforce_or_record_connectivity_gap(db, subscription, to_status)
+        _enforce_stopped_or_disabled_connectivity(db, subscription, to_status)
 
 
 def _handle_status_transition_via_lifecycle(

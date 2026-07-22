@@ -208,13 +208,12 @@ def reconcile_service_after_invoice_settlement(
     compute_account_status(db, str(account_id))
 
 
-def next_invoice_number(db: Session) -> str | None:
-    """Generate the next sequential invoice number (None when disabled)."""
-    return numbering.generate_number(
+def next_invoice_number(db: Session) -> str:
+    """Generate the next sequential invoice number."""
+    return numbering.generate_required_number(
         db,
         SettingDomain.billing,
         "invoice_number",
-        "invoice_number_enabled",
         "invoice_number_prefix",
         "invoice_number_padding",
         "invoice_number_start",
@@ -1652,11 +1651,10 @@ class Invoices(ListResponseMixin):
         total = amount + tax_total
 
         # Create invoice
-        invoice_number = numbering.generate_number(
+        invoice_number = numbering.generate_required_number(
             db,
             SettingDomain.billing,
             "invoice_number",
-            "invoice_number_enabled",
             "invoice_number_prefix",
             "invoice_number_padding",
             "invoice_number_start",

@@ -34,6 +34,15 @@ from app.services import communication_eligibility as eligibility
 from app.tasks import notifications as notification_tasks
 
 
+@pytest.fixture(autouse=True)
+def _allow_immediate_notification_delivery(monkeypatch):
+    """Keep delivery assertions independent of the CI runner's wall clock."""
+    monkeypatch.setattr(
+        "app.services.notification.quiet_hours_send_at",
+        lambda _db: None,
+    )
+
+
 def _subscriber(db_session, *, email: str, first_name: str = "Ada") -> Subscriber:
     subscriber = Subscriber(
         first_name=first_name,

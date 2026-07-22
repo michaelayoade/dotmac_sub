@@ -1,6 +1,6 @@
 from fastapi import HTTPException
 
-from app.services import control_registry, module_manager
+from app.services import module_manager
 
 
 def test_load_module_states_defaults_true_when_settings_missing(monkeypatch):
@@ -22,21 +22,20 @@ def test_load_module_states_defaults_true_when_settings_missing(monkeypatch):
         module_manager.domain_settings_service.modules_settings, "get_by_key", _missing
     )
     states = module_manager.load_module_states(db=object(), force_refresh=True)
-    assert states["billing"] is True
     assert states["network"] is True
     assert states["reports"] is True
+    assert "billing" not in states
 
 
 def test_load_module_states_prefers_cached_value(monkeypatch):
-    cached = {"billing": False, "catalog": True}
+    cached = {"billing": False, "catalog": True, "network": False}
     monkeypatch.setattr(
         module_manager.SettingsCache,
         "get",
         staticmethod(lambda *_args, **_kwargs: cached),
     )
     states = module_manager.load_module_states(db=object(), force_refresh=False)
-    assert states["billing"] is False
-    assert states["catalog"] is True
+    assert states == {"network": False}
 
 
 def test_update_module_flags_upserts_and_invalidates(monkeypatch):
@@ -57,23 +56,19 @@ def test_update_module_flags_upserts_and_invalidates(monkeypatch):
 
     module_manager.update_module_flags(
         db=object(),
-        payload={"billing": False, "catalog": True, "unknown": False},
+        payload={"network": False, "gis": True, "unknown": False},
     )
 
-    assert ("module_billing_enabled", False) in upserts
-    assert ("module_catalog_enabled", True) in upserts
+    assert ("module_network_enabled", False) in upserts
+    assert ("module_gis_enabled", True) in upserts
     assert ("modules", "states") in invalidations
     assert ("modules", "feature_states") in invalidations
 
 
-def test_load_feature_states_projects_only_live_customer_control(db_session):
-    control_registry.update_canonical_feature_controls(
-        db_session, payload={"customer.services_view": False}
-    )
-
+def test_load_feature_states_projects_permanent_customer_capability(db_session):
     states = module_manager.load_feature_states(db_session, force_refresh=True)
 
-    assert states == {"services_view": False}
+    assert states == {"services_view": True}
 
 
 def _make_provider(db_session, name, provider_type, *, is_active=True):
@@ -138,11 +133,8 @@ def test_module_manager_page_state_includes_providers(db_session):
     assert any(p["name"] == "Paystack" for p in state["payment_providers"])
 
 
-def test_module_manager_page_state_uses_canonical_registry_controls(db_session):
+def test_module_manager_page_state_excludes_financial_lifecycle_modules(db_session):
     state = module_manager.module_manager_page_state(db_session)
 
-    billing = next(card for card in state["module_cards"] if card["name"] == "billing")
-    controls = {feature["key"]: feature for feature in billing["features"]}
-    assert controls["billing.autopay"]["stored"] == "inherit"
-    assert controls["billing.autopay"]["effective"] is True
-    assert "module_billing_invoices_enabled" not in controls
+    module_names = {card["name"] for card in state["module_cards"]}
+    assert {"billing", "catalog", "customer", "notifications"}.isdisjoint(module_names)

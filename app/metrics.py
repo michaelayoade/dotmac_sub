@@ -560,10 +560,6 @@ class _BillingHealthCollector(Collector):
             "billing_negative_prepaid_balance_total",
             "Absolute total negative prepaid wallet exposure",
         )
-        yield _gauge_description(
-            "billing_negative_prepaid_sweep_disabled_accounts",
-            "Negative prepaid accounts while the prepaid balance sweep is disabled",
-        )
 
     def collect(self):  # noqa: ANN201 - prometheus collector protocol
         from datetime import UTC, datetime
@@ -675,11 +671,6 @@ class _BillingHealthCollector(Collector):
                 "negative_prepaid_balance_total",
                 "billing_negative_prepaid_balance_total",
                 "Absolute total negative prepaid wallet exposure",
-            ),
-            (
-                "negative_prepaid_sweep_disabled_accounts",
-                "billing_negative_prepaid_sweep_disabled_accounts",
-                "Negative prepaid accounts while the prepaid balance sweep is disabled",
             ),
         )
         for signal, name, help_text in global_metrics:

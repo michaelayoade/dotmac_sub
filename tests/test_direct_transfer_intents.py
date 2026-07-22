@@ -17,7 +17,7 @@ from app.models.billing import (
 from app.models.domain_settings import DomainSetting, SettingDomain, SettingValueType
 from app.models.event_store import EventStore
 from app.services import direct_transfer_intents as svc
-from app.services import module_manager, topup_intents
+from app.services import topup_intents
 from app.services.db_session_adapter import db_session_adapter
 from app.services.owner_commands import CommandContext
 
@@ -35,7 +35,6 @@ def _configuration(
     *, enabled: bool = True
 ) -> topup_intents.DirectTransferConfiguration:
     return topup_intents.DirectTransferConfiguration(
-        control_enabled=enabled,
         accounts=(
             topup_intents.DirectTransferConfiguredAccount(
                 id="bank-primary",
@@ -45,7 +44,9 @@ def _configuration(
                 account_number="0123456789",
                 sort_code="123456",
             ),
-        ),
+        )
+        if enabled
+        else (),
         bank_name="Dotmac Test Bank",
         account_name="Dotmac Payments",
         account_number="0123456789",
@@ -93,7 +94,7 @@ def _create(
     )
 
 
-def test_configuration_projection_uses_canonical_control_and_stable_accounts(
+def test_configuration_projection_uses_active_stable_accounts(
     db_session,
 ):
     account = CollectionAccount(
@@ -114,14 +115,12 @@ def test_configuration_projection_uses_canonical_control_and_stable_accounts(
                 domain=SettingDomain.modules,
                 key="billing_direct_bank_transfer",
                 value_type=SettingValueType.boolean,
-                value_text="true",
+                value_text="false",
                 is_active=True,
             ),
         ]
     )
     db_session.commit()
-    module_manager.invalidate_module_cache()
-
     first = topup_intents.direct_transfer_configuration(db_session)
     db_session.expire_all()
     second = topup_intents.direct_transfer_configuration(db_session)

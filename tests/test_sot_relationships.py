@@ -116,7 +116,6 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "control.settings_spec",
         "events.dispatcher",
         "observability.audit_log",
-        "communications.event_policy",
     )
     assert sot_relationships.dependencies_for("referrals.account_conversion") == (
         "customer.accounts",
@@ -444,32 +443,26 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "access.walled_garden_policy",
     )
     assert sot_relationships.dependencies_for("customer.financial_position") == (
+        "financial.credit_notes",
+        "financial.invoices",
         "financial.ledger",
+        "financial.payments",
         "financial.prepaid_funding_reconstruction",
     )
     assert sot_relationships.dependencies_for("financial.prepaid_enforcement") == (
         "access.subscription_lifecycle",
         "communications.customer_policy",
-        "control.feature_registry",
         "control.settings_spec",
         "customer.accounts",
         "financial.prepaid_funding_reconstruction",
         "financial.access_resolution",
         "financial.billing_profile",
-        "financial.billing_health",
         "financial.dunning",
         "financial.prepaid_currency",
         "financial.prepaid_enforcement_state",
         "financial.prepaid_threshold",
         "financial.grace_policy",
         "service_intent.catalog_policy",
-    )
-    assert sot_relationships.dependencies_for(
-        "financial.prepaid_enforcement_readiness"
-    ) == (
-        "financial.prepaid_funding_reconstruction",
-        "financial.prepaid_enforcement",
-        "financial.access_resolution",
     )
     assert sot_relationships.dependencies_for("financial.billing_scheduled") == (
         "financial.ledger",
@@ -485,7 +478,6 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "financial.access_resolution",
         "financial.prepaid_enforcement",
         "financial.prepaid_enforcement_state",
-        "financial.prepaid_enforcement_readiness",
     )
     assert sot_relationships.dependencies_for("financial.payment_webhooks") == (
         "integration.inbox",
@@ -666,7 +658,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     assert subscriber_api_mapping.name == "ui.subscriber_list_projection"
     assert sot_relationships.dependencies_for(
         "communications.notification_service"
-    ) == ("communications.channel_policy", "communications.event_policy")
+    ) == ("communications.channel_policy", "communications.customer_policy")
     assert sot_relationships.dependencies_for("communications.customer_read_state") == (
         "customer.identity_scope",
         "communications.customer_policy",
