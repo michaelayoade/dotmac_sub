@@ -14038,6 +14038,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "billing and access impact projection",
                     "service-change delivery-mode decision",
                     "service-address qualification and field-fee preview",
+                    "vacation-hold duration, annual-limit, cooldown, and resume policy",
                     "subscription command and outcome contracts",
                 ),
                 depends_on=(
@@ -14069,6 +14070,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "subscription command idempotent replay",
                     "structured subscription command outcomes",
                     "persisted relocation qualification and fee evidence",
+                    "vacation-hold and exact customer-lock resume orchestration",
                     "independently committed subscription command batches",
                 ),
                 depends_on=(
@@ -14090,6 +14092,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "service_intent.subscription_lifecycle_scheduling. Admin "
                     "single and bulk adapters delegate here instead of writing "
                     "subscription lifecycle fields directly."
+                    " Customer, admin, and automatic vacation-hold adapters all "
+                    "delegate customer_hold lock creation/resolution here."
                 ),
             ),
             SOTService(

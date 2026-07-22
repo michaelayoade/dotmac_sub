@@ -140,10 +140,15 @@ Completed in this slice:
   the exact subscription-scoped RADIUS user carries that profile with a sync
   watermark after the request. The structural profile/user links and
   verification time remain available for replay, drift audit, and repair.
+- Vacation hold and resume are explicit subscription lifecycle commands. The
+  lifecycle policy owner resolves duration, annual-use, cooldown, active-lock,
+  and subscription-status eligibility from canonical settings and exact
+  `customer_hold` lock history. Customer, admin, and automatic-expiry adapters
+  now delegate to the same locked, reviewed-head, idempotent command and retain
+  the exact enforcement-lock identifier in the outcome.
 
 Still required before this lifecycle is complete:
 
-- route vacation hold/resume through the lifecycle command owner;
 - expose scoped reboot/Wi-Fi command outcomes consistently on web and mobile;
 - remove the remaining superseded customer-route decisions and add the operator
   reconciliation surface for interrupted execution-chain states.

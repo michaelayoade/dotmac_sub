@@ -1841,7 +1841,7 @@ class TestVacationHoldUsageLimits:
         # Mock the settings and usage to simulate max holds reached
         def mock_resolve_value(db, domain, key):
             if key == "max_suspend_holds_per_year":
-                return 2
+                return 1
             if key == "customer_suspend_enabled":
                 return True
             if key == "max_suspend_days":
@@ -1850,28 +1850,33 @@ class TestVacationHoldUsageLimits:
                 return 0
             return None
 
-        # Mock usage to show 2 holds already used
-        mock_usage = {
-            "holds_this_year": 2,
-            "last_hold_date": None,
-            "days_since_last": None,
-        }
+        from app.models.enforcement_lock import EnforcementLock, EnforcementReason
+
+        db_session.add(
+            EnforcementLock(
+                subscription_id=subscription.id,
+                subscriber_id=subscriber.id,
+                reason=EnforcementReason.customer_hold,
+                source="historical:0",
+                is_active=False,
+                resolved_at=datetime.now(UTC),
+                resolved_by="test",
+                created_at=datetime.now(UTC),
+            )
+        )
+        db_session.commit()
 
         with patch(
             "app.services.settings_spec.resolve_value",
             side_effect=mock_resolve_value,
         ):
-            with patch(
-                "app.services.customer_portal_flow_services._get_vacation_hold_usage",
-                return_value=mock_usage,
-            ):
-                with pytest.raises(ValueError, match="maximum of 2 vacation holds"):
-                    apply_service_suspend(
-                        db_session,
-                        {"account_id": subscriber.id},
-                        str(subscription.id),
-                        days=7,
-                    )
+            with pytest.raises(ValueError, match="maximum of 1 vacation holds"):
+                apply_service_suspend(
+                    db_session,
+                    {"account_id": subscriber.id},
+                    str(subscription.id),
+                    days=7,
+                )
 
     def test_apply_service_suspend_rejects_during_cooldown(
         self, db_session, subscription, subscriber
@@ -2101,10 +2106,10 @@ class TestVacationHoldCeleryTask:
         mock_session.rollback = db_session.rollback
         mock_session.scalars = db_session.scalars
 
-        # Mock restore_subscription to raise an error
+        # Mock the lifecycle command owner to raise an error
         with patch("app.tasks.vacation_holds.SessionLocal", return_value=mock_session):
             with patch(
-                "app.tasks.vacation_holds.restore_subscription",
+                "app.tasks.vacation_holds.execute_subscription_command",
                 side_effect=Exception("Test error"),
             ):
                 result = resume_expired_holds()
