@@ -20,12 +20,13 @@ from types import SimpleNamespace
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, case, func, or_, select
+from sqlalchemy import and_, case, func, or_, select, union_all
 from sqlalchemy.orm import Session
 
 from app.models.billing import (
     AccountAdjustment,
     CreditNote,
+    CreditNoteApplication,
     CreditNoteStatus,
     Invoice,
     InvoiceClosure,
@@ -287,10 +288,65 @@ def _direct_renewal_documentary_invoice_ids():
     )
 
 
+def _exactly_settled_invoice_ids():
+    """Invoice ids backed by exact active payment or credit applications.
+
+    ``Invoice.status == paid`` is not funding evidence by itself. Requiring the
+    canonical settlement rows prevents imported or manually toggled invoices
+    from creating a customer-position debit without the matching credit that
+    funded it.
+    """
+    payment_rows = (
+        select(
+            PaymentAllocation.invoice_id.label("invoice_id"),
+            PaymentAllocation.amount.label("amount"),
+        )
+        .join(Payment, Payment.id == PaymentAllocation.payment_id)
+        .where(
+            PaymentAllocation.is_active.is_(True),
+            Payment.is_active.is_(True),
+            Payment.status.in_(
+                (
+                    PaymentStatus.succeeded,
+                    PaymentStatus.partially_refunded,
+                    PaymentStatus.refunded,
+                )
+            ),
+            PaymentAllocation.amount > Decimal("0.00"),
+        )
+    )
+    credit_rows = (
+        select(
+            CreditNoteApplication.invoice_id.label("invoice_id"),
+            CreditNoteApplication.amount.label("amount"),
+        )
+        .join(CreditNote, CreditNote.id == CreditNoteApplication.credit_note_id)
+        .where(
+            CreditNote.is_active.is_(True),
+            CreditNote.status.in_(
+                (
+                    CreditNoteStatus.issued,
+                    CreditNoteStatus.partially_applied,
+                    CreditNoteStatus.applied,
+                )
+            ),
+            CreditNoteApplication.amount > Decimal("0.00"),
+        )
+    )
+    settlement_rows = union_all(payment_rows, credit_rows).subquery()
+    return (
+        select(settlement_rows.c.invoice_id)
+        .join(Invoice, Invoice.id == settlement_rows.c.invoice_id)
+        .group_by(settlement_rows.c.invoice_id, Invoice.total)
+        .having(func.sum(settlement_rows.c.amount) >= Invoice.total)
+    )
+
+
 def _paid_prepaid_consumption_filter():
     """Exact paid prepaid invoices that own one customer-position debit."""
     return and_(
         Invoice.id.in_(prepaid_subscription_invoice_ids()),
+        Invoice.id.in_(_exactly_settled_invoice_ids()),
         Invoice.id.notin_(_direct_renewal_documentary_invoice_ids()),
         Invoice.status == InvoiceStatus.paid,
         Invoice.balance_due <= Decimal("0.00"),
@@ -352,6 +408,15 @@ def preview_paid_prepaid_invoice_consumption(
         if invoice_ids
         else set()
     )
+    settled_ids = (
+        set(
+            db.scalars(
+                _exactly_settled_invoice_ids().where(Invoice.id.in_(invoice_ids))
+            ).all()
+        )
+        if invoice_ids
+        else set()
+    )
     items: list[PrepaidInvoiceConsumptionItem] = []
     for invoice in invoices:
         amount = _money(invoice.total)
@@ -368,6 +433,9 @@ def preview_paid_prepaid_invoice_consumption(
         elif invoice.id in represented_ids:
             disposition = PrepaidInvoiceConsumptionDisposition.already_represented
             reason = "exact_direct_renewal_debit_precedence"
+        elif invoice.id not in settled_ids:
+            disposition = PrepaidInvoiceConsumptionDisposition.quarantined
+            reason = "missing_exact_settlement_evidence"
         else:
             disposition = PrepaidInvoiceConsumptionDisposition.projected
             reason = "paid_prepaid_invoice_consumption"

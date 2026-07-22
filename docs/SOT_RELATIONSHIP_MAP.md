@@ -711,7 +711,8 @@ detailed security and delivery boundary is
    it before access restoration; a lapsed service starts on the payment day and
    missed inactive periods are not silently back-billed.
    A fully paid positive invoice with an active exact prepaid subscription line
-   is the mutually exclusive invoice-funded representation. It remains non-AR,
+   and complete active payment/credit-note applications is the mutually exclusive
+   invoice-funded representation. Status alone is not funding evidence. It remains non-AR,
    but `customer.financial_position` projects its tax-inclusive total as the one
    service-consumption debit. An exact unreversed renewal adjustment plus active
    debit-backed entitlement for the same account, subscription, period, amount,
@@ -1137,7 +1138,8 @@ Payment creation, settlement, and allocation are one coherent owner contract:
   `payment.received` event invokes `financial.prepaid_service_renewals`, which is
   the sole decision owner of prepaid period funding, entitlements, billing-anchor
   advancement, and `prepaid_service.renewed` outcomes. Invoice-funded periods use
-  the exact fully paid prepaid invoice as their customer-position debit;
+  the exact fully paid and fully settlement-backed prepaid invoice as their
+  customer-position debit;
   invoice-less periods use the owner's exact adjustment debit. Access enforcement has an
   explicit dependency on that owner, while customer notifications and external
   delivery remain independent fanout consequences. The former inline payment
@@ -1522,8 +1524,9 @@ evidenced owner contract:
   never a runtime fallback. Reason-scoped repair follows the reason owner: an
   ``overdue`` lock is never judged by the prepaid affordability resolver.
   A paid prepaid subscription invoice is excluded from collectible AR but is
-  included once as consumed service value. Imported line-less invoices are not
-  sufficient. When the exact same period is already represented by an
+  included once as consumed service value only when exact active payment and/or
+  credit-note applications fully back its total. Paid status alone and imported
+  line-less invoices are not sufficient. When the exact same period is already represented by an
   unreversed renewal adjustment and active debit-backed entitlement, that
   canonical debit takes precedence and the documentary invoice contributes no
   second position effect. Scalar and bounded-cohort reads use the same rule.

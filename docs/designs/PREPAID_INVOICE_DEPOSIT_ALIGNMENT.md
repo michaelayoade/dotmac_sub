@@ -97,7 +97,8 @@ phantom-ledger cleanups). Separate one-off script, run after Item 1 lands.
 
 1. The monthly-prepaid draft-invoice owner and its control are retired.
    `financial.prepaid_service_renewals` is the only decision owner for new
-   funded prepaid periods. A fully paid prepaid subscription invoice is the
+   funded prepaid periods. A fully paid prepaid subscription invoice with exact
+   active payment and/or credit-note applications covering its total is the
    canonical service-consumption document for an invoice-funded period;
    `customer.financial_position` projects its tax-inclusive total as spent
    customer value. Invoice-less scheduled/post-credit renewal uses the owner's

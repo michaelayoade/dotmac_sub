@@ -98,6 +98,7 @@ def test_runtime_has_no_legacy_authority_toggle_or_fallback() -> None:
     assert "INTERNAL_MEMO_PREFIXES" not in ledger
     assert "affects_customer_position" in ledger
     assert "prepaid_subscription_invoice_ids" in ledger
+    assert "_exactly_settled_invoice_ids" in ledger
     assert "_paid_prepaid_consumption_filter" in ledger
     assert "exact_direct_renewal_debit_precedence" in ledger
     assert "PrepaidFundingSnapshot" not in planner

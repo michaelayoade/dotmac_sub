@@ -442,7 +442,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
                 notes=(
                     "Paid prepaid subscription invoices are non-AR documents but "
-                    "become exact customer-position service debits once fully paid. "
+                    "become exact customer-position service debits only when fully "
+                    "paid and backed by exact active settlement applications. "
                     "An exact direct-renewal adjustment and entitlement for the same "
                     "account, subscription, period, amount, and currency takes "
                     "precedence so a later documentary invoice cannot debit twice."
@@ -533,8 +534,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             kind=AuthorityKind.AUTHORITATIVE_RECORD,
                             source=(
                                 "active fully paid positive Invoice with an active exact "
-                                "prepaid Subscription line, paid time, period, total, and "
-                                "currency"
+                                "prepaid Subscription line whose total is fully backed by "
+                                "active PaymentAllocation and/or CreditNoteApplication "
+                                "evidence, plus paid time, period, total, and currency"
                             ),
                         ),
                         AuthorityInput(
@@ -584,7 +586,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         fail_closed_on=(
                             "missing reviewed prepaid authority for a pre-cutover account",
                             "cross-currency automation input",
-                            "ambiguous prepaid invoice without an exact subscription line",
+                            "prepaid invoice without an exact subscription line or complete "
+                            "active settlement applications",
                         ),
                     ),
                     projections=(

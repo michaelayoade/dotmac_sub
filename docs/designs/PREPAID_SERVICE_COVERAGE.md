@@ -46,7 +46,9 @@ prepaid periods. Invoice-less scheduled or post-credit renewals write the debit,
 entitlement, paid-through projection, and durable outcome together. When the
 customer instead funds an exact prepaid invoice, `financial.invoices` owns the
 paid document and `customer.financial_position` projects that fully paid invoice
-as the one customer-position service debit; the renewal consequence must use the
+as the one customer-position service debit only when active payment and/or
+credit-note applications exactly cover its total. Paid status alone is not
+funding evidence; the renewal consequence must use the
 same invoice period and may not post a second debit.
 
 An exact direct-renewal adjustment and active debit-backed entitlement for the

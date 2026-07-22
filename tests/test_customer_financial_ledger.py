@@ -490,6 +490,61 @@ def test_malformed_paid_prepaid_invoice_is_quarantined_not_projected(
     assert calculate_customer_balance(db_session, subscriber.id) == Decimal("100.00")
 
 
+def test_paid_prepaid_invoice_without_settlement_is_quarantined_not_debited(
+    db_session, subscriber, subscription
+):
+    position_at = datetime(2026, 7, 20, tzinfo=UTC)
+    paid_at = position_at + timedelta(days=1)
+    subscription.billing_mode = BillingMode.prepaid
+    subscription.status = SubscriptionStatus.active
+    invoice = Invoice(
+        account_id=subscriber.id,
+        status=InvoiceStatus.paid,
+        currency="NGN",
+        subtotal=Decimal("100.00"),
+        tax_total=Decimal("0.00"),
+        total=Decimal("100.00"),
+        balance_due=Decimal("0.00"),
+        billing_period_start=paid_at,
+        billing_period_end=paid_at + timedelta(days=30),
+        issued_at=paid_at,
+        paid_at=paid_at,
+        created_at=paid_at,
+    )
+    db_session.add(invoice)
+    db_session.flush()
+    db_session.add(
+        InvoiceLine(
+            invoice_id=invoice.id,
+            subscription_id=subscription.id,
+            description="Unsupported paid prepaid service",
+            quantity=Decimal("1.000"),
+            unit_price=Decimal("100.00"),
+            amount=Decimal("100.00"),
+            metadata_={"kind": "base_subscription"},
+        )
+    )
+    db_session.commit()
+    materialize_test_prepaid_opening_balance(
+        db_session,
+        subscriber.id,
+        Decimal("0.00"),
+        position_at=position_at,
+    )
+
+    preview = preview_paid_prepaid_invoice_consumption(
+        db_session,
+        account_ids=(subscriber.id,),
+        recorded_after=position_at,
+    )
+
+    assert preview.projected_count == 0
+    assert preview.already_represented_count == 0
+    assert preview.quarantined_count == 1
+    assert preview.items[0].reason == "missing_exact_settlement_evidence"
+    assert calculate_customer_balance(db_session, subscriber.id) == Decimal("0.00")
+
+
 def test_bulk_balance_matches_canonical_multi_currency_refund_rules(
     db_session, subscriber
 ):
