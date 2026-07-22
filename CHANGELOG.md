@@ -2,7 +2,7 @@
 
 All notable changes to DotMac Sub are tracked here.
 
-## 7.1.1 - 2026-07-22
+## 7.1.2 - 2026-07-22
 
 - Complete the Team Inbox source-of-truth split with typed observation,
   processing, contact, routing, operator-state, delivery, query, maintenance,

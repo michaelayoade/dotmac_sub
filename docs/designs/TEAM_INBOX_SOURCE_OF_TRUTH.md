@@ -113,14 +113,15 @@ stale. Realtime has no replay authority.
 
 ## Schema and migration
 
-Migration `403_team_inbox_sot_completion` adds the normalized provider
+Migration `404_team_inbox_sot_completion` adds the normalized provider
 observation ledger and per-operator conversation read cursor. It is additive;
 no legacy data is inferred or deleted. Deployment order is expand, deploy
 writers/readers, verify parity and duplicate handling, then retire old paths.
 
-The migration is based on main migration 400. If open migration 401/402 lands
-first, this branch must be rebased and the down revision renumbered before
-merge; production must never receive parallel unreviewed heads.
+The migration is based on main migration 400. Open branches currently claim
+migration identifiers 401 through 403. If any lands first, this branch must be
+rebased and the down revision updated before merge; production must never
+receive parallel unreviewed heads.
 
 ## Retired paths
 

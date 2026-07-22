@@ -1,6 +1,6 @@
 # Team Inbox Reconciliation Runbook
 
-Use this runbook after deploying migration 403, after provider retry incidents,
+Use this runbook after deploying migration 404, after provider retry incidents,
 or when Inbox counts/realtime views disagree. It does not authorize production
 access; the target host must be named explicitly before any production work.
 
@@ -15,7 +15,7 @@ access; the target host must be named explicitly before any production work.
 
 ## Checks
 
-1. Confirm Alembic has one expected head and migration 403 is applied.
+1. Confirm Alembic has one expected head and migration 404 is applied.
 2. Compare observation counts by provider, kind, and processing status. A
    recorded observation without `processed_at` is a processing work item, not
    permission to bypass the processor.
