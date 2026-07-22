@@ -1,10 +1,10 @@
-"""Items 3 & 4 of the prepaid deposit-is-truth alignment.
+"""Prepaid plan-change and billing-profile ownership regressions.
 
-Item 3: a prepaid mid-cycle plan-change on the generic/admin path must draw the
+A prepaid mid-cycle plan-change on the generic/admin path must draw the
 price difference down from prepaid funding (a ledger debit), never mint an issued
 invoice — matching the customer-portal instant-change path.
 
-Item 4: the customer-facing service status must resolve billing mode through the
+The customer-facing service status must resolve billing mode through the
 same collectible-subscription-derived authority as dunning/enforcement, so the
 two can't disagree for a drifted/mixed account.
 """

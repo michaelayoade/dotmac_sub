@@ -471,6 +471,10 @@ def preview_financial_access_consequence(
                         str(value)
                         for value in funding.unresolved_projection_subscription_ids
                     ],
+                    "unresolved_renewal_subscription_ids": [
+                        str(value)
+                        for value in funding.unresolved_renewal_subscription_ids
+                    ],
                 }
                 prepaid_target_ids = set(funding.actionable_uncovered_subscription_ids)
                 grace_decision = resolve_grace_decision(
@@ -482,6 +486,9 @@ def preview_financial_access_consequence(
                 if funding.unresolved_projection_subscription_ids:
                     eligible = False
                     outcome = "prepaid_coverage_unresolved"
+                elif funding.unresolved_renewal_subscription_ids:
+                    eligible = False
+                    outcome = "prepaid_renewal_terms_unresolved"
                 elif funding.funded:
                     eligible = False
                     outcome = "prepaid_balance_available"
@@ -1075,7 +1082,14 @@ def preview_financial_access_restoration(
                         )
                     )
 
-        if profile.automation_safe and profile.effective_mode == BillingMode.prepaid:
+        if not profile.has_collectible_subscriptions:
+            target_locks.extend(
+                lock
+                for lock in active_locks
+                if lock.reason == EnforcementReason.prepaid
+            )
+            clear_prepaid_timers = True
+        elif profile.automation_safe and profile.effective_mode == BillingMode.prepaid:
             funding = resolve_prepaid_funding(db, account)
             prepaid_funding = {
                 "currency": funding.currency,
@@ -1092,6 +1106,9 @@ def preview_financial_access_restoration(
                 "unresolved_projection_subscription_ids": [
                     str(value)
                     for value in funding.unresolved_projection_subscription_ids
+                ],
+                "unresolved_renewal_subscription_ids": [
+                    str(value) for value in funding.unresolved_renewal_subscription_ids
                 ],
             }
             restorable_prepaid_ids = (
@@ -1111,7 +1128,12 @@ def preview_financial_access_restoration(
             )
             if funding.funded:
                 clear_prepaid_timers = True
-        elif profile.is_valid and profile.effective_mode != BillingMode.prepaid:
+        elif profile.automation_safe and profile.effective_mode != BillingMode.prepaid:
+            target_locks.extend(
+                lock
+                for lock in active_locks
+                if lock.reason == EnforcementReason.prepaid
+            )
             clear_prepaid_timers = True
 
         if not (
@@ -1230,7 +1252,11 @@ def confirm_financial_access_restoration(
             detail="Financial access state changed after preview; preview again",
         )
 
-    from app.services.account_lifecycle import restore_subscription
+    from app.services.account_lifecycle import (
+        SUSPENDED_EQUIVALENT,
+        resolve_stale_lock_without_restoration,
+        restore_subscription,
+    )
 
     resolved_lock_ids: list[UUID] = []
     restored_subscriptions = 0
@@ -1244,13 +1270,35 @@ def confirm_financial_access_restoration(
         trigger = (
             "top_up" if lock.reason == EnforcementReason.prepaid else overdue_trigger
         )
-        restored = restore_subscription(
-            db,
-            str(lock.subscription_id),
-            trigger=trigger,
-            resolved_by=resolved_by or f"financial_access:{account.id}",
-            reason=lock.reason,
-        )
+        subscription = db.get(Subscription, lock.subscription_id)
+        if subscription is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Financial enforcement subscription no longer exists",
+            )
+        if subscription.status in SUSPENDED_EQUIVALENT:
+            restored = restore_subscription(
+                db,
+                str(lock.subscription_id),
+                trigger=trigger,
+                resolved_by=resolved_by or f"financial_access:{account.id}",
+                reason=lock.reason,
+            )
+        else:
+            resolved = resolve_stale_lock_without_restoration(
+                db,
+                str(lock.subscription_id),
+                trigger=trigger,
+                resolved_by=resolved_by or f"financial_access:{account.id}",
+                reason=lock.reason,
+                notes="Stale financial lock reconciled without service activation",
+            )
+            restored = False
+            if resolved == 0:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Financial enforcement lock was not resolved by its owner",
+                )
         db.flush()
         if lock.is_active:
             raise HTTPException(

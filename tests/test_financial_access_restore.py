@@ -15,6 +15,7 @@ from app.models.enforcement_lock import EnforcementReason
 from app.services.account_lifecycle import get_active_locks, suspend_subscription
 from app.services.collections import restore_account_services
 from app.services.collections._core import _suspend_account
+from tests.prepaid_funding_helpers import ensure_test_prepaid_contract
 
 
 def _prepare_prepaid(db, account, subscription, *, min_balance: str) -> None:
@@ -24,6 +25,7 @@ def _prepare_prepaid(db, account, subscription, *, min_balance: str) -> None:
     account.min_balance = Decimal(min_balance)
     subscription.billing_mode = BillingMode.prepaid
     subscription.status = SubscriptionStatus.active
+    ensure_test_prepaid_contract(db, subscription)
     db.commit()
     suspend_subscription(
         db,
@@ -163,6 +165,7 @@ def test_suspend_owner_refuses_funded_prepaid_account(
     subscriber_account.min_balance = Decimal("100.00")
     subscription.billing_mode = BillingMode.prepaid
     subscription.status = SubscriptionStatus.active
+    ensure_test_prepaid_contract(db_session, subscription)
     db_session.add(
         LedgerEntry(
             account_id=subscriber_account.id,

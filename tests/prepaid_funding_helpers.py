@@ -6,6 +6,9 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import patch
 
+from sqlalchemy import select
+
+from app.models.catalog import BillingCycle, OfferPrice, PriceType, Subscription
 from app.models.prepaid_funding import PrepaidFundingReconstructionBatch
 from app.services import prepaid_funding_attestation
 from app.services.prepaid_funding_reconstruction import (
@@ -18,6 +21,44 @@ from tests.prepaid_funding_test_support import (
 )
 
 TEST_PREPAID_POSITION_AT = datetime(2026, 3, 16, tzinfo=UTC)
+
+
+def ensure_test_prepaid_contract(
+    db,
+    subscription: Subscription,
+    amount: Decimal | str = Decimal("100.00"),
+    *,
+    currency: str = "NGN",
+) -> None:
+    """Give a test subscription complete, internally consistent renewal terms.
+
+    Production prepaid enforcement deliberately refuses catalog-only pricing:
+    the contracted amount must be frozen on ``Subscription.unit_price``. The
+    catalog row remains necessary for currency/cadence metadata, so generic
+    fixtures that become prepaid in a test need both pieces of evidence.
+    """
+    contracted = Decimal(str(amount))
+    subscription.unit_price = contracted
+    subscription.billing_cycle = BillingCycle.monthly
+    price = db.scalar(
+        select(OfferPrice).where(
+            OfferPrice.offer_id == subscription.offer_id,
+            OfferPrice.price_type == PriceType.recurring,
+            OfferPrice.is_active.is_(True),
+        )
+    )
+    if price is None:
+        db.add(
+            OfferPrice(
+                offer_id=subscription.offer_id,
+                price_type=PriceType.recurring,
+                amount=contracted,
+                currency=currency,
+                billing_cycle=BillingCycle.monthly,
+                is_active=True,
+            )
+        )
+    db.flush()
 
 
 def materialize_test_prepaid_opening_balance(

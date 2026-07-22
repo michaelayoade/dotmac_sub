@@ -65,6 +65,15 @@ def _reject_reason_from_event_payload(payload: dict) -> str:
     return "blocked"
 
 
+class EnforcementProjectionError(RuntimeError):
+    """A durable enforcement event did not complete every owned consequence."""
+
+
+def _raise_incomplete(operation: str, errors: list[str]) -> None:
+    if errors:
+        raise EnforcementProjectionError(f"{operation} incomplete: {'; '.join(errors)}")
+
+
 class EnforcementHandler:
     """Handler that applies session enforcement based on events."""
 
@@ -128,36 +137,20 @@ class EnforcementHandler:
 
         if not resolve_group_routing_policy(db).enabled:
             return
-        try:
-            result = set_subscription_access_state(db, str(subscription_id), state)
-            logger.info(
-                "shadow access_state: sub=%s state=%s %s",
-                subscription_id,
-                state.value if state else None,
-                result,
-            )
-        except Exception as exc:
-            logger.warning(
-                "shadow access_state write failed for subscription %s: %s",
-                subscription_id,
-                exc,
-            )
+        result = set_subscription_access_state(db, str(subscription_id), state)
+        logger.info(
+            "shadow access_state: sub=%s state=%s %s",
+            subscription_id,
+            state.value if state else None,
+            result,
+        )
 
     def _enqueue_subscription_session_cleanup(
         self, subscription_id: str, *, reason: str
     ) -> None:
-        try:
-            from app.tasks.enforcement import cleanup_subscription_block_sessions
+        from app.tasks.enforcement import cleanup_subscription_block_sessions
 
-            cleanup_subscription_block_sessions.delay(
-                str(subscription_id), reason=reason
-            )
-        except Exception as exc:
-            logger.error(
-                "Failed to enqueue session cleanup for subscription %s: %s",
-                subscription_id,
-                exc,
-            )
+        cleanup_subscription_block_sessions.delay(str(subscription_id), reason=reason)
 
     def _enforce_subscription_block(
         self,
@@ -179,6 +172,7 @@ class EnforcementHandler:
         ``Auth-Type := Reject`` row, so unblock is a single DELETE rather
         than a full credential rebuild."""
         subscription = db.get(Subscription, subscription_id)
+        errors: list[str] = []
 
         # RADIUS reject IP is source state for the projection.
         try:
@@ -191,6 +185,7 @@ class EnforcementHandler:
                 subscription_id,
                 exc,
             )
+            errors.append(f"reject_state:{exc}")
 
         # Materialize all configured targets synchronously. Session CoA is a
         # consequence and must not run after a partial projection.
@@ -201,27 +196,47 @@ class EnforcementHandler:
                     db, str(subscription_id)
                 )
                 projection_ready = bool(result.get("ok"))
+                if not projection_ready:
+                    errors.append("radius_projection:not_converged")
             except Exception as exc:
                 logger.error(
                     "Failed to project blocked RADIUS state for subscription %s: %s",
                     subscription_id,
                     exc,
                 )
+                errors.append(f"radius_projection:{exc}")
 
         # Compatibility shadow write: mirror the derived state to radusergroup.
         # No-op unless the enforcement event policy enables group routing.
-        self._shadow_write_access_state(db, str(subscription_id))
+        try:
+            self._shadow_write_access_state(db, str(subscription_id))
+        except Exception as exc:
+            logger.error(
+                "Failed to write shadow access state for subscription %s: %s",
+                subscription_id,
+                exc,
+            )
+            errors.append(f"access_state_projection:{exc}")
 
         if projection_ready:
-            self._enqueue_subscription_session_cleanup(
-                str(subscription_id), reason=reason
-            )
+            try:
+                self._enqueue_subscription_session_cleanup(
+                    str(subscription_id), reason=reason
+                )
+            except Exception as exc:
+                logger.error(
+                    "Failed to enqueue session cleanup for subscription %s: %s",
+                    subscription_id,
+                    exc,
+                )
+                errors.append(f"session_cleanup_enqueue:{exc}")
         else:
             logger.error(
                 "Session cleanup deferred for subscription %s: external RADIUS "
                 "projection is incomplete",
                 subscription_id,
             )
+        _raise_incomplete("subscription_block", errors)
 
     def _handle_subscription_block(
         self, db: Session, event: Event, reason: str
@@ -234,6 +249,7 @@ class EnforcementHandler:
             return
 
         subscription = db.get(Subscription, subscription_id)
+        errors: list[str] = []
 
         # Recompute account status (defensive — lifecycle already called this,
         # but non-migrated callers may emit events without lifecycle).
@@ -244,12 +260,14 @@ class EnforcementHandler:
                 logger.error(
                     "Subscriber not found for subscription %s", subscription_id
                 )
+                errors.append("account_status:subscriber_not_found")
             except Exception as exc:
                 logger.error(
                     "Failed to recompute account status for subscription %s: %s",
                     subscription_id,
                     exc,
                 )
+                errors.append(f"account_status:{exc}")
 
         reject_reason = _reject_reason_from_event_payload(event.payload)
         self._enforce_subscription_block(
@@ -259,6 +277,7 @@ class EnforcementHandler:
             reject_reason=reject_reason,
             terminal=(reason == "canceled"),
         )
+        _raise_incomplete("subscription_status", errors)
 
     def _handle_subscription_cancel(self, db: Session, event: Event) -> None:
         self._handle_subscription_block(db, event, "canceled")
@@ -272,6 +291,7 @@ class EnforcementHandler:
         refresh_enabled = resolve_session_refresh_policy(db).enabled
 
         subscription = db.get(Subscription, subscription_id)
+        errors: list[str] = []
 
         # Recompute account status
         if subscription:
@@ -281,12 +301,14 @@ class EnforcementHandler:
                 logger.error(
                     "Subscriber not found for subscription %s", subscription_id
                 )
+                errors.append("account_status:subscriber_not_found")
             except Exception as exc:
                 logger.error(
                     "Failed to recompute account status for subscription %s: %s",
                     subscription_id,
                     exc,
                 )
+                errors.append(f"account_status:{exc}")
 
         # Clear desired reject state, then synchronously project every target.
         projection_ready = False
@@ -300,22 +322,34 @@ class EnforcementHandler:
                 subscription_id,
                 exc,
             )
+            errors.append(f"reject_state:{exc}")
         if subscription:
             try:
                 result = radius_service.reconcile_subscription_connectivity(
                     db, str(subscription_id)
                 )
                 projection_ready = bool(result.get("ok"))
+                if not projection_ready:
+                    errors.append("radius_projection:not_converged")
             except Exception as exc:
                 logger.error(
                     "Failed to project restored RADIUS state for subscription %s: %s",
                     subscription_id,
                     exc,
                 )
+                errors.append(f"radius_projection:{exc}")
 
         # Compatibility shadow write: mirror the restored state to radusergroup.
         # No-op unless the enforcement event policy enables group routing.
-        self._shadow_write_access_state(db, str(subscription_id))
+        try:
+            self._shadow_write_access_state(db, str(subscription_id))
+        except Exception as exc:
+            logger.error(
+                "Failed to write restored access state for subscription %s: %s",
+                subscription_id,
+                exc,
+            )
+            errors.append(f"access_state_projection:{exc}")
 
         # Refresh sessions and remove address block
         try:
@@ -337,6 +371,8 @@ class EnforcementHandler:
                 subscription_id,
                 exc,
             )
+            errors.append(f"session_restore:{exc}")
+        _raise_incomplete("subscription_restore", errors)
 
     def _handle_subscription_speed_change(self, db: Session, event: Event) -> None:
         """Handle mid-session speed change via CoA-Update."""
@@ -368,12 +404,16 @@ class EnforcementHandler:
                 subscription_id,
                 exc,
             )
+            raise EnforcementProjectionError(
+                f"subscription speed projection failed: {exc}"
+            ) from exc
 
     def _handle_account_throttle(self, db: Session, event: Event) -> None:
         account_id = event.account_id or event.payload.get("account_id")
         if not account_id:
             logger.debug("Skipping throttle enforcement: event missing account_id")
             return
+        errors: list[str] = []
         projection_ready = False
         try:
             radius_service.sync_account_credentials_to_radius(db, account_id)
@@ -384,6 +424,7 @@ class EnforcementHandler:
                 account_id,
                 exc,
             )
+            errors.append(f"radius_projection:{exc}")
         refresh_enabled = resolve_session_refresh_policy(db).enabled
         try:
             if refresh_enabled and projection_ready:
@@ -394,6 +435,8 @@ class EnforcementHandler:
                 account_id,
                 exc,
             )
+            errors.append(f"session_refresh:{exc}")
+        _raise_incomplete("account_throttle", errors)
 
     def _handle_account_unthrottle(self, db: Session, event: Event) -> None:
         """Push the restored profile to RADIUS as promptly as the throttle landed.
@@ -408,6 +451,7 @@ class EnforcementHandler:
         if not account_id:
             logger.debug("Skipping unthrottle enforcement: event missing account_id")
             return
+        errors: list[str] = []
         projection_ready = False
         try:
             radius_service.sync_account_credentials_to_radius(db, account_id)
@@ -418,6 +462,7 @@ class EnforcementHandler:
                 account_id,
                 exc,
             )
+            errors.append(f"radius_projection:{exc}")
         refresh_enabled = resolve_session_refresh_policy(db).enabled
         try:
             if refresh_enabled and projection_ready:
@@ -428,6 +473,8 @@ class EnforcementHandler:
                 account_id,
                 exc,
             )
+            errors.append(f"session_refresh:{exc}")
+        _raise_incomplete("account_unthrottle", errors)
 
     def _handle_usage_exhausted(self, db: Session, event: Event) -> None:
         subscription_id = event.subscription_id or event.payload.get("subscription_id")
@@ -536,6 +583,7 @@ class EnforcementHandler:
                     subscription_id,
                     exc,
                 )
+                raise
             return
         throttle_profile_id = policy.required_throttle_profile_id()
         # Capture the subscriber's current full-speed profile BEFORE the
@@ -575,6 +623,7 @@ class EnforcementHandler:
                 subscription_id,
                 exc,
             )
+            raise
 
     def _persist_fup_state(
         self,
@@ -642,29 +691,22 @@ class EnforcementHandler:
         account_id = event.account_id or event.payload.get("account_id")
         if not account_id:
             return
-        try:
-            from app.services import collections as collections_service
+        from app.services import collections as collections_service
 
-            invoice_id = event.payload.get("invoice_id")
-            restored = collections_service.restore_account_services(
-                db,
-                str(account_id),
-                invoice_id=str(invoice_id) if invoice_id else None,
-            )
-            from app.services.account_lifecycle import compute_account_status
+        invoice_id = event.payload.get("invoice_id")
+        restored = collections_service.restore_account_services(
+            db,
+            str(account_id),
+            invoice_id=str(invoice_id) if invoice_id else None,
+        )
+        from app.services.account_lifecycle import compute_account_status
 
-            compute_account_status(db, str(account_id))
-            if restored:
-                logger.info(
-                    "Auto-restored %d subscription(s) for account %s after payment",
-                    restored,
-                    account_id,
-                )
-        except Exception as exc:
-            logger.error(
-                "Failed to auto-restore account %s after payment: %s",
+        compute_account_status(db, str(account_id))
+        if restored:
+            logger.info(
+                "Auto-restored %d subscription(s) for account %s after payment",
+                restored,
                 account_id,
-                exc,
             )
 
     def _handle_invoice_overdue(self, db: Session, event: Event) -> None:

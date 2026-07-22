@@ -799,6 +799,8 @@ class TestEnforcementHandler:
         def settings_side_effect(db, domain, key):
             if key == "fup_action":
                 return "suspend"
+            if key == "group_routing_enabled":
+                return False
             return None
 
         mock_settings.resolve_value.side_effect = settings_side_effect
@@ -1675,6 +1677,18 @@ class TestPaymentReceivedRestoreGuard:
         )
         db_session.refresh(subscriber)
         assert subscriber.status == AccountStatus.active
+
+    @patch("app.services.collections.restore_account_services")
+    def test_restore_failure_propagates_so_payment_event_remains_retryable(
+        self, mock_restore, db_session, subscriber
+    ):
+        mock_restore.side_effect = RuntimeError("financial access projection failed")
+
+        with pytest.raises(RuntimeError, match="financial access projection failed"):
+            EnforcementHandler().handle(
+                db_session,
+                self._payment_event(subscriber.id),
+            )
 
     @patch("app.services.collections.restore_account_services")
     def test_payment_event_without_account_is_ignored(self, mock_restore, db_session):

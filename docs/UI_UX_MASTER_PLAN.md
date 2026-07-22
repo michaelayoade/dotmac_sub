@@ -1552,7 +1552,7 @@ Subscriber | Balance | Min Required | Status | Last Warning | Actions
 - Dunning steps configuration (step name, delay days, action, template)
 - Prepaid thresholds (minimum balance, grace days, warning template)
 - Throttle RADIUS profile for throttled subscribers
-- Skip weekends, skip holidays configuration
+- Shared daily enforcement start/end time in the scheduler timezone
 
 ### Service: `app/services/collections/`
 

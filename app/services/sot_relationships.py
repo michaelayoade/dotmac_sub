@@ -801,8 +801,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     steward="finance operations",
                     design_refs=(
                         "docs/SOT_RELATIONSHIP_MAP.md",
-                        "docs/designs/PREPAID_INVOICE_DEPOSIT_ALIGNMENT.md",
-                        "docs/designs/PREPAID_SERVICE_COVERAGE.md",
+                        "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
                     ),
                     test_refs=(
                         "tests/test_customer_financial_ledger.py",
@@ -4009,7 +4008,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     steward="billing and finance operations",
                     design_refs=(
                         "docs/designs/SUBSCRIPTION_BILLING_TREATMENTS.md",
-                        "docs/designs/PREPAID_SERVICE_COVERAGE.md",
+                        "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
                         "docs/SOT_RELATIONSHIP_MAP.md",
                     ),
                     test_refs=(
@@ -4147,7 +4146,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     ),
                     steward="billing and network access",
                     design_refs=(
-                        "docs/designs/PREPAID_SERVICE_COVERAGE.md",
+                        "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
                         "docs/SOT_RELATIONSHIP_MAP.md",
                     ),
                     test_refs=(
@@ -4342,7 +4341,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     ),
                     steward="billing operations",
                     design_refs=(
-                        "docs/designs/PREPAID_SERVICE_COVERAGE.md",
+                        "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
                         "docs/SOT_RELATIONSHIP_MAP.md",
                     ),
                     test_refs=(
@@ -4364,13 +4363,14 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "customer.accounts",
                     "financial.prepaid_currency",
                     "financial.prepaid_service_coverage",
+                    "financial.prepaid_service_renewals",
                     "financial.subscription_billing_treatments",
-                    "service_intent.catalog_policy",
                 ),
                 notes=(
-                    "Returns typed minimum and unfunded-renewal provenance. Missing "
-                    "accounts, invalid minimums, absent prices, and cross-currency "
-                    "evidence fail closed."
+                    "Returns typed minimum and unfunded-renewal provenance. Renewal "
+                    "and enforcement consume one exact taxed contract charge. Missing "
+                    "renewal terms produce a typed protected outcome; missing accounts, "
+                    "invalid minimums, and cross-currency evidence fail closed."
                 ),
                 contract=ServiceContract(
                     concerns=(
@@ -4391,7 +4391,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "canonical collectible prepaid subscriptions",
                                 "canonical current service coverage",
                                 "effective subscription billing treatment",
-                                "canonical recurring catalog prices",
+                                "exact taxed contracted renewal charge",
                                 "canonical prepaid currency",
                                 "prepaid threshold protocol",
                             ),
@@ -4438,11 +4438,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             ),
                         ),
                         AuthorityInput(
-                            name="canonical recurring catalog prices",
-                            owner="service_intent.catalog_policy",
-                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            name="exact taxed contracted renewal charge",
+                            owner="financial.prepaid_service_renewals",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
                             source=(
-                                "newest active recurring OfferVersionPrice or OfferPrice"
+                                "positive Subscription unit_price with effective discount, "
+                                "tax precedence, currency, and monthly cadence"
                             ),
                         ),
                         AuthorityInput(
@@ -4456,9 +4457,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             owner="financial.prepaid_threshold",
                             kind=AuthorityKind.CONTROL_INPUT,
                             source=(
-                                "collectible status set, coverage precedence, newest-price "
-                                "ordering, discount semantics, current-coverage precedence, "
-                                "and due-only max(minimum, renewal) rule"
+                                "collectible status set, coverage precedence, typed missing-"
+                                "renewal protection, current-coverage precedence, and due-"
+                                "only max(minimum, renewal) rule"
                             ),
                         ),
                     ),
@@ -4466,8 +4467,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         mode=TransactionMode.READ_ONLY,
                         boundary=(
                             "Caller creates and closes the session; the batched resolver "
-                            "reads canonical account, service, coverage, price, and setting "
-                            "evidence without writes or transaction completion."
+                            "reads canonical account, service, coverage, exact renewal "
+                            "charge, and setting evidence without writes or transaction "
+                            "completion."
                         ),
                         locking=(
                             "No row lock for projections. State-changing enforcement "
@@ -4478,8 +4480,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "evidence produce identical typed threshold decisions."
                         ),
                         retries=(
-                            "Transient reads may be retried. Missing, invalid, unpriced, or "
-                            "cross-currency evidence remains a deterministic failure."
+                            "Transient reads may be retried. Missing renewal terms remain a "
+                            "deterministic protected outcome; invalid or cross-currency "
+                            "evidence remains a deterministic failure."
                         ),
                     ),
                     errors=ErrorContract(
@@ -4487,7 +4490,6 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "financial.prepaid_threshold.account_not_found",
                             "financial.prepaid_threshold.currency_mismatch",
                             "financial.prepaid_threshold.invalid_minimum_balance",
-                            "financial.prepaid_threshold.missing_subscription_price",
                         ),
                         mapping_owner=(
                             "access, enforcement, status, audit, and reporting adapters"
@@ -4495,7 +4497,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         fail_closed_on=(
                             "missing requested account",
                             "negative, non-finite, or malformed minimum balance",
-                            "unfunded collectible subscription without a price",
+                            "unfunded collectible subscription without exact renewal terms",
                             "price and enforcement currency mismatch",
                             "missing or invalid canonical prepaid currency",
                         ),
@@ -4509,8 +4511,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         new_owner="financial.prepaid_threshold",
                         verification=(
-                            "Scalar/batch parity, query budget, price precedence, paid "
-                            "coverage, provenance, failure, caller, and architecture tests."
+                            "Scalar/batch parity, query budget, renewal-charge/tax parity, "
+                            "missing-term protection, paid coverage, provenance, caller, "
+                            "and architecture tests."
                         ),
                         cutover_gate=(
                             "Access consumes the typed threshold decision; service status "
@@ -4524,6 +4527,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     ),
                     steward="billing operations",
                     design_refs=(
+                        "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
                         "docs/SOT_RELATIONSHIP_MAP.md",
                         "docs/audits/BILLING_SOT_AUDIT_2026-07-12.md",
                         "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
@@ -4946,7 +4950,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     ),
                     steward="billing operations",
                     design_refs=(
-                        "docs/designs/PREPAID_FUNDING_RECONSTRUCTION.md",
+                        "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
                         "docs/SOT_RELATIONSHIP_MAP.md",
                         "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
                     ),
@@ -5097,7 +5101,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     ),
                     steward="billing operations",
                     design_refs=(
-                        "docs/designs/PREPAID_FUNDING_RECONSTRUCTION.md",
+                        "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
                         "docs/SOT_RELATIONSHIP_MAP.md",
                         "docs/adr/0002-owner-command-transaction-boundary.md",
                     ),

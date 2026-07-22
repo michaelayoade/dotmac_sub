@@ -168,6 +168,7 @@ class PrepaidFundingDecision:
     non_billable_subscription_ids: tuple[UUID, ...] = ()
     actionable_uncovered_subscription_ids: tuple[UUID, ...] = ()
     unresolved_projection_subscription_ids: tuple[UUID, ...] = ()
+    unresolved_renewal_subscription_ids: tuple[UUID, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -178,7 +179,10 @@ class PrepaidFundingDecision:
 
     @property
     def funded(self) -> bool:
-        if self.unresolved_projection_subscription_ids:
+        if (
+            self.unresolved_projection_subscription_ids
+            or self.unresolved_renewal_subscription_ids
+        ):
             return False
         if (
             self.covered_subscription_ids or self.non_billable_subscription_ids
@@ -188,7 +192,13 @@ class PrepaidFundingDecision:
 
     @property
     def adverse_action_allowed(self) -> bool:
-        return not self.unresolved_projection_subscription_ids and not self.funded
+        return (
+            not (
+                self.unresolved_projection_subscription_ids
+                or self.unresolved_renewal_subscription_ids
+            )
+            and not self.funded
+        )
 
 
 def resolve_prepaid_available_balance(
@@ -245,6 +255,9 @@ def resolve_prepaid_funding(
         ),
         unresolved_projection_subscription_ids=(
             threshold.unresolved_projection_subscription_ids
+        ),
+        unresolved_renewal_subscription_ids=(
+            threshold.unresolved_renewal_subscription_ids
         ),
     )
 

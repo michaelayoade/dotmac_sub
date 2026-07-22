@@ -24,6 +24,7 @@ from app.models.billing import (
     InvoiceStatus,
     ServiceEntitlement,
     ServiceEntitlementStatus,
+    TaxRate,
 )
 from app.models.catalog import (
     AccessType,
@@ -37,9 +38,9 @@ from app.models.catalog import (
     SubscriptionStatus,
 )
 from app.models.subscriber import Subscriber
+from app.services.prepaid_service_renewals import resolve_prepaid_monthly_charge
 from app.services.prepaid_threshold import (
     PrepaidCurrencyMismatchError,
-    PrepaidThresholdError,
     resolve_prepaid_threshold,
     resolve_prepaid_threshold_decision,
     resolve_prepaid_thresholds,
@@ -47,6 +48,7 @@ from app.services.prepaid_threshold import (
 from app.services.service_status import _prepaid_threshold
 
 NOW = datetime(2026, 7, 12, 12, 0, tzinfo=UTC)
+_USE_OFFER_PRICE = object()
 
 
 class QueryCounter:
@@ -117,7 +119,7 @@ def _subscription(
     *,
     status: SubscriptionStatus = SubscriptionStatus.active,
     billing_mode: BillingMode = BillingMode.prepaid,
-    unit_price: str | None = None,
+    unit_price: str | None | object = _USE_OFFER_PRICE,
     discount: bool = False,
     discount_value: str | None = None,
     discount_type: str | None = None,
@@ -130,12 +132,27 @@ def _subscription(
             discount_value=Decimal(discount_value),
             discount_type=discount_type,
         )
+    contracted_price = unit_price
+    if unit_price is _USE_OFFER_PRICE:
+        price = (
+            db.query(OfferPrice)
+            .filter(
+                OfferPrice.offer_id == offer.id,
+                OfferPrice.price_type == PriceType.recurring,
+                OfferPrice.is_active.is_(True),
+            )
+            .order_by(OfferPrice.created_at.desc(), OfferPrice.id.desc())
+            .first()
+        )
+        contracted_price = price.amount if price is not None else None
     sub = Subscription(
         subscriber_id=account.id,
         offer_id=offer.id,
         status=status,
         billing_mode=billing_mode,
-        unit_price=Decimal(unit_price) if unit_price is not None else None,
+        unit_price=(
+            Decimal(str(contracted_price)) if contracted_price is not None else None
+        ),
         next_billing_at=next_billing_at,
         **kwargs,
     )
@@ -272,15 +289,13 @@ def test_threshold_decision_exposes_minimum_and_renewal_provenance(db_session):
 def test_missing_unfunded_subscription_price_fails_closed(db_session):
     account = _account(db_session, min_balance="0.00")
     offer = _offer(db_session, None)
-    subscription = _subscription(db_session, account, offer)
+    subscription = _subscription(db_session, account, offer, unit_price=None)
 
-    with pytest.raises(PrepaidThresholdError) as captured:
-        resolve_prepaid_threshold(db_session, account, now=NOW)
+    decision = resolve_prepaid_threshold_decision(db_session, account, now=NOW)
 
-    assert captured.value.code == (
-        "financial.prepaid_threshold.missing_subscription_price"
-    )
-    assert captured.value.details == {"subscription_id": str(subscription.id)}
+    assert decision.threshold == Decimal("0.00")
+    assert decision.actionable_uncovered_subscription_ids == ()
+    assert decision.unresolved_renewal_subscription_ids == (subscription.id,)
 
 
 def test_price_currency_must_match_configured_enforcement_currency(db_session):
@@ -318,6 +333,30 @@ def test_percentage_discount_lowers_the_effective_price(db_session):
 
     scalar, batch = _both(db_session, account)
     assert scalar == batch == Decimal("18000.00")
+
+
+def test_threshold_uses_the_same_taxed_contract_charge_as_renewal(db_session):
+    account = _account(db_session, min_balance="0.00")
+    tax_rate = TaxRate(
+        name="VAT 7.5%",
+        code="VAT75",
+        rate=Decimal("7.5000"),
+        is_active=True,
+    )
+    db_session.add(tax_rate)
+    db_session.flush()
+    account.tax_rate_id = tax_rate.id
+    offer = _offer(db_session, "17500.00")
+    subscription = _subscription(db_session, account, offer)
+    db_session.commit()
+
+    renewal = resolve_prepaid_monthly_charge(db_session, subscription, NOW)
+    decision = resolve_prepaid_threshold_decision(db_session, account, now=NOW)
+
+    assert renewal is not None
+    assert renewal[0] == Decimal("18812.50")
+    assert decision.unfunded_renewal_requirement == renewal[0]
+    assert decision.threshold == Decimal("18812.50")
 
 
 def test_unit_price_override_beats_the_catalog_price(db_session):
