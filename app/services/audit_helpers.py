@@ -16,6 +16,7 @@ from app.models.subscriber import Subscriber
 from app.models.system_user import SystemUser
 from app.schemas.audit import AuditEventCreate
 from app.services import audit as audit_service
+from app.services.owner_commands import owner_command_active
 from app.timezone import APP_TIMEZONE
 
 logger = logging.getLogger(__name__)
@@ -235,7 +236,10 @@ def log_audit_event(
         request_id=request.headers.get("x-request-id") if request else None,
         metadata_=metadata_payload or None,
     )
-    audit_service.audit_events.create(db=db, payload=payload)
+    if owner_command_active(db):
+        audit_service.audit_events.stage(db=db, payload=payload)
+    else:
+        audit_service.audit_events.create(db=db, payload=payload)
 
 
 def _resolve_request_actor_id(request, actor_id: str | None) -> str | None:

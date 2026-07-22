@@ -52,6 +52,12 @@ def test_migrated_support_services_do_not_own_transport_or_transactions() -> Non
             assert token not in source, f"{relative_path} contains {token}"
 
 
+def test_shared_audit_helper_is_flush_only_inside_owner_commands() -> None:
+    source = _source("app/services/audit_helpers.py")
+    assert "if owner_command_active(db):" in source
+    assert "audit_service.audit_events.stage(db=db, payload=payload)" in source
+
+
 def test_support_legacy_contract_and_writer_baselines_shrank() -> None:
     manifest = _source("tests/architecture/sot_manifest_legacy_baseline.txt")
     writers = _source("tests/architecture/sot_writer_baseline.txt")
