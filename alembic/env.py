@@ -61,6 +61,7 @@ target_metadata = Base.metadata
 # models were removed from the application.
 RETIRED_ARCHIVE_TABLES = frozenset(
     {
+        "payment_prepaid_applications_archive",
         "vas_wallets",
         "vas_wallet_entries",
         "vas_refund_requests",

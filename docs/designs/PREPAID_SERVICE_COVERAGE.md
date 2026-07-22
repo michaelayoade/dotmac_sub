@@ -68,8 +68,14 @@ atomically renames the physical table to
 index while leaving it without an application model or writer. Finance
 operations owns archive retention. Migration 396 creates the same empty archive
 shape only for an environment that had already applied the original
-empty-table-only form of migration 394. The archive is append-only operational
-evidence and requires a separate reviewed retention decision before deletion.
+empty-table-only form of migration 394. Both revisions validate the complete
+column, type, nullability, default, primary-key, foreign-key, check-constraint,
+index, and row-count contract. Migration 394 rejects neither-table and
+both-table states and accepts archive-only state only after that validation.
+Migration 397 applies the same fail-closed validation to databases already at
+396. Alembic autogeneration excludes the verified archive from contract
+proposals. The archive is append-only operational evidence and requires a
+separate reviewed retention decision before deletion.
 
 The enforcement kill switch remains. Coverage integrity, canonical-renewal
 availability, currency validity, and fresh enablement readiness are not optional
@@ -133,7 +139,8 @@ hash and cannot be recorded while a repairable or quarantined item remains.
    `payment_prepaid_applications` and `payment_prepaid_applications_archive`.
    Both names existing at once is an ambiguity and blocks deployment. Deploy
    migrations 392 through the current head; migration 394 must leave exactly
-   one archive table with the same row count as the legacy source.
+   one archive table with the same row count as the legacy source, and migration
+   397 must validate its complete schema before any reconciliation apply.
 2. Enable and dry-run `billing.prepaid_service_renewals`; repair missing prices,
    baseline quarantine, malformed service periods, and parent/subscription
    lifecycle drift.

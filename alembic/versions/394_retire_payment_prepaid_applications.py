@@ -12,7 +12,8 @@ apply; a lock failure is retried only by retrying the whole migration.
 Production inspection on 2026-07-21 found one row.  The rename preserves the
 table object, constraints, indexes, and every value exactly.  Finance operations
 is the archive steward.  The archive has no application model or writer and is
-retained until a separately reviewed retention decision approves deletion.
+retained until a separately reviewed retention decision approves deletion.  A
+missing, ambiguous, or structurally unverified table state fails closed.
 """
 
 from __future__ import annotations
@@ -20,14 +21,16 @@ from __future__ import annotations
 import sqlalchemy as sa
 
 from alembic import op
+from scripts.migration.payment_prepaid_application_archive_schema import (
+    ARCHIVE_TABLE,
+    LEGACY_TABLE,
+    validate_archive_schema,
+)
 
 revision = "394_retire_payment_prepaid_applications"
 down_revision = "393_prepaid_coverage_reconciliation"
 branch_labels = None
 depends_on = None
-
-_LEGACY_TABLE = "payment_prepaid_applications"
-_ARCHIVE_TABLE = "payment_prepaid_applications_archive"
 
 
 def _has_table(bind, table_name: str) -> bool:
@@ -41,28 +44,29 @@ def _row_count(bind, table_name: str) -> int:
 
 def upgrade() -> None:
     bind = op.get_bind()
-    legacy_exists = _has_table(bind, _LEGACY_TABLE)
-    archive_exists = _has_table(bind, _ARCHIVE_TABLE)
+    legacy_exists = _has_table(bind, LEGACY_TABLE)
+    archive_exists = _has_table(bind, ARCHIVE_TABLE)
 
     if legacy_exists and archive_exists:
         raise RuntimeError(
             "prepaid payment-application retirement is ambiguous: both "
-            f"{_LEGACY_TABLE} and {_ARCHIVE_TABLE} exist"
+            f"{LEGACY_TABLE} and {ARCHIVE_TABLE} exist"
         )
-    if archive_exists or not legacy_exists:
-        # The archive already exists, or this database applied the original
-        # empty-table retirement. Revision 396 supplies the empty compatibility
-        # archive for the latter case.
+    if not legacy_exists and not archive_exists:
+        raise RuntimeError(
+            "prepaid payment-application retirement cannot verify evidence: "
+            f"neither {LEGACY_TABLE} nor {ARCHIVE_TABLE} exists"
+        )
+    if archive_exists:
+        # Archive-only can represent an operator-reviewed pre-rename or a
+        # replay after a forward-only downgrade. Its complete structure must
+        # still prove that it is the retired evidence object.
+        validate_archive_schema(bind)
         return
 
-    source_count = _row_count(bind, _LEGACY_TABLE)
-    op.rename_table(_LEGACY_TABLE, _ARCHIVE_TABLE)
-    archive_count = _row_count(bind, _ARCHIVE_TABLE)
-    if archive_count != source_count:
-        raise RuntimeError(
-            "prepaid payment-application archive verification failed: "
-            f"source_count={source_count}, archive_count={archive_count}"
-        )
+    source_count = _row_count(bind, LEGACY_TABLE)
+    op.rename_table(LEGACY_TABLE, ARCHIVE_TABLE)
+    validate_archive_schema(bind, expected_row_count=source_count)
 
 
 def downgrade() -> None:
