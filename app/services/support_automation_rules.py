@@ -97,8 +97,7 @@ class TicketAutomationAction:
         if action_type is AutomationActionType.set_status:
             return cls(status=_optional_text(values.get("status")))
         if action_type is AutomationActionType.set_due_in_hours:
-            raw_hours = values.get("hours")
-            return cls(hours=int(raw_hours) if raw_hours is not None else None)
+            return cls(hours=_optional_hours(values.get("hours")))
         if action_type is AutomationActionType.add_tag:
             return cls(tag=_optional_text(values.get("tag")))
         raise TicketAutomationRuleError(
@@ -137,6 +136,23 @@ def _optional_uuid(value: object | None) -> UUID | None:
 def _optional_text(value: object | None) -> str | None:
     cleaned = str(value or "").strip()
     return cleaned or None
+
+
+def _optional_hours(value: object | None) -> int | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise TicketAutomationRuleError(
+            code="automation_rule_invalid",
+            message="Automation due hours must be an integer",
+        )
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise TicketAutomationRuleError(
+            code="automation_rule_invalid",
+            message="Automation due hours must be an integer",
+        ) from exc
 
 
 def _configuration_command(name: str):
