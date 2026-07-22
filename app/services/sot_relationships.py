@@ -14130,6 +14130,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "paid relocation fulfillment release",
                     "remote reprovision verification",
                     "verified service-change finalization",
+                    "interrupted execution-chain reconciliation",
                 ),
                 depends_on=(
                     "service_intent.subscription_lifecycle_execution",
@@ -14173,6 +14174,16 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             input_names=(
                                 "canonical provisioning-readiness decision",
                                 "canonical subscription-change execution state",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="interrupted execution-chain reconciliation",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "canonical invoice and payment allocation evidence",
+                                "canonical RADIUS profile observation",
+                                "canonical subscription-change execution state",
+                                "canonical provisioning-readiness decision",
                             ),
                         ),
                     ),
@@ -14259,6 +14270,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "service_intent.subscription_change_execution.remote_access_credential_ambiguous",
                             "service_intent.subscription_change_execution.remote_reprovision_verification_missing",
                             "service_intent.subscription_change_execution.service_change_not_finalizable",
+                            "service_intent.subscription_change_execution.reconciliation_head_invalid",
+                            "service_intent.subscription_change_execution.reconciliation_head_stale",
+                            "service_intent.subscription_change_execution.reconciliation_key_invalid",
+                            "service_intent.subscription_change_execution.reconciliation_key_conflict",
+                            "service_intent.subscription_change_execution.reconciliation_reason_invalid",
+                            "service_intent.subscription_change_execution.reconciliation_not_repairable",
                             "service_intent.subscription_change_execution.invalid_command_context",
                             "service_intent.subscription_change_execution.command_contract_violation",
                             "service_intent.subscription_change_execution.nested_owner_command",
@@ -14296,7 +14313,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                     ),
                     migration=MigrationContract(
-                        state=AuthorityMigrationState.CUTOVER_READY,
+                        state=AuthorityMigrationState.COMPLETE,
                         new_owner="service_intent.subscription_change_execution",
                         old_owner=(
                             "unimplemented handoff after awaiting_payment with no "
@@ -14307,6 +14324,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "Focused tests cover charge creation, exact settlement, "
                             "fulfillment release, RADIUS and field verification gates, "
                             "and replay."
+                            " Reviewed operator repair covers interrupted states,"
+                            " stale-head rejection, and durable idempotent replay."
                         ),
                         cutover_gate=(
                             "Migrations 401-402 backfill deferred execution state; every "

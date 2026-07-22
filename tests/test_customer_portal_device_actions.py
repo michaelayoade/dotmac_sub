@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from app.models.catalog import (
     AccessType,
     CatalogOffer,
@@ -11,11 +13,12 @@ from app.models.catalog import (
 )
 from app.models.network import OntAssignment, OntUnit
 from app.models.subscriber import Subscriber
-from app.services.customer_portal_flow_services import (
-    get_service_detail,
-    reboot_customer_subscription_ont,
-    update_customer_subscription_wifi,
+from app.services.customer_device_commands import (
+    CustomerDeviceCommandError,
+    reboot_subscription_device,
+    update_subscription_wifi,
 )
+from app.services.customer_portal_flow_services import get_service_detail
 
 
 def _active_subscription_with_ont(db_session):
@@ -126,14 +129,15 @@ def test_customer_reboot_delegates_to_tracked_ont_action(db_session, monkeypatch
         staticmethod(fake_execute_reboot),
     )
 
-    ok, message = reboot_customer_subscription_ont(
+    outcome = reboot_subscription_device(
         db_session,
-        {"account_id": str(subscriber.id), "id": "customer-user-1"},
-        str(subscription.id),
+        subscriber_id=subscriber.id,
+        subscription_id=subscription.id,
+        actor_id="customer-user-1",
     )
 
-    assert ok is True
-    assert message == "TR-069 reboot sent"
+    assert outcome.success is True
+    assert outcome.message == "TR-069 reboot sent"
     assert calls == [str(ont.id)]
 
 
@@ -153,34 +157,33 @@ def test_customer_wifi_update_delegates_to_reconciled_wifi_action(
         OntFeatureService, "set_wifi_config", staticmethod(fake_set_wifi_config)
     )
 
-    ok, message = update_customer_subscription_wifi(
+    outcome = update_subscription_wifi(
         db_session,
-        {"account_id": str(subscriber.id), "id": "customer-user-1"},
-        str(subscription.id),
+        subscriber_id=subscriber.id,
+        subscription_id=subscription.id,
+        actor_id="customer-user-1",
         ssid="NewSSID",
         password="Secret123",
-        password_confirm="Secret123",
     )
 
-    assert ok is True
-    assert message == "WiFi updated"
+    assert outcome.success is True
+    assert outcome.message == "WiFi updated"
     assert calls == [(str(ont.id), "NewSSID", "Secret123")]
 
 
-def test_customer_wifi_update_rejects_password_mismatch(db_session):
+def test_customer_wifi_update_rejects_invalid_password(db_session):
     subscriber, subscription, _ont = _active_subscription_with_ont(db_session)
 
-    ok, message = update_customer_subscription_wifi(
-        db_session,
-        {"account_id": str(subscriber.id)},
-        str(subscription.id),
-        ssid="NewSSID",
-        password="Secret123",
-        password_confirm="Different123",
-    )
-
-    assert ok is False
-    assert message == "WiFi passwords do not match"
+    with pytest.raises(CustomerDeviceCommandError) as exc:
+        update_subscription_wifi(
+            db_session,
+            subscriber_id=subscriber.id,
+            subscription_id=subscription.id,
+            actor_id="customer-user-1",
+            ssid="NewSSID",
+            password="short",
+        )
+    assert exc.value.code == "invalid_wifi_password"
 
 
 def test_customer_reboot_blocked_during_cooldown(db_session, monkeypatch):
@@ -212,14 +215,14 @@ def test_customer_reboot_blocked_during_cooldown(db_session, monkeypatch):
         ),
     )
 
-    ok, message = reboot_customer_subscription_ont(
-        db_session,
-        {"account_id": str(subscriber.id), "id": "customer-user-1"},
-        str(subscription.id),
-    )
-
-    assert ok is False
-    assert "wait" in message.lower()
+    with pytest.raises(CustomerDeviceCommandError) as exc:
+        reboot_subscription_device(
+            db_session,
+            subscriber_id=subscriber.id,
+            subscription_id=subscription.id,
+            actor_id="customer-user-1",
+        )
+    assert exc.value.code == "reboot_cooldown"
     assert calls == []
 
 
@@ -251,12 +254,13 @@ def test_customer_reboot_allowed_after_cooldown(db_session, monkeypatch):
         lambda *a, **k: SimpleNamespace(success=True, message="sent"),
     )
 
-    ok, _ = reboot_customer_subscription_ont(
+    outcome = reboot_subscription_device(
         db_session,
-        {"account_id": str(subscriber.id), "id": "customer-user-1"},
-        str(subscription.id),
+        subscriber_id=subscriber.id,
+        subscription_id=subscription.id,
+        actor_id="customer-user-1",
     )
-    assert ok is True
+    assert outcome.success is True
 
 
 def test_failed_reboot_does_not_arm_cooldown(db_session, monkeypatch):
@@ -285,9 +289,10 @@ def test_failed_reboot_does_not_arm_cooldown(db_session, monkeypatch):
         lambda *a, **k: SimpleNamespace(success=True, message="sent"),
     )
 
-    ok, _ = reboot_customer_subscription_ont(
+    outcome = reboot_subscription_device(
         db_session,
-        {"account_id": str(subscriber.id), "id": "customer-user-1"},
-        str(subscription.id),
+        subscriber_id=subscriber.id,
+        subscription_id=subscription.id,
+        actor_id="customer-user-1",
     )
-    assert ok is True
+    assert outcome.success is True

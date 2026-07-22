@@ -2317,3 +2317,223 @@ def test_admin_change_plan_quote_unknown_offer_404(db_session, subscriber):
             db_session, subscription_id=str(sub.id), target_offer_id=str(uuid4())
         )
     assert exc.value.status_code == 404
+
+
+def test_execution_reconciliation_inspection_has_reviewed_head(db_session, subscriber):
+    from app.models.subscription_change import (
+        SubscriptionChangeExecutionState,
+        SubscriptionChangeRequest,
+        SubscriptionChangeStatus,
+    )
+    from app.services.subscription_change_execution import (
+        inspect_execution_chain_reconciliation,
+    )
+
+    current = _make_offer(
+        db_session,
+        name="Reconcile Current",
+        amount=Decimal("100.00"),
+        plan_family="reconciliation",
+    )
+    target = _make_offer(
+        db_session,
+        name="Reconcile Target",
+        amount=Decimal("150.00"),
+        plan_family="reconciliation",
+    )
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current,
+        start_at=datetime.now(UTC) - timedelta(days=1),
+        next_billing_at=datetime.now(UTC) + timedelta(days=29),
+    )
+    change = SubscriptionChangeRequest(
+        subscription_id=subscription.id,
+        current_offer_id=current.id,
+        requested_offer_id=target.id,
+        effective_date=datetime.now(UTC).date(),
+        status=SubscriptionChangeStatus.applied,
+        execution_state=SubscriptionChangeExecutionState.completed,
+        is_active=True,
+    )
+    db_session.add(change)
+    db_session.commit()
+
+    inspection = inspect_execution_chain_reconciliation(db_session)
+
+    item = next(value for value in inspection.items if value.request_id == change.id)
+    assert len(item.reviewed_head) == 64
+    assert [finding.code for finding in item.findings] == [
+        "completed_subscription_drift"
+    ]
+    assert item.findings[0].repairable is False
+
+
+def test_execution_reconciliation_replays_durable_operator_evidence(
+    db_session, subscriber
+):
+    import hashlib
+
+    from app.models.subscription_change import (
+        SubscriptionChangeExecutionState,
+        SubscriptionChangeRequest,
+        SubscriptionChangeStatus,
+    )
+    from app.services.subscription_change_execution import reconcile_execution_chain
+
+    current = _make_offer(
+        db_session,
+        name="Replay Current",
+        amount=Decimal("100.00"),
+        plan_family="reconciliation",
+    )
+    target = _make_offer(
+        db_session,
+        name="Replay Target",
+        amount=Decimal("150.00"),
+        plan_family="reconciliation",
+    )
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current,
+        start_at=datetime.now(UTC) - timedelta(days=1),
+        next_billing_at=datetime.now(UTC) + timedelta(days=29),
+    )
+    key = "service-change-repair-replay-key"
+    head = "a" * 64
+    change = SubscriptionChangeRequest(
+        subscription_id=subscription.id,
+        current_offer_id=current.id,
+        requested_offer_id=target.id,
+        effective_date=datetime.now(UTC).date(),
+        status=SubscriptionChangeStatus.applied,
+        execution_state=SubscriptionChangeExecutionState.completed,
+        reconciliation_idempotency_key_hash=hashlib.sha256(key.encode()).hexdigest(),
+        reconciliation_reviewed_head=head,
+        reconciliation_actor_id="operator-1",
+        reconciliation_reason="Reviewed canonical execution evidence",
+        reconciled_at=datetime.now(UTC),
+        is_active=True,
+    )
+    db_session.add(change)
+    db_session.commit()
+
+    outcome = reconcile_execution_chain(
+        db_session,
+        request_id=change.id,
+        expected_head=head,
+        idempotency_key=key,
+        actor_id="operator-1",
+        reason="Reviewed canonical execution evidence",
+    )
+
+    assert outcome.replayed is True
+    assert outcome.request_id == change.id
+
+
+def test_execution_reconciliation_repairs_settled_before_fulfillment(
+    db_session, subscriber
+):
+    from app.models.billing import (
+        Invoice,
+        InvoiceStatus,
+        Payment,
+        PaymentAllocation,
+        PaymentStatus,
+    )
+    from app.models.subscription_change import (
+        SubscriptionChangeExecutionState,
+        SubscriptionChangeRequest,
+        SubscriptionChangeStatus,
+    )
+    from app.services.subscription_change_execution import (
+        inspect_execution_chain_reconciliation,
+        reconcile_execution_chain,
+    )
+
+    current = _make_offer(
+        db_session,
+        name="Interrupted Current",
+        amount=Decimal("100.00"),
+        plan_family="reconciliation",
+    )
+    target = _make_offer(
+        db_session,
+        name="Interrupted Target",
+        amount=Decimal("150.00"),
+        plan_family="reconciliation",
+    )
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current,
+        start_at=datetime.now(UTC) - timedelta(days=1),
+        next_billing_at=datetime.now(UTC) + timedelta(days=29),
+    )
+    invoice = Invoice(
+        account_id=subscriber.id,
+        status=InvoiceStatus.paid,
+        currency="NGN",
+        subtotal=Decimal("25000.00"),
+        total=Decimal("25000.00"),
+        balance_due=Decimal("0.00"),
+    )
+    payment = Payment(
+        account_id=subscriber.id,
+        amount=Decimal("25000.00"),
+        currency="NGN",
+        status=PaymentStatus.succeeded,
+        paid_at=datetime.now(UTC),
+        is_active=True,
+    )
+    db_session.add_all([invoice, payment])
+    db_session.flush()
+    db_session.add(
+        PaymentAllocation(
+            payment_id=payment.id,
+            invoice_id=invoice.id,
+            amount=Decimal("25000.00"),
+            is_active=True,
+        )
+    )
+    change = SubscriptionChangeRequest(
+        subscription_id=subscription.id,
+        current_offer_id=current.id,
+        requested_offer_id=target.id,
+        effective_date=datetime.now(UTC).date(),
+        status=SubscriptionChangeStatus.pending,
+        execution_state=SubscriptionChangeExecutionState.payment_settled,
+        field_fee_amount=Decimal("25000.00"),
+        field_fee_currency="NGN",
+        field_fee_invoice_id=invoice.id,
+        field_fee_payment_id=payment.id,
+        confirmation_snapshot={"delivery_mode": "field_migration"},
+        is_active=True,
+    )
+    db_session.add(change)
+    db_session.commit()
+    inspection = inspect_execution_chain_reconciliation(db_session)
+    item = next(value for value in inspection.items if value.request_id == change.id)
+    assert [(finding.code, finding.repairable) for finding in item.findings] == [
+        ("settled_not_released", True)
+    ]
+
+    outcome = reconcile_execution_chain(
+        db_session,
+        request_id=change.id,
+        expected_head=item.reviewed_head,
+        idempotency_key="repair-settled-before-fulfillment",
+        actor_id="operator-1",
+        reason="Payment settled before worker interruption",
+    )
+
+    db_session.refresh(change)
+    assert outcome.replayed is False
+    assert change.service_order_id is not None
+    assert change.work_order_id is not None
+    assert change.execution_state == (
+        SubscriptionChangeExecutionState.fulfillment_released
+    )
+    assert change.reconciliation_reviewed_head == item.reviewed_head
