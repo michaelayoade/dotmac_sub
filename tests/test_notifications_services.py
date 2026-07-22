@@ -135,12 +135,6 @@ def test_manual_notification_create_uses_channel_gate(db_session):
 
 def test_manual_notification_create_applies_quiet_hours_and_dedupe(db_session):
     subscriber = _subscriber(db_session, suffix="dedupe")
-    _setting(
-        db_session,
-        "notification_quiet_hours_enabled",
-        "true",
-        value_type=SettingValueType.boolean,
-    )
     _setting(db_session, "notification_quiet_hours_start", "00:00")
     _setting(db_session, "notification_quiet_hours_end", "23:59")
     _setting(

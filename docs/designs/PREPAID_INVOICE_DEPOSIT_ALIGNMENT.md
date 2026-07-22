@@ -98,21 +98,13 @@ phantom-ledger cleanups). Separate one-off script, run after Item 1 lands.
 1. The monthly-prepaid draft-invoice owner and its control are retired.
    `financial.prepaid_service_renewals` is the only writer for new funded
    prepaid periods; it writes the debit, entitlement, and anchor atomically.
-2. Keep `collections.prepaid_balance_enforcement` as the customer-impacting
-   suspension gate; cleanup scripts must not be used as the suspension signal.
-   Enabling it requires two reviewed records: first reconcile the complete
-   prepaid coverage cohort to zero repairable/quarantined items, then record a
-   full-cohort independent-funding readiness generation whose
-   `intended_activation_at` is the reviewed launch time and enable the control.
-   The standalone activation setting is retired. Every later OFF-to-ON
-   transition requires a fresh readiness generation, and canonical renewals
-   must remain enabled. Adverse actions fail closed when readiness, renewal
-   ownership, current coverage, or the readiness-owned activation time is
-   missing/invalid/not reached, while restoration from exact coverage remains
-   available. Grace is configuration-owned (account, policy set, then
-   billing-mode default). The approved cutover policy is zero default prepaid
-   grace, so an unfunded account with no override is suspended on its first
-   eligible sweep. Activation does not reset an older low-balance timer.
+2. The prepaid enforcement owner evaluates every eligible account on its
+   permanent pass; cleanup scripts must not be used as the suspension signal.
+   Canonical funding, current coverage, quarantine, billing profile, shields,
+   and grace determine the account outcome. The approved policy is zero default
+   prepaid grace, so an unfunded account with no override is suspended on its
+   first eligible in-window sweep. Existing low-balance timers retain their
+   chronology.
 3. Run the phantom-AR cleanup in dry-run first, review the plan, then apply.
    Runtime guards exclude prepaid subscription invoices and imported/provenance
    line-less prepaid invoices from AR/dunning/balance enforcement; ambiguous
@@ -125,10 +117,10 @@ phantom-ledger cleanups). Separate one-off script, run after Item 1 lands.
    This is the final authority cutover: runtime has no Splynx fallback. Use the
    independent evidence to verify the materialized native position, then run
    `plan_prepaid_balance_sweep.py` to review the owner decision. Record parity with
-   `--record-readiness --evidence-ref ... --verified-by ...`. Any missing or
-   mismatched account blocks the record and therefore blocks activation. Any
-   pre-activation cohort, policy, live-funding, or reconstruction-evidence
-   change invalidates the record and requires a fresh review. Bank
+   exact evidence hashes for operations review. Any missing or mismatched
+   account remains quarantined and receives no money-based action until a
+   reviewed supersession resolves it. Cohort, policy, live-funding, or
+   reconstruction-evidence drift requires a fresh review. Bank
    statements and Splynx exports can reconcile missing historical evidence
    through the one-time opening-balance owner; they are not runtime enforcement
    inputs.
@@ -142,6 +134,5 @@ phantom-ledger cleanups). Separate one-off script, run after Item 1 lands.
    prepaid-suspended, service restore runs. This is the one behaviour the offline
    tests can't fully prove against real payment/webhook plumbing.
 
-**LANDMINE:** do NOT enable `settle_credit_on_invoice_enabled` (account-wide settle)
-as a shortcut — it is disabled for migrated-data safety. Item 1's settle is
-single-invoice and targeted.
+**LANDMINE:** do not recreate the retired `settle_credit_on_invoice_enabled`
+path as a shortcut. Item 1's settle is single-invoice and targeted.

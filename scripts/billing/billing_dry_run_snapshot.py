@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 """Daily dry-run billing snapshot (READ-ONLY).
 
-Runs ``run_invoice_cycle(dry_run=True)`` (which runs even while
-``billing_enabled`` is false) and captures the operational counts for the
-launch discipline (see docs/BILLING_AUTOMATION_LAUNCH_RUNBOOK.md, Step 3).
+Runs ``run_invoice_cycle(dry_run=True)`` and captures the operational counts for
+the permanent invoice owner. The owner has no global runtime enable/disable
+control; the snapshot is an observability and reconciliation tool.
 
 The dry run does NOT commit, but it CAN dirty ORM objects in the session before
 the dry-run branch (notably fast-forwarding ``subscription.next_billing_at``,
@@ -13,7 +13,7 @@ its contract is that it leaves NO committed changes. Verified by
 
 Pair with the safety gauges from
 ``scripts/billing/billing_integrity_audit.py`` — disabled/canceled-billed and
-duplicate-period counts MUST be zero before automation launches.
+duplicate-period counts expose drift for repair without pausing the owner.
 
 ``--out`` writes the snapshot JSON; ``--prev`` prints the day-over-day delta.
 Any unexplained delta is a stop.

@@ -511,16 +511,11 @@ def preview_financial_access_consequence(
         ):
             eligible = False
             outcome = "outside_enforcement_window"
-        if eligible:
-            from app.services.billing_enforcement_guards import (
-                billing_enforcement_health,
-            )
+        from app.services.billing_enforcement_guards import billing_enforcement_health
 
-            health = billing_enforcement_health(db)
-            health_reasons = list(health.reasons)
-            if not health.ok:
-                eligible = False
-                outcome = "enforcement_health_blocked"
+        # Health is operator-visible evidence, not a global customer-lifecycle
+        # switch. Current account facts decide the consequence.
+        health_reasons = list(billing_enforcement_health(db).reasons)
 
         if eligible and action == FinancialAccessAction.throttle:
             throttle_profile_id = settings_spec.resolve_value(
@@ -626,7 +621,6 @@ def preview_financial_access_consequence(
         "billing_health_reasons": health_reasons,
         "dedicated_bundle": dedicated_bundle,
         "inside_enforcement_window": window_decision.inside_window,
-        "enforcement_window_mode": window_decision.mode,
         "enforcement_window_block_reason": window_decision.block_reason,
         "overdue_days": overdue_days,
         "target_subscription_ids": [str(value) for value in target_subscriptions],
@@ -1876,14 +1870,12 @@ def _execute_dunning_action_with_evidence(
     )
     if not preview.decision_inputs.get("inside_enforcement_window", True):
         logger.info(
-            "enforcement_window_audit",
+            "enforcement_window_deferred",
             extra={
-                "event": "enforcement_window_audit",
+                "event": "enforcement_window_deferred",
                 "path": "dunning",
                 "action": action.value,
                 "account_id": account_id,
-                "would_gate": True,
-                "mode": preview.decision_inputs.get("enforcement_window_mode"),
                 "deferred": preview.outcome == "outside_enforcement_window",
                 "block_reason": preview.decision_inputs.get(
                     "enforcement_window_block_reason"
@@ -2624,23 +2616,6 @@ class BillingEnforcementReconciler:
         db: Session, run_at: datetime
     ) -> dict[str, int | str]:
         """Apply payment-backed credit to due invoices before escalation."""
-        enabled = settings_spec.resolve_value(
-            db,
-            SettingDomain.collections,
-            "billing_enforcement_settle_credit_before_dunning_enabled",
-        )
-        if not (
-            enabled is True
-            or str(enabled).strip().lower() in {"1", "true", "yes", "on"}
-        ):
-            return {
-                "credit_accounts_scanned": 0,
-                "credit_accounts_settled": 0,
-                "credit_invoices_touched": 0,
-                "credit_settlement_errors": 0,
-                "credit_applied": "0.00",
-            }
-
         from app.services.billing.reconcile_unposted import (
             settle_open_invoices_from_credit,
         )

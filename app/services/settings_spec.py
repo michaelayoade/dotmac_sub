@@ -474,17 +474,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=True,
     ),
     SettingSpec(
-        # Hard gate: suppress customer notifications to terminal accounts
-        # (canceled/disabled get nothing) and non-actionable mail to walled
-        # accounts (suspended/blocked get only billing/account/service).
-        # Overrides per-subscriber preferences. Kill-switch, default on.
-        domain=SettingDomain.notification,
-        key="status_gate_enabled",
-        env_var="NOTIFICATION_STATUS_GATE_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=True,
-    ),
-    SettingSpec(
         domain=SettingDomain.notification,
         key="alert_notifications_default_channel",
         env_var="ALERT_NOTIFICATIONS_DEFAULT_CHANNEL",
@@ -580,13 +569,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.notification,
-        key="notification_queue_enabled",
-        env_var="NOTIFICATION_QUEUE_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=True,
-    ),
-    SettingSpec(
-        domain=SettingDomain.notification,
         key="notification_queue_interval_seconds",
         env_var="NOTIFICATION_QUEUE_INTERVAL_SECONDS",
         value_type=SettingValueType.integer,
@@ -644,13 +626,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=160,
         min_value=1,
         max_value=918,
-    ),
-    SettingSpec(
-        domain=SettingDomain.notification,
-        key="notification_quiet_hours_enabled",
-        env_var="NOTIFICATION_QUIET_HOURS_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=False,
     ),
     SettingSpec(
         domain=SettingDomain.notification,
@@ -769,16 +744,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.collections,
-        key="dunning_enabled",
-        env_var="DUNNING_ENABLED",
-        value_type=SettingValueType.boolean,
-        # Compatibility name for the unified billing-enforcement runner. This
-        # is the single scheduled writer for dunning policy actions and
-        # subscription enforcement locks.
-        default=True,
-    ),
-    SettingSpec(
-        domain=SettingDomain.collections,
         key="dunning_interval_seconds",
         env_var="DUNNING_INTERVAL_SECONDS",
         value_type=SettingValueType.integer,
@@ -796,13 +761,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.collections,
-        key="prepaid_blocking_time",
-        env_var="PREPAID_BLOCKING_TIME",
-        value_type=SettingValueType.string,
-        default="08:00",
-    ),
-    SettingSpec(
-        domain=SettingDomain.collections,
         key="billing_notif_send_hour",
         env_var="BILLING_NOTIF_SEND_HOUR",
         value_type=SettingValueType.integer,
@@ -812,46 +770,11 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.collections,
-        key="billing_notifications_hourly_enabled",
-        env_var="BILLING_NOTIFICATIONS_HOURLY_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=False,
-    ),
-    SettingSpec(
-        domain=SettingDomain.collections,
         key="billing_notifications_interval_seconds",
         env_var="BILLING_NOTIFICATIONS_INTERVAL_SECONDS",
         value_type=SettingValueType.integer,
         default=3600,
         min_value=300,
-    ),
-    SettingSpec(
-        domain=SettingDomain.collections,
-        key="billing_enforcement_health_gates_enabled",
-        env_var="BILLING_ENFORCEMENT_HEALTH_GATES_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=True,
-    ),
-    SettingSpec(
-        domain=SettingDomain.collections,
-        key="billing_enforcement_require_notification_health",
-        env_var="BILLING_ENFORCEMENT_REQUIRE_NOTIFICATION_HEALTH",
-        value_type=SettingValueType.boolean,
-        default=False,
-    ),
-    SettingSpec(
-        domain=SettingDomain.collections,
-        key="billing_enforcement_require_payment_health",
-        env_var="BILLING_ENFORCEMENT_REQUIRE_PAYMENT_HEALTH",
-        value_type=SettingValueType.boolean,
-        default=True,
-    ),
-    SettingSpec(
-        domain=SettingDomain.collections,
-        key="billing_enforcement_settle_credit_before_dunning_enabled",
-        env_var="BILLING_ENFORCEMENT_SETTLE_CREDIT_BEFORE_DUNNING_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=True,
     ),
     SettingSpec(
         domain=SettingDomain.collections,
@@ -965,16 +888,7 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.boolean,
         default=False,
     ),
-    # Enforcement (suspend/block) time-of-day window. Mode is explicit so
-    # operators can validate would-gate evidence before enabling deferral.
-    SettingSpec(
-        domain=SettingDomain.collections,
-        key="enforcement_window_mode",
-        env_var="ENFORCEMENT_WINDOW_MODE",
-        value_type=SettingValueType.string,
-        default="audit",
-        allowed={"audit", "enforce"},
-    ),
+    # Enforcement (suspend/block) time-of-day window, applied every day.
     SettingSpec(
         domain=SettingDomain.collections,
         key="enforcement_window_start",
@@ -988,52 +902,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
         env_var="ENFORCEMENT_WINDOW_END",
         value_type=SettingValueType.string,
         default=None,
-    ),
-    SettingSpec(
-        domain=SettingDomain.collections,
-        key="enforcement_skip_weekends",
-        env_var="ENFORCEMENT_SKIP_WEEKENDS",
-        value_type=SettingValueType.boolean,
-        default=False,
-    ),
-    SettingSpec(
-        domain=SettingDomain.collections,
-        key="enforcement_skip_holidays",
-        env_var="ENFORCEMENT_SKIP_HOLIDAYS",
-        value_type=SettingValueType.json,
-        default=[],
-    ),
-    SettingSpec(
-        domain=SettingDomain.collections,
-        key="prepaid_skip_weekends",
-        env_var="PREPAID_SKIP_WEEKENDS",
-        value_type=SettingValueType.boolean,
-        default=False,
-    ),
-    SettingSpec(
-        domain=SettingDomain.collections,
-        key="prepaid_skip_holidays",
-        env_var="PREPAID_SKIP_HOLIDAYS",
-        value_type=SettingValueType.json,
-        default=[],
-    ),
-    SettingSpec(
-        domain=SettingDomain.collections,
-        key="prepaid_readiness_max_age_minutes",
-        env_var="PREPAID_READINESS_MAX_AGE_MINUTES",
-        value_type=SettingValueType.integer,
-        default=60,
-        min_value=1,
-        label="Prepaid funding readiness maximum age (minutes)",
-    ),
-    SettingSpec(
-        domain=SettingDomain.collections,
-        key="prepaid_activation_max_grace_days",
-        env_var="PREPAID_ACTIVATION_MAX_GRACE_DAYS",
-        value_type=SettingValueType.integer,
-        default=0,
-        min_value=0,
-        label="Maximum prepaid grace allowed at activation (days)",
     ),
     SettingSpec(
         domain=SettingDomain.collections,
@@ -1127,14 +995,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default="This subscription follows dunning steps.",
     ),
     # Customer self-service
-    SettingSpec(
-        domain=SettingDomain.catalog,
-        key="customer_suspend_enabled",
-        env_var="CATALOG_CUSTOMER_SUSPEND_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=True,
-        label="Allow Customer Self-Service Vacation Hold",
-    ),
     SettingSpec(
         domain=SettingDomain.catalog,
         key="max_suspend_days",
@@ -1288,14 +1148,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.scheduler,
-        key="event_dispatch_enabled",
-        env_var="EVENT_DISPATCH_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=True,
-        label="Durable event outbox dispatch enabled",
-    ),
-    SettingSpec(
-        domain=SettingDomain.scheduler,
         key="event_dispatch_interval_seconds",
         env_var="EVENT_DISPATCH_INTERVAL_SECONDS",
         value_type=SettingValueType.integer,
@@ -1397,17 +1249,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
         label="Auto-generated RADIUS shared-secret length",
         min_value=16,
         max_value=64,
-    ),
-    SettingSpec(
-        domain=SettingDomain.radius,
-        key="enforce_stopped_disabled",
-        env_var="RADIUS_ENFORCE_STOPPED_DISABLED",
-        value_type=SettingValueType.boolean,
-        # Default OFF: enabling it makes a transition to stopped/disabled
-        # actively disconnect the subscriber (walled-garden / removed) instead
-        # of waiting for the orphan sweep. Roll out deliberately after checking
-        # the would-disconnect audit log + suspension audit.
-        default=False,
     ),
     SettingSpec(
         domain=SettingDomain.radius,
@@ -1718,33 +1559,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.billing,
-        key="billing_enabled",
-        env_var="BILLING_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=True,
-    ),
-    SettingSpec(
-        domain=SettingDomain.billing,
-        key="billing_enabled_expected",
-        env_var="BILLING_ENABLED_EXPECTED",
-        value_type=SettingValueType.boolean,
-        default=True,
-        label="Expected Billing Enabled State",
-    ),
-    SettingSpec(
-        # Kill-switch for the billing runner's inline "settle open invoices from
-        # account credit" step. DEFAULT OFF: unsafe on the migrated dataset where
-        # per-invoice balance_due/allocations aren't authoritative (deposit-paid
-        # invoices have no local allocation). Re-enable only after
-        # the account-level redesign.
-        domain=SettingDomain.billing,
-        key="settle_credit_on_invoice_enabled",
-        env_var="BILLING_SETTLE_CREDIT_ON_INVOICE_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=False,
-    ),
-    SettingSpec(
-        domain=SettingDomain.billing,
         key="billing_interval_seconds",
         env_var="BILLING_INTERVAL_SECONDS",
         value_type=SettingValueType.integer,
@@ -1779,23 +1593,7 @@ SETTINGS_SPECS: list[SettingSpec] = [
         min_value=1,
         label="Autopay Max Consecutive Failures",
     ),
-    SettingSpec(
-        domain=SettingDomain.billing,
-        key="customer_balance_notifications_enabled",
-        env_var="BILLING_CUSTOMER_BALANCE_NOTIFICATIONS_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=True,
-        label="Customer Balance Notifications Enabled",
-    ),
     # Overdue detection (independent of billing cycle)
-    SettingSpec(
-        domain=SettingDomain.billing,
-        key="overdue_check_enabled",
-        env_var="BILLING_OVERDUE_CHECK_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=True,
-        label="Enable Hourly Overdue Detection",
-    ),
     SettingSpec(
         domain=SettingDomain.billing,
         key="overdue_check_interval_seconds",
@@ -2038,30 +1836,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.billing,
-        key="proration_enabled",
-        env_var="BILLING_PRORATION_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=True,
-        label="Enable Proration",
-    ),
-    SettingSpec(
-        domain=SettingDomain.billing,
-        key="auto_activate_pending_on_billing",
-        env_var="BILLING_AUTO_ACTIVATE_PENDING",
-        value_type=SettingValueType.boolean,
-        default=True,
-        label="Auto-activate Pending Subscriptions on Billing",
-    ),
-    SettingSpec(
-        domain=SettingDomain.billing,
-        key="bill_backdated_periods",
-        env_var="BILLING_BILL_BACKDATED_PERIODS",
-        value_type=SettingValueType.boolean,
-        default=False,
-        label="Bill backdated (arrears) periods instead of fast-forwarding",
-    ),
-    SettingSpec(
-        domain=SettingDomain.billing,
         key="bill_ip_addon_requires_active_route",
         env_var="BILLING_IP_ADDON_REQUIRES_ACTIVE_ROUTE",
         value_type=SettingValueType.boolean,
@@ -2161,14 +1935,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
     # value_json and the readers would see an empty transfer config.
     SettingSpec(
         domain=SettingDomain.billing,
-        key="direct_bank_transfer_enabled",
-        env_var="BILLING_DIRECT_BANK_TRANSFER_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=False,
-        label="Direct Bank Transfer Enabled",
-    ),
-    SettingSpec(
-        domain=SettingDomain.billing,
         key="direct_bank_transfer_instructions",
         env_var=None,
         value_type=SettingValueType.string,
@@ -2195,13 +1961,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.billing,
-        key="invoice_number_enabled",
-        env_var="BILLING_INVOICE_NUMBER_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=True,
-    ),
-    SettingSpec(
-        domain=SettingDomain.billing,
         key="invoice_number_prefix",
         env_var="BILLING_INVOICE_NUMBER_PREFIX",
         value_type=SettingValueType.string,
@@ -2222,13 +1981,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.integer,
         default=1,
         min_value=1,
-    ),
-    SettingSpec(
-        domain=SettingDomain.billing,
-        key="credit_note_number_enabled",
-        env_var="BILLING_CREDIT_NOTE_NUMBER_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=True,
     ),
     SettingSpec(
         domain=SettingDomain.billing,
@@ -2284,14 +2036,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.string,
         default="none",
         allowed={"none", "prorated", "full_within_days"},
-    ),
-    SettingSpec(
-        domain=SettingDomain.catalog,
-        key="subscription_expiration_enabled",
-        env_var="SUBSCRIPTION_EXPIRATION_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=True,
-        label="Enable Subscription Expiration Task",
     ),
     SettingSpec(
         domain=SettingDomain.catalog,
@@ -4228,26 +3972,18 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
 ]
 
-# Tombstone the settings-registry surfaces whose decisions moved to canonical
-# feature controls. Keeping the identities together makes the cutover boundary
-# reviewable while ensuring forms, API validation, env fallback, and seed
-# discovery cannot expose them as a second writer. ``billing.billing_enabled``
-# is deliberately absent: it remains the independent cross-feature master.
+# Tombstone historical aliases whose decisions moved to canonical optional
+# feature controls. Core customer-financial lifecycle settings are deleted from
+# the registry instead of represented here.
 _RETIRED_FEATURE_ALIAS_SPECS = frozenset(
     {
         (SettingDomain.gis, "sync_enabled"),
-        (SettingDomain.notification, "notification_queue_enabled"),
         (SettingDomain.usage, "radius_accounting_import_enabled"),
         (SettingDomain.usage, "radius_session_reap_enabled"),
         (SettingDomain.usage, "usage_warning_enabled"),
         (SettingDomain.usage, "fup_submonthly_rules_enabled"),
-        (SettingDomain.collections, "dunning_enabled"),
-        (SettingDomain.collections, "billing_notifications_hourly_enabled"),
         (SettingDomain.scheduler, "crm_ticket_pull_enabled"),
         (SettingDomain.radius, "coa_enabled"),
-        (SettingDomain.billing, "overdue_check_enabled"),
-        (SettingDomain.billing, "direct_bank_transfer_enabled"),
-        (SettingDomain.catalog, "subscription_expiration_enabled"),
         (SettingDomain.network, "mikrotik_session_kill_enabled"),
         (SettingDomain.network, "mikrotik_api_session_kick_enabled"),
         (SettingDomain.network, "address_list_block_enabled"),

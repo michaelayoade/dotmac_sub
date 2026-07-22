@@ -12,7 +12,6 @@ def _expectation() -> AcceptanceExpectation:
         minimum_active_baselines=4265,
         coverage_fingerprint="b" * 64,
         coverage_subscription_count=2925,
-        renewal_control_enabled=True,
     )
 
 
@@ -22,12 +21,6 @@ def _observation() -> AcceptanceObservation:
         alembic_heads=("394_retire_payment_prepaid_applications",),
         active_baselines=4265,
         authority_cutover_batches=1,
-        active_readiness_records=1,
-        enforcement_enabled=True,
-        renewal_control_enabled=True,
-        activation_at="2026-07-17T06:30:00+00:00",
-        activation_error=None,
-        readiness_block_reason=None,
         coverage_fingerprint="b" * 64,
         coverage_subscription_count=2925,
         coverage_repairable_count=0,

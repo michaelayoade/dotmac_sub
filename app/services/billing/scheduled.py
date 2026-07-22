@@ -15,24 +15,10 @@ from app.services.billing_enforcement_guards import (
     billing_enforcement_health,
     notification_delivery_health,
 )
-from app.services.billing_settings import (
-    billing_enabled,
-    check_billing_switch,
-    disabled_billing_components,
-)
 from app.services.db_session_adapter import db_session_adapter
 
 logger = logging.getLogger(__name__)
 SessionLocal = db_session_adapter.create_session
-
-
-def scheduled_billing_enabled() -> bool:
-    """Return whether scheduled local billing automation may run."""
-    session = SessionLocal()
-    try:
-        return billing_enabled(session)
-    finally:
-        session.close()
 
 
 def run_invoice_cycle() -> dict[str, int]:
@@ -76,23 +62,17 @@ def mark_invoices_overdue() -> dict[str, int]:
 
 
 def check_billing_switch_health() -> dict:
-    """Config-integrity + billing enforcement health guard."""
+    """Observe financial enforcement and customer-message delivery health.
+
+    The historical billing master switch is retired. Health failures remain
+    operator-visible observations; they cannot turn the lifecycle off.
+    """
     session = SessionLocal()
     try:
-        switch = check_billing_switch(session)
         enforcement = billing_enforcement_health(session)
         notification = notification_delivery_health(session)
-        try:
-            disabled_components = (
-                disabled_billing_components(session) if switch["actual"] else []
-            )
-        except Exception:
-            logger.exception("disabled_billing_components check failed")
-            disabled_components = []
         result = {
-            "ok": bool(switch["ok"]) and enforcement.ok,
-            "billing_switch": switch,
-            "disabled_billing_components": disabled_components,
+            "ok": enforcement.ok and notification.ok,
             "billing_enforcement_health": {
                 "ok": enforcement.ok,
                 "reasons": enforcement.reasons,
@@ -104,15 +84,8 @@ def check_billing_switch_health() -> dict:
                 "details": notification.details,
             },
         }
-        if not switch["ok"]:
-            logger.critical(
-                "billing_switch_drift: billing_enabled=%s expected=%s; "
-                "local billing may act on customers unexpectedly",
-                switch["actual"],
-                switch["expected"],
-            )
         if not enforcement.ok:
-            logger.critical(
+            logger.error(
                 "billing_enforcement_health_failed: reasons=%s details=%s",
                 ",".join(enforcement.reasons),
                 enforcement.details,
@@ -122,13 +95,6 @@ def check_billing_switch_health() -> dict:
                 "billing_notification_delivery_unhealthy: reasons=%s details=%s",
                 ",".join(notification.reasons),
                 notification.details,
-            )
-        if disabled_components:
-            logger.critical(
-                "billing_component_disabled: billing is live but these capture "
-                "components are switched OFF: %s; re-enable them or collections "
-                "will silently under-run",
-                ",".join(disabled_components),
             )
         return result
     finally:
@@ -216,10 +182,6 @@ def _append_billing_health_snapshot(session, result: dict) -> None:
             "negative_prepaid_balance_total": str(
                 health.negative_prepaid_balance_total
             ),
-            "prepaid_balance_sweep_enabled": health.prepaid_balance_sweep_enabled,
-            "negative_prepaid_with_sweep_disabled_count": (
-                health.negative_prepaid_with_sweep_disabled_count
-            ),
             "anomalies": sorted(anomalies),
         }
         if "paid_invoices_with_balance" in anomalies:
@@ -261,8 +223,8 @@ def _append_billing_health_snapshot(session, result: dict) -> None:
         if "active_subs_without_billing_path" in anomalies:
             logger.error(
                 "billing_active_subs_without_billing_path: %d active prepaid "
-                "subscription(s) no enabled billing path will invoice (flag off "
-                "or non-monthly offer) - revenue leak",
+                "subscription(s) have no canonical recurring billing path - "
+                "revenue leak",
                 health.unbilled_no_path,
             )
         if "negative_prepaid_balances" in anomalies:
@@ -271,12 +233,6 @@ def _append_billing_health_snapshot(session, result: dict) -> None:
                 "wallet balance below zero (total exposure %s)",
                 health.negative_prepaid_balance_count,
                 health.negative_prepaid_balance_total,
-            )
-        if "negative_prepaid_sweep_disabled" in anomalies:
-            logger.error(
-                "billing_negative_prepaid_sweep_disabled: %d negative prepaid "
-                "account(s) exist while prepaid_balance_sweep is disabled",
-                health.negative_prepaid_with_sweep_disabled_count,
             )
     except SoftTimeLimitExceeded:
         raise

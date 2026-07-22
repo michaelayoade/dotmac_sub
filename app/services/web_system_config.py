@@ -196,16 +196,13 @@ def save_portal_config(db: Session, data: Mapping[str, Any]) -> None:
 # 8.12 Billing & Invoice Settings
 # ---------------------------------------------------------------------------
 BILLING_KEYS = [
-    "billing_enabled",
     "payment_period",
     "billing_day",
     "use_creation_date",
     "payment_due_days",
-    "customer_balance_notifications_enabled",
     "expiry_reminder_days",
     "invoice_reminder_days",
     "minimum_balance",
-    "send_billing_notifications",
     "invoice_number_format",
     "receipt_number_format",
     "credit_note_format",
@@ -334,10 +331,7 @@ def _normalize_csv_days(data: dict[str, Any], key: str, label: str) -> None:
 def _normalized_billing_config(data: Mapping[str, Any]) -> dict[str, Any]:
     normalized = dict(data)
     for key, label in (
-        ("billing_enabled", "Billing Enabled"),
         ("use_creation_date", "Use Customer Creation Date"),
-        ("customer_balance_notifications_enabled", "Customer Balance Notifications"),
-        ("send_billing_notifications", "Send Billing Notifications"),
         ("proforma_enabled", "Proforma Invoices"),
         ("zero_total_invoices", "Zero-Total Invoices"),
         ("invoice_caching", "Invoice PDF Caching"),
@@ -391,7 +385,7 @@ def save_billing_config(db: Session, data: Mapping[str, Any]) -> None:
     # casing enum choices, formatting decimals, validating CSV day-lists) and
     # ``use_specs`` layers spec-based type coercion/validation on top for the
     # keys that have a registered spec. Keys without a spec (payment_period,
-    # billing_day, use_creation_date, send_billing_notifications, the
+    # billing_day, use_creation_date, the
     # invoice/receipt/credit-note number formats, and the proforma_* / zero_
     # total_invoices / invoice_caching toggles) are intentionally NOT spec'd:
     # nothing in the app reads them, so registering specs would create orphans.

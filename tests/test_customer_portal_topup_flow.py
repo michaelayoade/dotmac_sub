@@ -141,7 +141,6 @@ def _patch_direct_transfer_creation_policy(monkeypatch) -> None:
         topup_intents,
         "direct_transfer_configuration",
         lambda _db: topup_intents.DirectTransferConfiguration(
-            control_enabled=True,
             accounts=(
                 topup_intents.DirectTransferConfiguredAccount(
                     id="bank-primary",

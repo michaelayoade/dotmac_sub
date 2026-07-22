@@ -893,9 +893,7 @@ class TestBuildBeatSchedule:
             return original_resolve_int(db, domain, key, default)
 
         with (
-            _control_overrides(
-                {"gis.sync": False, "collections.prepaid_balance_enforcement": True}
-            ),
+            _control_overrides({"gis.sync": False}),
             patch.object(scheduler_config, "SessionLocal", return_value=mock_session),
             patch.object(scheduler_config, "_resolve_int", side_effect=resolve_int),
             patch.object(

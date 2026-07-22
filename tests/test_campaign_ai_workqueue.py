@@ -58,6 +58,10 @@ def test_campaign_build_skips_inactive_and_sends_through_native_inbox(
     db_session,
     monkeypatch,
 ):
+    monkeypatch.setattr(
+        "app.services.notification.quiet_hours_send_at",
+        lambda _db: None,
+    )
     team = _team(db_session)
     active = _subscriber(db_session, email="ada@example.com")
     _subscriber(

@@ -23,48 +23,24 @@ class TestBillingTask:
         mock_idempotency_session.scalars.return_value.first.return_value = None
 
         with patch(
-            "app.tasks.billing.scheduled_billing.scheduled_billing_enabled",
-            return_value=True,
+            "app.services.billing.scheduled.SessionLocal",
+            return_value=mock_session,
         ):
             with patch(
-                "app.services.billing.scheduled.SessionLocal",
-                return_value=mock_session,
+                "app.services.task_idempotency.SessionLocal",
+                return_value=mock_idempotency_session,
             ):
                 with patch(
-                    "app.services.task_idempotency.SessionLocal",
-                    return_value=mock_idempotency_session,
-                ):
-                    with patch(
-                        "app.services.billing.scheduled.billing_automation_service."
-                        "run_invoice_cycle",
-                        return_value={"subscriptions_billed": 1, "errors": 0},
-                    ) as mock_run:
-                        from app.tasks.billing import run_invoice_cycle
-
-                        run_invoice_cycle()
-
-                        mock_run.assert_called_once()
-                        mock_session.close.assert_called()
-
-    def test_run_invoice_cycle_disabled_does_not_touch_idempotency(self):
-        """Disabled billing must not cache a succeeded daily idempotency result."""
-        with patch(
-            "app.tasks.billing.scheduled_billing.scheduled_billing_enabled",
-            return_value=False,
-        ):
-            with patch(
-                "app.tasks.billing.scheduled_billing.run_invoice_cycle"
-            ) as mock_run:
-                with patch(
-                    "app.services.task_idempotency.SessionLocal"
-                ) as mock_idempotency_session:
+                    "app.services.billing.scheduled.billing_automation_service."
+                    "run_invoice_cycle",
+                    return_value={"subscriptions_billed": 1, "errors": 0},
+                ) as mock_run:
                     from app.tasks.billing import run_invoice_cycle
 
-                    result = run_invoice_cycle()
+                    run_invoice_cycle()
 
-        assert result == {"skipped": "billing_disabled"}
-        mock_run.assert_not_called()
-        mock_idempotency_session.assert_not_called()
+                    mock_run.assert_called_once()
+                    mock_session.close.assert_called()
 
     def test_run_invoice_cycle_exception_rollback(self):
         """Test exception triggers rollback."""
@@ -73,29 +49,25 @@ class TestBillingTask:
         mock_idempotency_session.scalars.return_value.first.return_value = None
 
         with patch(
-            "app.tasks.billing.scheduled_billing.scheduled_billing_enabled",
-            return_value=True,
+            "app.services.billing.scheduled.SessionLocal",
+            return_value=mock_session,
         ):
             with patch(
-                "app.services.billing.scheduled.SessionLocal",
-                return_value=mock_session,
+                "app.services.task_idempotency.SessionLocal",
+                return_value=mock_idempotency_session,
             ):
                 with patch(
-                    "app.services.task_idempotency.SessionLocal",
-                    return_value=mock_idempotency_session,
+                    "app.services.billing.scheduled.billing_automation_service."
+                    "run_invoice_cycle",
+                    side_effect=Exception("Billing error"),
                 ):
-                    with patch(
-                        "app.services.billing.scheduled.billing_automation_service."
-                        "run_invoice_cycle",
-                        side_effect=Exception("Billing error"),
-                    ):
-                        from app.tasks.billing import run_invoice_cycle
+                    from app.tasks.billing import run_invoice_cycle
 
-                        with pytest.raises(Exception, match="Billing error"):
-                            run_invoice_cycle()
+                    with pytest.raises(Exception, match="Billing error"):
+                        run_invoice_cycle()
 
-                        mock_session.rollback.assert_called_once()
-                        mock_session.close.assert_called()
+                    mock_session.rollback.assert_called_once()
+                    mock_session.close.assert_called()
 
     def test_check_billing_switch_task_reports_enforcement_health(self):
         """Hourly billing guard includes payment/enforcement health state."""
@@ -115,30 +87,21 @@ class TestBillingTask:
             "app.services.billing.scheduled.SessionLocal",
             return_value=mock_session,
         ):
-            with patch(
-                "app.services.billing.scheduled.check_billing_switch",
-                return_value={"ok": True, "expected": True, "actual": True},
-            ):
-                with patch(
+            with (
+                patch(
                     "app.services.billing.scheduled.billing_enforcement_health",
                     return_value=enforcement,
-                ):
-                    with (
-                        patch(
-                            "app.services.billing.scheduled.notification_delivery_health",
-                            return_value=notification,
-                        ),
-                        patch(
-                            "app.services.billing_health.billing_health_snapshot",
-                            return_value=MagicMock(anomalies=[]),
-                        ),
-                    ):
-                        from app.tasks.billing import check_billing_switch_task
+                ),
+                patch(
+                    "app.services.billing.scheduled.notification_delivery_health",
+                    return_value=notification,
+                ),
+            ):
+                from app.tasks.billing import check_billing_switch_task
 
-                        result = check_billing_switch_task()
+                result = check_billing_switch_task()
 
         assert result["ok"] is False
-        assert result["billing_switch"]["ok"] is True
         assert result["billing_enforcement_health"]["ok"] is False
         assert result["billing_enforcement_health"]["reasons"] == [
             "recent_payment_volume_below_floor"
@@ -162,32 +125,24 @@ class TestBillingTask:
             "app.services.billing.scheduled.SessionLocal",
             return_value=mock_session,
         ):
-            with patch(
-                "app.services.billing.scheduled.check_billing_switch",
-                return_value={"ok": True, "expected": True, "actual": True},
-            ):
-                with patch(
+            with (
+                patch(
                     "app.services.billing.scheduled.billing_enforcement_health",
                     return_value=enforcement,
+                ),
+                patch(
+                    "app.services.billing.scheduled.notification_delivery_health",
+                    return_value=notification,
+                ),
+            ):
+                from app.tasks.billing import check_billing_switch_task
+
+                with caplog.at_level(
+                    logging.ERROR, logger="app.services.billing.scheduled"
                 ):
-                    with (
-                        patch(
-                            "app.services.billing.scheduled.notification_delivery_health",
-                            return_value=notification,
-                        ),
-                        patch(
-                            "app.services.billing_health.billing_health_snapshot",
-                            return_value=MagicMock(anomalies=[]),
-                        ),
-                    ):
-                        from app.tasks.billing import check_billing_switch_task
+                    result = check_billing_switch_task()
 
-                        with caplog.at_level(
-                            logging.ERROR, logger="app.services.billing.scheduled"
-                        ):
-                            result = check_billing_switch_task()
-
-        assert result["ok"] is True
+        assert result["ok"] is False
         assert result["notification_delivery_health"]["ok"] is False
         assert "billing_notification_delivery_unhealthy" in caplog.text
         assert "critical_notifications_failed" in caplog.text
@@ -207,32 +162,28 @@ class TestBillingTask:
             "app.services.billing.scheduled.SessionLocal",
             return_value=mock_session,
         ):
-            with patch(
-                "app.services.billing.scheduled.check_billing_switch",
-                return_value={"ok": True, "expected": True, "actual": True},
-            ):
-                with patch(
+            with (
+                patch(
                     "app.services.billing.scheduled.billing_enforcement_health",
                     return_value=enforcement,
+                ),
+                patch(
+                    "app.services.billing.scheduled.notification_delivery_health",
+                    return_value=notification,
+                ),
+                patch(
+                    "app.services.billing_health.billing_health_snapshot",
+                    side_effect=ValueError("snapshot boom"),
+                ) as snapshot,
+            ):
+                from app.tasks.billing import check_billing_switch_task
+
+                with caplog.at_level(
+                    logging.ERROR, logger="app.services.billing.scheduled"
                 ):
-                    with (
-                        patch(
-                            "app.services.billing.scheduled.notification_delivery_health",
-                            return_value=notification,
-                        ),
-                        patch(
-                            "app.services.billing_health.billing_health_snapshot",
-                            side_effect=ValueError("snapshot boom"),
-                        ) as snapshot,
-                    ):
-                        from app.tasks.billing import check_billing_switch_task
+                    result = check_billing_switch_task()
 
-                        with caplog.at_level(
-                            logging.ERROR, logger="app.services.billing.scheduled"
-                        ):
-                            result = check_billing_switch_task()
-
-        assert result["ok"] is True
+        assert result["ok"] is False
         assert "billing_health" not in result
         assert "billing_notification_delivery_unhealthy" in caplog.text
         snapshot.assert_not_called()
@@ -434,43 +385,38 @@ class TestCollectionsTask:
             return_value=mock_session,
         ):
             with patch(
-                "app.services.collections.scheduled.billing_enabled",
-                return_value=True,
-            ):
-                with patch(
-                    "app.services.collections.scheduled."
-                    "billing_enforcement_reconciler.run"
-                ) as mock_run:
-                    mock_run.return_value = BillingEnforcementRunResponse(
-                        run_at=datetime.now(UTC),
-                        accounts_scanned=7,
-                        cases_created=3,
-                        actions_created=2,
-                        skipped=1,
-                        dunning_accounts_scanned=7,
-                        dunning_cases_created=3,
-                        dunning_actions_created=2,
-                        dunning_skipped=1,
-                    )
-                    from app.tasks.collections import run_billing_enforcement
+                "app.services.collections.scheduled.billing_enforcement_reconciler.run"
+            ) as mock_run:
+                mock_run.return_value = BillingEnforcementRunResponse(
+                    run_at=datetime.now(UTC),
+                    accounts_scanned=7,
+                    cases_created=3,
+                    actions_created=2,
+                    skipped=1,
+                    dunning_accounts_scanned=7,
+                    dunning_cases_created=3,
+                    dunning_actions_created=2,
+                    dunning_skipped=1,
+                )
+                from app.tasks.collections import run_billing_enforcement
 
-                    result = run_billing_enforcement()
+                result = run_billing_enforcement()
 
-                    mock_run.assert_called_once()
-                    args = mock_run.call_args
-                    assert args[0][0] == mock_session
-                    mock_session.close.assert_called_once()
-                    assert result == {
-                        "accounts_scanned": 7,
-                        "cases_created": 3,
-                        "actions_created": 2,
-                        "skipped": 1,
-                        "credit_accounts_scanned": 0,
-                        "credit_accounts_settled": 0,
-                        "credit_invoices_touched": 0,
-                        "credit_settlement_errors": 0,
-                        "credit_applied": "0.00",
-                    }
+                mock_run.assert_called_once()
+                args = mock_run.call_args
+                assert args[0][0] == mock_session
+                mock_session.close.assert_called_once()
+                assert result == {
+                    "accounts_scanned": 7,
+                    "cases_created": 3,
+                    "actions_created": 2,
+                    "skipped": 1,
+                    "credit_accounts_scanned": 0,
+                    "credit_accounts_settled": 0,
+                    "credit_invoices_touched": 0,
+                    "credit_settlement_errors": 0,
+                    "credit_applied": "0.00",
+                }
 
     def test_run_billing_enforcement_exception_closes_session(self):
         """Test exception still closes session."""
@@ -481,83 +427,15 @@ class TestCollectionsTask:
             return_value=mock_session,
         ):
             with patch(
-                "app.services.collections.scheduled.billing_enabled",
-                return_value=True,
+                "app.services.collections.scheduled.billing_enforcement_reconciler.run",
+                side_effect=Exception("Dunning error"),
             ):
-                with patch(
-                    "app.services.collections.scheduled."
-                    "billing_enforcement_reconciler.run",
-                    side_effect=Exception("Dunning error"),
-                ):
-                    from app.tasks.collections import run_billing_enforcement
+                from app.tasks.collections import run_billing_enforcement
 
-                    with pytest.raises(Exception, match="Dunning error"):
-                        run_billing_enforcement()
+                with pytest.raises(Exception, match="Dunning error"):
+                    run_billing_enforcement()
 
-                    mock_session.close.assert_called_once()
-
-
-class TestBillingMasterSwitchGates:
-    """Customer-impacting billing tasks must no-op while billing_enabled is off.
-
-    The upstream biller stays authoritative until cutover; these tasks
-    must never charge, dun, suspend, or expire an account before billing_enabled
-    is flipped on, even though the queue consumes them and they are scheduled.
-    """
-
-    def test_billing_enforcement_skipped_when_billing_disabled(self):
-        mock_session = MagicMock()
-        with patch(
-            "app.services.collections.scheduled.SessionLocal",
-            return_value=mock_session,
-        ):
-            with patch(
-                "app.services.collections.scheduled.billing_enabled",
-                return_value=False,
-            ):
-                with patch(
-                    "app.services.collections.scheduled."
-                    "billing_enforcement_reconciler.run"
-                ) as mock_run:
-                    from app.tasks.collections import run_billing_enforcement
-
-                    result = run_billing_enforcement()
-
-                    mock_run.assert_not_called()
-                    assert result == {"skipped": "billing_disabled"}
-
-    def test_autopay_skipped_when_billing_disabled(self):
-        mock_session = MagicMock()
-        with patch(
-            "app.services.db_session_adapter.SessionLocal",
-            return_value=mock_session,
-        ):
-            with patch("app.tasks.autopay.billing_enabled", return_value=False):
-                with patch("app.tasks.autopay.autopay_service.run_all_due") as mock_run:
-                    from app.tasks.autopay import charge_due_invoices
-
-                    result = charge_due_invoices()
-
-                    mock_run.assert_not_called()
-                    assert result == {"skipped": "billing_disabled"}
-
-    def test_arrangement_check_skipped_when_billing_disabled(self):
-        mock_session = MagicMock()
-        with patch(
-            "app.services.db_session_adapter.SessionLocal",
-            return_value=mock_session,
-        ):
-            with patch("app.tasks.arrangements.billing_enabled", return_value=False):
-                with patch(
-                    "app.tasks.arrangements.payment_arrangements"
-                    ".check_overdue_installments"
-                ) as mock_run:
-                    from app.tasks.arrangements import check_overdue_arrangements
-
-                    result = check_overdue_arrangements()
-
-                    mock_run.assert_not_called()
-                    assert result["arrangements_defaulted"] == 0
+                mock_session.close.assert_called_once()
 
 
 class TestPaymentReconciliationTask:

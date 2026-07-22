@@ -18,7 +18,7 @@ release.
 - Operator surfaces: Module Manager for mutation and provenance; read-only
   Control Plane for cross-domain effective state, health, and audit history.
 
-`billing.billing_enabled` is excluded from deletion. It remains the independent
+`Subscriber.billing_enabled` is excluded from deletion. It remains the independent
 cross-feature billing master and is no longer treated as the editable value
 source for `billing.invoicing`.
 

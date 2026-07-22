@@ -57,6 +57,9 @@ def get_scheduler_task_detail_data(
             next_run = task.last_run_at + timedelta(seconds=task.interval_seconds)
     return {
         "task": task,
+        "task_is_permanent": scheduler_service.is_permanent_customer_lifecycle_task(
+            task.task_name
+        ),
         "next_run": next_run,
         "active_timezone": enforcement_window.resolve_timezone_name(db),
         "runs": [],

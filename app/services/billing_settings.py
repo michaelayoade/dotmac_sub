@@ -7,7 +7,6 @@ from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.domain_settings import DomainSetting, SettingDomain
-from app.services import settings_spec
 
 # A subscription in one of these states represents a *live* (connectable)
 # service. Used for "is the service actually up" semantics.
@@ -33,72 +32,6 @@ COLLECTIBLE_SERVICE_STATUSES = (
     SubscriptionStatus.pending,
     SubscriptionStatus.blocked,
 )
-
-
-def billing_enabled(db: Session, *, default: bool = True) -> bool:
-    """Master switch for local billing automation.
-
-    Before DotMac Sub became the biller of record, this stayed ``false`` so the
-    local runners were inert. It gates every task that
-    *acts on customers* off local billing state — invoicing, autopay charges,
-    dunning, prepaid enforcement, payment-arrangement checks, and subscription
-    expiry — so they all activate together at cutover and none can charge,
-    suspend, or expire an account before then. Resolved via ``settings_spec``
-    from the active database row or registered default to match the
-    invoice-cycle kill-switch.
-
-    Single control plane: the billing MODULE (resolved by the same module
-    resolver the registry uses) composes in — if the billing module is off,
-    billing is off everywhere, not just in the scheduler.
-
-    Design note: this MASTER is intentionally NOT collapsed into the
-    ``billing.invoicing`` feature. Task bodies (autopay, dunning, expiry) read it
-    as a cross-feature master, so equating it with invoicing would wrongly stop
-    collection whenever invoice *generation* is paused. The master therefore
-    stays = billing module AND the legacy ``billing.billing_enabled`` flag; the
-    individual capture features (invoicing/autopay/collections/…) are gated
-    independently through ``control_registry.is_enabled``.
-    """
-    # Local import avoids an import-time cycle (module_manager pulls settings).
-    from app.services import module_manager
-
-    if not module_manager.is_module_enabled(db, "billing"):
-        return False
-    value = settings_spec.resolve_value(db, SettingDomain.billing, "billing_enabled")
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    return str(value).strip().lower() in {"1", "true", "yes", "on"}
-
-
-def check_billing_switch(db: Session) -> dict:
-    """Invariant check on the ``billing_enabled`` master switch.
-
-    ``billing_enabled`` flipping to true unexpectedly is what let the local
-    runner generate phantom invoices — a config-integrity failure, not a code
-    bug, so the void cleaned the symptom, not the mechanism. This compares the
-    live switch against a pinned *expected* value (``billing_enabled_expected``
-    / env ``BILLING_ENABLED_EXPECTED``, default false pre-cutover). At cutover,
-    set the expected value to true in the same change that enables billing.
-
-    Returns a dict; callers should alert when ``ok`` is false.
-    """
-    import os
-
-    actual = billing_enabled(db, default=False)
-    # Read the pinned expected value directly (it is not a registered spec key):
-    # a DomainSetting row wins, else the BILLING_ENABLED_EXPECTED env, else false.
-    expected_raw = _setting_value(db, "billing_enabled_expected")
-    if expected_raw is None:
-        expected_raw = os.getenv("BILLING_ENABLED_EXPECTED")
-    if expected_raw is None:
-        expected = False
-    elif isinstance(expected_raw, bool):
-        expected = expected_raw
-    else:
-        expected = str(expected_raw).strip().lower() in {"1", "true", "yes", "on"}
-    return {"ok": actual == expected, "expected": expected, "actual": actual}
 
 
 def _coerce_int(value: object, default: int) -> int:
@@ -133,31 +66,6 @@ def _domain_setting_value(
 
 def _setting_value(db: Session, key: str) -> object | None:
     return _domain_setting_value(db, SettingDomain.billing, key)
-
-
-def disabled_billing_components(db: Session) -> list[str]:
-    """Canonical keys of billing capture-automation features that are OFF.
-
-    Derived from the control registry (single source) — every default-ON billing
-    feature (invoicing, autopay, collections, overdue-marking, arrangements,
-    topup-reconciliation, …) is checked via the one resolver. Default-OFF
-    opt-ins (e.g. the hourly notification runner) are excluded. Resolution is
-    fail-open, so this returns only deliberately-disabled features. The hourly
-    billing-switch task escalates a non-empty result to CRITICAL so no aspect of
-    billing capture automation can be silently turned off while billing is live.
-    """
-    from app.services import control_registry
-
-    disabled: list[str] = []
-    for control in control_registry.all_controls():
-        if (
-            control.layer is control_registry.Layer.feature
-            and control.owner_module == "billing"
-            and control.on_missing  # only features that are meant to be ON
-            and not control_registry.is_enabled(db, control.key)
-        ):
-            disabled.append(control.key)
-    return disabled
 
 
 def resolve_payment_due_days(

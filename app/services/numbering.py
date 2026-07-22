@@ -77,3 +77,28 @@ def generate_number(
         padding=padding if isinstance(padding, int) else None,
         start_value=start_value_int,
     )
+
+
+def generate_required_number(
+    db: Session,
+    domain: SettingDomain,
+    sequence_key: str,
+    prefix_key: str,
+    padding_key: str,
+    start_key: str,
+) -> str:
+    """Generate a document number from formatting policy with no runtime toggle."""
+    prefix = _resolve_setting(db, domain, prefix_key)
+    padding = _resolve_setting(db, domain, padding_key)
+    start_value = _resolve_setting(db, domain, start_key)
+    try:
+        start_value_int = int(start_value) if start_value is not None else 1
+    except (TypeError, ValueError):
+        start_value_int = 1
+    return generate_number_with_config(
+        db,
+        sequence_key,
+        prefix=prefix if isinstance(prefix, str) else None,
+        padding=padding if isinstance(padding, int) else None,
+        start_value=start_value_int,
+    )

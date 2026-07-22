@@ -1,8 +1,9 @@
-"""Production safety guards for billing enforcement.
+"""Operational health observations for billing enforcement.
 
 These checks are deliberately narrow: they do not decide whether an invoice is
-collectible. They decide whether it is safe to execute a service-affecting
-collections action right now.
+collectible and do not gate customer lifecycle actions. They expose delivery
+and payment-channel drift so operators can correct it without globally stopping
+billing, collections, renewal, suspension, or restoration.
 """
 
 from __future__ import annotations
@@ -96,15 +97,6 @@ def _critical_notification_filter():
 
 def notification_delivery_health(db: Session) -> EnforcementHealth:
     """Return whether critical billing notifications are drainable."""
-    from app.services import control_registry
-
-    if not control_registry.is_enabled(db, "notifications.queue"):
-        return EnforcementHealth(
-            ok=False,
-            reasons=["notification_queue_disabled"],
-            details={"notification_queue_enabled": False},
-        )
-
     task_enabled = (
         db.query(ScheduledTask.enabled)
         .filter(
@@ -322,36 +314,14 @@ def payment_channel_health(db: Session) -> EnforcementHealth:
 
 
 def billing_enforcement_health(db: Session) -> EnforcementHealth:
-    """Combined gate for service-affecting billing enforcement actions."""
-    if not _setting_bool(
-        db,
-        SettingDomain.collections,
-        "billing_enforcement_health_gates_enabled",
-        default=True,
-    ):
-        return EnforcementHealth(ok=True, details={"health_gates_enabled": False})
-
+    """Combined observation for billing, delivery, and payment-channel drift."""
     reasons: list[str] = []
-    details: dict[str, int | bool] = {"health_gates_enabled": True}
-    if _setting_bool(
-        db,
-        SettingDomain.collections,
-        "billing_enforcement_require_notification_health",
-        default=True,
-    ):
-        notification = notification_delivery_health(db)
-        reasons.extend(notification.reasons)
-        details.update(
-            {f"notification_{k}": v for k, v in notification.details.items()}
-        )
-    if _setting_bool(
-        db,
-        SettingDomain.collections,
-        "billing_enforcement_require_payment_health",
-        default=True,
-    ):
-        payment = payment_channel_health(db)
-        reasons.extend(payment.reasons)
-        details.update({f"payment_{k}": v for k, v in payment.details.items()})
+    details: dict[str, int | bool] = {}
+    notification = notification_delivery_health(db)
+    reasons.extend(notification.reasons)
+    details.update({f"notification_{k}": v for k, v in notification.details.items()})
+    payment = payment_channel_health(db)
+    reasons.extend(payment.reasons)
+    details.update({f"payment_{k}": v for k, v in payment.details.items()})
 
     return EnforcementHealth(ok=not reasons, reasons=reasons, details=details)

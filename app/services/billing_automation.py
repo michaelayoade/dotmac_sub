@@ -36,7 +36,7 @@ from app.models.domain_settings import SettingDomain
 from app.models.network import SubscriberAdditionalRoute
 from app.models.subscriber import Address, Subscriber, SubscriberStatus
 from app.schemas.billing import InvoiceCreate, SystemInvoiceLineCreate
-from app.services import control_registry, enforcement_window, settings_spec
+from app.services import enforcement_window, settings_spec
 from app.services.billing import _recalculate_invoice_totals
 from app.services.billing._common import _calculate_tax_amount
 from app.services.billing.invoices import InvoiceLines, Invoices, next_invoice_number
@@ -940,11 +940,6 @@ def subscription_invoice_eligible(
     return subscription.billing_mode != BillingMode.prepaid
 
 
-def _hourly_notifications_enabled(db: Session) -> bool:
-    """Whether the dedicated hourly billing-notifications runner owns the emits."""
-    return control_registry.is_enabled(db, "billing.notifications_hourly")
-
-
 def run_billing_notifications(
     db: Session,
     run_at: datetime | None = None,
@@ -995,32 +990,7 @@ def run_invoice_cycle(
     """
     run_at = _as_utc(run_at) or datetime.now(UTC)
 
-    # Global kill-switch. Before local billing became the system of record,
-    # invoice generation had to stay off to avoid duplicate bills. dry_run is
-    # exempt so the shadow reconciler can still compute would-be invoices for
-    # validation without writing anything.
-    if not dry_run and not _setting_truthy(db, "billing_enabled", default=True):
-        logger.info("billing_disabled_skip", extra={"run_at": run_at.isoformat()})
-        return {
-            "run_at": run_at,
-            "run_id": None,
-            "billing_disabled": True,
-            "subscriptions_scanned": 0,
-            "subscriptions_billed": 0,
-            "invoices_created": 0,
-            "lines_created": 0,
-            "skipped": 0,
-        }
-
     global_due_days = resolve_payment_due_days(db)
-
-    # Read auto-activate setting if not explicitly specified
-    if auto_activate_pending is True:
-        auto_activate_setting = settings_spec.resolve_value(
-            db, SettingDomain.billing, "auto_activate_pending_on_billing"
-        )
-        if auto_activate_setting is False:
-            auto_activate_pending = False
 
     run = BillingRun(
         run_at=run_at,
@@ -1047,20 +1017,15 @@ def run_invoice_cycle(
         ),
     )
 
-    prepaid_renewals_enabled = control_registry.is_enabled(
-        db, "billing.prepaid_service_renewals"
+    from app.services.prepaid_service_renewals import (
+        run_due_prepaid_service_renewals,
     )
-    prepaid_renewal_summary: dict[str, int | str] = {}
-    if prepaid_renewals_enabled:
-        from app.services.prepaid_service_renewals import (
-            run_due_prepaid_service_renewals,
-        )
 
-        prepaid_renewal_summary = run_due_prepaid_service_renewals(
-            db,
-            run_at=run_at,
-            dry_run=dry_run,
-        )
+    prepaid_renewal_summary: dict[str, int | str] = run_due_prepaid_service_renewals(
+        db,
+        run_at=run_at,
+        dry_run=dry_run,
+    )
 
     # Query billable active subscriptions. Network/account enforcement states
     # like blocked/suspended must not suppress invoicing: those accounts still
@@ -1186,28 +1151,27 @@ def run_invoice_cycle(
         # backdated invoice per missed period per run, double-billing periods
         # already settled before local billing cutover.
         # We fast-forward next_billing_at to the current period and bill only
-        # that. Set billing.bill_backdated_periods=true to restore arrears
-        # billing if an operator genuinely needs it.
+        # that. Historical arrears require an explicit reviewed repair rather
+        # than a mutable fleet-wide billing mode.
         if not is_pending and period_end <= run_at:
-            if not _setting_truthy(db, "bill_backdated_periods", default=False):
-                skipped_periods = 0
-                while period_end <= run_at:
-                    period_start = period_end
-                    period_end = _period_end(period_start, effective_cycle)
-                    skipped_periods += 1
-                subscription.next_billing_at = period_start
-                logger.info(
-                    "billing_fast_forward",
-                    extra={
-                        "run_id": str(run_uuid) if run_uuid else None,
-                        "subscription_id": str(subscription.id),
-                        "skipped_periods": skipped_periods,
-                        "new_period_start": period_start.isoformat(),
-                    },
-                )
-                if period_start > run_at:
-                    summary["skipped"] += 1
-                    continue
+            skipped_periods = 0
+            while period_end <= run_at:
+                period_start = period_end
+                period_end = _period_end(period_start, effective_cycle)
+                skipped_periods += 1
+            subscription.next_billing_at = period_start
+            logger.info(
+                "billing_fast_forward",
+                extra={
+                    "run_id": str(run_uuid) if run_uuid else None,
+                    "subscription_id": str(subscription.id),
+                    "skipped_periods": skipped_periods,
+                    "new_period_start": period_start.isoformat(),
+                },
+            )
+            if period_start > run_at:
+                summary["skipped"] += 1
+                continue
         end_at = _as_utc(subscription.end_at)
         start_at = _as_utc(subscription.start_at) or period_start
         if end_at and end_at <= period_start:
@@ -1439,17 +1403,10 @@ def run_invoice_cycle(
         # credit settlement below sees the open balance via its query.
         db.flush()
 
-        # Inline credit settlement is DISABLED by default. It was found to be
-        # unsafe on the migrated dataset: per-invoice balance_due/allocations are
-        # not authoritative (many invoices were paid from the account deposit
-        # with no invoice-linked allocation, and some allocations were synced
-        # without recomputing balance_due), so settling against local "open"
-        # invoices destroyed real credit on already-paid invoices. "Paid but
-        # walled" must be solved at the account level, not
-        # by per-invoice settlement here. Re-enable only after that redesign.
-        if newly_created_invoices and _setting_truthy(
-            db, "settle_credit_on_invoice_enabled", default=False
-        ):
+        # Canonical account credit is always offered to newly-created
+        # receivables. The settlement owner validates current invoice state and
+        # records structural allocation evidence; this is not a runtime option.
+        if newly_created_invoices:
             from contextlib import nullcontext
 
             from app.services.notification_suppression import suppress_notifications
@@ -1516,16 +1473,10 @@ def run_invoice_cycle(
                     event_exc,
                 )
 
-        # When the dedicated hourly notifications runner is enabled it owns
-        # pre-due reminders so they honour the configured send window. Policy
-        # dunning separately owns every overdue notification and consequence.
-        if _hourly_notifications_enabled(db):
-            summary["invoice_reminders_sent"] = 0
-        else:
-            notification_summary = run_billing_notifications(db, run_at)
-            summary["invoice_reminders_sent"] = int(
-                notification_summary.get("invoice_reminders_sent", 0)
-            )
+        # The permanent hourly notification runner owns pre-due reminders so
+        # they honour the configured send window. Policy dunning separately
+        # owns every overdue notification and consequence.
+        summary["invoice_reminders_sent"] = 0
         db.commit()
 
         summary["run_id"] = run_id_str
@@ -1928,19 +1879,12 @@ def generate_cancellation_credit(
 ) -> None:
     """Generate a credit note for unused days when a subscription is canceled mid-cycle.
 
-    Only generates if proration is enabled and the subscription has been billed
-    (has at least one invoice line). The credit covers the unused portion from
-    cancellation date to next_billing_at.
+    Generates when the subscription has been billed (has at least one invoice
+    line). The credit covers the unused portion from cancellation date to
+    next_billing_at.
     """
     from app.schemas.billing import CreditNoteIssuePreviewRequest
     from app.services.billing.credit_notes import CreditNotes
-
-    # Check if proration is enabled
-    proration_enabled = settings_spec.resolve_value(
-        db, SettingDomain.billing, "proration_enabled"
-    )
-    if proration_enabled is False:
-        return
 
     if not subscription.next_billing_at:
         return

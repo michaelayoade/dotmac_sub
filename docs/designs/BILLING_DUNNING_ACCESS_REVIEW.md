@@ -5,6 +5,12 @@ Scope reviewed: `origin/main` billing, collections/dunning, prepaid enforcement,
 subscription changes, schedulers, cleanup/reconciliation, notification guards,
 and catalog permissions risk.
 
+> Historical audit note: control and rollout statements in this dated review
+> describe the pre-cutover implementation. ADR 0003 and migration 398 supersede
+> the global/module/feature/scheduler enablement model. Account approval,
+> funding, coverage, quarantine, shields, grace, and provider capabilities
+> remain current facts.
+
 ## Executive Position
 
 The review originally found an inconsistency between prepaid write paths and
