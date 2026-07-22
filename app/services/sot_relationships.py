@@ -9002,7 +9002,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     ),
                     test_refs=(
                         "tests/test_support_services.py",
-                        "tests/test_support_status_transitions.py",
+                        "tests/test_ticket_status_transition.py",
                         "tests/test_support_automation.py",
                         "tests/test_ticket_assignment_engine.py",
                         "tests/architecture/test_support_ticket_sot_boundary.py",

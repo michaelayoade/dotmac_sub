@@ -163,6 +163,10 @@ def _configuration_command(name: str):
         def wrapped(db: Session, *args, **kwargs):
             if owner_command_active(db, owner=_OWNER):
                 return operation(db, *args, **kwargs)
+            if not owner_command_active(db):
+                from app.services.db_session_adapter import db_session_adapter
+
+                db_session_adapter.release_read_transaction(db)
             context = CommandContext.system(
                 actor="support-automation-admin",
                 scope=f"support.ticket_automation_rule:{name}",

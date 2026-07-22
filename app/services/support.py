@@ -111,6 +111,10 @@ def ticket_owner_command(name: str):
         def wrapped(db: Session, *args, **kwargs):
             if owner_command_active(db, owner="support.ticket_lifecycle"):
                 return operation(db, *args, **kwargs)
+            if not owner_command_active(db):
+                from app.services.db_session_adapter import db_session_adapter
+
+                db_session_adapter.release_read_transaction(db)
             actor = str(kwargs.get("actor_id") or "support-system")
             context = CommandContext.system(
                 actor=actor,
@@ -2136,13 +2140,14 @@ class Tickets:
         payload: TicketCommentCreate,
         actor_id: str | None = None,
         request=None,
+        mentioned_agent_ids: Sequence[UUID] = (),
     ) -> TicketComment:
         ticket = Tickets.get(db, ticket_id)
         comment = ticket_comments.create(
             db, ticket=ticket, payload=payload, actor_id=actor_id, request=request
         )
         Tickets._queue_mention_notifications(db, ticket, payload.body, actor_id)
-        if payload.mentioned_agent_ids:
+        if mentioned_agent_ids:
             from app.services import ticket_mentions
 
             ticket_mentions.notify_ticket_comment_mentions(
@@ -2151,7 +2156,7 @@ class Tickets:
                 ticket_number=ticket.number,
                 ticket_title=ticket.title,
                 comment_preview=payload.body[:300],
-                mentioned_agent_ids=[str(item) for item in payload.mentioned_agent_ids],
+                mentioned_agent_ids=[str(item) for item in mentioned_agent_ids],
                 actor_person_id=actor_id,
             )
         db.flush()
@@ -2174,20 +2179,6 @@ class Tickets:
                 db, ticket=ticket, payload=payload, actor_id=actor_id, request=request
             )
             Tickets._queue_mention_notifications(db, ticket, payload.body, actor_id)
-            if payload.mentioned_agent_ids:
-                from app.services import ticket_mentions
-
-                ticket_mentions.notify_ticket_comment_mentions(
-                    db,
-                    ticket_id=str(ticket.id),
-                    ticket_number=ticket.number,
-                    ticket_title=ticket.title,
-                    comment_preview=payload.body[:300],
-                    mentioned_agent_ids=[
-                        str(item) for item in payload.mentioned_agent_ids
-                    ],
-                    actor_person_id=actor_id,
-                )
             comments.append(comment)
         db.flush()
         for comment in comments:

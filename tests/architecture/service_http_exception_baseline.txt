@@ -41,7 +41,6 @@ app/services/comms_campaigns.py
 app/services/connector.py
 app/services/contracts.py
 app/services/crm_api.py
-app/services/crm_portal.py
 app/services/crud.py
 app/services/customer_location_requests.py
 app/services/customer_portal_context.py
@@ -160,7 +159,6 @@ app/services/subscription_lifecycle_commands.py
 app/services/system_jobs.py
 app/services/table_config.py
 app/services/team_inbox_widget.py
-app/services/ticket_assignment/admin.py
 app/services/tr069.py
 app/services/usage.py
 app/services/user_profile.py

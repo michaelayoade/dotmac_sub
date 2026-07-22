@@ -86,6 +86,10 @@ def _configuration_command(name: str):
         def wrapped(db: Session, *args, **kwargs):
             if owner_command_active(db, owner=_CONFIGURATION_OWNER):
                 return operation(db, *args, **kwargs)
+            if not owner_command_active(db):
+                from app.services.db_session_adapter import db_session_adapter
+
+                db_session_adapter.release_read_transaction(db)
             context = CommandContext.system(
                 actor="support-settings-admin",
                 scope=f"support.ticket_configuration:{name}",
@@ -198,7 +202,7 @@ def _write_list(
     )
     service = _settings_service()
     if getattr(service, "domain", None) is not None:
-        service.upsert_by_key(db, key, payload)
+        service.stage_upsert_by_key(db, key, payload)
         return
     domain_settings_service.settings.upsert_by_key(db, key, payload)
 
@@ -229,7 +233,7 @@ def _write_json(db: Session, *, key: str, value: Any) -> None:
     )
     service = _settings_service()
     if getattr(service, "domain", None) is not None:
-        service.upsert_by_key(db, key, payload)
+        service.stage_upsert_by_key(db, key, payload)
         return
     domain_settings_service.settings.upsert_by_key(db, key, payload)
 
@@ -245,7 +249,7 @@ def _write_bool(db: Session, *, key: str, value: bool) -> None:
     )
     service = _settings_service()
     if getattr(service, "domain", None) is not None:
-        service.upsert_by_key(db, key, payload)
+        service.stage_upsert_by_key(db, key, payload)
         return
     domain_settings_service.settings.upsert_by_key(db, key, payload)
 
@@ -263,7 +267,7 @@ def _write_optional_int(db: Session, *, key: str, value: int | None) -> None:
     )
     service = _settings_service()
     if getattr(service, "domain", None) is not None:
-        service.upsert_by_key(db, key, payload)
+        service.stage_upsert_by_key(db, key, payload)
         return
     domain_settings_service.settings.upsert_by_key(db, key, payload)
 

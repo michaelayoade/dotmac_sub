@@ -100,7 +100,7 @@ def test_historical_crm_provenance_has_gated_backfill_and_runbook() -> None:
     assert "crm_ticket_id" in migration
     assert "origin_ticket_id" in migration
     assert "raise RuntimeError" in migration
-    assert "UPDATE work_orders" in migration
+    assert "UPDATE work_order" in migration
     assert "crm_ticket_id = NULL" not in migration
     assert (ROOT / "docs/runbooks/TICKET_WORK_ORDER_PROVENANCE_CUTOVER.md").exists()
 

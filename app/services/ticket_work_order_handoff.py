@@ -214,6 +214,9 @@ def list_for_ticket(
 def issue_work_order(
     db: Session, command: TicketWorkOrderIssueCommand
 ) -> TicketWorkOrderIssueResult:
+    from app.services.db_session_adapter import db_session_adapter
+
+    db_session_adapter.release_read_transaction(db)
     return execute_owner_command(
         db,
         definition=_ISSUE_DEFINITION,

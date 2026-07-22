@@ -596,7 +596,6 @@ def build_ticket_comment_payload(
     is_internal: bool,
     actor_id: str | None,
     uploaded: list[dict],
-    mentioned_agent_ids: list[UUID] | None = None,
 ) -> TicketCommentCreate:
     return TicketCommentCreate(
         body=body,
@@ -604,7 +603,6 @@ def build_ticket_comment_payload(
         author_type=TicketCommentAuthorType.staff,
         author_system_user_id=parse_uuid_or_none(actor_id),
         attachments=[AttachmentMeta(**item) for item in uploaded],
-        mentioned_agent_ids=mentioned_agent_ids or [],
     )
 
 
@@ -790,7 +788,6 @@ def add_ticket_comment_from_form(
         is_internal=is_internal,
         actor_id=actor_id,
         uploaded=uploaded,
-        mentioned_agent_ids=mentioned_agent_ids,
     )
     db_session_adapter.release_read_transaction(db)
     comment = support_service.tickets.create_comment(
@@ -799,6 +796,7 @@ def add_ticket_comment_from_form(
         payload,
         actor_id=actor_id,
         request=request,
+        mentioned_agent_ids=mentioned_agent_ids,
     )
     return comment
 

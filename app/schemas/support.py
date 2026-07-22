@@ -256,7 +256,6 @@ class TicketCommentCreate(TicketCommentBase):
     author_person_id: UUID | None = None
     author_type: TicketCommentAuthorType | str | None = None
     author_system_user_id: UUID | None = None
-    mentioned_agent_ids: list[UUID] = Field(default_factory=list, exclude=True)
 
 
 class TicketCommentUpdate(BaseModel):
