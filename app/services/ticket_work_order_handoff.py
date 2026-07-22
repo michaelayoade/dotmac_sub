@@ -255,9 +255,7 @@ def _issue_work_order(
         raise TicketWorkOrderHandoffError(
             "ticket_not_found", "Ticket not found", kind="not_found"
         )
-    actor_uuid = _validate_issue_eligibility(
-        db, ticket, actor_id=command.actor_id
-    )
+    actor_uuid = _validate_issue_eligibility(db, ticket, actor_id=command.actor_id)
     subscriber_id = ticket.subscriber_id
     if subscriber_id is None:  # Defensive narrowing; eligibility rejects this above.
         raise TicketWorkOrderHandoffError(

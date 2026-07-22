@@ -13,9 +13,9 @@ from sqlalchemy.orm import Session
 from app.models.support import Ticket
 from app.schemas.support import TicketBulkUpdateItem, TicketBulkUpdateRequest
 from app.services import support as support_service
-from app.services.db_session_adapter import db_session_adapter
 from app.services import support_ticket_settings
 from app.services.bulk_actions import membership_scope_token, parse_bulk_selection
+from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 
 

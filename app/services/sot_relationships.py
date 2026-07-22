@@ -8470,7 +8470,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ConcernContract(
                             name="ticket assignment-rule configuration",
                             role=OwnerRole.AUTHORITATIVE_RECORD,
-                            input_names=("typed assignment-rule command", "assignment rules"),
+                            input_names=(
+                                "typed assignment-rule command",
+                                "assignment rules",
+                            ),
                             canonical_writer=(
                                 "support.ticket_assignment_rule_configuration"
                             ),
@@ -8515,7 +8518,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             ),
                         ),
                         mapping_owner="support settings web adapters",
-                        fail_closed_on=("invalid team/person target", "ambiguous rule identity"),
+                        fail_closed_on=(
+                            "invalid team/person target",
+                            "ambiguous rule identity",
+                        ),
                     ),
                     events=EventContract(
                         event_types=("ticket.assignment_rule_changed",),
@@ -8556,12 +8562,18 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ConcernContract(
                             name="ticket assignment-rule evaluation",
                             role=OwnerRole.POLICY,
-                            input_names=("canonical assignment rules", "ticket assignment facts"),
+                            input_names=(
+                                "canonical assignment rules",
+                                "ticket assignment facts",
+                            ),
                         ),
                         ConcernContract(
                             name="ticket assignment round-robin cursor",
                             role=OwnerRole.AUTHORITATIVE_RECORD,
-                            input_names=("canonical assignment rules", "assignment cursor state"),
+                            input_names=(
+                                "canonical assignment rules",
+                                "assignment cursor state",
+                            ),
                             canonical_writer="support.ticket_assignment_evaluation",
                         ),
                     ),
@@ -8647,7 +8659,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ConcernContract(
                             name="ticket automation-rule configuration",
                             role=OwnerRole.AUTHORITATIVE_RECORD,
-                            input_names=("typed automation-rule command", "automation rules"),
+                            input_names=(
+                                "typed automation-rule command",
+                                "automation rules",
+                            ),
                             canonical_writer=(
                                 "support.ticket_automation_rule_configuration"
                             ),
@@ -8724,7 +8739,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ConcernContract(
                             name="ticket automation-rule evaluation",
                             role=OwnerRole.POLICY,
-                            input_names=("canonical automation rules", "ticket automation facts"),
+                            input_names=(
+                                "canonical automation rules",
+                                "ticket automation facts",
+                            ),
                         ),
                     ),
                     authoritative_inputs=(
@@ -17068,7 +17086,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     errors=ErrorContract(
                         domain_codes=("support_ticket_bulk_projection_invalid",),
                         mapping_owner="admin support Ticket template/JSON adapters",
-                        fail_closed_on=("missing page membership", "missing permission"),
+                        fail_closed_on=(
+                            "missing page membership",
+                            "missing permission",
+                        ),
                     ),
                     migration=MigrationContract(
                         state=AuthorityMigrationState.COMPLETE,

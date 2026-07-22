@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import pytest
-from app.services.domain_errors import DomainError
 
 from app.schemas.support import TicketCreate
 from app.services import support as support_service
 from app.services import ticket_validation
+from app.services.domain_errors import DomainError
 
 
 def _payload(**overrides) -> TicketCreate:

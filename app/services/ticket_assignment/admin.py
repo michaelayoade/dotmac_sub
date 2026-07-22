@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import StrEnum
 from functools import wraps
 from uuid import UUID
@@ -11,9 +11,9 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.audit import AuditActorType
 from app.models.service_team import ServiceTeam
 from app.models.ticket_workflow import TicketAssignmentRule, TicketAssignmentStrategy
-from app.models.audit import AuditActorType
 from app.services.audit_adapter import stage_audit_event
 from app.services.domain_errors import DomainError
 from app.services.owner_commands import (
@@ -65,9 +65,7 @@ class TicketAssignmentRuleMatch:
             if values:
                 result[field] = list(values)
         if self.service_team_ids:
-            result["service_team_ids"] = [
-                str(value) for value in self.service_team_ids
-            ]
+            result["service_team_ids"] = [str(value) for value in self.service_team_ids]
         if self.assignee_person_id is not None:
             result["assignee_person_id"] = str(self.assignee_person_id)
             result["assignment_target"] = str(

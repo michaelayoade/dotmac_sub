@@ -12,8 +12,8 @@ from starlette.datastructures import MutableHeaders, UploadFile
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from app.services.ticket_work_order_handoff import TicketWorkOrderHandoffError
 from app.services.domain_errors import DomainError
+from app.services.ticket_work_order_handoff import TicketWorkOrderHandoffError
 from app.services.unit_of_work import ConcurrencyConflict
 from app.services.vendor_portal_errors import VendorPortalOperationError
 from app.services.work_order_errors import WorkOrderCommandError

@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy.orm import Session
 
+from app.models.audit import AuditActorType
 from app.models.domain_settings import SettingDomain
 from app.models.service_team import ServiceTeam, ServiceTeamMember, ServiceTeamType
 from app.models.subscription_engine import SettingValueType
@@ -14,7 +15,6 @@ from app.models.support import TicketStatus
 from app.models.ticket_workflow import TicketAssignmentRule, TicketAssignmentStrategy
 from app.schemas.settings import DomainSettingUpdate
 from app.services import domain_settings as domain_settings_service
-from app.models.audit import AuditActorType
 from app.services.audit_adapter import stage_audit_event
 from app.services.domain_errors import DomainError
 from app.services.owner_commands import (

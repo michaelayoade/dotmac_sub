@@ -155,9 +155,7 @@ def _typed_match_config(config: dict[str, object]):
         tags_any=strings("tags_any"),
         assignee_person_id=UUID(assignee) if assignee else None,
         assignment_target=(
-            assignment_admin_service.TicketAssignmentTarget(target)
-            if target
-            else None
+            assignment_admin_service.TicketAssignmentTarget(target) if target else None
         ),
     )
 

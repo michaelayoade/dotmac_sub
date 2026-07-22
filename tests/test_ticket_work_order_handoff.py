@@ -82,9 +82,7 @@ def _issue(
         request=payload or _payload(),
         actor_id=actor_id,
         actor_type=ticket_work_order_handoff.HandoffActorType.SYSTEM_USER,
-        permissions=frozenset(
-            {"support:ticket:update", "operations:dispatch:write"}
-        ),
+        permissions=frozenset({"support:ticket:update", "operations:dispatch:write"}),
         context=CommandContext.system(
             actor=str(actor_id),
             scope=ticket_work_order_handoff.WORK_ORDER_ISSUE_SCOPE,

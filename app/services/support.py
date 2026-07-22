@@ -19,6 +19,7 @@ from app.models.notification import NotificationChannel, NotificationStatus
 from app.models.sales import Lead
 from app.models.subscriber import Subscriber
 from app.models.support import (
+    AutomationTrigger,
     Ticket,
     TicketAccessToken,
     TicketAssignee,
@@ -55,8 +56,8 @@ from app.services.customer_identity_resolution import (
     resolve_customer_identity,
 )
 from app.services.customer_support_links import ticket_customer_link_filter
-from app.services.dynamic_filters import FilterValidationError
 from app.services.domain_errors import DomainError
+from app.services.dynamic_filters import FilterValidationError
 from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.owner_commands import (
@@ -137,6 +138,7 @@ def ticket_owner_command(name: str):
         return wrapped
 
     return decorate
+
 
 # Ticket.status is a free-form string column; these guard every write at the
 # boundary (no schema migration). closed/canceled/merged are terminal — they
@@ -1028,12 +1030,8 @@ class Tickets:
         elif result.assignment_target == "technician" and assignee_id:
             if not ticket.assigned_to_person_id:
                 ticket.assigned_to_person_id = assignee_id
-            if not any(
-                row.person_id == assignee_id for row in ticket.assignees
-            ):
-                db.add(
-                    TicketAssignee(ticket_id=ticket.id, person_id=assignee_id)
-                )
+            if not any(row.person_id == assignee_id for row in ticket.assignees):
+                db.add(TicketAssignee(ticket_id=ticket.id, person_id=assignee_id))
         return result.as_dict()
 
     @staticmethod
@@ -1045,7 +1043,7 @@ class Tickets:
 
     @staticmethod
     def _apply_automation_rules(
-        db: Session, ticket: Ticket, trigger: "AutomationTrigger"
+        db: Session, ticket: Ticket, trigger: AutomationTrigger
     ) -> tuple[str, ...]:
         """Apply policy proposals inside the canonical Ticket writer."""
         from app.models.support import AutomationActionType
@@ -1077,9 +1075,7 @@ class Tickets:
                         continue
             elif proposal.action_type == AutomationActionType.set_due_in_hours:
                 if proposal.due_in_hours is not None:
-                    ticket.due_at = _now() + timedelta(
-                        hours=proposal.due_in_hours
-                    )
+                    ticket.due_at = _now() + timedelta(hours=proposal.due_in_hours)
             elif proposal.action_type == AutomationActionType.add_tag:
                 if proposal.tag:
                     tags = list(ticket.tags or [])
@@ -1320,11 +1316,8 @@ class Tickets:
         Tickets._apply_ncc_categorisation(ticket, data)
 
         from app.models.support import AutomationTrigger
-        from app.services import support_automation
 
-        Tickets._apply_automation_rules(
-            db, ticket, AutomationTrigger.ticket_created
-        )
+        Tickets._apply_automation_rules(db, ticket, AutomationTrigger.ticket_created)
 
         Tickets._queue_notifications_for_assignments(db, ticket, actor_id)
 
@@ -2005,7 +1998,6 @@ class Tickets:
                 metadata={"from": before["status"], "to": after["status"]},
             )
             from app.models.support import AutomationTrigger
-            from app.services import support_automation
 
             Tickets._apply_automation_rules(
                 db, ticket, AutomationTrigger.status_changed
@@ -2021,7 +2013,6 @@ class Tickets:
                 metadata={"from": before["priority"], "to": after["priority"]},
             )
             from app.models.support import AutomationTrigger
-            from app.services import support_automation
 
             Tickets._apply_automation_rules(
                 db, ticket, AutomationTrigger.priority_changed

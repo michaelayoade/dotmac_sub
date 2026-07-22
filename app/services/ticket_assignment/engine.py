@@ -7,16 +7,16 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.models.project import Project, ProjectTask, ProjectTaskAssignee
 from app.models.audit import AuditActorType
+from app.models.project import Project, ProjectTask, ProjectTaskAssignee
 from app.models.support import Ticket
 from app.models.ticket_workflow import (
     TicketAssignmentCounter,
     TicketAssignmentRule,
     TicketAssignmentStrategy,
 )
-from app.services.common import coerce_uuid
 from app.services.audit_adapter import stage_audit_event
+from app.services.common import coerce_uuid
 from app.services.ticket_assignment.rules import (
     build_context,
     build_project_context,
@@ -330,9 +330,7 @@ def auto_assign_ticket_all(
         if authoritative_result:
             results.append(authoritative_result)
             continue
-        direct_result = _propose_direct_ticket_assignment(
-            ticket=ticket, rule=rule
-        )
+        direct_result = _propose_direct_ticket_assignment(ticket=ticket, rule=rule)
         if direct_result:
             results.append(direct_result)
             continue

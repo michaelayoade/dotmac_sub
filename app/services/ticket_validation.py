@@ -33,6 +33,7 @@ from app.services.domain_errors import DomainError
 class TicketValidationError(DomainError):
     """Transport-neutral Ticket creation policy failure."""
 
+
 _OPEN_STATUSES = {
     TicketStatus.new.value,
     TicketStatus.open.value,

@@ -4,7 +4,6 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from app.services.domain_errors import DomainError
 
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.notification import (
@@ -36,7 +35,6 @@ from app.schemas.support import (
     TicketUpdate,
 )
 from app.services import support as support_service
-from app.services import support_automation
 from app.services import support_automation_rules
 from app.services import support_ticket_settings as support_ticket_settings_service
 from app.services import web_support_tickets as web_support_tickets_service
@@ -44,6 +42,7 @@ from app.services.customer_identity_resolution import (
     rebuild_identity_index_for_subscriber,
 )
 from app.services.customer_support_links import ticket_customer_any_link_filter
+from app.services.domain_errors import DomainError
 
 
 def _ticket_payload(subscriber_id):
@@ -660,9 +659,7 @@ def test_automation_added_field_visit_tag_does_not_issue_work(db_session, subscr
             ticket_type="site_visit"
         ),
         action_type=AutomationActionType.add_tag,
-        action_value=support_automation_rules.TicketAutomationAction(
-            tag="field_visit"
-        ),
+        action_value=support_automation_rules.TicketAutomationAction(tag="field_visit"),
     )
 
     ticket = support_service.tickets.create(

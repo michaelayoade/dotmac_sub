@@ -1,6 +1,7 @@
 """Support-satisfaction (CSAT) rating on resolved/closed tickets."""
 
 import pytest
+
 from app.services.domain_errors import DomainError
 
 

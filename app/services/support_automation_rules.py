@@ -90,9 +90,7 @@ class TicketAutomationAction:
             return cls(service_team_id=_optional_uuid(values.get("service_team_id")))
         if action_type is AutomationActionType.assign_technician:
             return cls(
-                technician_person_id=_optional_uuid(
-                    values.get("technician_person_id")
-                )
+                technician_person_id=_optional_uuid(values.get("technician_person_id"))
             )
         if action_type is AutomationActionType.set_priority:
             return cls(priority=_optional_text(values.get("priority")))

@@ -115,6 +115,4 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    raise RuntimeError(
-        "CRM Ticket-to-Work-Order provenance cutover is irreversible"
-    )
+    raise RuntimeError("CRM Ticket-to-Work-Order provenance cutover is irreversible")

@@ -15,8 +15,7 @@ from app.models.support import (
     TicketPriority,
     TicketStatus,
 )
-from app.services import support_automation
-from app.services import support_automation_rules
+from app.services import support_automation, support_automation_rules
 from app.services import support_ticket_settings as support_ticket_settings_service
 from app.web.admin import support_automation as admin_support_automation
 

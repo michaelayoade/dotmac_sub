@@ -37,9 +37,9 @@ from app.services import (
 )
 from app.services import support as support_service
 from app.services import support_ticket_settings as support_ticket_settings_service
-from app.services.file_storage import file_uploads
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
+from app.services.file_storage import file_uploads
 from app.services.list_query import (
     ListDefinition,
     ListFieldDefinition,
@@ -54,6 +54,7 @@ logger = logging.getLogger(__name__)
 
 class WebSupportTicketInputError(DomainError):
     """Transport-neutral validation error from the admin Ticket adapter service."""
+
 
 ALLOWED_ATTACHMENT_TYPES = {
     "image/png",

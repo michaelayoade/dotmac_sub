@@ -6,7 +6,6 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
-from app.services.domain_errors import DomainError
 
 from app.models.catalog import (
     AccessType,
@@ -34,6 +33,7 @@ from app.services import party as party_service
 from app.services import sales as sales_service
 from app.services import sales_orders, support
 from app.services.customer_lifecycle_audit import build_customer_lifecycle_audit
+from app.services.domain_errors import DomainError
 from app.services.sales import lifecycle as lead_lifecycle
 from scripts.migration.audit_customer_lifecycle import _set_transaction_read_only
 

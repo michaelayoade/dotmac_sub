@@ -12,15 +12,15 @@ import logging
 from collections.abc import Iterable
 from typing import Any
 
-from fastapi import HTTPException, Request
+from fastapi import Request
 from sqlalchemy.orm import Session
 
 from app.models.subscriber import Subscriber
 from app.models.support import TicketCommentAuthorType
 from app.services.common import coerce_uuid
+from app.services.crm_client import CRMClientError
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
-from app.services.crm_client import CRMClientError
 from app.services.integrations.crm_capability import capability_client
 from app.services.session_store import get_session_redis
 from app.services.status_presentation import ticket_status_presentation
