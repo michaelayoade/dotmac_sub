@@ -43,6 +43,7 @@ from app.services.bandwidth import add_directions_to_series, bandwidth_samples
 from app.services.customer_context import (
     optional_customer_account_id,
     optional_customer_subscriber_id,
+    require_customer_account_id,
 )
 from app.services.customer_portal_context import (
     emit_customer_event,
@@ -1182,20 +1183,42 @@ def customer_reboot_service_ont(
     if _is_read_only_customer(customer):
         return _read_only_response(request, customer, active_page="services")
 
-    from app.services.customer_portal_flow_services import (
-        reboot_customer_subscription_ont,
+    from app.services.customer_device_commands import (
+        CustomerDeviceCommandError,
+        reboot_subscription_device,
     )
 
-    ok, message = reboot_customer_subscription_ont(db, customer, str(subscription_id))
-    if ok:
+    account_id = require_customer_account_id(db, customer)
+    try:
+        outcome = reboot_subscription_device(
+            db,
+            subscriber_id=UUID(str(account_id)),
+            subscription_id=subscription_id,
+            actor_id=str(customer.get("id") or account_id),
+        )
+        ok, message = outcome.success, outcome.message
+    except CustomerDeviceCommandError as exc:
+        outcome = None
+        ok, message = False, str(exc)
+    if outcome is not None and outcome.success:
         _emit_customer_event(
             db,
             "customer_service_reboot_requested",
             {"subscription_id": str(subscription_id)},
         )
     status = "rebooted" if ok else "reboot_error"
+    evidence = ""
+    if outcome is not None:
+        evidence = (
+            f"&command={outcome.command.value}&command_status={outcome.status.value}"
+            f"&device_id={outcome.device_id}"
+            f"&operation_id={outcome.operation_id or ''}"
+        )
     return RedirectResponse(
-        url=f"/portal/services/{subscription_id}?{status}=true&message={quote_plus(message)}",
+        url=(
+            f"/portal/services/{subscription_id}?{status}=true"
+            f"&message={quote_plus(message)}{evidence}"
+        ),
         status_code=303,
     )
 
@@ -1216,27 +1239,48 @@ def customer_update_service_wifi(
     if _is_read_only_customer(customer):
         return _read_only_response(request, customer, active_page="services")
 
-    from app.services.customer_portal_flow_services import (
-        update_customer_subscription_wifi,
+    from app.services.customer_device_commands import (
+        CustomerDeviceCommandError,
+        update_subscription_wifi,
     )
 
-    ok, message = update_customer_subscription_wifi(
-        db,
-        customer,
-        str(subscription_id),
-        ssid=ssid,
-        password=password,
-        password_confirm=password_confirm,
-    )
-    if ok:
+    account_id = require_customer_account_id(db, customer)
+    try:
+        if password.strip() != password_confirm.strip():
+            raise CustomerDeviceCommandError(
+                "wifi_password_mismatch", "WiFi passwords do not match"
+            )
+        outcome = update_subscription_wifi(
+            db,
+            subscriber_id=UUID(str(account_id)),
+            subscription_id=subscription_id,
+            actor_id=str(customer.get("id") or account_id),
+            ssid=ssid,
+            password=password.strip() or None,
+        )
+        ok, message = outcome.success, outcome.message
+    except CustomerDeviceCommandError as exc:
+        outcome = None
+        ok, message = False, str(exc)
+    if outcome is not None and outcome.success:
         _emit_customer_event(
             db,
             "customer_wifi_updated",
             {"subscription_id": str(subscription_id), "ssid_updated": True},
         )
     status = "wifi_updated" if ok else "wifi_error"
+    evidence = ""
+    if outcome is not None:
+        evidence = (
+            f"&command={outcome.command.value}&command_status={outcome.status.value}"
+            f"&device_id={outcome.device_id}"
+            f"&operation_id={outcome.operation_id or ''}"
+        )
     return RedirectResponse(
-        url=f"/portal/services/{subscription_id}?{status}=true&message={quote_plus(message)}",
+        url=(
+            f"/portal/services/{subscription_id}?{status}=true"
+            f"&message={quote_plus(message)}{evidence}"
+        ),
         status_code=303,
     )
 

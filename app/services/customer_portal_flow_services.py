@@ -43,7 +43,6 @@ from app.services.customer_portal_flow_common import (
 )
 from app.services.portal_account_health import build_portal_account_health
 from app.services.provisioning_lifecycle import latest_readiness
-from app.services.web_network_ont_actions import device_actions as ont_device_actions
 
 logger = logging.getLogger(__name__)
 
@@ -1186,38 +1185,24 @@ def reboot_customer_subscription_ont(
     subscription_id: str,
 ) -> tuple[bool, str]:
     """Reboot the active ONT associated with a customer's subscription."""
-    subscription = catalog_service.subscriptions.get(
-        db=db, subscription_id=subscription_id
-    )
-    if not subscription:
-        return False, "Subscription not found"
-
     account_id = optional_customer_account_id(db, customer)
-    if not account_id or str(subscription.subscriber_id) != str(account_id):
+    if not account_id:
         return False, "Subscription not found"
-    if subscription.status != SubscriptionStatus.active:
-        return False, "Only active services can be rebooted"
-
-    ont = _resolve_customer_subscription_ont(db, subscription)
-    if ont is None:
-        return False, "No active ONT is linked to this service"
-
-    remaining = _ont_reboot_cooldown_remaining(db, str(ont.id))
-    if remaining > 0:
-        minutes = max(1, -(-remaining // 60))
-        return False, (
-            "Your device was restarted recently. Please wait about "
-            f"{minutes} minute{'s' if minutes != 1 else ''} before trying again."
-        )
-
-    actor = f"customer:{customer.get('id') or account_id}"
-    result = ont_device_actions.execute_reboot(
-        db,
-        str(ont.id),
-        initiated_by=actor,
-        request=None,
+    from app.services.customer_device_commands import (
+        CustomerDeviceCommandError,
+        reboot_subscription_device,
     )
-    return bool(result.success), str(result.message or "Reboot request submitted")
+
+    try:
+        outcome = reboot_subscription_device(
+            db,
+            subscriber_id=coerce_uuid(account_id),
+            subscription_id=coerce_uuid(subscription_id),
+            actor_id=str(customer.get("id") or account_id),
+        )
+    except CustomerDeviceCommandError as exc:
+        return False, str(exc)
+    return outcome.success, outcome.message
 
 
 def update_customer_subscription_wifi(
@@ -1230,41 +1215,33 @@ def update_customer_subscription_wifi(
     password_confirm: str | None = None,
 ) -> tuple[bool, str]:
     """Update customer-managed WiFi SSID/password for a linked active ONT."""
-    subscription = catalog_service.subscriptions.get(
-        db=db, subscription_id=subscription_id
-    )
-    if not subscription:
-        return False, "Subscription not found"
     account_id = optional_customer_account_id(db, customer)
-    if not account_id or str(subscription.subscriber_id) != str(account_id):
+    if not account_id:
         return False, "Subscription not found"
-    if subscription.status != SubscriptionStatus.active:
-        return False, "Only active services can update WiFi settings"
 
     ssid_value = str(ssid or "").strip()
     password_value = str(password or "").strip()
     password_confirm_value = str(password_confirm or "").strip()
-    if not ssid_value or len(ssid_value) > 32:
-        return False, "WiFi name must be 1-32 characters"
     if password_value or password_confirm_value:
         if password_value != password_confirm_value:
             return False, "WiFi passwords do not match"
-        if not (8 <= len(password_value) <= 63):
-            return False, "WiFi password must be 8-63 characters"
-
-    ont = _resolve_customer_subscription_ont(db, subscription)
-    if ont is None:
-        return False, "No active ONT is linked to this service"
-
-    from app.services.network.ont_features import OntFeatureService
-
-    result = OntFeatureService.set_wifi_config(
-        db,
-        str(ont.id),
-        ssid=ssid_value,
-        password=password_value or None,
+    from app.services.customer_device_commands import (
+        CustomerDeviceCommandError,
+        update_subscription_wifi,
     )
-    return bool(result.success), str(result.message or "WiFi update submitted")
+
+    try:
+        outcome = update_subscription_wifi(
+            db,
+            subscriber_id=coerce_uuid(account_id),
+            subscription_id=coerce_uuid(subscription_id),
+            actor_id=str(customer.get("id") or account_id),
+            ssid=ssid_value,
+            password=password_value or None,
+        )
+    except CustomerDeviceCommandError as exc:
+        return False, str(exc)
+    return outcome.success, outcome.message
 
 
 def _resolve_customer_subscription_ont(

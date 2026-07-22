@@ -146,10 +146,15 @@ Completed in this slice:
   `customer_hold` lock history. Customer, admin, and automatic-expiry adapters
   now delegate to the same locked, reviewed-head, idempotent command and retain
   the exact enforcement-lock identifier in the outcome.
+- Customer reboot and Wi-Fi updates now enter one subscription-scoped command
+  boundary. It proves the authenticated subscriber, active subscription, and
+  exact active non-UISP ONT assignment before invoking the network operation
+  ledger. Web and `/api/v1/me` expose the same typed command, status,
+  subscription, device, operation, and message outcome; mobile provides both
+  actions and renders that canonical outcome without inferring device state.
 
 Still required before this lifecycle is complete:
 
-- expose scoped reboot/Wi-Fi command outcomes consistently on web and mobile;
 - remove the remaining superseded customer-route decisions and add the operator
   reconciliation surface for interrupted execution-chain states.
 

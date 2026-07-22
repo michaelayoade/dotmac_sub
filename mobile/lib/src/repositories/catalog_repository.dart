@@ -5,6 +5,7 @@ import 'package:dio/dio.dart';
 import '../core/http.dart';
 import '../models/addon.dart';
 import '../models/account_health.dart';
+import '../models/device_command.dart';
 import '../models/page.dart';
 import '../models/plan_change.dart';
 import '../models/subscription.dart';
@@ -41,6 +42,32 @@ class CatalogRepository {
     return AccountHealth.fromJson((data as Map).cast<String, dynamic>());
   }
 
+  /// Reboot the exact device currently assigned to this signed-in service.
+  Future<DeviceCommandOutcome> rebootDevice(String subscriptionId) async {
+    final data = await guard(
+      () => dio.post('/me/subscriptions/$subscriptionId/device/reboot'),
+    );
+    return DeviceCommandOutcome.fromJson((data as Map).cast<String, dynamic>());
+  }
+
+  /// Apply and verify Wi-Fi settings on the exact assigned device.
+  Future<DeviceCommandOutcome> updateWifi(
+    String subscriptionId, {
+    required String ssid,
+    String? password,
+  }) async {
+    final data = await guard(
+      () => dio.post(
+        '/me/subscriptions/$subscriptionId/device/wifi',
+        data: {
+          'ssid': ssid,
+          if (password != null && password.isNotEmpty) 'password': password,
+        },
+      ),
+    );
+    return DeviceCommandOutcome.fromJson((data as Map).cast<String, dynamic>());
+  }
+
   /// GET /subscriptions/{id}
   Future<Subscription> subscription(String id) async {
     final data = await guard(() => dio.get('/subscriptions/$id'));
@@ -56,8 +83,11 @@ class CatalogRepository {
   }
 
   /// GET …/service-change/quote — exact plan and delivery quote.
-  Future<PlanChangeQuote> planChangeQuote(String subscriptionId, String offerId,
-      {String? targetServiceAddressId}) async {
+  Future<PlanChangeQuote> planChangeQuote(
+    String subscriptionId,
+    String offerId, {
+    String? targetServiceAddressId,
+  }) async {
     final data = await guard(
       () => dio.get(
         '/me/subscriptions/$subscriptionId/service-change/quote',
@@ -103,7 +133,8 @@ class CatalogRepository {
     int quantity,
     String previewFingerprint,
   ) async {
-    final key = 'addon-${DateTime.now().microsecondsSinceEpoch}-'
+    final key =
+        'addon-${DateTime.now().microsecondsSinceEpoch}-'
         '${Random().nextInt(1 << 32)}';
     final data = await guard(
       () => dio.post(
@@ -136,7 +167,8 @@ class CatalogRepository {
     String? fieldQuoteFingerprint,
     String? notes,
   }) async {
-    final key = 'plan-${DateTime.now().microsecondsSinceEpoch}-'
+    final key =
+        'plan-${DateTime.now().microsecondsSinceEpoch}-'
         '${Random().nextInt(1 << 32)}';
     final data = await guard(
       () => dio.post(

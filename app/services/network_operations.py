@@ -900,6 +900,9 @@ def run_tracked_action(
 
     try:
         result = action_fn()
+        result_data = dict(getattr(result, "data", None) or {})
+        result_data.setdefault("operation_id", str(op.id))
+        result.data = result_data
         try:
             if getattr(result, "waiting", False):
                 waiting_reason = (getattr(result, "data", None) or {}).get(
@@ -908,7 +911,7 @@ def run_tracked_action(
                 network_operations.mark_waiting(db, str(op.id), str(waiting_reason))
             elif getattr(result, "success", False):
                 network_operations.mark_succeeded(
-                    db, str(op.id), output_payload=getattr(result, "data", None)
+                    db, str(op.id), output_payload=result_data
                 )
             else:
                 network_operations.mark_failed(
@@ -934,3 +937,8 @@ def run_tracked_action(
             except Exception as rb_err:
                 logger.debug("Rollback also failed: %s", rb_err)
         raise
+
+
+def commit_tracked_action(db: Session) -> None:
+    """Commit a completed synchronous operation and its terminal evidence."""
+    db.commit()

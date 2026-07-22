@@ -117,13 +117,13 @@ def test_customer_reboot_delegates_to_tracked_ont_action(db_session, monkeypatch
     subscriber, subscription, ont = _active_subscription_with_ont(db_session)
     calls = []
 
-    def fake_execute_reboot(db, ont_id, *, initiated_by=None, request=None):
-        calls.append((ont_id, initiated_by, request))
+    def fake_execute_reboot(db, ont_id):
+        calls.append(ont_id)
         return SimpleNamespace(success=True, message="TR-069 reboot sent")
 
     monkeypatch.setattr(
-        "app.services.customer_portal_flow_services.ont_device_actions.execute_reboot",
-        fake_execute_reboot,
+        "app.services.customer_device_commands.OntActions.reboot",
+        staticmethod(fake_execute_reboot),
     )
 
     ok, message = reboot_customer_subscription_ont(
@@ -134,7 +134,7 @@ def test_customer_reboot_delegates_to_tracked_ont_action(db_session, monkeypatch
 
     assert ok is True
     assert message == "TR-069 reboot sent"
-    assert calls == [(str(ont.id), "customer:customer-user-1", None)]
+    assert calls == [str(ont.id)]
 
 
 def test_customer_wifi_update_delegates_to_reconciled_wifi_action(
@@ -206,7 +206,7 @@ def test_customer_reboot_blocked_during_cooldown(db_session, monkeypatch):
 
     calls = []
     monkeypatch.setattr(
-        "app.services.customer_portal_flow_services.ont_device_actions.execute_reboot",
+        "app.services.customer_device_commands.OntActions.reboot",
         lambda *a, **k: (
             calls.append(1) or SimpleNamespace(success=True, message="sent")
         ),
@@ -247,7 +247,7 @@ def test_customer_reboot_allowed_after_cooldown(db_session, monkeypatch):
     db_session.commit()
 
     monkeypatch.setattr(
-        "app.services.customer_portal_flow_services.ont_device_actions.execute_reboot",
+        "app.services.customer_device_commands.OntActions.reboot",
         lambda *a, **k: SimpleNamespace(success=True, message="sent"),
     )
 
@@ -281,7 +281,7 @@ def test_failed_reboot_does_not_arm_cooldown(db_session, monkeypatch):
     db_session.commit()
 
     monkeypatch.setattr(
-        "app.services.customer_portal_flow_services.ont_device_actions.execute_reboot",
+        "app.services.customer_device_commands.OntActions.reboot",
         lambda *a, **k: SimpleNamespace(success=True, message="sent"),
     )
 
