@@ -47,23 +47,25 @@ class CatalogRepository {
     return Subscription.fromJson(data as Map<String, dynamic>);
   }
 
-  /// GET /me/subscriptions/{id}/plan-change — plans the customer can switch to.
+  /// GET /me/subscriptions/{id}/service-change — plans and addresses available.
   Future<PlanChangeOptions> planChangeOptions(String subscriptionId) async {
     final data = await guard(
-      () => dio.get('/me/subscriptions/$subscriptionId/plan-change'),
+      () => dio.get('/me/subscriptions/$subscriptionId/service-change'),
     );
     return PlanChangeOptions.fromJson(data as Map<String, dynamic>);
   }
 
-  /// GET …/plan-change/quote — prorated quote for one target offer.
-  Future<PlanChangeQuote> planChangeQuote(
-    String subscriptionId,
-    String offerId,
-  ) async {
+  /// GET …/service-change/quote — exact plan and delivery quote.
+  Future<PlanChangeQuote> planChangeQuote(String subscriptionId, String offerId,
+      {String? targetServiceAddressId}) async {
     final data = await guard(
       () => dio.get(
-        '/me/subscriptions/$subscriptionId/plan-change/quote',
-        queryParameters: {'offer_id': offerId},
+        '/me/subscriptions/$subscriptionId/service-change/quote',
+        queryParameters: {
+          'offer_id': offerId,
+          if (targetServiceAddressId != null)
+            'target_service_address_id': targetServiceAddressId,
+        },
       ),
     );
     return PlanChangeQuote.fromJson((data as Map).cast<String, dynamic>());
@@ -124,25 +126,34 @@ class CatalogRepository {
     );
   }
 
-  /// POST …/plan-change — submit a plan-change request.
-  Future<void> submitPlanChange(
+  /// POST …/service-change — confirm the reviewed service change.
+  Future<PlanChangeResult> submitPlanChange(
     String subscriptionId, {
     required String offerId,
     required String previewFingerprint,
+    required DateTime previewEffectiveAt,
+    String? targetServiceAddressId,
+    String? fieldQuoteFingerprint,
     String? notes,
   }) async {
     final key = 'plan-${DateTime.now().microsecondsSinceEpoch}-'
         '${Random().nextInt(1 << 32)}';
-    await guard(
+    final data = await guard(
       () => dio.post(
-        '/me/subscriptions/$subscriptionId/plan-change',
+        '/me/subscriptions/$subscriptionId/service-change',
         data: {
           'offer_id': offerId,
           'preview_fingerprint': previewFingerprint,
+          'preview_effective_at': previewEffectiveAt.toUtc().toIso8601String(),
+          if (targetServiceAddressId != null)
+            'target_service_address_id': targetServiceAddressId,
+          if (fieldQuoteFingerprint != null)
+            'field_quote_fingerprint': fieldQuoteFingerprint,
           'idempotency_key': key,
           if (notes != null) 'notes': notes,
         },
       ),
     );
+    return PlanChangeResult.fromJson((data as Map).cast<String, dynamic>());
   }
 }

@@ -3,8 +3,8 @@
 ## Decision
 
 `app.services.portal_account_health` is the read-only owner of the first-viewport
-Account/Service Health projection used by Customer Portal, Reseller Portal, and
-the customer mobile app. It composes authoritative owners; it does not poll
+Account/Service Health projection used by Customer Portal, Reseller Portal,
+Customer 360, and the customer mobile app. It composes authoritative owners; it does not poll
 equipment, mutate lifecycle state, infer financial totals in a client, or create
 a second outage decision.
 
@@ -17,6 +17,9 @@ The projection answers, for one exact subscriber account:
 - each operationally-current service's lifecycle and access decision;
 - subscription-scoped RADIUS state, binding, IP, NAS evidence, and freshness;
 - customer-safe connection/access-medium and area-outage diagnosis;
+- any active plan-change intent, its target/effective date, and the owner-
+  classified delivery mode, target address, payment/delivery state, and exact
+  one-time field charge when applicable;
 - charge/lapse dates and the canonical customer action.
 
 Availability is explicit through `StateValue`. Unknown, unavailable, stale,
@@ -31,6 +34,7 @@ The owner reads:
 - receivables and prepaid funding from `customer.financial_position`;
 - usability, reason, dates, and action from `customer.service_status`;
 - live-session binding/freshness from `network.radius_sessions`;
+- pending service-change intent from `service_intent.subscription_lifecycle`;
 - customer-safe connection/outage diagnosis from `network.connection_health`;
 - semantic labels/tones/icons from `ui.status_presentation`.
 
@@ -46,6 +50,8 @@ OLT, ONT, NAS, or RADIUS polling.
   subscription after the existing ownership check.
 - Reseller account detail performs its reseller/account scope check before
   building the projection and uses the same macros.
+- Admin Customer 360 renders the same service-health strip before its tabs;
+  it does not maintain an independent connection or change-status summary.
 - Mobile calls `GET /api/v1/me/account-health` and renders the transport schema
   in `app.schemas.portal_account_health`.
 
@@ -86,6 +92,6 @@ cohort.
 
 - financial currency-lane and unavailable-versus-zero tests;
 - exact/unbound multi-service RADIUS binding and non-leakage tests;
-- shared Customer/Reseller template boundary tests;
+- shared Customer/Reseller/Customer 360 template boundary tests;
 - API route retirement and mobile Account Health model tests;
 - template compilation, SOT manifest, and focused backend/mobile tests.

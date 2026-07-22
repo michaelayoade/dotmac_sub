@@ -1,6 +1,7 @@
 {% extends "layouts/admin.html" %}
 {% from "components/ui/macros.html" import status_badge, status_presentation_badge %}
 {% from "components/ui/record.html" import subscriber_hero %}
+{% from "components/portal/account_health.html" import service_health_strip %}
 
 {% block title %}{{ customer_name }} - Customer - Admin{% endblock %}
 
@@ -62,6 +63,9 @@
         </a>
     {% endcall %}
     {% endif %}
+
+    {# Canonical first-line support view shared with Customer and Reseller portals. #}
+    {{ service_health_strip(account_health, "/admin/catalog/subscriptions/") }}
 
     <!-- Tab Navigation -->
     <div class="border-b border-slate-200 dark:border-slate-700">

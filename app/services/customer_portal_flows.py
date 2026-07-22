@@ -14,12 +14,11 @@ from app.services.customer_portal_flow_billing import (
 )
 from app.services.customer_portal_flow_changes import (
     _get_offer_recurring_price,
-    apply_instant_plan_change,
+    confirm_service_change,
     get_change_plan_error_context,
     get_change_plan_page,
     get_change_requests_page,
     get_plan_change_quote,
-    request_plan_migration,
     submit_change_plan,
 )
 from app.services.customer_portal_flow_common import (
@@ -88,6 +87,5 @@ __all__ = [
     "verify_and_record_payment",
     "verify_and_record_topup",
     "_get_offer_recurring_price",
-    "apply_instant_plan_change",
-    "request_plan_migration",
+    "confirm_service_change",
 ]

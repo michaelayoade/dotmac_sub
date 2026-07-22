@@ -1,6 +1,7 @@
 import json
 import uuid
 from decimal import Decimal
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -191,6 +192,20 @@ def test_customer_detail_includes_crm_sync_link_status(db_session, subscriber):
     assert (
         context["account_status_presentations"][str(subscriber.id)]
         == context["customer_status_presentation"]
+    )
+    assert context["account_health"].account_id == subscriber.id
+
+
+def test_customer_360_renders_canonical_service_health() -> None:
+    template = Path("templates/admin/customers/detail.html").read_text(encoding="utf-8")
+
+    assert (
+        'from "components/portal/account_health.html" import service_health_strip'
+        in template
+    )
+    assert (
+        'service_health_strip(account_health, "/admin/catalog/subscriptions/")'
+        in template
     )
 
 

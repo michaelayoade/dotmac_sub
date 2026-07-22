@@ -62,6 +62,20 @@
                     {% endif %}
                 </div>
             </div>
+            {% if service.pending_change %}
+            <div class="border-b border-amber-100 bg-amber-50 px-5 py-3 dark:border-amber-900/40 dark:bg-amber-900/20">
+                <p class="text-sm font-semibold text-amber-900 dark:text-amber-100">
+                    {% if service.pending_change.delivery_mode == 'field_migration' %}Field migration{% elif service.pending_change.delivery_mode == 'remote_reprovision' %}Remote service change{% else %}Plan change{% endif %}
+                    {{ service.pending_change.status | replace('_', ' ') }}
+                    · {{ service.pending_change.delivery_state | replace('_', ' ') }}
+                </p>
+                <p class="mt-1 text-xs text-amber-800 dark:text-amber-200">
+                    Target: {{ service.pending_change.target_offer_name }} · Effective {{ service.pending_change.effective_date | portal_date }}
+                    {% if service.pending_change.target_service_address %}<br>Relocating to {{ service.pending_change.target_service_address }}{% endif %}
+                    {% if service.pending_change.field_fee_amount %}<br>One-time field charge: {{ service.pending_change.field_fee_currency }} {{ '{:,.2f}'.format(service.pending_change.field_fee_amount) }}{% endif %}
+                </p>
+            </div>
+            {% endif %}
             <div class="grid gap-px bg-stone-100 dark:bg-stone-700 sm:grid-cols-2 xl:grid-cols-4">
                 <div class="bg-white p-5 dark:bg-stone-800">
                     <p class="text-xs font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400">Access</p>

@@ -137,6 +137,71 @@ def reseller_account_detail(
     return web_reseller_routes_service.reseller_account_detail(request, db, account_id)
 
 
+@router.get(
+    "/accounts/{account_id}/subscriptions/{subscription_id}/service-change",
+    response_class=HTMLResponse,
+)
+def reseller_service_change_page(
+    request: Request,
+    account_id: str,
+    subscription_id: str,
+    db: Session = Depends(get_db),
+):
+    return web_reseller_routes_service.reseller_service_change_page(
+        request, db, account_id, subscription_id
+    )
+
+
+@router.get(
+    "/accounts/{account_id}/subscriptions/{subscription_id}/service-change/quote"
+)
+def reseller_service_change_quote(
+    request: Request,
+    account_id: str,
+    subscription_id: str,
+    offer_id: str,
+    target_service_address_id: str | None = None,
+    db: Session = Depends(get_db),
+):
+    return web_reseller_routes_service.reseller_service_change_quote(
+        request,
+        db,
+        account_id,
+        subscription_id,
+        offer_id,
+        target_service_address_id,
+    )
+
+
+@router.post("/accounts/{account_id}/subscriptions/{subscription_id}/service-change")
+def reseller_service_change_confirm(
+    request: Request,
+    account_id: str,
+    subscription_id: str,
+    offer_id: str = Form(...),
+    target_service_address_id: str | None = Form(None),
+    preview_fingerprint: str = Form(...),
+    field_quote_fingerprint: str | None = Form(None),
+    preview_effective_at: str = Form(...),
+    idempotency_key: str = Form(...),
+    notes: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    return web_reseller_routes_service.reseller_service_change_confirm(
+        request,
+        db,
+        account_id,
+        subscription_id,
+        offer_id=offer_id,
+        target_service_address_id=target_service_address_id,
+        preview_fingerprint=preview_fingerprint,
+        field_quote_fingerprint=field_quote_fingerprint,
+        preview_effective_at=preview_effective_at,
+        idempotency_key=idempotency_key,
+        notes=notes,
+    )
+
+
 @router.get("/accounts/{account_id}/invoices", response_class=HTMLResponse)
 def reseller_account_invoices(
     request: Request,

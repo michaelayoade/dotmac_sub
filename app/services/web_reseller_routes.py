@@ -15,6 +15,7 @@ from app.services import auth_flow as auth_flow_service
 from app.services import (
     crm_portal,
     customer_portal,
+    customer_portal_flow_changes,
     customer_work_order_selfcare,
     reseller_crm_views,
     reseller_portal,
@@ -366,20 +367,142 @@ def reseller_account_detail(
             "current_user": context["current_user"],
             "reseller": context["reseller"],
             "account": detail,
-            # Build only after the canonical reseller/account scope check above;
-            # the shared projection never receives an unverified foreign id.
-            "account_health": build_portal_account_health(
-                db,
-                UUID(detail["id"]),
-            ),
-            # Eligibility/reason owned by the backend; the raw preview dict on
-            # `account.status_actions` still supplies each POST's fingerprint.
+            "account_health": build_portal_account_health(db, UUID(detail["id"])),
             "status_action_contracts": reseller_portal.account_status_action_contracts(
                 detail["status_actions"]
             ),
             "status_success": request.query_params.get("status_success"),
             "status_error": request.query_params.get("status_error"),
         },
+    )
+
+
+def reseller_service_change_page(
+    request: Request,
+    db: Session,
+    account_id: str,
+    subscription_id: str,
+):
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url="/reseller/auth/login", status_code=303)
+    account = reseller_portal.owned_account(db, str(context["reseller"].id), account_id)
+    if account is None:
+        return templates.TemplateResponse(
+            "reseller/errors/404.html",
+            {
+                "request": request,
+                "current_user": context["current_user"],
+                "reseller": context["reseller"],
+            },
+            status_code=404,
+        )
+    page = customer_portal_flow_changes.get_change_plan_page(
+        db, {"account_id": str(account.id)}, subscription_id
+    )
+    if page is None:
+        return templates.TemplateResponse(
+            "reseller/errors/404.html",
+            {
+                "request": request,
+                "current_user": context["current_user"],
+                "reseller": context["reseller"],
+            },
+            status_code=404,
+        )
+    return templates.TemplateResponse(
+        "reseller/accounts/service_change.html",
+        {
+            "request": request,
+            "active_page": "accounts",
+            "current_user": context["current_user"],
+            "reseller": context["reseller"],
+            "account": account,
+            **page,
+        },
+    )
+
+
+def reseller_service_change_quote(
+    request: Request,
+    db: Session,
+    account_id: str,
+    subscription_id: str,
+    offer_id: str,
+    target_service_address_id: str | None,
+):
+    context = _require_reseller_context(request, db)
+    if not context:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    account = reseller_portal.owned_account(db, str(context["reseller"].id), account_id)
+    if account is None:
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    quote = customer_portal_flow_changes.get_plan_change_quote(
+        db,
+        {"account_id": str(account.id)},
+        subscription_id,
+        offer_id,
+        target_service_address_id=target_service_address_id,
+    )
+    if quote is None:
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    return JSONResponse({"quote": quote})
+
+
+def reseller_service_change_confirm(
+    request: Request,
+    db: Session,
+    account_id: str,
+    subscription_id: str,
+    *,
+    offer_id: str,
+    target_service_address_id: str | None,
+    preview_fingerprint: str,
+    field_quote_fingerprint: str | None,
+    preview_effective_at: str,
+    idempotency_key: str,
+    notes: str | None,
+):
+    from datetime import datetime
+    from urllib.parse import quote_plus
+
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url="/reseller/auth/login", status_code=303)
+    account = reseller_portal.owned_account(db, str(context["reseller"].id), account_id)
+    if account is None:
+        return RedirectResponse(url="/reseller/accounts", status_code=303)
+    try:
+        result = customer_portal_flow_changes.confirm_service_change(
+            db,
+            {"account_id": str(account.id)},
+            subscription_id,
+            offer_id,
+            notes,
+            target_service_address_id=target_service_address_id,
+            preview_fingerprint=preview_fingerprint,
+            field_quote_fingerprint=field_quote_fingerprint,
+            preview_effective_at=datetime.fromisoformat(preview_effective_at),
+            idempotency_key=idempotency_key,
+            confirmation_origin="reseller_web",
+        )
+        if not result.get("success", False):
+            raise ValueError("Additional prepaid funding is required")
+    except (HTTPException, ValueError) as exc:
+        db.rollback()
+        return RedirectResponse(
+            url=(
+                f"/reseller/accounts/{account_id}?status_error="
+                + quote_plus(str(getattr(exc, "detail", exc)))
+            ),
+            status_code=303,
+        )
+    return RedirectResponse(
+        url=(
+            f"/reseller/accounts/{account_id}?status_success="
+            + quote_plus(str(result.get("message") or "Service change confirmed"))
+        ),
+        status_code=303,
     )
 
 

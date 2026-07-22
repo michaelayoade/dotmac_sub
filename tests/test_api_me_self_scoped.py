@@ -23,6 +23,14 @@ def _system_user_principal():
     return {"principal_type": "system_user", "subscriber_id": str(uuid.uuid4())}
 
 
+def test_customer_service_change_routes_are_canonical_without_plan_change_alias():
+    paths = {getattr(route, "path", "") for route in me_api.router.routes}
+    assert "/me/subscriptions/{subscription_id}/service-change" in paths
+    assert "/me/subscriptions/{subscription_id}/service-change/quote" in paths
+    assert "/me/subscriptions/{subscription_id}/plan-change" not in paths
+    assert "/me/subscriptions/{subscription_id}/plan-change/quote" not in paths
+
+
 def test_subscriber_id_helper_rejects_non_subscriber():
     with pytest.raises(HTTPException) as exc:
         me_api._subscriber_id(_system_user_principal())

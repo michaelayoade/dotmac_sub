@@ -3,6 +3,7 @@
 import enum
 import uuid
 from datetime import UTC, date, datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     JSON,
@@ -13,6 +14,7 @@ from sqlalchemy import (
     Enum,
     ForeignKey,
     Index,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -79,6 +81,19 @@ class SubscriptionChangeRequest(Base):
     requested_offer_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("catalog_offers.id"), nullable=False
     )
+    target_service_address_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("addresses.id", ondelete="RESTRICT")
+    )
+    service_qualification_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("service_qualifications.id", ondelete="RESTRICT"),
+    )
+    field_fee_offer_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("catalog_offers.id", ondelete="RESTRICT")
+    )
+    field_fee_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    field_fee_currency: Mapped[str | None] = mapped_column(String(3))
+    field_quote_fingerprint: Mapped[str | None] = mapped_column(String(64))
     status: Mapped[SubscriptionChangeStatus] = mapped_column(
         Enum(SubscriptionChangeStatus), default=SubscriptionChangeStatus.pending
     )
@@ -133,6 +148,13 @@ class SubscriptionChangeRequest(Base):
     subscription = relationship("Subscription", foreign_keys=[subscription_id])
     current_offer = relationship("CatalogOffer", foreign_keys=[current_offer_id])
     requested_offer = relationship("CatalogOffer", foreign_keys=[requested_offer_id])
+    target_service_address = relationship(
+        "Address", foreign_keys=[target_service_address_id]
+    )
+    service_qualification = relationship(
+        "ServiceQualification", foreign_keys=[service_qualification_id]
+    )
+    field_fee_offer = relationship("CatalogOffer", foreign_keys=[field_fee_offer_id])
     requested_by = relationship("Subscriber", foreign_keys=[requested_by_subscriber_id])
     reviewed_by = relationship("Subscriber", foreign_keys=[reviewed_by_subscriber_id])
     account_adjustment = relationship(

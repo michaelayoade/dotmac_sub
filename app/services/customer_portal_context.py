@@ -658,20 +658,15 @@ def get_available_portal_offers(
 
     allowed_ids = _parse_allowed_change_plan_ids(current_offer.allowed_change_plan_ids)
 
-    # Instant self-service changes require a real, matching plan family. An empty/
-    # unset family is NOT a group: _validate_plan_change (the apply-time gate)
-    # rejects any change where either side has no family. If we listed empty-family
-    # offers here they'd appear as "instant changes in your current plan family"
-    # but 400 on submit, so require a non-empty family on both sides.
-    current_family = str(current_offer.plan_family or "").strip()
+    # Plan family is merchandising metadata, not delivery evidence. The
+    # subscription lifecycle owner classifies each compatible offer from access
+    # and provisionable network intent after the customer selects it.
     return cast(
         list[CatalogOffer],
         [
             offer
             for offer in offers
             if _same_region_compatibility(current_offer, offer)
-            and current_family
-            and str(offer.plan_family or "").strip() == current_family
             and (not allowed_ids or str(offer.id) in allowed_ids)
         ],
     )

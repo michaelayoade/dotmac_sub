@@ -11,7 +11,11 @@ from sqlalchemy import event
 
 from app.api import me as me_api
 from app.models.billing import Invoice, InvoiceStatus
-from app.models.catalog import BillingMode, SubscriptionStatus
+from app.models.catalog import BillingMode, CatalogOffer, SubscriptionStatus
+from app.models.subscription_change import (
+    SubscriptionChangeRequest,
+    SubscriptionChangeStatus,
+)
 from app.schemas.portal_account_health import PortalAccountHealthRead
 from app.services import portal_account_health
 from app.services.portal_account_health import build_portal_account_health
@@ -83,6 +87,47 @@ def test_portal_account_health_marks_receivables_unavailable_not_zero(
     assert health.has_partial_data is True
 
 
+def test_portal_account_health_does_not_treat_plan_family_as_network_migration(
+    db_session, subscriber_account, subscription
+):
+    current_offer = subscription.offer
+    current_offer.plan_family = "fibre"
+    target_offer = CatalogOffer(
+        name="Wireless 100",
+        service_type=current_offer.service_type,
+        access_type=current_offer.access_type,
+        price_basis=current_offer.price_basis,
+        billing_cycle=current_offer.billing_cycle,
+        billing_mode=current_offer.billing_mode,
+        contract_term=current_offer.contract_term,
+        plan_family="wireless",
+        status=current_offer.status,
+        is_active=True,
+    )
+    db_session.add(target_offer)
+    db_session.flush()
+    change = SubscriptionChangeRequest(
+        subscription_id=subscription.id,
+        current_offer_id=current_offer.id,
+        requested_offer_id=target_offer.id,
+        status=SubscriptionChangeStatus.pending,
+        effective_date=subscription.created_at.date(),
+    )
+    db_session.add(change)
+    db_session.commit()
+
+    health = build_portal_account_health(db_session, subscriber_account.id)
+
+    pending = health.services[0].pending_change
+    assert pending is not None
+    assert pending.request_id == change.id
+    assert pending.target_offer_name == "Wireless 100"
+    assert pending.delivery_mode == "commercial_only"
+    wire = PortalAccountHealthRead.model_validate(health)
+    assert wire.services[0].pending_change is not None
+    assert wire.services[0].pending_change.delivery_mode == "commercial_only"
+
+
 def test_portal_account_health_has_an_explicit_single_service_query_budget(
     db_session, subscriber_account, subscription
 ):
@@ -129,8 +174,10 @@ def test_portal_account_health_templates_compile():
     env.filters["portal_datetime"] = str
     env.get_template("components/portal/account_health.html")
     env.get_template("customer/dashboard/index.html")
+    env.get_template("customer/services/change_plan.html")
     env.get_template("customer/services/detail.html")
     env.get_template("reseller/accounts/detail.html")
+    env.get_template("reseller/accounts/service_change.html")
 
 
 def test_mobile_is_cut_over_to_the_shared_account_health_contract():

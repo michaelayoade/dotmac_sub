@@ -1161,6 +1161,13 @@ class PlanOfferSummary(BaseModel):
     period_label: str = "/cycle"
 
 
+class ServiceAddressOption(BaseModel):
+    id: UUID
+    label: str
+    has_coordinates: bool = False
+    is_current: bool = False
+
+
 class PlanChangePageResponse(BaseModel):
     current_offer: PlanOfferSummary | None = None
     available_offers: list[PlanOfferSummary] = Field(default_factory=list)
@@ -1169,13 +1176,18 @@ class PlanChangePageResponse(BaseModel):
     collection_blocking_balance: Decimal = Decimal("0.00")
     next_billing_date: datetime | None = None
     billing_message: str | None = None
+    service_addresses: list[ServiceAddressOption] = Field(default_factory=list)
+    current_service_address_id: UUID | None = None
 
 
 class PlanChangeSubmitRequest(BaseModel):
     offer_id: UUID
-    # Cross-family submissions create a non-financial migration ticket. These
-    # become mandatory at the owner boundary for same-family immediate changes.
+    target_service_address_id: UUID | None = None
+    # The owner preview binds money and delivery evidence to this confirmation.
     preview_fingerprint: str | None = Field(default=None, min_length=64, max_length=64)
+    field_quote_fingerprint: str | None = Field(
+        default=None, min_length=64, max_length=64
+    )
     preview_effective_at: datetime | None = None
     idempotency_key: str | None = Field(default=None, min_length=1, max_length=120)
     notes: str | None = None
@@ -1183,8 +1195,7 @@ class PlanChangeSubmitRequest(BaseModel):
 
 class PlanChangeSubmitResponse(BaseModel):
     success: bool = True
-    # "applied" when the change took effect instantly, "migration_requested"
-    # when a cross-family change was queued as a support ticket.
+    # applied, pending_remote_reprovision, or pending_field_migration.
     status: str = "applied"
     message: str | None = None
     change_request_id: UUID | None = None

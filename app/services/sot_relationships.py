@@ -13500,15 +13500,25 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "subscription lifecycle state projection",
                     "subscription command eligibility and preview",
                     "billing and access impact projection",
+                    "service-change delivery-mode decision",
+                    "service-address qualification and field-fee preview",
                     "subscription command and outcome contracts",
                 ),
                 depends_on=(
                     "service_intent.catalog_policy",
+                    "control.settings_spec",
                     "financial.access_resolution",
                     "financial.prepaid_plan_change",
                     "access.radius_state",
                 ),
                 notes=(
+                    "Service-change preview classifies commercial-only, remote, "
+                    "and field delivery from access and provisionable network "
+                    "facts; plan family is never delivery evidence. A service-"
+                    "address change is always field delivery. Fixed-wireless/radio "
+                    "relocation fails closed unless the target address qualifies "
+                    "and the configured catalog offer supplies a nonzero one-time "
+                    "field fee. "
                     "Execution remains with the established billing, account "
                     "lifecycle, catalog, and RADIUS owners. UI, API, scheduled, "
                     "and bulk callers consume this preview before execution."
@@ -13522,6 +13532,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "subscription command locking and reviewed-head enforcement",
                     "subscription command idempotent replay",
                     "structured subscription command outcomes",
+                    "persisted relocation qualification and fee evidence",
                     "independently committed subscription command batches",
                 ),
                 depends_on=(
@@ -13531,6 +13542,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "access.radius_state",
                 ),
                 notes=(
+                    "Confirmed commercial-only changes apply immediately. Remote "
+                    "and field changes persist reviewed intent until their delivery "
+                    "owner supplies verification; no support ticket is created. A "
+                    "priced field relocation remains awaiting_payment and leaves "
+                    "the current offer and service address unchanged. "
                     "Delegates mutations and side effects to the established "
                     "account lifecycle, catalog, billing, scheduler, and RADIUS "
                     "owners. Renewal execution remains billing-owned and fails "
@@ -15605,6 +15621,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "subscription-scoped service-health row projection",
                     "portal financial-position currency-lane projection",
                     "mobile account-health transport projection",
+                    "pending service-change presentation",
                 ),
                 depends_on=(
                     "access.subscription_lifecycle",
@@ -15616,6 +15633,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "network.connection_health",
                     "network.outage_lifecycle",
                     "network.radius_sessions",
+                    "service_intent.subscription_lifecycle",
                     "ui.projection_contracts",
                     "ui.status_presentation",
                 ),
@@ -15649,7 +15667,16 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "canonical service access decision",
                                 "canonical live-session evidence",
                                 "canonical connection and outage diagnosis",
+                                "canonical pending service change",
                                 "UI status semantics",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="pending service-change presentation",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical pending service change",
+                                "canonical current subscriptions",
                             ),
                         ),
                         ConcernContract(
@@ -15723,6 +15750,16 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             ),
                         ),
                         AuthorityInput(
+                            name="canonical pending service change",
+                            owner="service_intent.subscription_lifecycle",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "active SubscriptionChangeRequest intent, target offer, "
+                                "effective date, lifecycle status, and owner-classified "
+                                "delivery mode"
+                            ),
+                        ),
+                        AuthorityInput(
                             name="canonical connection and outage diagnosis",
                             owner="network.connection_health",
                             kind=AuthorityKind.DERIVED_PROJECTION,
@@ -15786,12 +15823,13 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         new_owner="ui.portal_account_health_projection",
                         verification=(
                             "Financial separation, availability, multi-service session "
-                            "non-leakage, shared-template, API cutover, mobile model, and "
-                            "query-budget tests."
+                            "non-leakage, pending service-change visibility, Customer 360 "
+                            "reuse, shared-template, API cutover, mobile model, and query-"
+                            "budget tests."
                         ),
                         cutover_gate=(
-                            "Customer dashboard/detail, reseller account detail, and mobile "
-                            "consume the shared projection."
+                            "Customer dashboard/detail, reseller account detail, Customer "
+                            "360, and mobile consume the shared projection."
                         ),
                         fallback_retirement=(
                             "Generic balances, local freshness/status mapping, /me/service-"
@@ -15802,6 +15840,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     steward="customer operations",
                     design_refs=(
                         "docs/designs/PORTAL_ACCOUNT_SERVICE_HEALTH.md",
+                        "docs/designs/CUSTOMER_SELF_SERVICE_LIFECYCLE.md",
                         "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
                         "docs/SOT_RELATIONSHIP_MAP.md",
                     ),
