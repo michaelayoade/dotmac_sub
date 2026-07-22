@@ -2,7 +2,7 @@
 
 ``docs/designs/AI_SOT.md`` / SOT map §AI Control Plane. AI observes, derives,
 and recommends; acting on a recommendation means calling the domain's declared
-owner (``support.tickets``, ``operations.work_orders``,
+owner (``support.ticket_lifecycle``, ``operations.work_orders``,
 ``operations.project_lifecycle``, ``communications.team_inbox``), which applies
 its own guards, events, and audit.
 

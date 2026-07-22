@@ -13,6 +13,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.services.ticket_work_order_handoff import TicketWorkOrderHandoffError
+from app.services.domain_errors import DomainError
 from app.services.unit_of_work import ConcurrencyConflict
 from app.services.vendor_portal_errors import VendorPortalOperationError
 from app.services.work_order_errors import WorkOrderCommandError
@@ -331,6 +332,46 @@ def register_error_handlers(app) -> None:
             exc.message
             if _is_html_request(request)
             else {"code": exc.code, "message": exc.message},
+        )
+
+    @app.exception_handler(DomainError)
+    async def domain_error_handler(request: Request, exc: DomainError):
+        """Map transport-neutral service failures at the shared HTTP adapter."""
+
+        code = exc.code.lower()
+        if code.endswith("not_found") or "_not_found" in code:
+            status_code = 404
+        elif "permission" in code or "forbidden" in code:
+            status_code = 403
+        elif any(
+            marker in code
+            for marker in (
+                "invalid",
+                "required",
+                "not_eligible",
+            )
+        ):
+            status_code = 422
+        elif any(
+            marker in code
+            for marker in (
+                "mismatch",
+                "command_contract_violation",
+                "nested_owner_command",
+                "nested_transaction_completion",
+            )
+        ):
+            status_code = 409 if "mismatch" in code else 500
+        else:
+            status_code = 409
+        if _is_html_request(request) and status_code == 422:
+            status_code = 400
+        return await _handle_http_exception(
+            request,
+            status_code,
+            exc.message
+            if _is_html_request(request)
+            else {"code": exc.code, "message": exc.message, "details": exc.details},
         )
 
     @app.exception_handler(AuthenticationRequired)

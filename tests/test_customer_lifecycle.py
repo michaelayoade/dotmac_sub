@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from app.services.domain_errors import DomainError
 
 from app.models.catalog import (
     AccessType,
@@ -297,7 +298,7 @@ def test_quote_order_and_ticket_guards_reject_cross_party_links(db_session):
         )
     assert order_error.value.status_code == 409
 
-    with pytest.raises(HTTPException) as ticket_error:
+    with pytest.raises(DomainError) as ticket_error:
         support.tickets.create(
             db_session,
             TicketCreate(
@@ -306,7 +307,7 @@ def test_quote_order_and_ticket_guards_reject_cross_party_links(db_session):
                 subscriber_id=other_subscriber.id,
             ),
         )
-    assert ticket_error.value.status_code == 409
+    assert ticket_error.value.code == "lead_subscriber_mismatch"
 
     lead_only_ticket = support.tickets.create(
         db_session,
@@ -388,13 +389,13 @@ def test_quote_order_and_ticket_update_guards_validate_prospective_links(db_sess
         )
     assert order_error.value.status_code == 409
 
-    with pytest.raises(HTTPException) as ticket_error:
+    with pytest.raises(DomainError) as ticket_error:
         support.tickets.update(
             db_session,
             str(ticket.id),
             TicketUpdate(subscriber_id=other_subscriber.id),
         )
-    assert ticket_error.value.status_code == 409
+    assert ticket_error.value.code == "lead_subscriber_mismatch"
 
 
 def test_lifecycle_audit_reports_aggregate_alignment_without_identity_values(

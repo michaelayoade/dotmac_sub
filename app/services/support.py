@@ -7,10 +7,10 @@ import re
 import secrets
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from functools import wraps
+from typing import Any, ParamSpec, TypeVar
 from uuid import UUID
 
-from fastapi import HTTPException
 from sqlalchemy import or_
 from sqlalchemy.orm import Session, selectinload
 
@@ -56,12 +56,87 @@ from app.services.customer_identity_resolution import (
 )
 from app.services.customer_support_links import ticket_customer_link_filter
 from app.services.dynamic_filters import FilterValidationError
+from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
+from app.services.owner_commands import (
+    CommandContext,
+    OwnerCommandDefinition,
+    execute_owner_command,
+    owner_command_active,
+)
 from app.services.sales import lifecycle as lead_lifecycle
 from app.services.staff_notifications import queue_staff_email, queue_staff_push
 
 logger = logging.getLogger(__name__)
+
+P = ParamSpec("P")
+R = TypeVar("R")
+_LIFECYCLE_CONCERN = "ticket lifecycle mutations"
+
+
+class SupportTicketError(DomainError):
+    """Transport-neutral failure from the canonical Ticket owner."""
+
+
+def _ticket_error(code: str, message: str, **details: object) -> SupportTicketError:
+    return SupportTicketError(code=code, message=message, details=details)
+
+
+def _command_idempotency_key(request: object | None) -> str | None:
+    headers = getattr(request, "headers", None)
+    if headers is None:
+        return None
+    value = headers.get("Idempotency-Key")
+    return str(value).strip() or None if value is not None else None
+
+
+def ticket_owner_command(name: str):
+    """Enter the canonical Ticket transaction around one typed public method.
+
+    Calls made by another Ticket operation (for example a bulk command invoking
+    the single-ticket update participant) remain flush-only inside the existing
+    root command.
+    """
+
+    definition = OwnerCommandDefinition(
+        owner="support.ticket_lifecycle",
+        concern=_LIFECYCLE_CONCERN,
+        name=name,
+    )
+
+    def decorate(operation):
+        @wraps(operation)
+        def wrapped(db: Session, *args, **kwargs):
+            if owner_command_active(db, owner="support.ticket_lifecycle"):
+                return operation(db, *args, **kwargs)
+            actor = str(kwargs.get("actor_id") or "support-system")
+            context = CommandContext.system(
+                actor=actor,
+                scope=f"support.ticket:{name}",
+                reason=f"execute canonical Ticket {name} command",
+                idempotency_key=_command_idempotency_key(kwargs.get("request")),
+            )
+            result = execute_owner_command(
+                db,
+                definition=definition,
+                context=context,
+                operation=lambda: operation(db, *args, **kwargs),
+            )
+            if name == "create" and isinstance(result, Ticket):
+                _notify_workqueue(result, "added")
+            elif name == "update" and isinstance(result, Ticket):
+                previous = db.info.pop("_support_previous_assignee_id", None)
+                _notify_workqueue(
+                    result,
+                    "updated",
+                    previous_assignee_id=previous,
+                )
+            return result
+
+        return wrapped
+
+    return decorate
 
 # Ticket.status is a free-form string column; these guard every write at the
 # boundary (no schema migration). closed/canceled/merged are terminal — they
@@ -185,8 +260,8 @@ def _ensure_not_merged_source(ticket: Ticket) -> None:
         ticket.merged_into_ticket_id is not None
         or support_ticket_settings_service.status_is_merged(ticket.status)
     ):
-        raise HTTPException(
-            status_code=409, detail="Cannot modify a merged source ticket"
+        raise _ticket_error(
+            "ticket_merged_source", "Cannot modify a merged source ticket"
         )
 
 
@@ -405,7 +480,7 @@ def _validate_ticket_lead_alignment(
         return
     lead = db.get(Lead, lead_id)
     if lead is None:
-        raise HTTPException(status_code=404, detail="Lead not found")
+        raise _ticket_error("lead_not_found", "Lead not found")
 
     subscriber_ids: set[UUID] = set()
     for field in ("subscriber_id", "customer_account_id", "customer_person_id"):
@@ -415,16 +490,16 @@ def _validate_ticket_lead_alignment(
     for subscriber_id in subscriber_ids:
         subscriber = db.get(Subscriber, subscriber_id)
         if subscriber is None:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Ticket {subscriber_id} Subscriber link was not found",
+            raise _ticket_error(
+                "subscriber_not_found",
+                f"Ticket {subscriber_id} Subscriber link was not found",
             )
         try:
             lead_lifecycle.validate_lead_subscriber_alignment(
                 db, lead=lead, subscriber=subscriber
             )
         except lead_lifecycle.LeadLifecycleError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+            raise _ticket_error("lead_subscriber_mismatch", str(exc)) from exc
 
 
 class TicketComments:
@@ -432,7 +507,7 @@ class TicketComments:
     def get(db: Session, comment_id: str) -> TicketComment:
         comment = db.get(TicketComment, comment_id)
         if not comment:
-            raise HTTPException(status_code=404, detail="Ticket comment not found")
+            raise _ticket_error("comment_not_found", "Ticket comment not found")
         return comment
 
     @staticmethod
@@ -545,6 +620,7 @@ class TicketComments:
         return comment
 
     @staticmethod
+    @ticket_owner_command("update_comment")
     def update(
         db: Session,
         *,
@@ -555,7 +631,7 @@ class TicketComments:
     ) -> TicketComment:
         ticket = db.get(Ticket, comment.ticket_id)
         if not ticket:
-            raise HTTPException(status_code=404, detail="Ticket not found")
+            raise _ticket_error("ticket_not_found", "Ticket not found")
         _ensure_not_merged_source(ticket)
 
         data = payload.model_dump(exclude_unset=True)
@@ -579,17 +655,18 @@ class TicketComments:
             actor_id=actor_id,
             metadata={"comment_id": str(comment.id)},
         )
-        db.commit()
+        db.flush()
         db.refresh(comment)
         return comment
 
     @staticmethod
+    @ticket_owner_command("delete_comment")
     def delete(
         db: Session, *, comment: TicketComment, actor_id: str | None, request=None
     ) -> None:
         ticket = db.get(Ticket, comment.ticket_id)
         if not ticket:
-            raise HTTPException(status_code=404, detail="Ticket not found")
+            raise _ticket_error("ticket_not_found", "Ticket not found")
         _ensure_not_merged_source(ticket)
         db.delete(comment)
         log_audit_event(
@@ -601,7 +678,7 @@ class TicketComments:
             actor_id=actor_id,
             metadata={"comment_id": str(comment.id)},
         )
-        db.commit()
+        db.flush()
 
 
 class TicketSlaEvents:
@@ -609,7 +686,7 @@ class TicketSlaEvents:
     def get(db: Session, event_id: str) -> TicketSlaEvent:
         event = db.get(TicketSlaEvent, event_id)
         if not event:
-            raise HTTPException(status_code=404, detail="Ticket SLA event not found")
+            raise _ticket_error("sla_event_not_found", "Ticket SLA event not found")
         return event
 
     @staticmethod
@@ -624,10 +701,11 @@ class TicketSlaEvents:
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
+    @ticket_owner_command("create_sla_event")
     def create(db: Session, payload: TicketSlaEventCreate) -> TicketSlaEvent:
         ticket = db.get(Ticket, payload.ticket_id)
         if not ticket:
-            raise HTTPException(status_code=404, detail="Ticket not found")
+            raise _ticket_error("ticket_not_found", "Ticket not found")
         _ensure_not_merged_source(ticket)
         event = TicketSlaEvent(
             ticket_id=payload.ticket_id,
@@ -637,32 +715,34 @@ class TicketSlaEvents:
             metadata_=payload.metadata_,
         )
         db.add(event)
-        db.commit()
+        db.flush()
         db.refresh(event)
         return event
 
     @staticmethod
+    @ticket_owner_command("update_sla_event")
     def update(
         db: Session, event: TicketSlaEvent, payload: TicketSlaEventUpdate
     ) -> TicketSlaEvent:
         ticket = db.get(Ticket, event.ticket_id)
         if not ticket:
-            raise HTTPException(status_code=404, detail="Ticket not found")
+            raise _ticket_error("ticket_not_found", "Ticket not found")
         _ensure_not_merged_source(ticket)
         for key, value in payload.model_dump(exclude_unset=True).items():
             setattr(event, key, value)
-        db.commit()
+        db.flush()
         db.refresh(event)
         return event
 
     @staticmethod
+    @ticket_owner_command("delete_sla_event")
     def delete(db: Session, event: TicketSlaEvent) -> None:
         ticket = db.get(Ticket, event.ticket_id)
         if not ticket:
-            raise HTTPException(status_code=404, detail="Ticket not found")
+            raise _ticket_error("ticket_not_found", "Ticket not found")
         _ensure_not_merged_source(ticket)
         db.delete(event)
-        db.commit()
+        db.flush()
 
 
 def _notify_workqueue(
@@ -746,7 +826,7 @@ class Tickets:
     def _assert_ticket_exists(db: Session, ticket_id: UUID) -> Ticket:
         ticket = db.get(Ticket, ticket_id)
         if not ticket or not ticket.is_active:
-            raise HTTPException(status_code=404, detail="Ticket not found")
+            raise _ticket_error("ticket_not_found", "Ticket not found")
         return ticket
 
     @staticmethod
@@ -922,8 +1002,38 @@ class Tickets:
                 db
             ),
         )
+        assignment_engine.stage_ticket_evaluation_evidence(
+            db, ticket_id=ticket.id, result=result
+        )
         if result.reason == "no_matching_rule":
             return None
+        assignee_id = _coerce_uuid(result.assignee_person_id)
+        team_id = _coerce_uuid(result.fallback_service_team_id)
+        if result.assignment_target in {"team", "rule_scope"}:
+            ticket.service_team_id = team_id
+            ticket.assigned_to_person_id = None
+            ticket.ticket_manager_person_id = None
+            ticket.site_coordinator_person_id = None
+            db.query(TicketAssignee).filter(
+                TicketAssignee.ticket_id == ticket.id
+            ).delete()
+        elif result.reason == "queue_fallback_team_assigned" and team_id:
+            ticket.service_team_id = team_id
+        elif result.assignment_target == "technical_supervisor" and assignee_id:
+            if not ticket.ticket_manager_person_id:
+                ticket.ticket_manager_person_id = assignee_id
+        elif result.assignment_target == "site_coordinator" and assignee_id:
+            if not ticket.site_coordinator_person_id:
+                ticket.site_coordinator_person_id = assignee_id
+        elif result.assignment_target == "technician" and assignee_id:
+            if not ticket.assigned_to_person_id:
+                ticket.assigned_to_person_id = assignee_id
+            if not any(
+                row.person_id == assignee_id for row in ticket.assignees
+            ):
+                db.add(
+                    TicketAssignee(ticket_id=ticket.id, person_id=assignee_id)
+                )
         return result.as_dict()
 
     @staticmethod
@@ -932,6 +1042,52 @@ class Tickets:
         if rule_result is not None:
             return rule_result
         return Tickets._apply_region_auto_assignment(ticket, db)
+
+    @staticmethod
+    def _apply_automation_rules(
+        db: Session, ticket: Ticket, trigger: "AutomationTrigger"
+    ) -> tuple[str, ...]:
+        """Apply policy proposals inside the canonical Ticket writer."""
+        from app.models.support import AutomationActionType
+        from app.services import support_automation
+
+        if support_automation.identity_review_blocks_automation(ticket):
+            support_automation.mark_identity_automation_suppressed(ticket)
+            return ()
+
+        applied: list[str] = []
+        for proposal in support_automation.evaluate_rules(db, ticket, trigger):
+            if proposal.action_type == AutomationActionType.assign_team:
+                ticket.service_team_id = proposal.service_team_id
+            elif proposal.action_type == AutomationActionType.assign_technician:
+                ticket.technician_person_id = proposal.technician_person_id
+            elif proposal.action_type == AutomationActionType.set_priority:
+                ticket.priority = proposal.priority or ticket.priority
+            elif proposal.action_type == AutomationActionType.set_status:
+                if proposal.status:
+                    try:
+                        transition_ticket_status(
+                            ticket, proposal.status, source="automation"
+                        )
+                    except ValueError:
+                        logger.warning(
+                            "automation set_status ignored invalid status %r",
+                            proposal.status,
+                        )
+                        continue
+            elif proposal.action_type == AutomationActionType.set_due_in_hours:
+                if proposal.due_in_hours is not None:
+                    ticket.due_at = _now() + timedelta(
+                        hours=proposal.due_in_hours
+                    )
+            elif proposal.action_type == AutomationActionType.add_tag:
+                if proposal.tag:
+                    tags = list(ticket.tags or [])
+                    if proposal.tag not in tags:
+                        tags.append(proposal.tag)
+                        ticket.tags = tags
+            applied.append(proposal.rule_name)
+        return tuple(applied)
 
     @staticmethod
     def _queue_notifications_for_assignments(
@@ -1102,6 +1258,7 @@ class Tickets:
         )
 
     @staticmethod
+    @ticket_owner_command("create")
     def create(
         db: Session, payload: TicketCreate, actor_id: str | None = None, request=None
     ) -> Ticket:
@@ -1165,7 +1322,9 @@ class Tickets:
         from app.models.support import AutomationTrigger
         from app.services import support_automation
 
-        support_automation.apply_rules(db, ticket, AutomationTrigger.ticket_created)
+        Tickets._apply_automation_rules(
+            db, ticket, AutomationTrigger.ticket_created
+        )
 
         Tickets._queue_notifications_for_assignments(db, ticket, actor_id)
 
@@ -1180,19 +1339,19 @@ class Tickets:
         )
         Tickets._emit_ticket_event(db, "ticket.created", ticket, actor_id)
 
-        db.commit()
+        db.flush()
         db.refresh(ticket)
-        _notify_workqueue(ticket, "added")
         return ticket
 
     @staticmethod
     def get(db: Session, ticket_id: str) -> Ticket:
         ticket = db.get(Ticket, ticket_id)
         if not ticket or not ticket.is_active:
-            raise HTTPException(status_code=404, detail="Ticket not found")
+            raise _ticket_error("ticket_not_found", "Ticket not found")
         return ticket
 
     @staticmethod
+    @ticket_owner_command("set_satisfaction")
     def set_satisfaction(
         db: Session, ticket: Ticket, *, rating: int, comment: str | None = None
     ) -> Ticket:
@@ -1204,9 +1363,9 @@ class Tickets:
             TicketStatus.resolved.value,
             TicketStatus.closed.value,
         ):
-            raise HTTPException(
-                status_code=409,
-                detail="You can rate support once the ticket is resolved.",
+            raise _ticket_error(
+                "satisfaction_not_eligible",
+                "You can rate support once the ticket is resolved.",
             )
         meta = dict(ticket.metadata_ or {})
         meta["csat"] = {
@@ -1216,7 +1375,7 @@ class Tickets:
         }
         ticket.metadata_ = meta
         db.add(ticket)
-        db.commit()
+        db.flush()
         db.refresh(ticket)
         return ticket
 
@@ -1239,6 +1398,7 @@ class Tickets:
         return comment
 
     @staticmethod
+    @ticket_owner_command("request_resolution_confirmation")
     def request_resolution_confirmation(
         db: Session,
         ticket_id: str,
@@ -1250,9 +1410,9 @@ class Tickets:
         ticket = Tickets.get(db, ticket_id)
         _ensure_not_merged_source(ticket)
         if ticket.status in _TICKET_TERMINAL_STATUSES:
-            raise HTTPException(
-                status_code=409,
-                detail="Cannot request confirmation for a closed ticket.",
+            raise _ticket_error(
+                "resolution_confirmation_not_eligible",
+                "Cannot request confirmation for a closed ticket.",
             )
 
         now = _now()
@@ -1302,12 +1462,13 @@ class Tickets:
             metadata={"token_id": str(token_row.id), "grace_hours": int(grace_hours)},
         )
         Tickets._queue_resolution_confirmation_notifications(db, ticket, token_row)
-        db.commit()
+        db.flush()
         db.refresh(ticket)
         db.refresh(token_row)
         return ticket, token_row
 
     @staticmethod
+    @ticket_owner_command("confirm_resolution")
     def confirm_resolution(
         db: Session,
         token_row: TicketAccessToken,
@@ -1316,14 +1477,14 @@ class Tickets:
     ) -> Ticket:
         ticket = token_row.ticket or db.get(Ticket, token_row.ticket_id)
         if not ticket or not ticket.is_active:
-            raise HTTPException(status_code=404, detail="Ticket not found")
+            raise _ticket_error("ticket_not_found", "Ticket not found")
         if ticket.status == TicketStatus.closed.value:
             return ticket
         _ensure_not_merged_source(ticket)
         if ticket.status in {TicketStatus.canceled.value, TicketStatus.merged.value}:
-            raise HTTPException(
-                status_code=409,
-                detail="Cannot confirm a terminal ticket.",
+            raise _ticket_error(
+                "resolution_confirmation_terminal",
+                "Cannot confirm a terminal ticket.",
             )
 
         now = _now()
@@ -1367,11 +1528,12 @@ class Tickets:
             actor_id=None,
             metadata={"token_id": str(token_row.id), "auto": bool(auto)},
         )
-        db.commit()
+        db.flush()
         db.refresh(ticket)
         return ticket
 
     @staticmethod
+    @ticket_owner_command("respond_to_resolution_for_customer")
     def respond_to_resolution_for_customer(
         db: Session,
         ticket: Ticket,
@@ -1385,9 +1547,9 @@ class Tickets:
         confirmation capability and therefore the same mutation/audit path.
         """
         if ticket.status != TicketStatus.pending_confirmation.value:
-            raise HTTPException(
-                status_code=409,
-                detail="This ticket is not awaiting resolution confirmation.",
+            raise _ticket_error(
+                "resolution_confirmation_not_pending",
+                "This ticket is not awaiting resolution confirmation.",
             )
         token_row = (
             db.query(TicketAccessToken)
@@ -1405,9 +1567,9 @@ class Tickets:
             .first()
         )
         if token_row is None:
-            raise HTTPException(
-                status_code=409,
-                detail="The resolution confirmation request is no longer active.",
+            raise _ticket_error(
+                "resolution_confirmation_inactive",
+                "The resolution confirmation request is no longer active.",
             )
         token_row.ticket = ticket
         if confirm:
@@ -1415,6 +1577,7 @@ class Tickets:
         return Tickets.dispute_resolution(db, token_row, reason=reason)
 
     @staticmethod
+    @ticket_owner_command("dispute_resolution")
     def dispute_resolution(
         db: Session,
         token_row: TicketAccessToken,
@@ -1423,12 +1586,12 @@ class Tickets:
     ) -> Ticket:
         ticket = token_row.ticket or db.get(Ticket, token_row.ticket_id)
         if not ticket or not ticket.is_active:
-            raise HTTPException(status_code=404, detail="Ticket not found")
+            raise _ticket_error("ticket_not_found", "Ticket not found")
         _ensure_not_merged_source(ticket)
         if ticket.status in _TICKET_TERMINAL_STATUSES:
-            raise HTTPException(
-                status_code=409,
-                detail="Cannot dispute a terminal ticket.",
+            raise _ticket_error(
+                "resolution_dispute_terminal",
+                "Cannot dispute a terminal ticket.",
             )
 
         now = _now()
@@ -1473,11 +1636,12 @@ class Tickets:
             actor_id=None,
             metadata={"token_id": str(token_row.id), "has_reason": bool(clean_reason)},
         )
-        db.commit()
+        db.flush()
         db.refresh(ticket)
         return ticket
 
     @staticmethod
+    @ticket_owner_command("auto_confirm_pending")
     def auto_confirm_pending(
         db: Session,
         *,
@@ -1523,8 +1687,7 @@ class Tickets:
             try:
                 Tickets.confirm_resolution(db, token_row, auto=True)
                 confirmed += 1
-            except HTTPException:
-                db.rollback()
+            except SupportTicketError:
                 logger.exception(
                     "ticket_auto_confirm_failed",
                     extra={
@@ -1535,13 +1698,14 @@ class Tickets:
         return confirmed
 
     @staticmethod
+    @ticket_owner_command("add_attachments")
     def add_attachments(
         db: Session, ticket_id: str, attachments: list[dict] | None
     ) -> Ticket:
         ticket = Tickets.get(db, ticket_id)
         ticket.attachments = _merge_attachment_dicts(ticket.attachments, attachments)
         db.add(ticket)
-        db.commit()
+        db.flush()
         db.refresh(ticket)
         return ticket
 
@@ -1560,7 +1724,7 @@ class Tickets:
             query = query.filter(Ticket.number == lookup)
         ticket = query.first()
         if not ticket:
-            raise HTTPException(status_code=404, detail="Ticket not found")
+            raise _ticket_error("ticket_not_found", "Ticket not found")
         return ticket
 
     @staticmethod
@@ -1633,7 +1797,7 @@ class Tickets:
                     filters
                 )
             except FilterValidationError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+                raise _ticket_error("invalid_ticket_filter", str(exc)) from exc
             if filter_clause is not None:
                 query = query.filter(filter_clause)
 
@@ -1732,6 +1896,7 @@ class Tickets:
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
+    @ticket_owner_command("update")
     def update(
         db: Session,
         ticket_id: str,
@@ -1842,7 +2007,9 @@ class Tickets:
             from app.models.support import AutomationTrigger
             from app.services import support_automation
 
-            support_automation.apply_rules(db, ticket, AutomationTrigger.status_changed)
+            Tickets._apply_automation_rules(
+                db, ticket, AutomationTrigger.status_changed
+            )
         if before["priority"] != after["priority"]:
             log_audit_event(
                 db=db,
@@ -1856,7 +2023,7 @@ class Tickets:
             from app.models.support import AutomationTrigger
             from app.services import support_automation
 
-            support_automation.apply_rules(
+            Tickets._apply_automation_rules(
                 db, ticket, AutomationTrigger.priority_changed
             )
 
@@ -1871,17 +2038,16 @@ class Tickets:
         ):
             Tickets._emit_ticket_event(db, "ticket.assigned", ticket, actor_id)
 
-        db.commit()
+        db.flush()
         db.refresh(ticket)
         previous_assignee = before.get("assigned_to_person_id")
-        _notify_workqueue(
-            ticket,
-            "updated",
-            previous_assignee_id=UUID(previous_assignee) if previous_assignee else None,
+        db.info["_support_previous_assignee_id"] = (
+            UUID(previous_assignee) if previous_assignee else None
         )
         return ticket
 
     @staticmethod
+    @ticket_owner_command("soft_delete")
     def soft_delete(
         db: Session, ticket_id: str, actor_id: str | None = None, request=None
     ) -> None:
@@ -1897,9 +2063,10 @@ class Tickets:
             actor_id=actor_id,
             metadata={"soft_deleted": True},
         )
-        db.commit()
+        db.flush()
 
     @staticmethod
+    @ticket_owner_command("bulk_update")
     def bulk_update(
         db: Session,
         payload: TicketBulkUpdateRequest,
@@ -1946,10 +2113,11 @@ class Tickets:
             actor_id=actor_id,
             metadata={"count": len(updated)},
         )
-        db.commit()
+        db.flush()
         return updated
 
     @staticmethod
+    @ticket_owner_command("manual_auto_assign")
     def manual_auto_assign(
         db: Session, ticket_id: str, actor_id: str | None = None, request=None
     ) -> dict[str, Any]:
@@ -1966,10 +2134,11 @@ class Tickets:
             metadata={"result": result},
         )
         Tickets._queue_notifications_for_assignments(db, ticket, actor_id)
-        db.commit()
+        db.flush()
         return result
 
     @staticmethod
+    @ticket_owner_command("create_comment")
     def create_comment(
         db: Session,
         ticket_id: str,
@@ -1982,11 +2151,24 @@ class Tickets:
             db, ticket=ticket, payload=payload, actor_id=actor_id, request=request
         )
         Tickets._queue_mention_notifications(db, ticket, payload.body, actor_id)
-        db.commit()
+        if payload.mentioned_agent_ids:
+            from app.services import ticket_mentions
+
+            ticket_mentions.notify_ticket_comment_mentions(
+                db,
+                ticket_id=str(ticket.id),
+                ticket_number=ticket.number,
+                ticket_title=ticket.title,
+                comment_preview=payload.body[:300],
+                mentioned_agent_ids=[str(item) for item in payload.mentioned_agent_ids],
+                actor_person_id=actor_id,
+            )
+        db.flush()
         db.refresh(comment)
         return comment
 
     @staticmethod
+    @ticket_owner_command("bulk_create_comments")
     def bulk_create_comments(
         db: Session,
         ticket_id: str,
@@ -2001,13 +2183,28 @@ class Tickets:
                 db, ticket=ticket, payload=payload, actor_id=actor_id, request=request
             )
             Tickets._queue_mention_notifications(db, ticket, payload.body, actor_id)
+            if payload.mentioned_agent_ids:
+                from app.services import ticket_mentions
+
+                ticket_mentions.notify_ticket_comment_mentions(
+                    db,
+                    ticket_id=str(ticket.id),
+                    ticket_number=ticket.number,
+                    ticket_title=ticket.title,
+                    comment_preview=payload.body[:300],
+                    mentioned_agent_ids=[
+                        str(item) for item in payload.mentioned_agent_ids
+                    ],
+                    actor_person_id=actor_id,
+                )
             comments.append(comment)
-        db.commit()
+        db.flush()
         for comment in comments:
             db.refresh(comment)
         return comments
 
     @staticmethod
+    @ticket_owner_command("link_ticket")
     def link_ticket(
         db: Session,
         *,
@@ -2048,7 +2245,7 @@ class Tickets:
             actor_id=actor_id,
             metadata={"to_ticket_id": str(target.id), "link_type": link_type},
         )
-        db.commit()
+        db.flush()
         db.refresh(link)
         return link
 
@@ -2074,6 +2271,7 @@ class Tickets:
         )
 
     @staticmethod
+    @ticket_owner_command("merge")
     def merge(
         db: Session,
         source_ticket_id: str,
@@ -2084,8 +2282,8 @@ class Tickets:
         source = Tickets.get(db, source_ticket_id)
         target = Tickets.get(db, str(payload.target_ticket_id))
         if source.id == target.id:
-            raise HTTPException(
-                status_code=400, detail="Cannot merge a ticket into itself"
+            raise _ticket_error(
+                "ticket_merge_self", "Cannot merge a ticket into itself"
             )
         _ensure_not_merged_source(source)
         _ensure_not_merged_source(target)
@@ -2199,7 +2397,7 @@ class Tickets:
             metadata={"target_ticket_id": str(target.id), "reason": payload.reason},
         )
 
-        db.commit()
+        db.flush()
         db.refresh(target)
         return target
 
@@ -2265,10 +2463,11 @@ class TicketAccessTokens:
         return "ok"
 
     @staticmethod
+    @ticket_owner_command("mark_access_token_used")
     def mark_accessed(db: Session, token_row: TicketAccessToken) -> None:
         token_row.accessed_at = _now()
         db.add(token_row)
-        db.commit()
+        db.flush()
 
     @staticmethod
     def action_urls(token_row: TicketAccessToken) -> dict[str, str | None]:

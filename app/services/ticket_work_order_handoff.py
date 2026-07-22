@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from typing import Any, Literal
+from enum import StrEnum
+from typing import Literal
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -25,6 +26,12 @@ from app.schemas.dispatch import WorkOrderHeaderCreate
 from app.schemas.support import TicketWorkOrderIssueRequest
 from app.services.audit_adapter import stage_audit_event
 from app.services.common import coerce_uuid
+from app.services.domain_errors import DomainError
+from app.services.owner_commands import (
+    CommandContext,
+    OwnerCommandDefinition,
+    execute_owner_command,
+)
 from app.services.ui_contracts import Action
 
 HandoffErrorKind = Literal["invalid", "forbidden", "not_found", "conflict"]
@@ -36,9 +43,35 @@ _NON_ISSUABLE_STATUSES = frozenset(
         TicketStatus.merged.value,
     }
 )
+WORK_ORDER_ISSUE_SCOPE = "support.ticket_work_order:issue"
+_REQUIRED_PERMISSIONS = frozenset(
+    {"support:ticket:update", "operations:dispatch:write"}
+)
+_ISSUE_DEFINITION = OwnerCommandDefinition(
+    owner="support.ticket_work_order_handoff",
+    concern="ticket-to-work-order issuance eligibility",
+    name="issue_ticket_work_order",
+)
 
 
-class TicketWorkOrderHandoffError(ValueError):
+class HandoffActorType(StrEnum):
+    SYSTEM_USER = "system_user"
+    API_KEY = "api_key"
+    SERVICE = "service"
+
+
+@dataclass(frozen=True)
+class TicketWorkOrderIssueCommand:
+    ticket_id: UUID
+    request: TicketWorkOrderIssueRequest
+    actor_id: UUID
+    actor_type: HandoffActorType
+    permissions: frozenset[str]
+    context: CommandContext
+    request_id: str | None = None
+
+
+class TicketWorkOrderHandoffError(DomainError):
     def __init__(
         self,
         code: str,
@@ -46,9 +79,7 @@ class TicketWorkOrderHandoffError(ValueError):
         *,
         kind: HandoffErrorKind = "conflict",
     ) -> None:
-        super().__init__(message)
-        self.code = code
-        self.message = message
+        super().__init__(code=code, message=message, details={"kind": kind})
         self.kind = kind
 
 
@@ -58,8 +89,8 @@ class TicketWorkOrderIssueResult:
     replayed: bool
 
 
-def _actor_type(auth: dict[str, Any] | None) -> AuditActorType:
-    principal_type = str((auth or {}).get("principal_type") or "").lower()
+def _actor_type(actor_type: HandoffActorType) -> AuditActorType:
+    principal_type = actor_type.value
     return {
         "api_key": AuditActorType.api_key,
         "service": AuditActorType.service,
@@ -181,16 +212,33 @@ def list_for_ticket(
 
 
 def issue_work_order(
-    db: Session,
-    ticket_id: object,
-    payload: TicketWorkOrderIssueRequest,
-    *,
-    actor_id: object | None,
-    auth: dict[str, Any] | None,
-    idempotency_key: str,
-    request_id: str | None = None,
+    db: Session, command: TicketWorkOrderIssueCommand
 ) -> TicketWorkOrderIssueResult:
-    key = str(idempotency_key or "").strip()
+    return execute_owner_command(
+        db,
+        definition=_ISSUE_DEFINITION,
+        context=command.context,
+        operation=lambda: _issue_work_order(db, command),
+    )
+
+
+def _issue_work_order(
+    db: Session, command: TicketWorkOrderIssueCommand
+) -> TicketWorkOrderIssueResult:
+    if command.context.scope != WORK_ORDER_ISSUE_SCOPE:
+        raise TicketWorkOrderHandoffError(
+            "invalid_command_scope",
+            "Ticket field-work issuance scope is invalid",
+            kind="forbidden",
+        )
+    missing_permissions = _REQUIRED_PERMISSIONS - command.permissions
+    if missing_permissions:
+        raise TicketWorkOrderHandoffError(
+            "permission_required",
+            "Ticket update and dispatch write permissions are required",
+            kind="forbidden",
+        )
+    key = str(command.context.idempotency_key or "").strip()
     if not key:
         raise TicketWorkOrderHandoffError(
             "idempotency_key_required",
@@ -199,7 +247,7 @@ def issue_work_order(
         )
     ticket = (
         db.query(Ticket)
-        .filter(Ticket.id == coerce_uuid(ticket_id))
+        .filter(Ticket.id == command.ticket_id)
         .with_for_update()
         .one_or_none()
     )
@@ -207,7 +255,9 @@ def issue_work_order(
         raise TicketWorkOrderHandoffError(
             "ticket_not_found", "Ticket not found", kind="not_found"
         )
-    actor_uuid = _validate_issue_eligibility(db, ticket, actor_id=actor_id)
+    actor_uuid = _validate_issue_eligibility(
+        db, ticket, actor_id=command.actor_id
+    )
     subscriber_id = ticket.subscriber_id
     if subscriber_id is None:  # Defensive narrowing; eligibility rejects this above.
         raise TicketWorkOrderHandoffError(
@@ -220,6 +270,7 @@ def issue_work_order(
         f"ticket-wo-{str(ticket.id)[:8]}-"
         f"{hashlib.sha256(command_key.encode()).hexdigest()[:24]}"
     )
+    payload = command.request
     description = payload.description or ticket.description
     scope_description = f"Issuance reason: {payload.reason}"
     if description:
@@ -268,7 +319,10 @@ def issue_work_order(
             tags=payload.tags,
             access_notes=payload.access_notes,
         ),
-        auth=auth,
+        auth={
+            "principal_type": command.actor_type.value,
+            "principal_id": str(command.actor_id),
+        },
         request_id=stable_request_id,
         idempotency_key=command_key,
         origin_ticket_id=ticket.id,
@@ -283,7 +337,6 @@ def issue_work_order(
         .one_or_none()
     )
     if existing_audit is not None:
-        db.commit()
         return TicketWorkOrderIssueResult(work_order=work_order, replayed=True)
 
     stage_audit_event(
@@ -291,7 +344,7 @@ def issue_work_order(
         action="ticket.work_order_issued",
         entity_type="support_ticket",
         entity_id=str(ticket.id),
-        actor_type=_actor_type(auth),
+        actor_type=_actor_type(command.actor_type),
         actor_id=str(actor_uuid),
         request_id=stable_request_id,
         metadata={
@@ -303,11 +356,9 @@ def issue_work_order(
             else None,
             "assigned_team_id": str(ticket.service_team_id),
             "reason": payload.reason,
-            "transport_request_id": request_id,
+            "transport_request_id": command.request_id,
         },
     )
-    db.commit()
-    db.refresh(work_order)
     return TicketWorkOrderIssueResult(work_order=work_order, replayed=False)
 
 

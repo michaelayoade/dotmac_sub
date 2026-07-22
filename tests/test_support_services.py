@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
+from app.services.domain_errors import DomainError
 
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.notification import (
@@ -37,6 +37,7 @@ from app.schemas.support import (
 )
 from app.services import support as support_service
 from app.services import support_automation
+from app.services import support_automation_rules
 from app.services import support_ticket_settings as support_ticket_settings_service
 from app.services import web_support_tickets as web_support_tickets_service
 from app.services.customer_identity_resolution import (
@@ -221,6 +222,7 @@ def test_ticket_auto_assignment_respects_configured_open_limit(db_session, subsc
             ),
         ]
     )
+    db_session.commit()
     support_ticket_settings_service.update_options(
         db_session,
         statuses=["open", "closed", "merged"],
@@ -563,11 +565,11 @@ def test_authenticated_selfcare_rejects_expired_confirmation(db_session, subscri
     token.expires_at = datetime.now(UTC) - timedelta(seconds=1)
     db_session.commit()
 
-    with pytest.raises(HTTPException) as expired:
+    with pytest.raises(DomainError) as expired:
         support_service.tickets.respond_to_resolution_for_customer(
             db_session, ticket, confirm=True
         )
-    assert expired.value.status_code == 409
+    assert expired.value.code == "resolution_confirmation_inactive"
 
 
 def test_resolution_confirmation_rejects_closed_ticket(db_session, subscriber):
@@ -581,12 +583,12 @@ def test_resolution_confirmation_rejects_closed_ticket(db_session, subscriber):
         actor_id=str(subscriber.id),
     )
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(DomainError) as exc:
         support_service.tickets.request_resolution_confirmation(
             db_session, str(ticket.id), actor_id=str(subscriber.id)
         )
 
-    assert exc.value.status_code == 409
+    assert exc.value.code == "resolution_confirmation_not_eligible"
 
 
 def test_resolution_confirmation_accepts_crm_provenance(db_session, subscriber):
@@ -650,13 +652,17 @@ def test_automation_added_field_visit_tag_does_not_issue_work(db_session, subscr
     from app.models.support import AutomationActionType, AutomationTrigger
     from app.models.work_order import WorkOrder
 
-    support_automation.create_rule(
+    support_automation_rules.create_rule(
         db_session,
         name="Site visits get a work order",
         trigger=AutomationTrigger.ticket_created,
-        conditions={"ticket_type": "site_visit"},
+        conditions=support_automation_rules.TicketAutomationConditions(
+            ticket_type="site_visit"
+        ),
         action_type=AutomationActionType.add_tag,
-        action_value={"tag": "field_visit"},
+        action_value=support_automation_rules.TicketAutomationAction(
+            tag="field_visit"
+        ),
     )
 
     ticket = support_service.tickets.create(
@@ -737,14 +743,14 @@ def test_merge_moves_comments_assignees_and_blocks_source_mutations(
     )
     assert any(str(row.person_id) == str(subscriber.id) for row in assignee_rows)
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(DomainError) as exc:
         support_service.tickets.update(
             db_session,
             str(source.id),
             TicketUpdate(title="forbidden"),
             actor_id=str(subscriber.id),
         )
-    assert exc.value.status_code == 409
+    assert exc.value.code == "ticket_merged_source"
 
 
 def test_assignment_notifications_wired_but_disabled(db_session, subscriber):
@@ -1050,12 +1056,13 @@ def test_ticket_automation_is_suppressed_for_ambiguous_identity(db_session, subs
     db_session.flush()
     rebuild_identity_index_for_subscriber(db_session, subscriber.id)
     rebuild_identity_index_for_subscriber(db_session, other.id)
-    support_automation.create_rule(
+    db_session.commit()
+    support_automation_rules.create_rule(
         db_session,
         name="Auto high priority",
         trigger=AutomationTrigger.ticket_created,
         action_type=AutomationActionType.set_priority,
-        action_value={"priority": "high"},
+        action_value=support_automation_rules.TicketAutomationAction(priority="high"),
     )
     db_session.commit()
 
@@ -1094,12 +1101,15 @@ def test_ticket_automation_is_suppressed_for_low_confidence_identity(
         )
     )
     db_session.flush()
-    support_automation.create_rule(
+    db_session.commit()
+    support_automation_rules.create_rule(
         db_session,
         name="Auto open status",
         trigger=AutomationTrigger.ticket_created,
         action_type=AutomationActionType.set_status,
-        action_value={"status": "pending_customer"},
+        action_value=support_automation_rules.TicketAutomationAction(
+            status="pending_customer"
+        ),
     )
     db_session.commit()
 
@@ -1242,7 +1252,7 @@ def test_web_comment_edit_rejects_comment_from_other_ticket(db_session, subscrib
         actor_id=None,
     )
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(DomainError) as exc:
         web_support_tickets_service.update_ticket_comment_from_form(
             db_session,
             request=None,
@@ -1251,4 +1261,4 @@ def test_web_comment_edit_rejects_comment_from_other_ticket(db_session, subscrib
             actor_id=None,
             body="Should not apply",
         )
-    assert exc.value.status_code == 404
+    assert exc.value.code == "ticket_comment_not_found"

@@ -465,6 +465,11 @@ class WorkOrderCommands:
                 db.commit()
                 db.refresh(row)
         except IntegrityError as exc:
+            if not commit:
+                # Participant callers do not own transaction completion. The
+                # root owner rolls back and retries the whole command so its
+                # state, provenance, and audit evidence remain atomic.
+                raise
             # Concurrent replays converge through the public-id unique key.
             db.rollback()
             existing = (

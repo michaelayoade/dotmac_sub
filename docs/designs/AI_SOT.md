@@ -55,7 +55,7 @@ facts → derived → consequences separation:
 ## The consequence rule (the load-bearing invariant)
 
 **An insight never mutates domain state.** Acting on a recommendation means
-calling the domain's declared owner — `support.tickets`,
+calling the domain's declared owner — `support.ticket_lifecycle`,
 `operations.work_orders`, `operations.project_lifecycle`,
 `communications.team_inbox` — which applies its own guards, events, and
 audit. AI requests an outcome; the owner decides it.

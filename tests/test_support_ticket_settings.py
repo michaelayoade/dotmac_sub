@@ -43,7 +43,10 @@ def test_ticket_settings_drive_support_ticket_form_context(db_session):
 
 
 def test_ticket_settings_reject_statuses_outside_lifecycle_vocabulary(db_session):
-    with pytest.raises(ValueError, match="Unsupported ticket status: needs_vendor"):
+    with pytest.raises(
+        support_ticket_settings_service.SupportTicketConfigurationError,
+        match="Unsupported ticket status: needs_vendor",
+    ):
         support_ticket_settings_service.update_options(
             db_session,
             statuses=["open", "needs_vendor"],
@@ -96,6 +99,7 @@ def test_ticket_settings_persist_routing_and_sla(db_session):
         "incident": 0,
         "core link disconnection": 48,
     }
+    db_session.commit()
     support_ticket_settings_service.update_options(
         db_session,
         statuses=["open", "pending"],
@@ -180,5 +184,6 @@ def test_assignment_rule_create_and_delete(db_session):
         }
     ]
 
+    db_session.commit()
     support_ticket_settings_service.delete_assignment_rule(db_session, str(rule.id))
     assert db_session.query(TicketAssignmentRule).count() == 0

@@ -1351,6 +1351,7 @@ def my_create_ticket(
         channel=TicketChannel.web,
         subscriber_id=UUID(subscriber_id),
     )
+    db_session_adapter.release_read_transaction(db)
     ticket = support_service.tickets.create(
         db, ticket_payload, actor_id=subscriber_id, request=request
     )
@@ -1423,6 +1424,7 @@ def my_add_ticket_comment(
     uploaded: list[dict] = []
     if files:
         try:
+            db_session_adapter.release_read_transaction(db)
             uploaded = web_support_tickets.upload_ticket_attachments(
                 db,
                 ticket_id=ticket_id,
@@ -1435,6 +1437,7 @@ def my_add_ticket_comment(
                 status_code=400,
                 detail={"code": "invalid_attachment", "message": str(exc)},
             ) from exc
+    db_session_adapter.release_read_transaction(db)
     comment = support_service.tickets.create_comment(
         db,
         ticket_id,
@@ -1459,6 +1462,7 @@ def my_rate_ticket(
     """Rate the support experience on the caller's own resolved/closed ticket
     (CSAT, 1-5 + optional comment). Re-rating overwrites the previous score."""
     ticket = _owned_ticket(db, _subscriber_id(principal), ticket_id)
+    db_session_adapter.release_read_transaction(db)
     return support_service.tickets.set_satisfaction(
         db, ticket, rating=payload.rating, comment=payload.comment
     )
@@ -1474,6 +1478,7 @@ def my_confirm_ticket_resolution(
 ):
     """Confirm that the owner-resolved incident is fixed."""
     ticket = _owned_ticket(db, _subscriber_id(principal), ticket_id)
+    db_session_adapter.release_read_transaction(db)
     return support_service.tickets.respond_to_resolution_for_customer(
         db, ticket, confirm=True
     )
@@ -1490,6 +1495,7 @@ def my_dispute_ticket_resolution(
 ):
     """Reopen the incident when the reported resolution did not fix it."""
     ticket = _owned_ticket(db, _subscriber_id(principal), ticket_id)
+    db_session_adapter.release_read_transaction(db)
     return support_service.tickets.respond_to_resolution_for_customer(
         db,
         ticket,

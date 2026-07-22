@@ -1,0 +1,107 @@
+from pathlib import Path
+
+from app.services.sot_relationships import all_services
+
+
+ROOT = Path(__file__).resolve().parents[2]
+
+MIGRATED_MODULES = (
+    "app/services/support.py",
+    "app/services/support_automation.py",
+    "app/services/support_automation_rules.py",
+    "app/services/support_ticket_settings.py",
+    "app/services/ticket_assignment/admin.py",
+    "app/services/ticket_assignment/engine.py",
+    "app/services/ticket_assignment/selectors.py",
+    "app/services/ticket_work_order_handoff.py",
+    "app/services/ticket_validation.py",
+    "app/services/web_support_ticket_bulk.py",
+    "app/services/web_support_tickets.py",
+)
+
+CONTRACTED_OWNERS = {
+    "support.ticket_lifecycle",
+    "support.ticket_configuration",
+    "support.ticket_sla_clock",
+    "support.ticket_work_order_handoff",
+    "support.ticket_bulk_commands",
+    "support.ticket_assignment_rule_configuration",
+    "support.ticket_assignment_evaluation",
+    "support.ticket_automation_rule_configuration",
+    "support.ticket_automation_evaluation",
+    "ui.support_ticket_list_projection",
+    "ui.support_ticket_bulk_action_projection",
+}
+SERVICES_BY_NAME = {service.name: service for service in all_services()}
+
+
+def _source(relative_path: str) -> str:
+    return (ROOT / relative_path).read_text(encoding="utf-8")
+
+
+def test_support_services_have_complete_registered_contracts() -> None:
+    assert CONTRACTED_OWNERS <= SERVICES_BY_NAME.keys()
+    for name in CONTRACTED_OWNERS:
+        assert SERVICES_BY_NAME[name].contract is not None, name
+
+
+def test_migrated_support_services_do_not_own_transport_or_transactions() -> None:
+    forbidden = ("HTTPException", ".commit(", ".rollback(", ".begin_nested(")
+    for relative_path in MIGRATED_MODULES:
+        source = _source(relative_path)
+        for token in forbidden:
+            assert token not in source, f"{relative_path} contains {token}"
+
+
+def test_support_legacy_contract_and_writer_baselines_shrank() -> None:
+    manifest = _source("tests/architecture/sot_manifest_legacy_baseline.txt")
+    writers = _source("tests/architecture/sot_writer_baseline.txt")
+    for name in CONTRACTED_OWNERS:
+        assert name not in manifest
+    for module in (
+        "app.services.support_automation",
+        "app.services.ticket_assignment.admin",
+        "app.services.ticket_assignment.engine",
+        "app.services.ticket_assignment.selectors",
+    ):
+        assert module not in writers
+
+
+def test_assignment_and_automation_policies_do_not_write_ticket_lifecycle() -> None:
+    assignment = _source("app/services/ticket_assignment/engine.py")
+    automation = _source("app/services/support_automation.py")
+    assert "ticket.assigned_to_person_id =" not in assignment
+    assert "ticket.status =" not in assignment
+    assert "ticket.service_team_id =" not in assignment
+    assert "ticket.status =" not in automation
+    assert "ticket.priority =" not in automation
+    assert "ticket.service_team_id =" not in automation
+    lifecycle = _source("app/services/support.py")
+    assert "evaluate_rules(db, ticket, trigger)" in lifecycle
+    assert "auto_assign_ticket(" in assignment
+
+
+def test_ticket_work_order_field_results_cannot_close_ticket() -> None:
+    source = _source("app/services/ticket_work_order_handoff.py")
+    assert "execute_owner_command(" in source
+    assert "support:ticket:update" in source
+    assert "operations:dispatch:write" in source
+    assert "ticket.status =" not in source
+    assert "transition_ticket_status" not in source
+
+
+def test_historical_crm_provenance_has_gated_backfill_and_runbook() -> None:
+    migration = _source(
+        "alembic/versions/401_support_ticket_work_order_provenance.py"
+    )
+    assert "crm_ticket_id" in migration
+    assert "origin_ticket_id" in migration
+    assert "raise RuntimeError" in migration
+    assert "UPDATE work_orders" in migration
+    assert "crm_ticket_id = NULL" not in migration
+    assert (ROOT / "docs/runbooks/TICKET_WORK_ORDER_PROVENANCE_CUTOVER.md").exists()
+
+
+def test_retired_ticket_owner_is_not_registered() -> None:
+    assert "support.tickets" not in SERVICES_BY_NAME
+    assert "support.ticket_lifecycle" in SERVICES_BY_NAME

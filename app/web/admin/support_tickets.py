@@ -477,6 +477,7 @@ def issue_ticket_work_order(
 ):
     from app.schemas.support import TicketWorkOrderIssueRequest
     from app.services import ticket_work_order_handoff
+    from app.services.owner_commands import CommandContext
 
     def _clean(value: str | None) -> str | None:
         cleaned = (value or "").strip()
@@ -505,17 +506,32 @@ def issue_ticket_work_order(
             requires_as_built_evidence=str(requires_as_built_evidence or "").lower()
             in {"1", "true", "yes", "on"},
         )
+        actor_id = UUID(str(_actor_id(request)))
+        auth = getattr(request.state, "auth", None) or {}
         result = ticket_work_order_handoff.issue_work_order(
             db,
-            ticket_id,
-            payload,
-            actor_id=_actor_id(request),
-            auth=getattr(request.state, "auth", None),
-            idempotency_key=idempotency_key,
-            request_id=getattr(request.state, "request_id", None),
+            ticket_work_order_handoff.TicketWorkOrderIssueCommand(
+                ticket_id=ticket_id,
+                request=payload,
+                actor_id=actor_id,
+                actor_type=ticket_work_order_handoff.HandoffActorType(
+                    str(auth.get("principal_type") or "system_user")
+                ),
+                permissions=frozenset(
+                    {"support:ticket:update", "operations:dispatch:write"}
+                ),
+                context=CommandContext.system(
+                    actor=str(actor_id),
+                    scope=ticket_work_order_handoff.WORK_ORDER_ISSUE_SCOPE,
+                    reason=payload.reason,
+                    idempotency_key=idempotency_key,
+                ),
+                request_id=getattr(request.state, "request_id", None),
+            ),
         )
     except (
         ValidationError,
+        ValueError,
         ticket_work_order_handoff.TicketWorkOrderHandoffError,
     ) as exc:
         message = (

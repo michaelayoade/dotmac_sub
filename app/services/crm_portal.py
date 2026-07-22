@@ -18,6 +18,8 @@ from sqlalchemy.orm import Session
 from app.models.subscriber import Subscriber
 from app.models.support import TicketCommentAuthorType
 from app.services.common import coerce_uuid
+from app.services.db_session_adapter import db_session_adapter
+from app.services.domain_errors import DomainError
 from app.services.crm_client import CRMClientError
 from app.services.integrations.crm_capability import capability_client
 from app.services.session_store import get_session_redis
@@ -207,13 +209,14 @@ def handle_ticket_rating(
     if not ticket.subscriber_id or str(ticket.subscriber_id) not in allowed:
         return {"success": False, "error": "Ticket not found."}
     try:
+        db_session_adapter.release_read_transaction(db)
         support_service.Tickets.set_satisfaction(
             db,
             ticket,
             rating=max(1, min(5, int(rating))),
             comment=(comment or "")[:2000] or None,
         )
-    except HTTPException:
+    except DomainError:
         return {"success": False, "error": "You can rate support once resolved."}
     return {"success": True}
 
@@ -237,14 +240,15 @@ def handle_ticket_resolution_response(
     if not ticket.subscriber_id or str(ticket.subscriber_id) not in allowed:
         return {"success": False, "error": "Ticket not found."}
     try:
+        db_session_adapter.release_read_transaction(db)
         support_service.Tickets.respond_to_resolution_for_customer(
             db,
             ticket,
             confirm=confirm,
             reason=reason,
         )
-    except HTTPException as exc:
-        return {"success": False, "error": str(exc.detail)}
+    except DomainError as exc:
+        return {"success": False, "error": exc.message}
     return {"success": True}
 
 
@@ -405,6 +409,7 @@ def handle_ticket_create(
         }
     files = [a for a in (attachments or []) if getattr(a, "filename", "")]
     try:
+        db_session_adapter.release_read_transaction(db)
         ticket = support_service.Tickets.create(
             db,
             TicketCreate(
@@ -429,11 +434,9 @@ def handle_ticket_create(
     except ValueError as e:
         # Attachment validation (type/size) — surface the specific reason.
         logger.info("Rejected portal ticket attachment: %s", e)
-        db.rollback()
         return {"success": False, "error": str(e)}
     except Exception as e:  # noqa: BLE001
         logger.error("Failed to create portal ticket: %s", e)
-        db.rollback()
         return {
             "success": False,
             "error": "Unable to create ticket. Please try again later.",
@@ -475,6 +478,7 @@ def handle_ticket_comment(
             author_person_id = None
         uploaded: list[dict] = []
         if files:
+            db_session_adapter.release_read_transaction(db)
             uploaded = web_support_tickets.upload_ticket_attachments(
                 db,
                 ticket_id=str(ticket.id),
@@ -482,10 +486,11 @@ def handle_ticket_comment(
                 entity_type="support_ticket_comment_attachment",
                 actor_id=str(ticket.subscriber_id),
             )
-        comment = support_service.TicketComments.create(
+        db_session_adapter.release_read_transaction(db)
+        support_service.Tickets.create_comment(
             db,
-            ticket=ticket,
-            payload=TicketCommentCreate(
+            str(ticket.id),
+            TicketCommentCreate(
                 body=body,
                 is_internal=False,
                 author_type=TicketCommentAuthorType.customer,
@@ -494,16 +499,13 @@ def handle_ticket_comment(
             ),
             actor_id=None,
         )
-        db.commit()
         return {"success": True}
     except ValueError as e:
         # Attachment validation (type/size) — surface the specific reason.
         logger.info("Rejected portal ticket comment attachment: %s", e)
-        db.rollback()
         return {"success": False, "error": str(e)}
     except Exception as e:  # noqa: BLE001
         logger.error("Failed to add portal ticket comment: %s", e)
-        db.rollback()
         return {
             "success": False,
             "error": "Unable to add comment. Please try again later.",

@@ -115,7 +115,7 @@ def test_ticket_auto_assign_respects_match_config_and_fallback_team(db_session):
     assert south_result.reason == "no_matching_rule"
 
 
-def test_ticket_auto_assign_direct_technician_adds_assignee_row(db_session):
+def test_ticket_auto_assign_direct_technician_is_a_proposal_only(db_session):
     technician_id = uuid4()
     rule = TicketAssignmentRule(
         name="Direct technician",
@@ -132,7 +132,8 @@ def test_ticket_auto_assign_direct_technician_adds_assignee_row(db_session):
     db_session.refresh(ticket)
 
     assert result.assigned is True
-    assert ticket.assigned_to_person_id == technician_id
+    assert result.assignee_person_id == str(technician_id)
+    assert ticket.assigned_to_person_id is None
     assert (
         db_session.query(TicketAssignee)
         .filter(
@@ -140,7 +141,7 @@ def test_ticket_auto_assign_direct_technician_adds_assignee_row(db_session):
             TicketAssignee.person_id == technician_id,
         )
         .count()
-        == 1
+        == 0
     )
 
 

@@ -2,23 +2,21 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
 
 from app.models.support import (
     AutomationActionType,
     AutomationTrigger,
+    Ticket,
     TicketChannel,
     TicketPriority,
     TicketStatus,
 )
-from app.schemas.support import TicketCreate
-from app.services import support as support_service
 from app.services import support_automation
+from app.services import support_automation_rules
 from app.services import support_ticket_settings as support_ticket_settings_service
 from app.web.admin import support_automation as admin_support_automation
 
@@ -35,7 +33,9 @@ def test_clean_conditions_drops_unknown_keys_and_empty_values():
         "ticket_type": "incident",
         "made_up_key": "x",
     }
-    cleaned = support_automation._clean_conditions(raw)
+    cleaned = support_automation_rules.TicketAutomationConditions.from_mapping(
+        raw
+    ).as_dict()
     assert cleaned == {"status": "open", "ticket_type": "incident"}
 
 
@@ -76,72 +76,47 @@ def test_conditions_match_unwraps_enum_value():
 # ---------------------------------------------------------------------------
 
 
-def _fake_ticket(**overrides):
-    base = {
-        "service_team_id": None,
-        "technician_person_id": None,
-        "priority": "normal",
-        "status": "open",
-        "due_at": None,
-        "tags": [],
-    }
-    base.update(overrides)
-    return SimpleNamespace(**base)
-
-
 def _fake_rule(action_type, action_value):
-    return SimpleNamespace(action_type=action_type, action_value=action_value)
+    return SimpleNamespace(
+        id=uuid4(), name="Test rule", action_type=action_type, action_value=action_value
+    )
 
 
-def test_apply_action_set_priority():
-    ticket = _fake_ticket()
+def test_proposal_sets_priority_without_a_ticket_write():
     rule = _fake_rule(AutomationActionType.set_priority, {"priority": "high"})
-    support_automation._apply_action(rule, ticket)
-    assert ticket.priority == "high"
+    proposal = support_automation._proposal_for_rule(rule)
+    assert proposal is not None and proposal.priority == "high"
 
 
-def test_apply_action_set_status_strips_whitespace():
-    ticket = _fake_ticket()
+def test_status_proposal_strips_whitespace():
     rule = _fake_rule(AutomationActionType.set_status, {"status": "  resolved  "})
-    support_automation._apply_action(rule, ticket)
-    assert ticket.status == "resolved"
+    proposal = support_automation._proposal_for_rule(rule)
+    assert proposal is not None and proposal.status == "resolved"
 
 
-def test_apply_action_add_tag_dedupes():
-    ticket = _fake_ticket(tags=["vip", "urgent"])
+def test_tag_proposal_carries_only_the_requested_tag():
     rule = _fake_rule(AutomationActionType.add_tag, {"tag": "vip"})
-    support_automation._apply_action(rule, ticket)
-    assert ticket.tags == ["vip", "urgent"]  # unchanged
-
-    rule_new = _fake_rule(AutomationActionType.add_tag, {"tag": "escalated"})
-    support_automation._apply_action(rule_new, ticket)
-    assert ticket.tags == ["vip", "urgent", "escalated"]
+    proposal = support_automation._proposal_for_rule(rule)
+    assert proposal is not None and proposal.tag == "vip"
 
 
-def test_apply_action_set_due_in_hours_uses_now_plus_delta():
-    ticket = _fake_ticket()
+def test_due_proposal_carries_relative_hours_not_a_wall_clock_decision():
     rule = _fake_rule(AutomationActionType.set_due_in_hours, {"hours": 4})
-    before = datetime.now(UTC)
-    support_automation._apply_action(rule, ticket)
-    delta = (ticket.due_at - before).total_seconds()
-    assert 3.9 * 3600 <= delta <= 4.1 * 3600
+    proposal = support_automation._proposal_for_rule(rule)
+    assert proposal is not None and proposal.due_in_hours == 4
 
 
-def test_apply_action_assign_team_with_invalid_uuid_raises():
-    ticket = _fake_ticket()
+def test_team_proposal_with_invalid_uuid_raises():
     rule = _fake_rule(
         AutomationActionType.assign_team, {"service_team_id": "not-a-uuid"}
     )
     with pytest.raises(ValueError):
-        support_automation._apply_action(rule, ticket)
+        support_automation._proposal_for_rule(rule)
 
 
-def test_apply_action_missing_value_is_a_no_op():
-    """If action_value is empty / missing the expected key, nothing changes."""
-    ticket = _fake_ticket(priority="medium")
+def test_missing_action_value_produces_no_proposal():
     rule = _fake_rule(AutomationActionType.set_priority, {})
-    support_automation._apply_action(rule, ticket)
-    assert ticket.priority == "medium"
+    assert support_automation._proposal_for_rule(rule) is None
 
 
 def test_admin_action_value_validation_rejects_mismatched_payload(db_session):
@@ -181,68 +156,67 @@ def _make_subscriber(db_session):
 def test_set_rule_active_is_idempotent(db_session):
     subscriber = _make_subscriber(db_session)
     del subscriber  # only used to ensure the DB has at least one subscriber row
-    rule = support_automation.create_rule(
+    db_session.commit()
+    rule = support_automation_rules.create_rule(
         db_session,
         name="Idempotent rule",
         trigger=AutomationTrigger.ticket_created,
         action_type=AutomationActionType.add_tag,
-        action_value={"tag": "noop"},
+        action_value=support_automation_rules.TicketAutomationAction(tag="noop"),
         is_active=True,
     )
     db_session.commit()
 
     initial_updated = rule.updated_at
     # Same state -> no flush, no updated_at change
-    support_automation.set_rule_active(db_session, str(rule.id), is_active=True)
+    support_automation_rules.set_rule_active(db_session, str(rule.id), is_active=True)
     db_session.refresh(rule)
     assert rule.updated_at == initial_updated
 
     # Flip
-    support_automation.set_rule_active(db_session, str(rule.id), is_active=False)
+    support_automation_rules.set_rule_active(db_session, str(rule.id), is_active=False)
     db_session.commit()
     db_session.refresh(rule)
     assert rule.is_active is False
 
     # Setting to the same flipped state again must remain idempotent
     second_flipped_updated = rule.updated_at
-    support_automation.set_rule_active(db_session, str(rule.id), is_active=False)
+    support_automation_rules.set_rule_active(db_session, str(rule.id), is_active=False)
     db_session.refresh(rule)
     assert rule.updated_at == second_flipped_updated
 
 
-def test_get_rule_raises_404_for_missing(db_session):
-    with pytest.raises(HTTPException) as exc:
-        support_automation.get_rule(db_session, str(uuid4()))
-    assert exc.value.status_code == 404
+def test_get_rule_raises_domain_error_for_missing(db_session):
+    with pytest.raises(support_automation_rules.TicketAutomationRuleError) as exc:
+        support_automation_rules.get_rule(db_session, str(uuid4()))
+    assert exc.value.code == "automation_rule_not_found"
 
 
-def test_apply_rules_records_last_fired_at(db_session):
-    rule = support_automation.create_rule(
+def test_automation_evaluation_returns_proposal_without_mutating_ticket(db_session):
+    rule = support_automation_rules.create_rule(
         db_session,
         name="Set high on created",
         trigger=AutomationTrigger.ticket_created,
         action_type=AutomationActionType.set_priority,
-        action_value={"priority": "high"},
+        action_value=support_automation_rules.TicketAutomationAction(priority="high"),
         is_active=True,
     )
     db_session.commit()
 
-    ticket = support_service.tickets.create(
-        db_session,
-        TicketCreate(
-            title="Automation observability test",
-            description="",
-            channel=TicketChannel.web,
-            priority="normal",
-        ),
-        actor_id=None,
+    ticket = Ticket(
+        title="Automation proposal test",
+        description="",
+        channel=TicketChannel.web,
+        priority="normal",
+    )
+    db_session.add(ticket)
+    db_session.commit()
+
+    proposals = support_automation.evaluate_rules(
+        db_session, ticket, AutomationTrigger.ticket_created
     )
 
-    db_session.refresh(rule)
-    # Identity-resolution suppression may apply for tickets without an
-    # inbound sender; that path also sets metadata flags. We only need to
-    # confirm the bookkeeping fields work when a rule succeeds normally.
-    assert ticket.priority in {"high", "normal"}
-    if ticket.priority == "high":
-        assert rule.last_fired_at is not None
-        assert rule.last_error is None
+    assert len(proposals) == 1
+    assert proposals[0].priority == "high"
+    assert ticket.priority == "normal"
+    assert rule.last_fired_at is None

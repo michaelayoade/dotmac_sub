@@ -8,14 +8,19 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from uuid import UUID
 
-from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models.support import Ticket
 from app.schemas.support import TicketBulkUpdateItem, TicketBulkUpdateRequest
 from app.services import support as support_service
+from app.services.db_session_adapter import db_session_adapter
 from app.services import support_ticket_settings
 from app.services.bulk_actions import membership_scope_token, parse_bulk_selection
+from app.services.domain_errors import DomainError
+
+
+class SupportTicketBulkError(DomainError):
+    """Stable bulk membership, validation, or drift rejection."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,12 +162,18 @@ def preview_support_ticket_bulk_update(
 ) -> SupportTicketBulkPreview:
     """Resolve selected membership and update eligibility without side effects."""
 
-    selection = parse_bulk_selection(
-        payload,
-        allowed_filter_keys=(),
-        filtered_selection_supported=False,
-    )
-    changes = _normalize_changes(db, payload.get("updates"))
+    try:
+        selection = parse_bulk_selection(
+            payload,
+            allowed_filter_keys=(),
+            filtered_selection_supported=False,
+        )
+        changes = _normalize_changes(db, payload.get("updates"))
+    except ValueError as exc:
+        raise SupportTicketBulkError(
+            code="support_ticket_bulk_invalid",
+            message=str(exc),
+        ) from exc
     resolved_ids: list[str] = []
     eligible_ids: list[str] = []
     skipped: list[dict[str, str]] = []
@@ -194,21 +205,30 @@ def require_support_ticket_bulk_confirmation(
 ) -> SupportTicketBulkPreview:
     """Reject execution unless membership, eligibility, and changes match preview."""
 
-    selection = parse_bulk_selection(
-        payload,
-        allowed_filter_keys=(),
-        filtered_selection_supported=False,
-    )
+    try:
+        selection = parse_bulk_selection(
+            payload,
+            allowed_filter_keys=(),
+            filtered_selection_supported=False,
+        )
+    except ValueError as exc:
+        raise SupportTicketBulkError(
+            code="support_ticket_bulk_invalid",
+            message=str(exc),
+        ) from exc
     if selection.expected_count is None or not selection.expected_scope_token:
-        raise ValueError("Preview the ticket update before confirming")
+        raise SupportTicketBulkError(
+            code="support_ticket_bulk_preview_required",
+            message="Preview the ticket update before confirming",
+        )
     preview = preview_support_ticket_bulk_update(db, payload)
     changed = selection.expected_count != len(
         preview.resolved_ids
     ) or not hmac.compare_digest(selection.expected_scope_token, preview.scope_token)
     if changed:
-        raise HTTPException(
-            status_code=409,
-            detail=(
+        raise SupportTicketBulkError(
+            code="support_ticket_bulk_scope_drift",
+            message=(
                 "The selected ticket scope or eligibility changed after preview. "
                 "Review the updated impact before confirming again."
             ),
@@ -226,7 +246,10 @@ def execute_support_ticket_bulk_update(
     """Execute one confirmed update through the canonical ticket mutation owner."""
 
     if payload.get("confirmed") is not True:
-        raise ValueError("Ticket update confirmation required")
+        raise SupportTicketBulkError(
+            code="support_ticket_bulk_confirmation_required",
+            message="Ticket update confirmation required",
+        )
     preview = require_support_ticket_bulk_confirmation(db, payload)
     items = [
         TicketBulkUpdateItem(
@@ -242,9 +265,9 @@ def execute_support_ticket_bulk_update(
         for ticket_id in preview.eligible_ids
     ]
     updated = (
-        support_service.tickets.bulk_update(
+        _execute_bulk_owner(
             db,
-            TicketBulkUpdateRequest(items=items),
+            items=items,
             actor_id=actor_id,
             request=request,
         )
@@ -267,3 +290,19 @@ def execute_support_ticket_bulk_update(
         "processed_ids": processed_ids,
         "skipped": list(preview.skipped),
     }
+
+
+def _execute_bulk_owner(
+    db: Session,
+    *,
+    items: list[TicketBulkUpdateItem],
+    actor_id: str | None,
+    request,
+):
+    db_session_adapter.release_read_transaction(db)
+    return support_service.tickets.bulk_update(
+        db,
+        TicketBulkUpdateRequest(items=items),
+        actor_id=actor_id,
+        request=request,
+    )
