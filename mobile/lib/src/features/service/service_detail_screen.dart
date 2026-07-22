@@ -96,14 +96,11 @@ class _ServiceDetailScreenState extends ConsumerState<ServiceDetailScreen> {
     if (submitted != true || !mounted) return;
     setState(() => _commandPending = true);
     try {
-      final outcome = await ref
-          .read(catalogRepositoryProvider)
-          .updateWifi(
+      final outcome = await ref.read(catalogRepositoryProvider).updateWifi(
             widget.service.id,
             ssid: ssid.text.trim(),
-            password: password.text.trim().isEmpty
-                ? null
-                : password.text.trim(),
+            password:
+                password.text.trim().isEmpty ? null : password.text.trim(),
           );
       if (mounted) _showOutcome(outcome.message, outcome.succeeded);
     } catch (error) {
@@ -148,8 +145,8 @@ class _ServiceDetailScreenState extends ConsumerState<ServiceDetailScreen> {
             Text(
               s.planType!,
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: Theme.of(context).colorScheme.outline,
-              ),
+                    color: Theme.of(context).colorScheme.outline,
+                  ),
             ),
           ],
           const SizedBox(height: 16),
@@ -238,20 +235,19 @@ class _ExpiryCard extends StatelessWidget {
         : switch (days) {
             // Postpaid / no date expiry: show the next bill date, not a scary
             // "validity unknown".
-            null =>
-              s.nextBillingAt != null
-                  ? (
-                      context.semantic.success,
-                      'Next bill ${Fmt.date(s.nextBillingAt)}',
-                    )
-                  : (scheme.outline, 'No expiry date'),
+            null => s.nextBillingAt != null
+                ? (
+                    context.semantic.success,
+                    'Next bill ${Fmt.date(s.nextBillingAt)}',
+                  )
+                : (scheme.outline, 'No expiry date'),
             0 => (scheme.error, 'Expires today'),
             // Active service, stale billing date: running, not expired.
             < 0 => (context.semantic.success, 'Active'),
             <= 3 => (
-              context.semantic.warning,
-              '$days day${days == 1 ? '' : 's'} left',
-            ),
+                context.semantic.warning,
+                '$days day${days == 1 ? '' : 's'} left',
+              ),
             _ => (context.semantic.success, '$days days left'),
           };
     return Card(
@@ -268,9 +264,9 @@ class _ExpiryCard extends StatelessWidget {
                   Text(
                     label,
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      color: color,
-                      fontWeight: FontWeight.w700,
-                    ),
+                          color: color,
+                          fontWeight: FontWeight.w700,
+                        ),
                   ),
                   if (s.expiresAt != null)
                     Text(

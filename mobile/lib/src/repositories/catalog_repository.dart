@@ -133,8 +133,7 @@ class CatalogRepository {
     int quantity,
     String previewFingerprint,
   ) async {
-    final key =
-        'addon-${DateTime.now().microsecondsSinceEpoch}-'
+    final key = 'addon-${DateTime.now().microsecondsSinceEpoch}-'
         '${Random().nextInt(1 << 32)}';
     final data = await guard(
       () => dio.post(
@@ -167,8 +166,7 @@ class CatalogRepository {
     String? fieldQuoteFingerprint,
     String? notes,
   }) async {
-    final key =
-        'plan-${DateTime.now().microsecondsSinceEpoch}-'
+    final key = 'plan-${DateTime.now().microsecondsSinceEpoch}-'
         '${Random().nextInt(1 << 32)}';
     final data = await guard(
       () => dio.post(
