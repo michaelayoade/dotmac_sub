@@ -356,6 +356,43 @@ def db_session(engine):
         connection.close()
 
 
+@pytest.fixture(autouse=True)
+def _deterministic_quiet_hours(db_session):
+    """Quiet hours are permanently active in production (defaults 22:00-07:00
+    UTC), which would otherwise make every delivery assertion depend on the
+    wall-clock time the suite runs at. Pin an empty window so delivery is
+    deterministic; a test that exercises quiet hours sets its own values and
+    overrides these rows.
+    """
+    from app.models.domain_settings import (
+        DomainSetting,
+        SettingDomain,
+        SettingValueType,
+    )
+
+    for key in ("notification_quiet_hours_start", "notification_quiet_hours_end"):
+        row = (
+            db_session.query(DomainSetting)
+            .filter_by(domain=SettingDomain.notification, key=key)
+            .one_or_none()
+        )
+        if row is None:
+            db_session.add(
+                DomainSetting(
+                    domain=SettingDomain.notification,
+                    key=key,
+                    value_type=SettingValueType.string,
+                    value_text="00:00",
+                    is_active=True,
+                )
+            )
+        else:
+            row.value_text = "00:00"
+            row.is_active = True
+    db_session.flush()
+    yield
+
+
 def _unique_email() -> str:
     return f"test-{uuid.uuid4().hex}@example.com"
 
