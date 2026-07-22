@@ -17,7 +17,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.billing import Invoice, InvoiceStatus, Payment, PaymentAllocation
-from app.models.catalog import Subscription
+from app.models.catalog import AccessCredential, OfferRadiusProfile, Subscription
 from app.models.provisioning import (
     ProvisioningReadinessDecision,
     ProvisioningReadinessDecisionStatus,
@@ -25,6 +25,7 @@ from app.models.provisioning import (
     ServiceOrderStatus,
     ServiceOrderType,
 )
+from app.models.radius import RadiusUser
 from app.models.subscription_change import (
     SubscriptionChangeExecutionState,
     SubscriptionChangeRequest,
@@ -34,6 +35,7 @@ from app.schemas.billing import InvoiceCreate
 from app.schemas.dispatch import WorkOrderHeaderCreate
 from app.services import billing as billing_service
 from app.services.events import EventType, emit_event
+from app.services.radius_access_state import stage_subscription_radius_profile
 from app.services.subscription_changes import subscription_change_requests
 from app.services.work_order_commands import work_order_commands
 
@@ -49,6 +51,14 @@ class FulfillmentOutcome:
     request_id: UUID
     service_order_id: UUID
     work_order_id: UUID
+    replayed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class RemoteReprovisionOutcome:
+    request_id: UUID
+    radius_profile_id: UUID
+    radius_user_id: UUID | None
     replayed: bool
 
 
@@ -116,6 +126,150 @@ def stage_relocation_charge(
     request.execution_state = SubscriptionChangeExecutionState.awaiting_payment
     db.flush()
     return invoice
+
+
+def stage_remote_reprovision(
+    db: Session, request: SubscriptionChangeRequest
+) -> RemoteReprovisionOutcome:
+    """Stage the exact offer profile on one subscription-scoped credential.
+
+    The live offer remains unchanged. A later verifier must observe the exact
+    profile on the exact RADIUS user after this request watermark.
+    """
+
+    if request.remote_radius_profile_id is not None:
+        return RemoteReprovisionOutcome(
+            request.id,
+            request.remote_radius_profile_id,
+            request.remote_radius_user_id,
+            True,
+        )
+    profiles = list(
+        db.scalars(
+            select(OfferRadiusProfile).where(
+                OfferRadiusProfile.offer_id == request.requested_offer_id
+            )
+        ).all()
+    )
+    if len(profiles) != 1:
+        raise SubscriptionChangeExecutionError(
+            "remote_radius_profile_ambiguous",
+            "The requested offer must have exactly one RADIUS profile",
+        )
+    credentials = list(
+        db.scalars(
+            select(AccessCredential).where(
+                AccessCredential.subscription_id == request.subscription_id,
+                AccessCredential.is_active.is_(True),
+            )
+        ).all()
+    )
+    if len(credentials) != 1:
+        raise SubscriptionChangeExecutionError(
+            "remote_access_credential_ambiguous",
+            "Remote reprovisioning requires exactly one active subscription credential",
+        )
+    credential = credentials[0]
+    radius_user = db.scalar(
+        select(RadiusUser).where(RadiusUser.access_credential_id == credential.id)
+    )
+    requested_at = datetime.now(UTC)
+    stage_subscription_radius_profile(
+        db,
+        subscription_id=request.subscription_id,
+        credential_id=credential.id,
+        radius_profile_id=profiles[0].profile_id,
+    )
+    request.remote_radius_profile_id = profiles[0].profile_id
+    request.remote_radius_user_id = radius_user.id if radius_user is not None else None
+    request.remote_reprovision_requested_at = requested_at
+    request.execution_state = SubscriptionChangeExecutionState.provisioning
+    db.flush()
+    return RemoteReprovisionOutcome(
+        request.id,
+        profiles[0].profile_id,
+        radius_user.id if radius_user is not None else None,
+        False,
+    )
+
+
+def finalize_verified_remote_reprovision(
+    db: Session, *, request_id: UUID, actor_id: str
+) -> SubscriptionChangeRequest:
+    """Apply a remote change only from exact, fresh RADIUS read-model evidence."""
+
+    request = _lock_request(db, request_id)
+    if request.execution_state == SubscriptionChangeExecutionState.completed:
+        return request
+    if (
+        request.execution_state != SubscriptionChangeExecutionState.provisioning
+        or request.remote_radius_profile_id is None
+        or request.remote_reprovision_requested_at is None
+    ):
+        raise SubscriptionChangeExecutionError(
+            "remote_reprovision_not_staged",
+            "Remote reprovisioning has not been staged",
+        )
+    radius_user = (
+        db.get(RadiusUser, request.remote_radius_user_id)
+        if request.remote_radius_user_id is not None
+        else db.scalar(
+            select(RadiusUser).where(
+                RadiusUser.subscription_id == request.subscription_id
+            )
+        )
+    )
+    observed_at = radius_user.last_sync_at if radius_user is not None else None
+    if observed_at is not None and observed_at.tzinfo is None:
+        observed_at = observed_at.replace(tzinfo=UTC)
+    requested_at = request.remote_reprovision_requested_at
+    if requested_at is not None and requested_at.tzinfo is None:
+        requested_at = requested_at.replace(tzinfo=UTC)
+    if (
+        radius_user is None
+        or radius_user.subscription_id != request.subscription_id
+        or radius_user.radius_profile_id != request.remote_radius_profile_id
+        or observed_at is None
+        or requested_at is None
+        or observed_at < requested_at
+    ):
+        raise SubscriptionChangeExecutionError(
+            "remote_reprovision_verification_missing",
+            "The exact target RADIUS profile has not been observed after staging",
+        )
+    request.remote_radius_user_id = radius_user.id
+    request.provisioning_verified_at = observed_at
+    request.execution_state = SubscriptionChangeExecutionState.provisioning_verified
+    if request.status == SubscriptionChangeStatus.pending:
+        subscription_change_requests.approve(db, str(request.id), commit=False)
+    if request.status != SubscriptionChangeStatus.approved:
+        raise SubscriptionChangeExecutionError(
+            "service_change_not_finalizable", "Service change cannot be finalized"
+        )
+    applied = subscription_change_requests.apply(
+        db,
+        str(request.id),
+        plan_change_operation_key=f"subscription-change:{request.id}:remote-finalize",
+        plan_change_preview_fingerprint=request.confirmation_preview_fingerprint,
+        plan_change_effective_at=_confirmation_effective_at(request),
+        plan_change_actor_id=actor_id,
+    )
+    applied.execution_state = SubscriptionChangeExecutionState.completed
+    db.commit()
+    db.refresh(applied)
+    return applied
+
+
+def _confirmation_effective_at(request: SubscriptionChangeRequest) -> datetime | None:
+    snapshot = request.confirmation_snapshot or {}
+    raw = snapshot.get("preview_effective_at")
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        value = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 def settle_relocation_payment(
@@ -273,6 +427,14 @@ def audit_execution_chain(
         return (ExecutionDrift(request_id, "service_change_not_found", False),)
     findings: list[ExecutionDrift] = []
     if (
+        request.execution_state == SubscriptionChangeExecutionState.provisioning
+        and _delivery_mode(request) == "remote_reprovision"
+        and _remote_radius_verification_ready(db, request)
+    ):
+        findings.append(
+            ExecutionDrift(request.id, "remote_verified_not_finalized", True)
+        )
+    if (
         request.execution_state == SubscriptionChangeExecutionState.awaiting_payment
         and request.field_fee_invoice_id is not None
     ):
@@ -314,6 +476,13 @@ def repair_execution_chain(
     """Idempotently resume a chain from canonical persisted evidence."""
 
     request = _lock_request(db, request_id)
+    if (
+        request.execution_state == SubscriptionChangeExecutionState.provisioning
+        and _delivery_mode(request) == "remote_reprovision"
+    ):
+        return finalize_verified_remote_reprovision(
+            db, request_id=request.id, actor_id=actor_id
+        )
     if request.execution_state == SubscriptionChangeExecutionState.awaiting_payment:
         allocation = db.scalar(
             select(PaymentAllocation)
@@ -357,13 +526,49 @@ def repair_execution_chain(
     return request
 
 
+def _delivery_mode(request: SubscriptionChangeRequest) -> str | None:
+    snapshot = request.confirmation_snapshot or {}
+    value = snapshot.get("delivery_mode")
+    return value if isinstance(value, str) else None
+
+
+def _remote_radius_verification_ready(
+    db: Session, request: SubscriptionChangeRequest
+) -> bool:
+    if (
+        request.remote_radius_profile_id is None
+        or request.remote_reprovision_requested_at is None
+    ):
+        return False
+    users = list(
+        db.scalars(
+            select(RadiusUser).where(
+                RadiusUser.subscription_id == request.subscription_id,
+                RadiusUser.radius_profile_id == request.remote_radius_profile_id,
+            )
+        ).all()
+    )
+    if len(users) != 1 or users[0].last_sync_at is None:
+        return False
+    observed_at = users[0].last_sync_at
+    requested_at = request.remote_reprovision_requested_at
+    if observed_at.tzinfo is None:
+        observed_at = observed_at.replace(tzinfo=UTC)
+    if requested_at.tzinfo is None:
+        requested_at = requested_at.replace(tzinfo=UTC)
+    return observed_at >= requested_at
+
+
 __all__ = [
     "FulfillmentOutcome",
     "ExecutionDrift",
     "SubscriptionChangeExecutionError",
+    "RemoteReprovisionOutcome",
+    "finalize_verified_remote_reprovision",
     "finalize_verified_service_change",
     "audit_execution_chain",
     "repair_execution_chain",
     "settle_relocation_payment",
     "stage_relocation_charge",
+    "stage_remote_reprovision",
 ]

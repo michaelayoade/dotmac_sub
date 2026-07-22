@@ -14119,6 +14119,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "relocation charge evidence and settlement admission",
                     "paid relocation fulfillment release",
+                    "remote reprovision verification",
                     "verified service-change finalization",
                 ),
                 depends_on=(
@@ -14128,6 +14129,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "operations.service_order_lifecycle",
                     "operations.work_order_commands",
                     "operations.provisioning_lifecycle",
+                    "access.radius_state",
                 ),
                 contract=ServiceContract(
                     concerns=(
@@ -14144,6 +14146,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             role=OwnerRole.APPLICATION_COORDINATOR,
                             input_names=(
                                 "canonical invoice and payment allocation evidence",
+                                "canonical subscription-change execution state",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="remote reprovision verification",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "catalog-linked target RADIUS profile",
+                                "canonical RADIUS profile observation",
                                 "canonical subscription-change execution state",
                             ),
                         ),
@@ -14173,6 +14184,24 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             source=(
                                 "exact issued Invoice, succeeded Payment, active "
                                 "PaymentAllocation, and paid invoice state"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="catalog-linked target RADIUS profile",
+                            owner="service_intent.subscription_lifecycle_execution",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "the single OfferRadiusProfile linked to the confirmed "
+                                "target offer"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical RADIUS profile observation",
+                            owner="access.radius_state",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "exact subscription-scoped RadiusUser profile and "
+                                "post-request last_sync_at watermark"
                             ),
                         ),
                         AuthorityInput(
@@ -14217,6 +14246,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "service_intent.subscription_change_execution.service_change_not_found",
                             "service_intent.subscription_change_execution.relocation_fee_not_settled",
                             "service_intent.subscription_change_execution.provisioning_verification_missing",
+                            "service_intent.subscription_change_execution.remote_radius_profile_ambiguous",
+                            "service_intent.subscription_change_execution.remote_access_credential_ambiguous",
+                            "service_intent.subscription_change_execution.remote_reprovision_verification_missing",
                             "service_intent.subscription_change_execution.service_change_not_finalizable",
                             "service_intent.subscription_change_execution.invalid_command_context",
                             "service_intent.subscription_change_execution.command_contract_violation",
@@ -14228,10 +14260,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         retryable_codes=(
                             "service_intent.subscription_change_execution.relocation_fee_not_settled",
                             "service_intent.subscription_change_execution.provisioning_verification_missing",
+                            "service_intent.subscription_change_execution.remote_reprovision_verification_missing",
                         ),
                         fail_closed_on=(
                             "missing or mismatched fee, currency, invoice, allocation, or payment",
                             "missing field-work or provisioning verification",
+                            "missing, stale, ambiguous, or mismatched RADIUS profile evidence",
                             "mismatched service-order scope",
                         ),
                     ),
@@ -14262,11 +14296,13 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         verification=(
                             "Focused tests cover charge creation, exact settlement, "
-                            "fulfillment release, verification gating, and replay."
+                            "fulfillment release, RADIUS and field verification gates, "
+                            "and replay."
                         ),
                         cutover_gate=(
-                            "Migration 401 backfills deferred requests and every new "
-                            "priced relocation receives structural evidence."
+                            "Migrations 401-402 backfill deferred execution state; every "
+                            "new priced relocation or remote reprovision receives "
+                            "structural evidence."
                         ),
                         fallback_retirement=(
                             "No support-ticket, memo lookup, invoice-status-only, or "

@@ -128,6 +128,15 @@ class SubscriptionChangeRequest(Base):
         UUID(as_uuid=True),
         ForeignKey("provisioning_readiness_decisions.id", ondelete="RESTRICT"),
     )
+    remote_radius_profile_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("radius_profiles.id", ondelete="RESTRICT")
+    )
+    remote_radius_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("radius_users.id", ondelete="RESTRICT")
+    )
+    remote_reprovision_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     payment_settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     provisioning_verified_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
@@ -200,6 +209,12 @@ class SubscriptionChangeRequest(Base):
     provisioning_readiness_decision = relationship(
         "ProvisioningReadinessDecision",
         foreign_keys=[provisioning_readiness_decision_id],
+    )
+    remote_radius_profile = relationship(
+        "RadiusProfile", foreign_keys=[remote_radius_profile_id]
+    )
+    remote_radius_user = relationship(
+        "RadiusUser", foreign_keys=[remote_radius_user_id]
     )
     requested_by = relationship("Subscriber", foreign_keys=[requested_by_subscriber_id])
     reviewed_by = relationship("Subscriber", foreign_keys=[reviewed_by_subscriber_id])

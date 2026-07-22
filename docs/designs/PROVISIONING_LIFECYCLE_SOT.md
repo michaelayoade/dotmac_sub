@@ -88,6 +88,16 @@ place, but failures now propagate to the event store instead of being logged
 and treated as customer success. The connectivity cutover described in
 `CONNECTIVITY_STATE_MACHINE.md` remains a separate guarded migration.
 
+Remote same-medium service changes use the existing RADIUS control plane rather
+than manufacturing a field service order. The service-change execution
+coordinator asks `access.radius_state` to stage the exact catalog-linked target
+profile on the exact subscription credential. It does not change the live
+offer. Finalization requires a structurally linked `RadiusUser` for that
+subscription whose observed profile matches and whose `last_sync_at` is at or
+after the staging watermark. Ambiguous profiles, credentials, users, stale
+syncs, and mismatched profiles fail closed and remain repairable from the same
+canonical evidence.
+
 ## Migration and repair
 
 Migration 390 adds the native links and append-only evidence tables. It

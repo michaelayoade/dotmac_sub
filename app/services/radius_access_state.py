@@ -10,6 +10,7 @@ See ``docs/radius_state_refactor/phase0_state_model.md``.
 from __future__ import annotations
 
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -25,6 +26,28 @@ from app.models.subscriber import Subscriber
 from app.services.common import coerce_uuid
 
 AccessStateWriteResult = dict[str, int | str | None]
+
+
+def stage_subscription_radius_profile(
+    db: Session,
+    *,
+    subscription_id: UUID,
+    credential_id: UUID,
+    radius_profile_id: UUID,
+) -> AccessCredential:
+    """Stage one exact subscription credential's desired RADIUS profile."""
+
+    credential = db.get(AccessCredential, credential_id)
+    if (
+        credential is None
+        or credential.subscription_id != subscription_id
+        or not credential.is_active
+    ):
+        raise ValueError("Active credential does not belong to the subscription")
+    credential.radius_profile_id = radius_profile_id
+    db.flush()
+    return credential
+
 
 # Status sets — declared here as constants so callers can also reason
 # about which SubscriptionStatus values map to a given AccessState
