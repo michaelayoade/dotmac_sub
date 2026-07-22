@@ -1,0 +1,100 @@
+{% from "components/ui/macros.html" import card %}
+
+<div id="account-statement">
+{% call card("Account Statement", icon='<svg class="h-4 w-4 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>', color="emerald") %}
+    <div class="space-y-4">
+        <form method="get" action="/admin/billing/accounts/{{ account_id }}" hx-get="/admin/billing/accounts/{{ account_id }}/statement" hx-target="#account-statement" hx-swap="outerHTML" class="grid gap-3 sm:grid-cols-4">
+            <div>
+                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Start Date</label>
+                <input type="date" name="statement_start" value="{{ statement_range.start_date.isoformat() }}" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div>
+                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">End Date</label>
+                <input type="date" name="statement_end" value="{{ statement_range.end_date.isoformat() }}" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div class="flex items-end gap-2 sm:col-span-2">
+                <button type="submit" class="inline-flex items-center rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700">Refresh</button>
+                <a href="/admin/billing/accounts/{{ account_id }}/statement.csv?start_date={{ statement_range.start_date.isoformat() }}&end_date={{ statement_range.end_date.isoformat() }}" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Download CSV</a>
+            </div>
+        </form>
+
+        {% if can(request, "billing:account:write") %}
+        <form method="post" action="/admin/billing/accounts/{{ account_id }}/statement/send" class="grid gap-3 sm:grid-cols-4">
+            <input type="hidden" name="start_date" value="{{ statement_range.start_date.isoformat() }}">
+            <input type="hidden" name="end_date" value="{{ statement_range.end_date.isoformat() }}">
+            <div class="sm:col-span-3">
+                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Send To Email</label>
+                <input type="email" name="recipient_email" value="{{ recipient_email or '' }}" placeholder="name@example.com" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div class="flex items-end">
+                <button type="submit" class="inline-flex w-full items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">Send To Customer</button>
+            </div>
+        </form>
+        {% endif %}
+
+        {% if statement.has_multiple_currencies %}
+        <p class="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800 dark:border-blue-800/50 dark:bg-blue-900/20 dark:text-blue-200">
+            This account has activity in multiple currencies. Each currency is balanced independently.
+        </p>
+        {% endif %}
+
+        <div class="space-y-3">
+            {% for summary in statement.summaries %}
+            <div class="grid gap-3 rounded-xl border border-slate-200 p-3 dark:border-slate-700 sm:grid-cols-[7rem_repeat(3,minmax(0,1fr))]">
+                <div>
+                    <p class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Currency</p>
+                    <p class="mt-1 font-mono text-lg font-semibold text-slate-900 dark:text-white">{{ summary.currency }}</p>
+                </div>
+                <div>
+                    <p class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Opening</p>
+                    <p class="mt-1 font-mono text-lg font-semibold text-slate-900 dark:text-white">{{ summary.opening_display }}</p>
+                </div>
+                <div>
+                    <p class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Activity</p>
+                    <p class="mt-1 font-mono text-lg font-semibold text-slate-900 dark:text-white">{{ summary.period_display }}</p>
+                </div>
+                <div>
+                    <p class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Closing</p>
+                    <p class="mt-1 font-mono text-lg font-semibold text-slate-900 dark:text-white">{{ summary.closing_display }}</p>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
+            <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-800/60">
+                    <tr>
+                        <th class="px-3 py-2 text-left font-semibold text-slate-600 dark:text-slate-300">Date</th>
+                        <th class="px-3 py-2 text-left font-semibold text-slate-600 dark:text-slate-300">Type</th>
+                        <th class="px-3 py-2 text-left font-semibold text-slate-600 dark:text-slate-300">Source</th>
+                        <th class="px-3 py-2 text-right font-semibold text-slate-600 dark:text-slate-300">Amount</th>
+                        <th class="px-3 py-2 text-right font-semibold text-slate-600 dark:text-slate-300">Running</th>
+                        <th class="px-3 py-2 text-left font-semibold text-slate-600 dark:text-slate-300">Memo</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+                    {% if statement.rows %}
+                    {% for row in statement.rows %}
+                    <tr class="bg-white dark:bg-slate-900/30">
+                        <td class="px-3 py-2 text-slate-700 dark:text-slate-300">{{ row.occurred_at | app_datetime('%Y-%m-%d', '-', include_tz=False) }}</td>
+                        <td class="px-3 py-2 text-slate-700 dark:text-slate-300">{{ row.entry_type_label }}</td>
+                        <td class="px-3 py-2 text-slate-700 dark:text-slate-300">
+                            {% if row.source_url %}<a href="{{ row.source_url }}" class="font-medium text-emerald-700 hover:text-emerald-800 dark:text-emerald-400">{{ row.source_label }}</a>{% else %}{{ row.source_label }}{% endif %}
+                        </td>
+                        <td class="px-3 py-2 text-right font-mono text-slate-900 dark:text-white">{{ row.amount_display }}</td>
+                        <td class="px-3 py-2 text-right font-mono text-slate-900 dark:text-white">{{ row.running_balance_display }}</td>
+                        <td class="px-3 py-2 text-slate-600 dark:text-slate-400">{{ row.memo or '-' }}</td>
+                    </tr>
+                    {% endfor %}
+                    {% else %}
+                    <tr class="bg-white dark:bg-slate-900/30">
+                        <td colspan="6" class="px-3 py-6 text-center text-slate-500 dark:text-slate-400">No transactions for selected period.</td>
+                    </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+{% endcall %}
+</div>
