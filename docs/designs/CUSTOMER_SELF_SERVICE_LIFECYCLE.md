@@ -134,12 +134,15 @@ Completed in this slice:
 - The execution owner exposes deterministic drift audit and idempotent repair
   for paid-but-unreleased and verified-but-not-finalized requests; it never
   repairs from memo text, portal state, or unverified provider payloads.
+- Remote reprovisioning now resolves exactly one catalog-linked target RADIUS
+  profile and one active subscription credential. It stages that desired
+  profile without changing the live offer, then accepts completion only when
+  the exact subscription-scoped RADIUS user carries that profile with a sync
+  watermark after the request. The structural profile/user links and
+  verification time remain available for replay, drift audit, and repair.
 
 Still required before this lifecycle is complete:
 
-- implement the remote-reprovision branch's controller-specific verifier (the
-  field relocation settlement, service-order/work-order handoff, provisioning
-  gate, and verified final subscription command are implemented);
 - route vacation hold/resume through the lifecycle command owner;
 - expose scoped reboot/Wi-Fi command outcomes consistently on web and mobile;
 - remove the remaining superseded customer-route decisions and add the operator
