@@ -1,7 +1,7 @@
 """Add Team Inbox observation ledger and operator read cursors.
 
 Revision ID: 404_team_inbox_sot_completion
-Revises: 402_remote_reprovision_verification
+Revises: 403_service_change_reconciliation_evidence
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from sqlalchemy.dialects import postgresql
 from alembic import op
 
 revision = "404_team_inbox_sot_completion"
-down_revision = "402_remote_reprovision_verification"
+down_revision = "403_service_change_reconciliation_evidence"
 branch_labels = None
 depends_on = None
 
