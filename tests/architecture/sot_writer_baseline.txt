@@ -42,7 +42,6 @@ app.services.customer_location_requests
 app.services.customer_portal_contacts
 app.services.customer_portal_flow_payment_methods
 app.services.customer_portal_flow_payments
-app.services.customer_portal_flow_services
 app.services.cutover_balance_audit
 app.services.dispatch
 app.services.dotmac_erp.domain_sync
@@ -203,7 +202,6 @@ app.services.vendor_admin
 app.services.web_billing_invoice_batch
 app.services.web_billing_reconciliation
 app.services.web_catalog_offers
-app.services.web_catalog_subscription_workflows
 app.services.web_catalog_subscriptions
 app.services.web_customer_auth
 app.services.web_customer_details
