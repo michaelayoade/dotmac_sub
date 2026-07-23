@@ -82,8 +82,11 @@ evidence into audit and the versioned deposit event.
 
 Provider fee is typed settlement evidence, not a webhook-owned payment edit.
 It must be between zero and the confirmed gross amount and is persisted by the
-payment owner. Deposit credit remains the exact customer-authorized gross
-amount; changing that policy requires a new owner contract and preview, not an
+payment owner. Deposit credit remains the exact customer-authorized deposit
+amount. When a gateway passes its fee to the customer, the verified gross charge
+may exceed the authorized deposit only by that exact provider fee; the payment
+owner preserves gross and fee evidence while crediting the authorized net
+amount. Changing that policy requires a new owner contract and preview, not an
 adapter-side net calculation.
 
 Eligible invoices are active `issued`, `partially_paid` or `overdue` invoices

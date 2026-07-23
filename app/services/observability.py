@@ -265,9 +265,16 @@ def record_celery_task_success(
     try:
         job_heartbeat.record_success(task_name, now=now)
         if task_name in job_heartbeat.MONEY_JOB_TASKS:
+            status = "ok"
+            if (
+                task_name == job_heartbeat.PAYMENT_RECONCILIATION_TASK
+                and isinstance(detail, dict)
+                and int(detail.get("errors") or 0) > 0
+            ):
+                status = "partial"
             job_heartbeat.record_result(
                 task_name,
-                status="ok",
+                status=status,
                 detail=detail,
                 now=now,
             )

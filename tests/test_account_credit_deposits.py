@@ -89,6 +89,7 @@ def _transaction(
     intent,
     *,
     amount=None,
+    provider_fee="0.00",
     currency=None,
     external_id="gateway-deposit-1",
     metadata=None,
@@ -106,6 +107,7 @@ def _transaction(
         currency=currency or intent.currency,
         provider_intent_id=correlation,
         source=AccountCreditDepositSettlementSource.customer_gateway_verify,
+        provider_fee=Decimal(provider_fee),
     )
 
 
@@ -716,6 +718,32 @@ def test_duplicate_confirmation_returns_same_payment(db_session, subscriber):
     assert (
         db_session.query(Payment).filter_by(external_id="gateway-idempotent").count()
         == 1
+    )
+
+
+def test_provider_gross_including_fee_settles_authorized_deposit(
+    db_session, subscriber
+):
+    provider = _provider(db_session)
+    intent = _intent(db_session, subscriber, provider, amount="10000.00")
+
+    result = _settle(
+        db_session,
+        intent_id=intent.id,
+        transaction=_transaction(
+            intent,
+            amount="10175.00",
+            provider_fee="175.00",
+            external_id="gateway-gross-including-fee",
+        ),
+    )
+
+    assert result.payment.amount == Decimal("10175.00")
+    assert result.payment.provider_fee == Decimal("175.00")
+    assert result.payment.settlement.amount == Decimal("10000.00")
+    assert result.payment.settlement.unallocated_amount == Decimal("10000.00")
+    assert get_account_credit_balance(db_session, str(subscriber.id)) == Decimal(
+        "10000.00"
     )
 
 

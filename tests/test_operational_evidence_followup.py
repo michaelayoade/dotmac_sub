@@ -5,7 +5,9 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 from app.poller.mikrotik_poller import DevicePool, MikroTikConnection
+from app.services import operational_checks
 from app.services.db_error_observability import statement_fingerprint
+from app.services.payment_reconciliation import TopupReconciliationBacklog
 from app.services.web_network_ont_actions import device_actions
 
 
@@ -118,3 +120,65 @@ def test_database_statement_correlation_is_stable_and_redacted():
     assert first == second
     assert first is not None
     assert "email" not in first
+
+
+def test_paystack_operational_check_exposes_webhook_and_reconciliation_gap(
+    db_session, monkeypatch
+):
+    now = datetime(2026, 7, 23, 18, 0, tzinfo=UTC)
+    monkeypatch.setattr(
+        operational_checks,
+        "_paystack_binding_evidence",
+        lambda _db: ("Capabilities are enabled.", True, True),
+    )
+    monkeypatch.setattr(
+        operational_checks,
+        "_task_row",
+        lambda _db, _task_name: SimpleNamespace(
+            enabled=True,
+            interval_seconds=1800,
+        ),
+    )
+    monkeypatch.setattr(
+        operational_checks,
+        "_task_result",
+        lambda _task_name: (
+            {
+                "status": "partial",
+                "detail": {"checked": 8, "recovered": 0, "errors": 3},
+            },
+            now - timedelta(minutes=5),
+        ),
+    )
+    monkeypatch.setattr(
+        operational_checks.job_heartbeat,
+        "get_last_success",
+        lambda _task_name: now - timedelta(minutes=5),
+    )
+    monkeypatch.setattr(
+        operational_checks,
+        "topup_reconciliation_backlog",
+        lambda _db, observed_at: TopupReconciliationBacklog(
+            pending=3,
+            eligible=3,
+            outside_window=0,
+            oldest_pending_at=observed_at - timedelta(hours=1),
+            stale_before=observed_at - timedelta(minutes=15),
+            oldest_eligible_at=observed_at - timedelta(days=7),
+        ),
+    )
+    monkeypatch.setattr(
+        operational_checks,
+        "_latest_paystack_webhook_at",
+        lambda _db: None,
+    )
+
+    check = operational_checks.paystack_payment_check(db_session, now=now)
+
+    assert check.needs_attention is True
+    assert check.last_result == (
+        "Reconciliation checked 8, recovered 0, and rejected 3; "
+        "3 stale intent(s) remain."
+    )
+    assert operational_checks.PAYSTACK_WEBHOOK_PATH in check.expected
+    assert "Set the Paystack live webhook URL" in check.next_step

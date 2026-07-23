@@ -1793,6 +1793,7 @@ def verify_and_record_topup(
         currency=tx.currency,
         provider_intent_id=provider_intent_id,
         source=AccountCreditDepositSettlementSource.customer_gateway_verify,
+        provider_fee=round_money(to_decimal(getattr(tx, "provider_fee", 0))),
     )
     context = CommandContext.system(
         actor=f"customer:{account_id}",
