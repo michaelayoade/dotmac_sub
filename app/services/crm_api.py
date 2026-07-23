@@ -661,25 +661,35 @@ def _latest_session_by_subscription(
 ) -> dict[uuid.UUID, RadiusAccountingSession]:
     if not subscription_ids:
         return {}
+    observed_at = func.coalesce(
+        RadiusAccountingSession.last_update_at,
+        RadiusAccountingSession.session_start,
+        RadiusAccountingSession.created_at,
+    )
+    ranked = (
+        select(
+            RadiusAccountingSession.id.label("session_id"),
+            func.row_number()
+            .over(
+                partition_by=RadiusAccountingSession.subscription_id,
+                order_by=(
+                    observed_at.desc(),
+                    RadiusAccountingSession.id.desc(),
+                ),
+            )
+            .label("rank"),
+        )
+        .where(RadiusAccountingSession.subscription_id.in_(subscription_ids))
+        .subquery()
+    )
     rows = list(
         db.scalars(
             select(RadiusAccountingSession)
-            .where(RadiusAccountingSession.subscription_id.in_(subscription_ids))
-            .order_by(
-                RadiusAccountingSession.subscription_id,
-                func.coalesce(
-                    RadiusAccountingSession.last_update_at,
-                    RadiusAccountingSession.session_start,
-                    RadiusAccountingSession.created_at,
-                ).desc(),
-            )
+            .join(ranked, ranked.c.session_id == RadiusAccountingSession.id)
+            .where(ranked.c.rank == 1)
         ).all()
     )
-    mapped: dict[uuid.UUID, RadiusAccountingSession] = {}
-    for row in rows:
-        if row.subscription_id and row.subscription_id not in mapped:
-            mapped[row.subscription_id] = row
-    return mapped
+    return {row.subscription_id: row for row in rows if row.subscription_id}
 
 
 def latest_session_by_subscriber(

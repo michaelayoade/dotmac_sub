@@ -171,6 +171,7 @@ def record_task_run(
     status: str,
     counters: dict[str, Any] | None = None,
     duration_seconds: float | None = None,
+    next_attempt_at: datetime | None = None,
     now: datetime | None = None,
 ) -> None:
     """Record a task run across the existing heartbeat/metrics sinks."""
@@ -187,6 +188,7 @@ def record_task_run(
             task_name,
             status=normalized_status,
             detail=counters,
+            next_attempt_at=next_attempt_at,
             now=now,
         )
     except Exception:

@@ -648,7 +648,15 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.tr069.refresh_single_ont_runtime": _c("tr069", MANUAL, IDEMP, STATUS),
     "app.tasks.tr069.scrape_genieacs_metrics": _c("tr069", SWEEP, IDEMP, HEALTH),
     "app.tasks.tr069.setup_genieacs": _c("tr069", MANUAL, GUARDED, STATUS),
-    "app.tasks.tr069.sync_all_acs_devices": _c("tr069", SWEEP, IDEMP, HEALTH),
+    "app.tasks.tr069.sync_all_acs_devices": _c(
+        "tr069",
+        AUTORETRY,
+        IDEMP,
+        HEALTH,
+        "A complete pass records duration, server counts, and freshness. "
+        "Timeouts, unexpected failures, and partial server passes retry after "
+        "1m/5m/15m; the periodic schedule remains the recovery backstop.",
+    ),
     "app.tasks.tr069.wait_for_ont_bootstrap": _c("tr069", STATE, STATEFUL, STATUS),
     "app.tasks.usage.evaluate_fup_rules": _c("usage", STATE, GUARDED, HEALTH),
     "app.tasks.usage.import_radius_accounting": _c("usage", SWEEP, PER_ITEM, HEALTH),

@@ -15,6 +15,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    func,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -155,6 +156,18 @@ class RadiusAccountingSession(Base):
     access_credential = relationship("AccessCredential")
     radius_client = relationship("RadiusClient")
     nas_device = relationship("NasDevice")
+
+
+Index(
+    "ix_radius_accounting_sessions_subscription_latest",
+    RadiusAccountingSession.subscription_id,
+    func.coalesce(
+        RadiusAccountingSession.last_update_at,
+        RadiusAccountingSession.session_start,
+        RadiusAccountingSession.created_at,
+    ).desc(),
+    RadiusAccountingSession.id.desc(),
+)
 
 
 class SubscriberDailyUsage(Base):
