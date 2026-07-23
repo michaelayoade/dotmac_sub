@@ -710,9 +710,10 @@ def build_beat_schedule() -> dict:
         # PPPoE session survives it, so a suspended/terminated subscriber can stay
         # online for days (revenue leak). run_enforcement_reconciler CoA-kicks open
         # sessions whose user has no radcheck row or sits in a reject pool, and
-        # repairs walled-garden radreply drift. It caps kicks per run so systemic
-        # drift degrades to alerts rather than a mass disconnect — hence safe to
-        # run continuously as a mandatory lifecycle task.
+        # repairs exact RADIUS row drift. It caps disconnect attempts per run so
+        # transport failure or systemic drift degrades to alerts rather than an
+        # unbounded retry or mass disconnect — hence safe to run continuously as
+        # a mandatory lifecycle task.
         enforcement_reconciler_interval_seconds = max(
             _effective_int(
                 session,

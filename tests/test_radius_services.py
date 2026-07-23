@@ -475,13 +475,14 @@ def test_reconcile_subscription_connectivity_creates_internal_radius_state(
         db_session, str(subscription.id)
     )
 
-    assert result == {
-        "ok": True,
-        "radius_clients_changed": 1,
-        "radius_users_changed": 1,
-        "external_nas_synced": 0,
-        "external_credentials_synced": 0,
-    }
+    assert result.ok is False
+    assert result.disposition is (
+        radius_service.ConnectivityProjectionDisposition.target_unavailable
+    )
+    assert result.radius_clients_changed == 1
+    assert result.radius_users_changed == 1
+    assert result.external_nas_synced == 0
+    assert result.external_credentials_synced == 0
 
     client = (
         db_session.query(RadiusClient)

@@ -5345,6 +5345,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.prepaid_service_renewals",
                 owns=(
                     "due prepaid service-cycle funding preview",
+                    "settled-payment evidence validation and evaluation outcome",
                     "locked and idempotent prepaid renewal debit",
                     "exact debit-to-entitlement evidence",
                     "prepaid subscription paid-through advancement",
@@ -5355,6 +5356,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=(
                     "financial.account_adjustments",
                     "financial.invoices",
+                    "financial.payments",
                     "financial.prepaid_funding_reconstruction",
                     "financial.subscription_billing_grants",
                     "financial.subscription_billing_treatments",
@@ -5362,10 +5364,14 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
                 notes=(
                     "A payment receipt proves cash settlement, not service duration. "
+                    "A funding-change event is complete only when the referenced "
+                    "payment has canonical succeeded and settlement evidence. "
                     "Each forward renewal stages prepaid_service.renewed with the "
                     "exact entitlement, debit and renewed-through boundary in the "
                     "same transaction; payment correlation is a trigger, not source "
-                    "attribution for pooled account credit."
+                    "attribution for pooled account credit. Incomplete evidence raises "
+                    "through the durable event-handler attempt so the permanent event "
+                    "redriver retries it; an explicit no-due-service outcome is success."
                 ),
             ),
             SOTService(
@@ -11480,7 +11486,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     steward="service delivery and network operations",
                     design_refs=(
                         "docs/designs/PROVISIONING_LIFECYCLE_SOT.md",
-                        "docs/designs/CONNECTIVITY_STATE_MACHINE.md",
+                        "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
                         "docs/SOT_RELATIONSHIP_MAP.md",
                     ),
                     test_refs=(
@@ -15412,11 +15418,20 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "persisted access restriction intent",
                     "subscription access-status transitions",
                     "subscriber access-status projection",
+                    "subscriber portal/account-active projection",
                     "atomic account and child-service access projection",
+                    "sole persisted Subscription.access_state writes",
                 ),
                 depends_on=(
                     "events.dispatcher",
                     "financial.prepaid_enforcement_state",
+                ),
+                notes=(
+                    "Locks, subscriber status, subscriber account-active state, "
+                    "subscription status and every child access-state projection are "
+                    "derived under the lifecycle transaction. "
+                    "Adapters request a lifecycle command or reconciliation; they do not "
+                    "write the access-state projection."
                 ),
             ),
             SOTService(
@@ -15737,10 +15752,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             SOTService(
                 name="access.radius_state",
                 module="app.services.radius_access_state",
-                owns=("desired RADIUS state mapping", "RADIUS group/profile actions"),
+                owns=("pure desired RADIUS access-state mapping",),
                 depends_on=(
-                    "financial.access_resolution",
+                    "access.subscription_lifecycle",
                     "access.walled_garden_policy",
+                    "financial.access_resolution",
+                ),
+                notes=(
+                    "Maps canonical lifecycle status and effective restriction to an "
+                    "AccessState. It writes neither lifecycle rows nor external RADIUS."
                 ),
             ),
             SOTService(
@@ -15772,10 +15792,14 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "radcheck/radreply/radusergroup customer projection",
                     "radcheck_admin/radreply_admin device-login projection",
                     "idempotent per-target advisory-locked RADIUS auth projection",
+                    "credential-independent hard-reject projection",
+                    "unbuildable active/captive login classification and preservation",
+                    "secret-safe exact RADIUS-row projection fingerprint",
                     "walled-garden/reject radreply on blocked/suspended access",
                     "bidirectional desired-versus-observed projection drift",
                 ),
                 depends_on=(
+                    "access.subscription_lifecycle",
                     "access.radius_state",
                     "access.radius_reject",
                     "access.radius_target_registry",
@@ -15787,15 +15811,34 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "tables directly. The permanent account-access reconciler is the "
                     "only periodic drift detector and requests the full writer only "
                     "when drift exists; the writer is never independently scheduled. "
-                    "The writer and reconciler consume the same per-login plan and "
-                    "therefore cannot reinterpret lifecycle statuses independently."
+                    "Hard reject does not depend on a recoverable "
+                    "customer password. An active/captive login that cannot be built "
+                    "is preserved and reported, never treated as a successful refresh. "
+                    "The writer and reconciler consume the same exact, secret-safe "
+                    "per-login fingerprint and therefore cannot reinterpret lifecycle "
+                    "statuses or silently ignore attribute drift."
                 ),
             ),
             SOTService(
                 name="access.session_enforcement",
                 module="app.services.enforcement",
-                owns=("access-state CoA/disconnect execution",),
-                depends_on=("access.radius_state", "sessions.radius_resolution"),
+                owns=(
+                    "typed access-state CoA/disconnect execution",
+                    "NAS-evidenced accounting-session closure",
+                    "single-flight access-control recovery execution",
+                ),
+                depends_on=(
+                    "access.radius_projection",
+                    "access.radius_state",
+                    "sessions.radius_resolution",
+                ),
+                notes=(
+                    "Disconnect ACK, RFC 5176 session-not-found, rejection, timeout "
+                    "and configuration failure remain distinct outcomes. Accounting "
+                    "closes only when the NAS explicitly reports that the session "
+                    "context is absent. The periodic recovery loop is single-flight "
+                    "and caps attempts rather than successes."
+                ),
             ),
             SOTService(
                 name="access.fup_rule_engine",

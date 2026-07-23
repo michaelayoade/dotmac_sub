@@ -4,7 +4,7 @@ Compares the three IPv4 sources for an active subscription — the
 subscription.ipv4_address column, the IPAM IPAssignment, and the external
 radreply Framed-IP — against a sqlite RADIUS stand-in (same pattern as
 test_radius_reconciliation.py). See
-docs/designs/SERVICE_LIFECYCLE_BUNDLE_INTEGRITY.md.
+docs/FINANCIAL_ACCESS_ENFORCEMENT.md.
 """
 
 from __future__ import annotations

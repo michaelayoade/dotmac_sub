@@ -1,8 +1,4 @@
-"""Accounting framed-IP write-back is gated to active subscriptions (task #15).
-
-A stale/reject-pool address on a suspended/terminated subscriber's accounting
-row must not overwrite the served-IP column (which the RADIUS sweep re-emits).
-"""
+"""Accounting framed-IP observations never overwrite the desired projection."""
 
 from __future__ import annotations
 
@@ -22,12 +18,13 @@ def _sub(db, subscriber, catalog_offer, status):
     return sub
 
 
-def test_active_sub_ip_is_mirrored(db_session, subscriber, catalog_offer):
+def test_active_sub_ip_is_observation_only(db_session, subscriber, catalog_offer):
     sub = _sub(db_session, subscriber, catalog_offer, SubscriptionStatus.active)
     _write_subscription_ips_from_accounting(
         db_session, sub.id, ipv4="10.0.0.9", ipv6=None
     )
-    assert sub.ipv4_address == "10.0.0.9"
+    assert sub.ipv4_address == "10.0.0.5"
+    assert sub.last_seen_framed_ipv4 == "10.0.0.9"
 
 
 def test_suspended_sub_ip_not_overwritten(db_session, subscriber, catalog_offer):
@@ -35,8 +32,10 @@ def test_suspended_sub_ip_not_overwritten(db_session, subscriber, catalog_offer)
     _write_subscription_ips_from_accounting(
         db_session, sub.id, ipv4="100.64.0.1", ipv6=None
     )
+    db_session.flush()
     db_session.refresh(sub)
     assert sub.ipv4_address == "10.0.0.5"  # unchanged
+    assert sub.last_seen_framed_ipv4 == "100.64.0.1"
 
 
 def test_terminated_sub_ip_not_overwritten(db_session, subscriber, catalog_offer):
@@ -44,5 +43,7 @@ def test_terminated_sub_ip_not_overwritten(db_session, subscriber, catalog_offer
     _write_subscription_ips_from_accounting(
         db_session, sub.id, ipv4="100.64.0.2", ipv6=None
     )
+    db_session.flush()
     db_session.refresh(sub)
     assert sub.ipv4_address == "10.0.0.5"  # unchanged
+    assert sub.last_seen_framed_ipv4 == "100.64.0.2"

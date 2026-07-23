@@ -1406,7 +1406,9 @@ def _reconcile_active_subscription_after_credential_sync(
     try:
         from app.services.radius import reconcile_subscription_connectivity
 
-        reconcile_subscription_connectivity(db, str(subscription.id))
+        reconcile_subscription_connectivity(
+            db, str(subscription.id)
+        ).require_projected()
     except Exception:
         logger.warning(
             "RADIUS reconcile failed during subscription credential sync for %s",
@@ -4129,7 +4131,9 @@ def force_subscription_reauth(
     try:
         from app.services.radius import reconcile_subscription_connectivity
 
-        reconcile_subscription_connectivity(db, str(subscription.id))
+        reconcile_subscription_connectivity(
+            db, str(subscription.id)
+        ).require_projected()
         metadata["radius_reconciled"] = True
     except Exception:
         logger.warning(

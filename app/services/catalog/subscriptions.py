@@ -197,7 +197,9 @@ def _sync_credentials_to_radius(db: Session, subscriber_id) -> None:
             .all()
         )
         for subscription in active_subscriptions:
-            reconcile_subscription_connectivity(db, str(subscription.id))
+            reconcile_subscription_connectivity(
+                db, str(subscription.id)
+            ).require_projected()
     except Exception as exc:
         logger.warning(
             "Failed to reconcile RADIUS state for subscriber %s: %s",

@@ -196,8 +196,12 @@ approval owner, so it cannot lift fraud, collections, customer-hold, or
 unrelated administrative decisions.
 
 Lifecycle state, lock, audit, and durable event rows commit or roll back
-together. Delivery begins only after commit. A rollback therefore cannot send
-a suspension/restoration event for state that never existed.
+together. The lifecycle owner is the sole writer of the persisted subscriber
+status, subscriber portal/account-active state, subscription status, and child
+`Subscription.access_state` projection. It derives parent and child state under
+the same transaction after flushing lock changes. Delivery begins only after
+commit. A rollback therefore cannot send a suspension/restoration event for
+state that never existed.
 
 Enforcement handlers attempt the owned local and external consequences. A
 failed RADIUS projection, access-state projection, session-cleanup enqueue, or
@@ -205,6 +209,13 @@ financial restoration is raised to the durable dispatcher. The handler remains
 failed/retryable; it is never logged as successful work. Other independent
 event handlers, including receipts and webhooks, remain reachable according to
 the declared event execution plan.
+
+The prepaid-renewal event adapter validates that the referenced payment belongs
+to the account, succeeded, and has canonical settlement evidence before asking
+the renewal owner to act. Missing evidence raises and remains a failed durable
+handler attempt. The permanent event redriver retries that exact attempt. A
+typed `no_due_service` or consolidated-allocation result is a completed
+evaluation rather than an inferred renewal.
 
 ## Access tier and RADIUS
 
@@ -220,6 +231,25 @@ RADIUS population, connectivity reconciliation, session cleanup, portal views,
 and audit comparators consume that state; none independently interprets account
 or subscription statuses.
 
+Service status and restriction are desired-state inputs. Network and accounting
+records are projections or observations:
+
+- `Subscription.access_state` is the local access projection written only by
+  `access.subscription_lifecycle`;
+- `IPAssignment` is desired address authority and
+  `Subscription.ipv4_address`/`ipv6_address` are its served-address projection;
+- `last_seen_framed_ipv4`/`last_seen_framed_ipv6` are accounting observations
+  and never overwrite the desired address;
+- active service retains its credential and address; a reversible restriction
+  retains both but projects hard reject or captive access; a terminal service
+  removes external authentication and releases its service resources.
+
+The RADIUS writer resolves the desired plan before reading customer
+credentials. Hard reject therefore remains buildable when a password is
+missing or undecryptable. Active or captive access that cannot be built is
+reported as `unbuildable` and its existing external row is preserved; a scoped
+repair cannot delete a paying customer's only working row and report success.
+
 ## Account and RADIUS convergence
 
 The mandatory access-control loop runs at the configured operational cadence
@@ -228,11 +258,19 @@ and cannot be disabled. It performs one sequence:
 1. invoke `access.subscription_lifecycle` to repair derived account and child
    access state from canonical service facts;
 2. resolve the exact per-login RADIUS plan consumed by the projection writer;
-3. compare that plan with radcheck Reject and radreply captive state in both
-   directions;
-4. request one idempotent projection refresh when rows are missing or stale;
-5. reconcile live sessions within the configured disconnect cap; and
+3. compare the normalized radcheck, radreply, and owned radusergroup row set in
+   both directions using a secret-safe keyed fingerprint;
+4. request one idempotent projection refresh when rows are missing, extra,
+   unbuildable, or have exact attribute drift;
+5. reconcile live sessions within the configured disconnect-attempt cap; and
 6. record an outcome alert until local and external projections converge.
+
+Only one recovery run may execute at a time. Its cap counts attempts, so a
+failing transport cannot bypass the safety limit. CoA outcomes preserve the
+difference between disconnect confirmed, NAS session-not-found, rejection,
+timeout, configuration failure, and transport failure. A radacct row is closed
+only when the NAS returns RFC 5176 Error-Cause 503, directly confirming that
+the requested session context is absent.
 
 The task is a recovery adapter. Payment, renewal, dunning, administrative, and
 service-lifecycle commands still invoke the lifecycle owner in their own
@@ -383,7 +421,12 @@ deletion requires a separate reviewed decision.
 - due uncovered service with missing contract terms;
 - repairable/quarantined coverage evidence by stable reason;
 - failed/retrying financial-access event handlers;
-- local access state or RADIUS projection not converging to the lifecycle owner.
+- local access state or exact RADIUS row projection not converging to the
+  lifecycle owner;
+- active/captive RADIUS logins whose credentials cannot be built;
+- recovery-loop overlap, exhausted disconnect-attempt cap, or nonterminal CoA
+  outcomes;
+- accounting observations that differ from the desired assigned address.
 
 ### Release and incident handling
 
@@ -413,6 +456,13 @@ exports, or secret values in these records.
 - `app/services/collections/prepaid_balance_sweep.py`
 - `app/services/collections/_core.py`
 - `app/services/account_lifecycle.py`
+- `app/services/account_status_reconcile.py`
+- `app/services/radius_access_state.py`
+- `app/services/radius_population.py`
+- `app/services/radius_projection_planner.py`
+- `app/services/radius.py`
+- `app/services/enforcement.py`
+- `app/tasks/radius.py`
 - `app/services/enforcement_window.py`
 - `app/services/events/dispatcher.py`
 - `app/services/events/handlers/enforcement.py`

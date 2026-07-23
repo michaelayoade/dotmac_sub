@@ -4,7 +4,7 @@ Splits the OBSERVED framed address (from live RADIUS accounting) out of the
 ipv4_address/ipv6_address columns, which are the DESIRED/served IP owned by the
 IP assignment + connectivity reconciler. Keeping observed separate stops the
 live IP overwriting the desired IP and being re-emitted by the RADIUS sweep.
-See docs/designs/CONNECTIVITY_STATE_MACHINE.md §3.1. Nullable, no backfill.
+See docs/FINANCIAL_ACCESS_ENFORCEMENT.md. Nullable, no backfill.
 
 Revision ID: 173_subscription_last_seen_framed_ip
 Revises: 172_splynx_usage_history_import

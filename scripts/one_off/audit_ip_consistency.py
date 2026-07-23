@@ -5,7 +5,7 @@ Read-only. Quantifies how many active subscribers have an IPv4 that disagrees
 across its three sources (subscription.ipv4_address column / IPAM IPAssignment /
 external radreply Framed-IP). This is step 1 of the connectivity-reconciler
 hardening — measure drift before refactoring writers. See
-docs/designs/SERVICE_LIFECYCLE_BUNDLE_INTEGRITY.md.
+docs/FINANCIAL_ACCESS_ENFORCEMENT.md.
 
 Usage (inside the app container so the DB + external RADIUS resolve):
 

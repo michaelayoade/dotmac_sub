@@ -2,6 +2,7 @@ import hashlib
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any
 
 from fastapi import HTTPException
@@ -65,17 +66,19 @@ from app.services.external_radius_targets import (
     authoritative_external_radius_db_url as _authoritative_external_radius_db_url,
 )
 from app.services.observability import record_task_run
+from app.services.radius_access_state import (
+    ACTIVE_STATUSES,
+    BLOCKED_STATUSES,
+    TERMINATED_STATUSES,
+)
 from app.services.response import ListResponseMixin
 from app.services.secrets import resolve_secret
 
 logger = logging.getLogger(__name__)
 
 
-RADIUS_SYNC_ELIGIBLE_STATUSES = (
-    SubscriptionStatus.active,
-    SubscriptionStatus.suspended,
-    SubscriptionStatus.canceled,
-    SubscriptionStatus.expired,
+RADIUS_SYNC_ELIGIBLE_STATUSES = tuple(
+    ACTIVE_STATUSES | BLOCKED_STATUSES | TERMINATED_STATUSES
 )
 # Compatibility aliases for read/NAS adapters. Runtime target ownership lives
 # in ``external_radius_targets``; projection writes live in radius_population.
@@ -87,6 +90,67 @@ def _projection_result_count(result: dict[str, object], key: str) -> int:
     """Read an integer counter from a structured projection result."""
     value = result.get(key, 0)
     return value if isinstance(value, int) else 0
+
+
+def _require_projection_result(result: dict[str, object]) -> None:
+    if result.get("projection_complete") is not True:
+        raise RadiusConnectivityProjectionIncomplete(
+            "RADIUS projection contains an unbuildable login"
+        )
+
+
+class ConnectivityProjectionDisposition(StrEnum):
+    """Stable result of projecting one subscription's connectivity."""
+
+    projected = "projected"
+    ineligible_subscription = "ineligible_subscription"
+    missing_login = "missing_login"
+    target_unavailable = "target_unavailable"
+    unbuildable_login = "unbuildable_login"
+
+
+class RadiusConnectivityProjectionIncomplete(RuntimeError):
+    """A subscription's required RADIUS projection did not converge."""
+
+
+@dataclass(frozen=True)
+class SubscriptionConnectivityOutcome:
+    """Typed evidence that local and external connectivity were projected."""
+
+    subscription_id: str
+    disposition: ConnectivityProjectionDisposition
+    radius_clients_changed: int = 0
+    radius_users_changed: int = 0
+    external_nas_synced: int = 0
+    external_credentials_synced: int = 0
+    requested_logins: int = 0
+    projected_logins: int = 0
+    projection_targets: int = 0
+
+    @property
+    def ok(self) -> bool:
+        return self.disposition is ConnectivityProjectionDisposition.projected
+
+    def as_dict(self) -> dict[str, int | bool | str]:
+        return {
+            "ok": self.ok,
+            "subscription_id": self.subscription_id,
+            "disposition": self.disposition.value,
+            "radius_clients_changed": self.radius_clients_changed,
+            "radius_users_changed": self.radius_users_changed,
+            "external_nas_synced": self.external_nas_synced,
+            "external_credentials_synced": self.external_credentials_synced,
+            "requested_logins": self.requested_logins,
+            "projected_logins": self.projected_logins,
+            "projection_targets": self.projection_targets,
+        }
+
+    def require_projected(self) -> "SubscriptionConnectivityOutcome":
+        if not self.ok:
+            raise RadiusConnectivityProjectionIncomplete(
+                f"RADIUS connectivity projection incomplete: {self.disposition.value}"
+            )
+        return self
 
 
 def authoritative_external_radius_db_url(db: Session) -> str | None:
@@ -950,20 +1014,24 @@ def ensure_radius_users_for_subscription(
 def reconcile_subscription_connectivity(
     db: Session,
     subscription_id: str,
-) -> dict[str, int | bool]:
-    """Ensure internal RADIUS state exists for a sync-eligible subscription."""
+) -> SubscriptionConnectivityOutcome:
+    """Project one subscription and report whether every required target converged."""
     subscription = db.get(Subscription, coerce_uuid(subscription_id))
     if not subscription or subscription.status not in RADIUS_SYNC_ELIGIBLE_STATUSES:
-        return {"ok": False, "radius_clients_changed": 0, "radius_users_changed": 0}
+        return SubscriptionConnectivityOutcome(
+            subscription_id=str(subscription_id),
+            disposition=ConnectivityProjectionDisposition.ineligible_subscription,
+        )
 
     radius_clients_changed = 0
+    nas_device = None
     if subscription.provisioning_nas_device_id:
         nas_device = db.get(NasDevice, subscription.provisioning_nas_device_id)
         if nas_device:
             radius_clients_changed = ensure_radius_clients_for_nas(db, nas_device)
 
     radius_users_changed = ensure_radius_users_for_subscription(db, subscription)
-    db.commit()
+    db.flush()
 
     external_nas_synced = 0
     external_credentials_synced = 0
@@ -984,25 +1052,62 @@ def reconcile_subscription_connectivity(
                 "external_nas_synced", 0
             )
     user_configs = active_external_radius_targets(db, capability="users")
-    if credentials and user_configs:
-        from app.services.radius_population import reconcile_usernames
-
-        result = reconcile_usernames(
-            {credential.username for credential in credentials},
-            dry_run=False,
-            source_db=db,
-        )
-        external_credentials_synced = len(credentials) * _projection_result_count(
-            result, "projection_targets"
-        )
-
-    return {
-        "ok": True,
-        "radius_clients_changed": radius_clients_changed,
-        "radius_users_changed": radius_users_changed,
-        "external_nas_synced": external_nas_synced,
-        "external_credentials_synced": external_credentials_synced,
+    requested_usernames = {
+        credential.username for credential in credentials if credential.username
     }
+    if subscription.login:
+        requested_usernames.add(str(subscription.login))
+
+    if (
+        subscription.status in ACTIVE_STATUSES | BLOCKED_STATUSES
+        and not subscription.login
+    ):
+        return SubscriptionConnectivityOutcome(
+            subscription_id=str(subscription.id),
+            disposition=ConnectivityProjectionDisposition.missing_login,
+            radius_clients_changed=radius_clients_changed,
+            radius_users_changed=radius_users_changed,
+            external_nas_synced=external_nas_synced,
+            requested_logins=len(requested_usernames),
+        )
+
+    if not user_configs:
+        return SubscriptionConnectivityOutcome(
+            subscription_id=str(subscription.id),
+            disposition=ConnectivityProjectionDisposition.target_unavailable,
+            radius_clients_changed=radius_clients_changed,
+            radius_users_changed=radius_users_changed,
+            external_nas_synced=external_nas_synced,
+            requested_logins=len(requested_usernames),
+        )
+
+    from app.services.radius_population import reconcile_usernames
+
+    result = reconcile_usernames(
+        requested_usernames,
+        dry_run=False,
+        source_db=db,
+    )
+    projected_logins = _projection_result_count(result, "projected_logins")
+    projection_targets = _projection_result_count(result, "projection_targets")
+    unbuildable_logins = _projection_result_count(result, "unbuildable_logins")
+    external_credentials_synced = projected_logins * projection_targets
+    disposition = (
+        ConnectivityProjectionDisposition.unbuildable_login
+        if unbuildable_logins
+        else ConnectivityProjectionDisposition.projected
+    )
+    return SubscriptionConnectivityOutcome(
+        subscription_id=str(subscription.id),
+        disposition=disposition,
+        radius_clients_changed=radius_clients_changed,
+        radius_users_changed=radius_users_changed,
+        external_nas_synced=external_nas_synced,
+        external_credentials_synced=external_credentials_synced,
+        requested_logins=len(requested_usernames),
+        projected_logins=projected_logins,
+        projection_targets=projection_targets,
+    )
 
 
 def _sanitize_table_identifier(raw: object, fallback: str) -> str:
@@ -1037,6 +1142,7 @@ def _external_sync_users(
         credential.username for credential in credentials if credential.username
     }
     result = reconcile_usernames(usernames, dry_run=False, source_db=db)
+    _require_projection_result(result)
     return {
         "external_users_synced": len(usernames)
         * _projection_result_count(result, "projection_targets"),
@@ -1639,7 +1745,8 @@ def sync_credential_to_radius(db: Session, credential: AccessCredential) -> bool
         return False
     from app.services.radius_population import reconcile_usernames
 
-    reconcile_usernames({credential.username}, dry_run=False, source_db=db)
+    result = reconcile_usernames({credential.username}, dry_run=False, source_db=db)
+    _require_projection_result(result)
     return True
 
 
@@ -1674,7 +1781,10 @@ def sync_account_credentials_to_radius(db: Session, account_id) -> int:
         dry_run=False,
         source_db=db,
     )
-    return len(credentials) * _projection_result_count(result, "projection_targets")
+    _require_projection_result(result)
+    return _projection_result_count(
+        result, "projected_logins"
+    ) * _projection_result_count(result, "projection_targets")
 
 
 def remove_external_radius_credentials(db: Session, account_id) -> int:
@@ -1697,7 +1807,10 @@ def remove_external_radius_credentials(db: Session, account_id) -> int:
         dry_run=False,
         source_db=db,
     )
-    return len(credentials) * _projection_result_count(result, "projection_targets")
+    _require_projection_result(result)
+    return _projection_result_count(
+        result, "projected_logins"
+    ) * _projection_result_count(result, "projection_targets")
 
 
 def block_external_radius_credentials(db: Session, account_id) -> int:
@@ -1720,7 +1833,10 @@ def block_external_radius_credentials(db: Session, account_id) -> int:
         dry_run=False,
         source_db=db,
     )
-    return len(credentials) * _projection_result_count(result, "projection_targets")
+    _require_projection_result(result)
+    return _projection_result_count(
+        result, "projected_logins"
+    ) * _projection_result_count(result, "projection_targets")
 
 
 def unblock_external_radius_credentials(db: Session, account_id) -> int:
@@ -1743,7 +1859,10 @@ def unblock_external_radius_credentials(db: Session, account_id) -> int:
         dry_run=False,
         source_db=db,
     )
-    return len(credentials) * _projection_result_count(result, "projection_targets")
+    _require_projection_result(result)
+    return _projection_result_count(
+        result, "projected_logins"
+    ) * _projection_result_count(result, "projection_targets")
 
 
 radius_servers = RadiusServers()
