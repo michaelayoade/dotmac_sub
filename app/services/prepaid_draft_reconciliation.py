@@ -531,7 +531,7 @@ def preview_prepaid_draft_cohort(
             InvoiceLine.amount > Decimal("0.00"),
             Subscription.billing_mode == BillingMode.prepaid,
         )
-        .distinct()
+        .group_by(Invoice.id, Invoice.created_at)
         .order_by(Invoice.created_at, Invoice.id)
     )
     if account_id is not None:
