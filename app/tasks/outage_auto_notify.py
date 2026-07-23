@@ -5,14 +5,17 @@ the service is gated on ``outage_auto_notify_enabled`` (default off) and a
 disabled run is a no-op. Single-flight via the same advisory-lock helper the
 other topology sweeps use — two concurrent runs would each read the debounce
 table before the other wrote it, and double-notify.
+
+This module owns scheduling and single-flight ONLY. The transaction belongs to
+the service (tests/architecture/test_adapter_transaction_ownership.py): a task
+is an adapter, and the sibling sweeps that commit here are grandfathered
+baseline entries, not a pattern to copy.
 """
 
 from __future__ import annotations
 
 import logging
 from typing import Any
-
-from billiard.exceptions import SoftTimeLimitExceeded
 
 from app.celery_app import celery_app
 from app.services.db_session_adapter import db_session_adapter
@@ -40,15 +43,4 @@ def auto_dispatch_outage_notifications() -> dict[str, Any]:
         if not acquired:
             logger.info("outage_auto_notify_skipped: previous run still in progress")
             return {"skipped": "already_running"}
-        try:
-            result = auto_dispatch_due_outage_notifications(db)
-            db.commit()
-            return result
-        except SoftTimeLimitExceeded:
-            db.rollback()
-            logger.warning("outage_auto_notify_timed_out")
-            return {"error": "outage_auto_notify_timed_out"}
-        except Exception as exc:  # noqa: BLE001 - report and roll back
-            db.rollback()
-            logger.exception("outage_auto_notify_failed")
-            return {"error": str(exc)}
+        return auto_dispatch_due_outage_notifications(db)

@@ -141,10 +141,35 @@ def auto_dispatch_due_outage_notifications(
 ) -> dict:
     """One automated pass. Returns a per-incident summary.
 
+    Owns its transaction: the calling task is an adapter and must not commit
+    (tests/architecture/test_adapter_transaction_ownership.py). A failure rolls
+    back rather than leaving audit rows half-written — those rows are also the
+    debounce source, so a partial write would mute a boundary that was never
+    actually notified.
+
     A no-op returning ``dispatched: False`` when the automation flag is off, so
     the task can be scheduled before the decision to enable it is made.
     ``subscription_ids_for`` is injectable so tests need not build topology.
     """
+    try:
+        result = _run_auto_dispatch(
+            session, now=now, subscription_ids_for=subscription_ids_for
+        )
+    except Exception as exc:  # noqa: BLE001 - report and roll back
+        session.rollback()
+        logger.exception("outage_auto_notify_failed")
+        return {"dispatched": False, "reason": "error", "error": str(exc)}
+    session.commit()
+    return result
+
+
+def _run_auto_dispatch(
+    session: Session,
+    *,
+    now: datetime | None = None,
+    subscription_ids_for: Callable[[Session, OutageIncident], list[uuid.UUID]]
+    | None = None,
+) -> dict:
     now = now or datetime.now(UTC)
 
     if not _auto_enabled():

@@ -49,9 +49,17 @@ class _Query:
 class _Session:
     def __init__(self, rows):
         self._rows = rows
+        self.commits = 0
+        self.rollbacks = 0
 
     def query(self, *_args):
         return _Query(self._rows)
+
+    def commit(self):
+        self.commits += 1
+
+    def rollback(self):
+        self.rollbacks += 1
 
 
 @pytest.fixture
@@ -231,3 +239,48 @@ def test_automation_adds_no_second_send_path():
 
 def test_operator_source_incidents_are_left_to_operators(monkeypatch):
     assert _eligible([_Incident(detection_source=OPERATOR_SOURCE)], monkeypatch) == []
+
+
+# --- transaction ownership --------------------------------------------------
+
+
+def test_service_commits_its_own_transaction(monkeypatch, enabled):
+    """The calling task is an adapter and must not own the transaction."""
+    monkeypatch.setattr(
+        outage_auto_notify, "dispatch_outage_notifications", lambda *a, **k: {}
+    )
+    session = _Session([_Incident()])
+    outage_auto_notify.auto_dispatch_due_outage_notifications(
+        session, now=NOW, subscription_ids_for=lambda s, i: [uuid.uuid4()]
+    )
+    assert session.commits == 1
+    assert session.rollbacks == 0
+
+
+def test_failure_rolls_back_rather_than_half_writing_audit_rows(monkeypatch, enabled):
+    """Audit rows are the debounce source; a partial write would mute a
+    boundary that was never actually notified."""
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("provider exploded")
+
+    monkeypatch.setattr(outage_auto_notify, "dispatch_outage_notifications", _boom)
+    session = _Session([_Incident()])
+
+    result = outage_auto_notify.auto_dispatch_due_outage_notifications(
+        session, now=NOW, subscription_ids_for=lambda s, i: [uuid.uuid4()]
+    )
+
+    assert session.rollbacks == 1
+    assert session.commits == 0
+    assert result["reason"] == "error"
+
+
+def test_task_does_not_own_the_transaction():
+    import inspect
+
+    from app.tasks import outage_auto_notify as task_module
+
+    source = inspect.getsource(task_module)
+    assert "db.commit()" not in source
+    assert "db.rollback()" not in source
