@@ -15,6 +15,7 @@ import 'package:dotmac_portal/src/models/plan_change.dart';
 import 'package:dotmac_portal/src/models/session.dart';
 import 'package:dotmac_portal/src/models/subscription.dart';
 import 'package:dotmac_portal/src/models/ticket.dart';
+import 'package:dotmac_portal/src/models/topup.dart';
 import 'package:dotmac_portal/src/models/usage.dart';
 
 void main() {
