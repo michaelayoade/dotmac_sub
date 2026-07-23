@@ -235,14 +235,14 @@
             </div>
         </div>
 
-        <div class="grid gap-6 lg:grid-cols-3">
+        <div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
             <!-- Left Column: Contact + Login As Customer -->
-            <div class="space-y-6">
+            <div class="contents">
                 <!-- CRM Sync Status -->
                 {% set crm_status = crm_sync_status|default({}) %}
                 {% set identity = identity_profile|default({}) %}
                 {% set crm_tone = 'negative' if crm_status.status == 'failed' else 'positive' if crm_status.status == 'linked' else 'warning' %}
-                <div class="status-panel status-panel-{{ crm_tone }} rounded-2xl border shadow-sm">
+                <div class="status-panel status-panel-{{ crm_tone }} order-1 rounded-2xl border shadow-sm lg:col-span-1">
                     <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
                         <h3 class="font-semibold text-slate-900 dark:text-white">CRM Sync</h3>
                         <span class="status-tone status-tone-{{ crm_tone }} inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold">
@@ -283,7 +283,7 @@
                 </div>
 
                 {% set identity_tone = 'positive' if identity.complete else 'warning' %}
-                <div class="status-panel status-panel-{{ identity_tone }} rounded-2xl border shadow-sm">
+                <div class="status-panel status-panel-{{ identity_tone }} order-2 rounded-2xl border shadow-sm lg:col-span-2">
                     <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
                         <h3 class="font-semibold text-slate-900 dark:text-white">Identity Profile</h3>
                         <span class="status-tone status-tone-{{ identity_tone }} inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold">
@@ -308,7 +308,7 @@
                 </div>
 
                 <!-- Contact Information Card -->
-                <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+                <div class="order-3 rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 lg:col-span-1">
                     <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
                         <h3 class="font-semibold text-slate-900 dark:text-white">Contact Information</h3>
                         <div class="flex items-center gap-3">
@@ -467,7 +467,7 @@
 
                 <!-- Business Details (shown when customer belongs to an organization) -->
                 {% if organization %}
-                <div x-data="{ open: true }" class="rounded-2xl border border-purple-200/60 bg-white shadow-sm dark:border-purple-800/40 dark:bg-slate-800">
+                <div x-data="{ open: true }" class="order-5 rounded-2xl border border-purple-200/60 bg-white shadow-sm dark:border-purple-800/40 dark:bg-slate-800 md:col-span-2 lg:col-span-3">
                     <button @click="open = !open" class="flex w-full items-center justify-between border-b border-purple-100/60 px-5 py-4 dark:border-purple-800/30 text-left">
                         <div class="flex items-center gap-2">
                             <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-purple-50 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400">
@@ -520,7 +520,7 @@
 
                 <!-- Portal Access -->
                 {% set pppoe_access = pppoe_access|default({'has_credential': false, 'credential_id': none, 'login': none, 'has_password': false}) %}
-                <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+                <div class="order-4 rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 lg:col-span-2">
                     <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
                         <h3 class="font-semibold text-slate-900 dark:text-white">Portal Access</h3>
                         <span class="text-xs text-slate-500 dark:text-slate-400">Login, impersonation & PPPoE</span>
@@ -663,7 +663,7 @@
             </div>
 
             <!-- Center Column: Subscriber Accounts + Addresses -->
-            <div class="space-y-6 lg:col-span-2">
+            <div class="order-6 space-y-6 md:col-span-2 lg:col-span-3">
                 <!-- Subscriber Accounts -->
                 <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
                     <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">

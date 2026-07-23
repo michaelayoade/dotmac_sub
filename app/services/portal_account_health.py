@@ -175,6 +175,20 @@ class PortalAccountHealth:
             customer_primary_action_url=service.customer_action_url,
         )
 
+    def for_active_services(self) -> PortalAccountHealth:
+        """Narrow the projection to services in the active lifecycle state."""
+        active_services = tuple(
+            service
+            for service in self.services
+            if service.lifecycle.value == SubscriptionStatus.active.value
+        )
+        return replace(
+            self,
+            services=active_services,
+            primary_action=None,
+            customer_primary_action_url=None,
+        )
+
 
 _CUSTOMER_ACTION_URLS = {
     "top_up": "/portal/billing/topup",

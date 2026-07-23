@@ -1750,7 +1750,7 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
         connection_by_subscription,
         additional_routes_by_subscriber,
     )
-    account_health = build_portal_account_health(db, customer.id)
+    account_health = build_portal_account_health(db, customer.id).for_active_services()
     pending_location_request = (
         db.query(CustomerLocationChangeRequest)
         .filter(CustomerLocationChangeRequest.subscriber_id == customer.id)
