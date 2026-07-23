@@ -42,9 +42,9 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
   late bool _saveCard = widget.saveCardInitial;
 
   /// The selected pay method, encoded as one of:
-  ///  - `card:<id>`   — charge a saved card server-side (one-tap)
-  ///  - `gw:<type>`   — new card via a gateway ('paystack'/'flutterwave')
-  ///  - `transfer`    — direct bank transfer + upload receipt
+  ///  - `card:<id>`   - charge a saved card server-side (one-tap)
+  ///  - `gw:<type>`   - new card via a gateway ('paystack'/'flutterwave')
+  ///  - `transfer`    - direct bank transfer + upload receipt
   /// Null until the page + saved cards load and a default is chosen.
   String? _selection;
 
@@ -94,9 +94,13 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
         await _refreshPreview();
       }
     } catch (e) {
-      if (mounted) setState(() => _loadError = e);
+      if (mounted) {
+        setState(() => _loadError = e);
+      }
     } finally {
-      if (mounted) setState(() => _loadingPage = false);
+      if (mounted) {
+        setState(() => _loadingPage = false);
+      }
     }
   }
 
@@ -162,11 +166,14 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
     final messenger = ScaffoldMessenger.of(context);
     final router = GoRouter.of(context);
     if (amount == null || amount < page.minAmount || amount > page.maxAmount) {
-      messenger.showSnackBar(SnackBar(
-        content: Text(
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
             'Enter an amount between ${Fmt.money(page.minAmount, page.currency)} '
-            'and ${Fmt.money(page.maxAmount, page.currency)}'),
-      ));
+            'and ${Fmt.money(page.maxAmount, page.currency)}',
+          ),
+        ),
+      );
       return;
     }
 
@@ -181,10 +188,13 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
       );
       if (ok == true && mounted) {
         ref.invalidate(paymentProofsProvider);
-        messenger.showSnackBar(const SnackBar(
-          content: Text(
-              'Receipt submitted — we will verify it and credit your account.'),
-        ));
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Receipt submitted - we will verify it and credit your account.',
+            ),
+          ),
+        );
       }
       return;
     }
@@ -192,11 +202,17 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
     setState(() => _busy = true);
     try {
       final preview = await _refreshPreview();
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
       if (preview == null || preview.previewFingerprint.isEmpty) {
-        messenger.showSnackBar(const SnackBar(
-          content: Text('Review the latest allocation preview before checkout.'),
-        ));
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Review the latest allocation preview before checkout.',
+            ),
+          ),
+        );
         return;
       }
       final cardId = _selectedCardId;
@@ -213,18 +229,22 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
                     : 'topup-${DateTime.now().microsecondsSinceEpoch}-'
                         '${Random().nextInt(0x7fffffff)}',
               );
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
 
       String reference;
       if (initiation.charged) {
-        // Saved card was charged server-side — skip the gateway webview.
+        // Saved card was charged server-side - skip the gateway webview.
         reference = initiation.paymentReference;
       } else {
         final ref0 = await router.push<String>(
           '/pay',
           extra: CheckoutArgs.topup(initiation),
         );
-        if (ref0 == null) return; // cancelled
+        if (ref0 == null) {
+          return;
+        }
         reference = ref0;
       }
 
@@ -234,23 +254,35 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
             saveCard:
                 cardId == null && _selectedGateway == 'paystack' && _saveCard,
           );
-      // Top-up credits the account — refresh balance + ledger + invoices.
+      // Top-up credits the account - refresh balance + ledger + invoices.
       ref.invalidate(invoicesProvider);
       ref.invalidate(balanceProvider);
       ref.invalidate(ledgerProvider);
       ref.invalidate(paymentMethodsProvider);
-      messenger.showSnackBar(SnackBar(
-        content: Text(result.availableBalance != null
-            ? 'Topped up — balance ${Fmt.money(result.availableBalance!, page.currency)}'
-            : 'Top-up of ${Fmt.money(result.amount, page.currency)} received'),
-      ));
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            result.availableBalance != null
+                ? 'Topped up - balance '
+                    '${Fmt.money(result.availableBalance!, page.currency)}'
+                : 'Top-up of ${Fmt.money(result.amount, page.currency)} '
+                    'received',
+          ),
+        ),
+      );
       await _loadPage();
     } on ApiException catch (e) {
-      if (mounted) showPaymentError(context, e, onRetry: _submit);
+      if (mounted) {
+        showPaymentError(context, e, onRetry: _submit);
+      }
     } catch (e) {
-      if (mounted) showPaymentError(context, e, onRetry: _submit);
+      if (mounted) {
+        showPaymentError(context, e, onRetry: _submit);
+      }
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() => _busy = false);
+      }
     }
   }
 
@@ -273,7 +305,9 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
           : _page == null
               ? AsyncValueView(
                   value: AsyncValue<void>.error(
-                      _loadError ?? 'error', StackTrace.empty),
+                    _loadError ?? 'error',
+                    StackTrace.empty,
+                  ),
                   data: (_) => const SizedBox.shrink(),
                   onRetry: _loadPage,
                 )
@@ -288,9 +322,7 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
           : 'Pay ${Fmt.money(_amount!, page.currency)} by transfer';
     }
     final verb = _selectedCardId == null ? 'Top up' : 'Pay';
-    return _amount == null
-        ? verb
-        : '$verb ${Fmt.money(_amount!, page.currency)}';
+    return _amount == null ? verb : '$verb ${Fmt.money(_amount!, page.currency)}';
   }
 
   Widget _methodTile({
@@ -358,7 +390,8 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
             labelText: 'Amount',
             prefixText: '${page.currency} ',
             helperText:
-                '${Fmt.money(page.minAmount, page.currency)} – ${Fmt.money(page.maxAmount, page.currency)}',
+                '${Fmt.money(page.minAmount, page.currency)} - '
+                '${Fmt.money(page.maxAmount, page.currency)}',
           ),
         ),
         if (page.eligibleUnpaidInvoices.isNotEmpty) ...[
@@ -426,18 +459,20 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
           const SizedBox(height: 16),
           Text(
             'Could not load the latest allocation preview. Try again.',
-            style: theme.textTheme.bodyMedium
-                ?.copyWith(color: theme.colorScheme.error),
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: theme.colorScheme.error,
+            ),
           ),
         ],
-        // --- Pay with: saved card (one-tap), an online gateway, or transfer ---
+        // Pay with: saved card (one-tap), an online gateway, or transfer.
         const SizedBox(height: 8),
         Text('Pay with', style: theme.textTheme.titleSmall),
         for (final c in savedCards)
           _methodTile(
             value: 'card:${c.id}',
             icon: Icons.credit_card,
-            title: c.label ?? '${c.brand ?? 'Card'} •••• ${c.last4 ?? ''}',
+            title:
+                c.label ?? '${c.brand ?? 'Card'} .... ${c.last4 ?? ''}',
             subtitle: (c.expiresMonth != null && c.expiresYear != null)
                 ? 'Expires '
                     '${c.expiresMonth!.toString().padLeft(2, '0')}/${c.expiresYear}'
@@ -473,12 +508,15 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
               ? const SizedBox(
                   height: 18,
                   width: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2))
-              : Icon(_isTransfer
-                  ? Icons.account_balance_outlined
-                  : _selectedCardId == null
-                      ? Icons.add_card_outlined
-                      : Icons.bolt_outlined),
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : Icon(
+                  _isTransfer
+                      ? Icons.account_balance_outlined
+                      : _selectedCardId == null
+                          ? Icons.add_card_outlined
+                          : Icons.bolt_outlined,
+                ),
           label: Text(_payLabel(page)),
         ),
       ],
