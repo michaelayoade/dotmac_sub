@@ -60,6 +60,10 @@ from app.schemas.catalog import (
 )
 from app.schemas.chat import ChatSessionResponse
 from app.schemas.common import ListResponse
+from app.schemas.customer_device_commands import (
+    CustomerDeviceCommandOutcomeRead,
+    CustomerWifiUpdateRequest,
+)
 from app.schemas.gis import (
     MyLocationRead,
     MyLocationRequestCreate,
@@ -128,6 +132,7 @@ from app.services import (
     customer_work_order_selfcare,
     quote_deposits,
     quotes_mirror,
+    team_inbox_widget,
     web_support_tickets,
 )
 from app.services import customer_location_requests as location_service
@@ -365,6 +370,69 @@ def my_subscriptions(
     return catalog_service.subscriptions.list_response(
         db, subscriber_id, None, status, order_by, order_dir, limit, offset
     )
+
+
+@router.post(
+    "/subscriptions/{subscription_id}/device/reboot",
+    response_model=CustomerDeviceCommandOutcomeRead,
+)
+def reboot_my_subscription_device(
+    subscription_id: UUID,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Reboot the exact device currently assigned to the caller's service."""
+    from app.services.customer_device_commands import (
+        CustomerDeviceCommandError,
+        reboot_subscription_device,
+    )
+
+    try:
+        return reboot_subscription_device(
+            db,
+            subscriber_id=UUID(_subscriber_id(principal)),
+            subscription_id=subscription_id,
+            actor_id=str(principal.get("id") or _subscriber_id(principal)),
+        )
+    except CustomerDeviceCommandError as exc:
+        status_code = 404 if exc.code == "subscription_not_found" else 409
+        raise HTTPException(
+            status_code=status_code,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+
+
+@router.post(
+    "/subscriptions/{subscription_id}/device/wifi",
+    response_model=CustomerDeviceCommandOutcomeRead,
+)
+def update_my_subscription_wifi(
+    subscription_id: UUID,
+    payload: CustomerWifiUpdateRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Update Wi-Fi on the exact device assigned to the caller's service."""
+    from app.services.customer_device_commands import (
+        CustomerDeviceCommandError,
+        update_subscription_wifi,
+    )
+
+    try:
+        return update_subscription_wifi(
+            db,
+            subscriber_id=UUID(_subscriber_id(principal)),
+            subscription_id=subscription_id,
+            actor_id=str(principal.get("id") or _subscriber_id(principal)),
+            ssid=payload.ssid,
+            password=payload.password,
+        )
+    except CustomerDeviceCommandError as exc:
+        status_code = 404 if exc.code == "subscription_not_found" else 409
+        raise HTTPException(
+            status_code=status_code,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
 
 
 @router.get("/account-health", response_model=PortalAccountHealthRead)
@@ -802,9 +870,13 @@ def my_chat_session(
     the reference rides in the session so the agent has context.
     """
     subscriber_id = _subscriber_id(principal)
-    return chat_session_service.broker_customer_session(
-        db, subscriber_id, ticket_id=ticket_id, project_id=project_id
-    )
+    try:
+        return chat_session_service.broker_customer_session(
+            db, subscriber_id, ticket_id=ticket_id, project_id=project_id
+        )
+    except team_inbox_widget.TeamInboxWidgetError as exc:
+        status_code = 404 if exc.code.endswith("_not_found") else 503
+        raise HTTPException(status_code=status_code, detail=exc.message) from exc
 
 
 @router.post("/portal/session", response_model=PortalSessionResponse)

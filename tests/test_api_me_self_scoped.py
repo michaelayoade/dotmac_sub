@@ -31,6 +31,44 @@ def test_customer_service_change_routes_are_canonical_without_plan_change_alias(
     assert "/me/subscriptions/{subscription_id}/plan-change/quote" not in paths
 
 
+def test_customer_device_command_routes_are_self_scoped():
+    paths = {getattr(route, "path", "") for route in me_api.router.routes}
+    assert "/me/subscriptions/{subscription_id}/device/reboot" in paths
+    assert "/me/subscriptions/{subscription_id}/device/wifi" in paths
+
+
+def test_reboot_device_forces_principal_scope(monkeypatch):
+    from app.services import customer_device_commands
+
+    principal = _subscriber_principal()
+    subscription_id = uuid.uuid4()
+    captured = {}
+
+    def fake(db, *, subscriber_id, subscription_id, actor_id):
+        captured.update(
+            subscriber_id=subscriber_id,
+            subscription_id=subscription_id,
+            actor_id=actor_id,
+        )
+        return customer_device_commands.CustomerDeviceCommandOutcome(
+            command=customer_device_commands.CustomerDeviceCommandKind.reboot,
+            status=customer_device_commands.CustomerDeviceCommandStatus.succeeded,
+            subscription_id=subscription_id,
+            device_id=uuid.uuid4(),
+            operation_id=uuid.uuid4(),
+            message="Restart completed",
+        )
+
+    monkeypatch.setattr(customer_device_commands, "reboot_subscription_device", fake)
+    outcome = me_api.reboot_my_subscription_device(
+        subscription_id, db=None, principal=principal
+    )
+
+    assert outcome.message == "Restart completed"
+    assert captured["subscriber_id"] == uuid.UUID(principal["subscriber_id"])
+    assert captured["subscription_id"] == subscription_id
+
+
 def test_subscriber_id_helper_rejects_non_subscriber():
     with pytest.raises(HTTPException) as exc:
         me_api._subscriber_id(_system_user_principal())

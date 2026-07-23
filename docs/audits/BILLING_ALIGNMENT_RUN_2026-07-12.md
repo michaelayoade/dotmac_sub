@@ -1,5 +1,9 @@
 # Billing alignment — read-only reconciliation run
 
+> Historical provenance only. Do not use dated activation/readiness guidance in
+> this record as current procedure. The canonical runtime and operator contract
+> is `docs/FINANCIAL_ACCESS_ENFORCEMENT.md`.
+
 Provenance record for the alignment pass described in
 `docs/audits/BILLING_SOT_AUDIT_2026-07-12.md`. **No persistent source or
 business table was written.** The harness (`scripts/one_off/billing_alignment_audit.py`) has no

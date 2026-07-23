@@ -8,6 +8,8 @@ owners.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -67,6 +69,31 @@ class ExecutionDrift:
     request_id: UUID
     code: str
     repairable: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionReconciliationItem:
+    request_id: UUID
+    subscription_id: UUID
+    status: str
+    execution_state: str
+    findings: tuple[ExecutionDrift, ...]
+    reviewed_head: str
+    updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionReconciliationInspection:
+    items: tuple[ExecutionReconciliationItem, ...]
+    inspected_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionReconciliationOutcome:
+    request_id: UUID
+    execution_state: str
+    replayed: bool
+    reviewed_head: str
 
 
 def _lock_request(db: Session, request_id: UUID) -> SubscriptionChangeRequest:
@@ -282,7 +309,10 @@ def settle_relocation_payment(
         return FulfillmentOutcome(
             request.id, request.service_order_id, request.work_order_id, True
         )
-    if request.execution_state != SubscriptionChangeExecutionState.awaiting_payment:
+    if request.execution_state not in {
+        SubscriptionChangeExecutionState.awaiting_payment,
+        SubscriptionChangeExecutionState.payment_settled,
+    }:
         raise SubscriptionChangeExecutionError(
             "service_change_not_awaiting_payment",
             "Service change is not awaiting payment",
@@ -321,7 +351,7 @@ def settle_relocation_payment(
             "subscription_not_found", "Subscription not found"
         )
     request.field_fee_payment_id = payment.id
-    request.payment_settled_at = datetime.now(UTC)
+    request.payment_settled_at = request.payment_settled_at or datetime.now(UTC)
     request.execution_state = SubscriptionChangeExecutionState.payment_settled
     service_order = ServiceOrder(
         subscriber_id=subscription.subscriber_id,
@@ -438,9 +468,19 @@ def audit_execution_chain(
         request.execution_state == SubscriptionChangeExecutionState.awaiting_payment
         and request.field_fee_invoice_id is not None
     ):
-        invoice = db.get(Invoice, request.field_fee_invoice_id)
-        if invoice is not None and invoice.status == InvoiceStatus.paid:
+        payment_id = _settled_payment_id(db, request)
+        if payment_id is not None:
             findings.append(ExecutionDrift(request.id, "paid_not_released", True))
+    if request.execution_state == SubscriptionChangeExecutionState.payment_settled and (
+        request.service_order_id is None or request.work_order_id is None
+    ):
+        findings.append(
+            ExecutionDrift(
+                request.id,
+                "settled_not_released",
+                _settled_payment_id(db, request) is not None,
+            )
+        )
     if request.service_order_id is not None and request.execution_state in {
         SubscriptionChangeExecutionState.fulfillment_released,
         SubscriptionChangeExecutionState.provisioning,
@@ -470,6 +510,118 @@ def audit_execution_chain(
     return tuple(findings)
 
 
+def inspect_execution_chain_reconciliation(
+    db: Session, *, limit: int = 200
+) -> ExecutionReconciliationInspection:
+    """Return bounded, read-only interrupted-chain evidence for operators."""
+
+    requests = list(
+        db.scalars(
+            select(SubscriptionChangeRequest)
+            .where(SubscriptionChangeRequest.is_active.is_(True))
+            .order_by(SubscriptionChangeRequest.updated_at.desc())
+            .limit(max(1, min(limit, 500)))
+        ).all()
+    )
+    items: list[ExecutionReconciliationItem] = []
+    for request in requests:
+        findings = audit_execution_chain(db, request_id=request.id)
+        if not findings:
+            continue
+        items.append(
+            ExecutionReconciliationItem(
+                request_id=request.id,
+                subscription_id=request.subscription_id,
+                status=request.status.value,
+                execution_state=(
+                    request.execution_state.value
+                    if request.execution_state is not None
+                    else "unknown"
+                ),
+                findings=findings,
+                reviewed_head=_execution_reviewed_head(request, findings),
+                updated_at=request.updated_at,
+            )
+        )
+    return ExecutionReconciliationInspection(tuple(items), datetime.now(UTC))
+
+
+def reconcile_execution_chain(
+    db: Session,
+    *,
+    request_id: UUID,
+    expected_head: str,
+    idempotency_key: str,
+    actor_id: str,
+    reason: str,
+) -> ExecutionReconciliationOutcome:
+    """Perform one reviewed, idempotent repair from canonical evidence."""
+
+    if len(expected_head) != 64:
+        raise SubscriptionChangeExecutionError(
+            "reconciliation_head_invalid", "Reviewed reconciliation head is invalid"
+        )
+    key = idempotency_key.strip()
+    if len(key) < 16:
+        raise SubscriptionChangeExecutionError(
+            "reconciliation_key_invalid", "Idempotency key is too short"
+        )
+    reason_value = reason.strip()
+    if len(reason_value) < 8:
+        raise SubscriptionChangeExecutionError(
+            "reconciliation_reason_invalid", "Reconciliation reason is too short"
+        )
+    key_hash = hashlib.sha256(key.encode()).hexdigest()
+    request = _lock_request(db, request_id)
+    if request.reconciliation_idempotency_key_hash == key_hash:
+        if request.reconciliation_reviewed_head != expected_head:
+            raise SubscriptionChangeExecutionError(
+                "reconciliation_key_conflict",
+                "Idempotency key was already used for different reviewed evidence",
+            )
+        return ExecutionReconciliationOutcome(
+            request.id,
+            request.execution_state.value if request.execution_state else "unknown",
+            True,
+            expected_head,
+        )
+    existing_key = db.scalar(
+        select(SubscriptionChangeRequest.id).where(
+            SubscriptionChangeRequest.reconciliation_idempotency_key_hash == key_hash
+        )
+    )
+    if existing_key is not None:
+        raise SubscriptionChangeExecutionError(
+            "reconciliation_key_conflict",
+            "Idempotency key is already bound to another service change",
+        )
+    findings = audit_execution_chain(db, request_id=request.id)
+    current_head = _execution_reviewed_head(request, findings)
+    if current_head != expected_head:
+        raise SubscriptionChangeExecutionError(
+            "reconciliation_head_stale",
+            "Execution evidence changed; refresh and review before repairing",
+        )
+    if not findings or not any(item.repairable for item in findings):
+        raise SubscriptionChangeExecutionError(
+            "reconciliation_not_repairable",
+            "This execution chain has no repairable canonical drift",
+        )
+    repaired = repair_execution_chain(db, request_id=request.id, actor_id=actor_id)
+    repaired.reconciliation_idempotency_key_hash = key_hash
+    repaired.reconciliation_reviewed_head = expected_head
+    repaired.reconciliation_actor_id = actor_id[:120]
+    repaired.reconciliation_reason = reason_value
+    repaired.reconciled_at = datetime.now(UTC)
+    db.commit()
+    return ExecutionReconciliationOutcome(
+        repaired.id,
+        repaired.execution_state.value if repaired.execution_state else "unknown",
+        False,
+        expected_head,
+    )
+
+
 def repair_execution_chain(
     db: Session, *, request_id: UUID, actor_id: str
 ) -> SubscriptionChangeRequest:
@@ -483,26 +635,17 @@ def repair_execution_chain(
         return finalize_verified_remote_reprovision(
             db, request_id=request.id, actor_id=actor_id
         )
-    if request.execution_state == SubscriptionChangeExecutionState.awaiting_payment:
-        allocation = db.scalar(
-            select(PaymentAllocation)
-            .join(Invoice, Invoice.id == PaymentAllocation.invoice_id)
-            .where(
-                PaymentAllocation.invoice_id == request.field_fee_invoice_id,
-                PaymentAllocation.is_active.is_(True),
-                Invoice.status == InvoiceStatus.paid,
-            )
-            .order_by(PaymentAllocation.created_at.asc())
-            .limit(1)
-        )
-        if allocation is None:
+    if request.execution_state in {
+        SubscriptionChangeExecutionState.awaiting_payment,
+        SubscriptionChangeExecutionState.payment_settled,
+    }:
+        payment_id = _settled_payment_id(db, request)
+        if payment_id is None:
             raise SubscriptionChangeExecutionError(
                 "relocation_fee_not_settled",
                 "No canonical settlement is available for repair",
             )
-        settle_relocation_payment(
-            db, request_id=request.id, payment_id=allocation.payment_id
-        )
+        settle_relocation_payment(db, request_id=request.id, payment_id=payment_id)
         request = _lock_request(db, request.id)
     if request.service_order_id is not None:
         decision = db.scalar(
@@ -524,6 +667,68 @@ def repair_execution_chain(
                 actor_id=actor_id,
             )
     return request
+
+
+def _settled_payment_id(db: Session, request: SubscriptionChangeRequest) -> UUID | None:
+    invoice = (
+        db.get(Invoice, request.field_fee_invoice_id)
+        if request.field_fee_invoice_id is not None
+        else None
+    )
+    expected = Decimal(request.field_fee_amount or 0)
+    if (
+        invoice is None
+        or invoice.status != InvoiceStatus.paid
+        or expected <= Decimal("0.00")
+        or invoice.currency != request.field_fee_currency
+        or Decimal(invoice.total or 0) != expected
+    ):
+        return None
+    allocations = list(
+        db.scalars(
+            select(PaymentAllocation)
+            .where(
+                PaymentAllocation.invoice_id == request.field_fee_invoice_id,
+                PaymentAllocation.is_active.is_(True),
+            )
+            .order_by(PaymentAllocation.created_at.asc())
+        ).all()
+    )
+    for allocation in allocations:
+        allocated = db.scalar(
+            select(func.coalesce(func.sum(PaymentAllocation.amount), 0)).where(
+                PaymentAllocation.invoice_id == invoice.id,
+                PaymentAllocation.payment_id == allocation.payment_id,
+                PaymentAllocation.is_active.is_(True),
+            )
+        )
+        if Decimal(allocated or 0) >= expected:
+            return allocation.payment_id
+    return None
+
+
+def _execution_reviewed_head(
+    request: SubscriptionChangeRequest, findings: tuple[ExecutionDrift, ...]
+) -> str:
+    evidence = {
+        "request_id": str(request.id),
+        "updated_at": request.updated_at.isoformat(),
+        "status": request.status.value,
+        "execution_state": (
+            request.execution_state.value if request.execution_state else None
+        ),
+        "invoice_id": str(request.field_fee_invoice_id or ""),
+        "payment_id": str(request.field_fee_payment_id or ""),
+        "service_order_id": str(request.service_order_id or ""),
+        "work_order_id": str(request.work_order_id or ""),
+        "readiness_id": str(request.provisioning_readiness_decision_id or ""),
+        "remote_profile_id": str(request.remote_radius_profile_id or ""),
+        "remote_user_id": str(request.remote_radius_user_id or ""),
+        "findings": sorted((item.code, item.repairable) for item in findings),
+    }
+    return hashlib.sha256(
+        json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
 
 def _delivery_mode(request: SubscriptionChangeRequest) -> str | None:
@@ -560,13 +765,18 @@ def _remote_radius_verification_ready(
 
 
 __all__ = [
-    "FulfillmentOutcome",
     "ExecutionDrift",
+    "ExecutionReconciliationInspection",
+    "ExecutionReconciliationItem",
+    "ExecutionReconciliationOutcome",
+    "FulfillmentOutcome",
     "SubscriptionChangeExecutionError",
     "RemoteReprovisionOutcome",
     "finalize_verified_remote_reprovision",
     "finalize_verified_service_change",
     "audit_execution_chain",
+    "inspect_execution_chain_reconciliation",
+    "reconcile_execution_chain",
     "repair_execution_chain",
     "settle_relocation_payment",
     "stage_relocation_charge",

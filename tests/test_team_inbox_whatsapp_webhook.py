@@ -13,7 +13,12 @@ from starlette.requests import Request
 from app.api import inbox_webhooks
 from app.models.integration_platform import IntegrationInbox
 from app.models.subscriber import Subscriber, SubscriberStatus
-from app.models.team_inbox import InboxConversation, InboxMessage, InboxMessageDirection
+from app.models.team_inbox import (
+    InboxConversation,
+    InboxMessage,
+    InboxMessageDirection,
+    InboxProviderObservation,
+)
 from app.services.integrations import installations
 from app.services.integrations.runtime import ValidationResult
 from app.services.integrations.whatsapp_capability import (
@@ -259,7 +264,7 @@ def test_meta_whatsapp_webhook_preserves_media_message(db_session, monkeypatch):
     assert message.body == "[image]"
     assert message.metadata_["attachments"][0]["type"] == "image"
     assert message.metadata_["attachments"][0]["id"] == "media-1"
-    assert message.metadata_["raw"]["raw"]["image"]["id"] == "media-1"
+    assert "raw" not in message.metadata_
 
 
 def test_meta_whatsapp_webhook_updates_outbound_delivery_status(
@@ -294,6 +299,7 @@ def test_meta_whatsapp_webhook_updates_outbound_delivery_status(
                         "field": "messages",
                         "value": {
                             "messaging_product": "whatsapp",
+                            "metadata": {"phone_number_id": "phone-number-id"},
                             "statuses": [
                                 {
                                     "id": "wamid.outbound-1",
@@ -320,9 +326,11 @@ def test_meta_whatsapp_webhook_updates_outbound_delivery_status(
     assert response["status_processed"] == 1
     assert response["status_items"][0]["kind"] == "updated"
     assert message.metadata_["delivery_status"] == "delivered"
-    assert message.metadata_["delivery_status_at"] == "1783670500"
+    assert message.metadata_["delivery_status_at"] == "2026-07-10T08:01:40+00:00"
     assert message.metadata_["delivery_recipient_id"] == "2348035550114"
     assert message.metadata_["delivery_status_history"][-1]["status"] == "delivered"
+    observation = db_session.query(InboxProviderObservation).one()
+    assert observation.provider_account_scope == "phone-number-id"
 
 
 def test_meta_whatsapp_webhook_acknowledges_unknown_status(db_session, monkeypatch):

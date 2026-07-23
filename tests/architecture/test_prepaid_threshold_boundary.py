@@ -78,15 +78,17 @@ def test_threshold_exposes_typed_provenance_and_domain_failures() -> None:
     source = THRESHOLD_OWNER.read_text(encoding="utf-8")
 
     assert "class PrepaidThresholdDecision:" in source
-    assert "class PriceRow(Protocol):" in source
     assert "class PrepaidThresholdError(DomainError)" in source
     assert "class PrepaidCurrencyMismatchError(PrepaidThresholdError)" in source
+    assert "unresolved_renewal_subscription_ids" in source
+    assert "resolve_prepaid_monthly_charges" in source
+    assert "OfferPrice" not in source
+    assert "OfferVersionPrice" not in source
     assert "Sequence[Any]" not in source
     assert "list[Any]" not in source
     assert "raise ValueError" not in source
     assert ".commit(" not in source
     assert ".rollback(" not in source
-    assert 'code="financial.prepaid_threshold.missing_subscription_price"' in source
 
 
 def test_currency_policy_has_one_implementation_and_no_access_cycle() -> None:

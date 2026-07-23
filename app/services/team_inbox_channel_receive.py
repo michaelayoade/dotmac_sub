@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+import hashlib
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, TypeVar
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -16,6 +16,7 @@ from app.models.team_inbox import (
     InboxConversationStatus,
     InboxMessage,
     InboxMessageDirection,
+    InboxObservationKind,
 )
 from app.services import team_inbox_media, team_inbox_realtime, team_inbox_routing
 from app.services.common import coerce_uuid
@@ -24,6 +25,7 @@ from app.services.customer_identity_normalization import (
     normalize_channel_address,
 )
 from app.services.integrations.connectors import whatsapp_runtime
+from app.services.owner_commands import CommandContext
 from app.services.realtime_platform import EventType
 
 _INACTIVE_SUBSCRIBER_STATUSES = {
@@ -35,17 +37,6 @@ _OPAQUE_CONTACT_CHANNELS = {
     InboxChannelType.instagram_dm.value,
     InboxChannelType.chat_widget.value,
 }
-T = TypeVar("T")
-
-
-def _commit(db: Session, action: Callable[[], T]) -> T:
-    try:
-        result = action()
-        db.commit()
-        return result
-    except Exception:
-        db.rollback()
-        raise
 
 
 @dataclass(frozen=True)
@@ -433,6 +424,7 @@ def receive_inbound_channel(
     )
     conversation.last_message_at = received_at
     team_inbox_realtime.publish_conversation_event(
+        db,
         str(conversation.id),
         event_type=EventType.MESSAGE_NEW,
         payload=team_inbox_realtime.message_event_payload(
@@ -486,7 +478,6 @@ def receive_whatsapp_webhook(
                 "attachments": payload.get("attachments")
                 if isinstance(payload.get("attachments"), list)
                 else [],
-                "raw": normalized.get("raw"),
             },
         ),
     )
@@ -512,15 +503,192 @@ def receive_whatsapp_webhook_batch_committed(
     payloads: list[dict[str, Any]],
     status_items: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
-    return _commit(
-        db,
-        lambda: receive_whatsapp_webhook_batch(
+    from app.services import team_inbox_observations, team_inbox_processing
+
+    provider_name = team_inbox_observations.InboxProvider(provider)
+    message_results: list[dict[str, object]] = []
+    receipt_results: list[dict[str, object]] = []
+    for payload in payloads:
+        message = payload.get("message")
+        message_data = message if isinstance(message, dict) else {}
+        external_message_id = str(message_data.get("id") or "").strip()
+        observed_at = payload.get("observed_at")
+        if not isinstance(observed_at, datetime):
+            observed_at = datetime.fromtimestamp(0, tz=UTC)
+        metadata = payload.get("metadata")
+        metadata_data = metadata if isinstance(metadata, dict) else {}
+        provider_scope = str(
+            metadata_data.get("phone_number_id")
+            or metadata_data.get("display_phone_number")
+            or "default"
+        ).strip()
+        if not external_message_id:
+            evidence = "|".join(
+                (
+                    str(message_data.get("from") or ""),
+                    str(message_data.get("text") or ""),
+                    observed_at.astimezone(UTC).isoformat(),
+                )
+            )
+            external_message_id = (
+                "derived:" + hashlib.sha256(evidence.encode()).hexdigest()
+            )
+        context = CommandContext.system(
+            actor=f"transport:{provider}",
+            scope="team-inbox:provider-observation",
+            reason="record normalized inbound message observation",
+            idempotency_key=external_message_id,
+        )
+        recorded = team_inbox_observations.record_provider_observation(
             db,
-            provider=provider,
-            payloads=payloads,
-            status_items=status_items,
-        ),
-    )
+            team_inbox_observations.RecordProviderObservationCommand(
+                context=context,
+                provider=provider_name,
+                provider_account_scope=provider_scope,
+                provider_event_id=f"message:{external_message_id}",
+                kind=InboxObservationKind.message,
+                channel_type=InboxChannelType.whatsapp,
+                external_message_id=external_message_id,
+                observed_at=observed_at,
+                payload=team_inbox_observations.InboundMessageObservation(
+                    contact_address=str(message_data.get("from") or ""),
+                    body=_message_body(message_data.get("text")),
+                    contact_name=(
+                        str(payload["contact_name"])
+                        if payload.get("contact_name")
+                        else None
+                    ),
+                    attachments=tuple(
+                        team_inbox_observations.InboundAttachmentObservation(
+                            asset_type=str(item.get("type") or "file"),
+                            file_name=(
+                                str(item.get("filename") or item.get("file_name"))
+                                if item.get("filename") or item.get("file_name")
+                                else None
+                            ),
+                            mime_type=str(item["mime_type"])
+                            if item.get("mime_type")
+                            else None,
+                            provider_media_id=str(item.get("id"))
+                            if item.get("id")
+                            else None,
+                            source_url=str(item.get("url"))
+                            if item.get("url")
+                            else None,
+                            caption=str(item.get("caption"))
+                            if item.get("caption")
+                            else None,
+                        )
+                        for item in (payload.get("attachments") or ())
+                        if isinstance(item, dict)
+                    ),
+                ),
+            ),
+        )
+        processed = team_inbox_processing.process_provider_observation(
+            db,
+            observation_id=recorded.observation_id,
+            context=CommandContext.system(
+                actor="system:team-inbox-observation-processor",
+                scope="team-inbox:provider-consequence",
+                reason="resolve committed inbound message observation",
+                idempotency_key=str(recorded.observation_id),
+            ),
+        )
+        message_results.append(
+            {
+                "kind": processed.consequence_kind
+                or (
+                    "duplicate"
+                    if processed.outcome.value == "already_processed"
+                    else "processed"
+                ),
+                "conversation_id": str(processed.conversation_id)
+                if processed.conversation_id
+                else None,
+                "message_id": str(processed.message_id)
+                if processed.message_id
+                else None,
+                "resolution_status": processed.resolution_status or "unmatched",
+                "subscriber_id": str(processed.subscriber_id)
+                if processed.subscriber_id
+                else None,
+                "reseller_id": str(processed.reseller_id)
+                if processed.reseller_id
+                else None,
+            }
+        )
+
+    for item in status_items or []:
+        external_message_id = str(item.get("message_id") or "").strip()
+        clean_status = str(item.get("status") or "").strip().lower()
+        raw_timestamp = item.get("timestamp")
+        try:
+            observed_at = datetime.fromtimestamp(float(str(raw_timestamp)), tz=UTC)
+        except (TypeError, ValueError, OSError):
+            observed_at = datetime.fromtimestamp(0, tz=UTC)
+        raw_errors = item.get("errors")
+        errors: list[object] = raw_errors if isinstance(raw_errors, list) else []
+        error_codes = tuple(
+            str(error.get("code"))[:80]
+            for error in errors
+            if isinstance(error, dict) and error.get("code") is not None
+        )
+        provider_event_id = (
+            f"receipt:{external_message_id}:{clean_status}:"
+            f"{observed_at.astimezone(UTC).isoformat()}"
+        )
+        recorded = team_inbox_observations.record_provider_observation(
+            db,
+            team_inbox_observations.RecordProviderObservationCommand(
+                context=CommandContext.system(
+                    actor=f"transport:{provider}",
+                    scope="team-inbox:provider-observation",
+                    reason="record normalized provider delivery receipt",
+                    idempotency_key=provider_event_id,
+                ),
+                provider=provider_name,
+                provider_account_scope=str(
+                    item.get("provider_account_scope") or "default"
+                ),
+                provider_event_id=provider_event_id,
+                kind=InboxObservationKind.delivery_receipt,
+                channel_type=InboxChannelType.whatsapp,
+                external_message_id=external_message_id,
+                observed_at=observed_at,
+                payload=team_inbox_observations.DeliveryReceiptObservation(
+                    status=clean_status,
+                    recipient_id=(
+                        str(item["recipient_id"]) if item.get("recipient_id") else None
+                    ),
+                    error_codes=error_codes,
+                ),
+            ),
+        )
+        processed = team_inbox_processing.process_provider_observation(
+            db,
+            observation_id=recorded.observation_id,
+            context=CommandContext.system(
+                actor="system:team-inbox-observation-processor",
+                scope="team-inbox:provider-consequence",
+                reason="reconcile committed provider delivery receipt",
+                idempotency_key=str(recorded.observation_id),
+            ),
+        )
+        receipt_result: dict[str, object] = {
+            "kind": processed.consequence_kind
+            or (
+                "duplicate"
+                if processed.outcome.value == "already_processed"
+                else "processed"
+            ),
+            "provider_message_id": external_message_id,
+            "status": clean_status,
+        }
+        if processed.message_id:
+            receipt_result["message_id"] = str(processed.message_id)
+        receipt_results.append(receipt_result)
+    return message_results, receipt_results
 
 
 def receive_whatsapp_webhook_batch(
@@ -532,7 +700,7 @@ def receive_whatsapp_webhook_batch(
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     """Apply verified observations without taking transaction ownership."""
 
-    from app.services import team_inbox_outbound
+    from app.services import team_inbox_delivery_receipts
 
     results = [
         receive_result_payload(
@@ -541,7 +709,7 @@ def receive_whatsapp_webhook_batch(
         for payload in payloads
     ]
     statuses = [
-        team_inbox_outbound.apply_whatsapp_delivery_status(db, item)
+        team_inbox_delivery_receipts.apply_whatsapp_delivery_status(db, item)
         for item in (status_items or [])
     ]
     return results, statuses
@@ -551,10 +719,109 @@ def receive_inbound_channel_batch_committed(
     db: Session,
     payloads: list[InboundChannelPayload],
 ) -> list[dict[str, object]]:
-    return _commit(
-        db,
-        lambda: [
-            receive_result_payload(receive_inbound_channel(db, payload))
-            for payload in payloads
-        ],
-    )
+    from app.services import team_inbox_observations, team_inbox_processing
+
+    results: list[dict[str, object]] = []
+    for payload in payloads:
+        observed_at = payload.received_at or datetime.now(UTC)
+        evidence = "|".join(
+            (
+                payload.channel_type,
+                payload.contact_address,
+                payload.body,
+                observed_at.astimezone(UTC).isoformat(),
+            )
+        )
+        external_message_id = payload.external_message_id or (
+            "derived:" + hashlib.sha256(evidence.encode()).hexdigest()
+        )
+        metadata = payload.metadata or {}
+        provider_value = str(metadata.get("provider") or "meta_social")
+        provider = team_inbox_observations.InboxProvider(provider_value)
+        provider_scope = str(
+            metadata.get("page_or_account_id")
+            or metadata.get("account_scope")
+            or "default"
+        )
+        recorded = team_inbox_observations.record_provider_observation(
+            db,
+            team_inbox_observations.RecordProviderObservationCommand(
+                context=CommandContext.system(
+                    actor=f"transport:{provider.value}",
+                    scope="team-inbox:provider-observation",
+                    reason="record normalized inbound channel observation",
+                    idempotency_key=external_message_id,
+                ),
+                provider=provider,
+                provider_account_scope=provider_scope,
+                provider_event_id=f"message:{external_message_id}",
+                kind=InboxObservationKind.message,
+                channel_type=InboxChannelType(payload.channel_type),
+                external_message_id=external_message_id,
+                observed_at=observed_at,
+                payload=team_inbox_observations.InboundMessageObservation(
+                    contact_address=payload.contact_address,
+                    body=payload.body,
+                    contact_name=payload.contact_name,
+                    subject=payload.subject,
+                    external_thread_id=payload.external_thread_id,
+                    subscriber_id=coerce_uuid(payload.subscriber_id),
+                    fallback_service_team_id=coerce_uuid(
+                        payload.fallback_service_team_id
+                    ),
+                    attachments=tuple(
+                        team_inbox_observations.InboundAttachmentObservation(
+                            asset_type=str(item.get("type") or "file"),
+                            file_name=(
+                                str(item.get("filename") or item.get("file_name"))
+                                if item.get("filename") or item.get("file_name")
+                                else None
+                            ),
+                            mime_type=str(item["mime_type"])
+                            if item.get("mime_type")
+                            else None,
+                            provider_media_id=str(item.get("id"))
+                            if item.get("id")
+                            else None,
+                            source_url=str(item.get("url"))
+                            if item.get("url")
+                            else None,
+                            caption=str(item.get("caption"))
+                            if item.get("caption")
+                            else None,
+                        )
+                        for item in (metadata.get("attachments") or ())
+                        if isinstance(item, dict)
+                    ),
+                ),
+            ),
+        )
+        processed = team_inbox_processing.process_provider_observation(
+            db,
+            observation_id=recorded.observation_id,
+            context=CommandContext.system(
+                actor="system:team-inbox-observation-processor",
+                scope="team-inbox:provider-consequence",
+                reason="resolve committed inbound channel observation",
+                idempotency_key=str(recorded.observation_id),
+            ),
+        )
+        results.append(
+            {
+                "kind": processed.consequence_kind or "duplicate",
+                "conversation_id": str(processed.conversation_id)
+                if processed.conversation_id
+                else None,
+                "message_id": str(processed.message_id)
+                if processed.message_id
+                else None,
+                "resolution_status": processed.resolution_status or "unmatched",
+                "subscriber_id": str(processed.subscriber_id)
+                if processed.subscriber_id
+                else None,
+                "reseller_id": str(processed.reseller_id)
+                if processed.reseller_id
+                else None,
+            }
+        )
+    return results

@@ -1,6 +1,6 @@
 # Customer Self-Service Lifecycle
 
-Status: approved target; migration in progress
+Status: implemented
 
 ## Contract
 
@@ -140,13 +140,30 @@ Completed in this slice:
   the exact subscription-scoped RADIUS user carries that profile with a sync
   watermark after the request. The structural profile/user links and
   verification time remain available for replay, drift audit, and repair.
+- Vacation hold and resume are explicit subscription lifecycle commands. The
+  lifecycle policy owner resolves duration, annual-use, cooldown, active-lock,
+  and subscription-status eligibility from canonical settings and exact
+  `customer_hold` lock history. Customer, admin, and automatic-expiry adapters
+  now delegate to the same locked, reviewed-head, idempotent command and retain
+  the exact enforcement-lock identifier in the outcome.
+- Customer reboot and Wi-Fi updates now enter one subscription-scoped command
+  boundary. It proves the authenticated subscriber, active subscription, and
+  exact active non-UISP ONT assignment before invoking the network operation
+  ledger. Web and `/api/v1/me` expose the same typed command, status,
+  subscription, device, operation, and message outcome; mobile provides both
+  actions and renders that canonical outcome without inferring device state.
+- Superseded customer device-command wrappers and their duplicate cooldown and
+  validation decisions are retired; web routes, API, and mobile enter the
+  canonical scoped owner directly.
+- Operators now have a permission-gated service-change reconciliation surface.
+  Its read-only inspection reports bounded canonical drift with a reviewed
+  evidence head. Repair requires that exact head, a durable idempotency key,
+  actor, and reason, then resumes only from structural payment, fulfillment,
+  RADIUS, or provisioning evidence. A crash after payment settlement but before
+  fulfillment release is explicitly detectable and repairable.
 
-Still required before this lifecycle is complete:
-
-- route vacation hold/resume through the lifecycle command owner;
-- expose scoped reboot/Wi-Fi command outcomes consistently on web and mobile;
-- remove the remaining superseded customer-route decisions and add the operator
-  reconciliation surface for interrupted execution-chain states.
+The lifecycle migration is complete. Further changes extend this contract and
+must preserve these owners rather than introduce compatibility writers.
 
 No compatibility response or fallback will be retained after each in-repository
 consumer is migrated and the cutover gate is green.

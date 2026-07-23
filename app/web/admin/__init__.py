@@ -91,6 +91,9 @@ from app.web.admin.provisioning import router as provisioning_router
 from app.web.admin.reports import router as reports_router
 from app.web.admin.resellers import router as resellers_router
 from app.web.admin.sales import router as sales_router
+from app.web.admin.service_change_reconciliation import (
+    router as service_change_reconciliation_router,
+)
 from app.web.admin.service_requests_queue import router as service_requests_queue_router
 from app.web.admin.support_assignment_rules import (
     router as support_assignment_rules_router,
@@ -172,6 +175,7 @@ def admin_nas_legacy_path_redirect(path: str):
 
 # Include all admin sub-routers
 router.include_router(dashboard_router)
+router.include_router(service_change_reconciliation_router)
 router.include_router(design_system_router)
 router.include_router(dispatch_work_orders_router)
 router.include_router(field_maps_router)

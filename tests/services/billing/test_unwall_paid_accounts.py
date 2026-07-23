@@ -22,6 +22,7 @@ from app.services.billing.unwall_paid_accounts import (
     find_walled_paid_account_ids,
     unwall_cohort,
 )
+from tests.prepaid_funding_helpers import ensure_test_prepaid_contract
 
 _counter = iter(range(900000, 999999))
 
@@ -97,16 +98,16 @@ def test_prepaid_unwall_uses_due_service_threshold_not_reserve_alone(
     for account in (underfunded, funded):
         account.billing_mode = BillingMode.prepaid
         account.min_balance = Decimal("100.00")
-        db_session.add(
-            Subscription(
-                subscriber_id=account.id,
-                offer_id=catalog_offer.id,
-                status=SubscriptionStatus.active,
-                billing_mode=BillingMode.prepaid,
-                unit_price=Decimal("100.00"),
-                next_billing_at=datetime.now(UTC) - timedelta(days=1),
-            )
+        service = Subscription(
+            subscriber_id=account.id,
+            offer_id=catalog_offer.id,
+            status=SubscriptionStatus.active,
+            billing_mode=BillingMode.prepaid,
+            unit_price=Decimal("100.00"),
+            next_billing_at=datetime.now(UTC) - timedelta(days=1),
         )
+        db_session.add(service)
+        ensure_test_prepaid_contract(db_session, service)
     db_session.commit()
 
     ids = find_walled_paid_account_ids(db_session)

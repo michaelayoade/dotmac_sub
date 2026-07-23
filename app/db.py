@@ -88,10 +88,7 @@ def get_db():
 
 
 def finish_read_transaction(db: Session) -> None:
-    """Release a Postgres read transaction after all response data is materialized."""
-    bind = db.get_bind()
-    if bind.dialect.name != "postgresql":
-        return
+    """Release a clean read transaction after response inputs are materialized."""
     if not db.in_transaction() or db.in_nested_transaction():
         return
     if db.new or db.dirty or db.deleted:

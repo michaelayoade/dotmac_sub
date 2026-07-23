@@ -23,6 +23,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.collections import FinancialAccessOrigin
 from app.models.enforcement_lock import EnforcementReason
 from app.models.subscriber import Subscriber
 from app.services.access_resolution import PrepaidFundingDecision
@@ -31,6 +32,8 @@ from app.services.collections._core import (
     _get_account_email,
     _restore_prepaid_if_funded,
     _suspend_account,
+    confirm_financial_access_restoration,
+    preview_financial_access_restoration,
 )
 from app.services.common import coerce_uuid
 from app.services.prepaid_enforcement_planner import (
@@ -132,6 +135,30 @@ def _reconcile_funded(
     return "ok"
 
 
+def _reconcile_stale_prepaid_locks(db: Session, account: Subscriber) -> str:
+    """Resolve only locks proven obsolete by the canonical billing profile."""
+    preview = preview_financial_access_restoration(
+        db,
+        str(account.id),
+        origin=FinancialAccessOrigin.prepaid_enforcement,
+    )
+    result = confirm_financial_access_restoration(
+        db,
+        str(account.id),
+        preview_fingerprint=preview.fingerprint,
+        idempotency_key=(
+            f"prepaid-stale-lock-repair:{account.id}:{preview.fingerprint[:24]}"
+        ),
+        origin=FinancialAccessOrigin.prepaid_enforcement,
+        resolved_by=f"{_SOURCE}:stale_lock:{account.id}",
+    )
+    repaired = bool(
+        result.consequence.result.get("enforcement_lock_ids")
+        or preview.decision_inputs.get("clear_prepaid_timers")
+    )
+    return "restored" if repaired else "state_drift"
+
+
 def _reconcile_low(
     db: Session,
     account: Subscriber,
@@ -227,6 +254,8 @@ def _process_account(
     if decision.action == PrepaidEnforcementAction.clear_stale_timers:
         _clear_prepaid_dunning_flags(db, str(account.id))
         return "restored"
+    if decision.action == PrepaidEnforcementAction.repair_stale_locks:
+        return _reconcile_stale_prepaid_locks(db, account)
     if decision.action == PrepaidEnforcementAction.restore:
         return _reconcile_funded(
             db,
@@ -244,6 +273,9 @@ def _process_account(
                 unresolved_projection_subscription_ids=(
                     decision.unresolved_projection_subscription_ids
                 ),
+                unresolved_renewal_subscription_ids=(
+                    decision.unresolved_renewal_subscription_ids
+                ),
             ),
         )
     if decision.action == PrepaidEnforcementAction.coverage_unresolved:
@@ -256,6 +288,16 @@ def _process_account(
             ),
         )
         return "coverage_unresolved"
+    if decision.action == PrepaidEnforcementAction.renewal_terms_unresolved:
+        logger.error(
+            "prepaid_balance_sweep blocked adverse action for account %s: %s (%s)",
+            account.id,
+            decision.reason,
+            ",".join(
+                str(value) for value in decision.unresolved_renewal_subscription_ids
+            ),
+        )
+        return "renewal_terms_unresolved"
     if decision.action == PrepaidEnforcementAction.deferred:
         return "deferred"
     if decision.action == PrepaidEnforcementAction.shielded:
@@ -306,6 +348,7 @@ def run_prepaid_balance_sweep(
         "shielded": 0,
         "billing_profile_invalid": 0,
         "coverage_unresolved": 0,
+        "renewal_terms_unresolved": 0,
         "funding_quarantined": 0,
         "notice_blocked": 0,
         "state_drift": 0,

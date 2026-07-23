@@ -9,8 +9,10 @@ from types import SimpleNamespace
 import pytest
 
 from app.models.catalog import BillingMode, SubscriptionStatus
+from app.models.enforcement_lock import EnforcementReason
 from app.models.notification import Notification
 from app.models.subscriber import SubscriberStatus
+from app.services.account_lifecycle import get_active_locks, suspend_subscription
 from app.services.collections.prepaid_balance_sweep import run_prepaid_balance_sweep
 from app.services.prepaid_enforcement_planner import (
     PrepaidEnforcementAction,
@@ -20,7 +22,10 @@ from app.services.prepaid_enforcement_planner import (
     candidate_prepaid_funding_account_ids,
     plan_prepaid_enforcement,
 )
-from tests.prepaid_funding_helpers import materialize_test_prepaid_opening_balance
+from tests.prepaid_funding_helpers import (
+    ensure_test_prepaid_contract,
+    materialize_test_prepaid_opening_balance,
+)
 
 _MONDAY_NOON = datetime(2026, 7, 6, 12, 0, tzinfo=UTC)
 
@@ -36,6 +41,7 @@ def _prepare(db, account, subscription) -> None:
     subscription.billing_mode = BillingMode.prepaid
     subscription.status = SubscriptionStatus.active
     subscription.next_billing_at = None
+    ensure_test_prepaid_contract(db, subscription)
     db.commit()
     materialize_test_prepaid_opening_balance(db, account.id, Decimal("0.00"))
 
@@ -95,6 +101,68 @@ def test_funding_cohort_excludes_postpaid_timer_repair_input(
     assert item.reason == "non_prepaid_account_has_prepaid_timers"
     assert item.available_balance == Decimal("0.00")
     assert item.required_balance == Decimal("0.00")
+
+
+def test_mode_change_repairs_only_the_obsolete_prepaid_lock(
+    db_session, subscriber_account, subscription
+):
+    _prepare(db_session, subscriber_account, subscription)
+    suspend_subscription(
+        db_session,
+        str(subscription.id),
+        reason=EnforcementReason.prepaid,
+        source="pytest:prepaid",
+        emit=False,
+    )
+    suspend_subscription(
+        db_session,
+        str(subscription.id),
+        reason=EnforcementReason.fraud,
+        source="pytest:fraud",
+        emit=False,
+    )
+    subscriber_account.billing_mode = BillingMode.postpaid
+    subscription.billing_mode = BillingMode.postpaid
+    db_session.commit()
+
+    item = plan_prepaid_enforcement(
+        db_session,
+        now=_MONDAY_NOON,
+        account_ids=[subscriber_account.id],
+    ).items[0]
+    assert item.action == PrepaidEnforcementAction.repair_stale_locks
+
+    result = run_prepaid_balance_sweep(db_session, now=_MONDAY_NOON)
+
+    db_session.refresh(subscription)
+    assert result["restored"] == 1
+    assert subscription.status == SubscriptionStatus.suspended
+    assert {
+        lock.reason
+        for lock in get_active_locks(db_session, subscription_id=str(subscription.id))
+    } == {EnforcementReason.fraud}
+
+
+def test_terminal_service_stale_lock_is_resolved_without_reactivation(
+    db_session, subscriber_account, subscription
+):
+    _prepare(db_session, subscriber_account, subscription)
+    suspend_subscription(
+        db_session,
+        str(subscription.id),
+        reason=EnforcementReason.prepaid,
+        source="pytest:prepaid",
+        emit=False,
+    )
+    subscription.status = SubscriptionStatus.canceled
+    db_session.commit()
+
+    result = run_prepaid_balance_sweep(db_session, now=_MONDAY_NOON)
+
+    db_session.refresh(subscription)
+    assert result["restored"] == 1
+    assert subscription.status == SubscriptionStatus.canceled
+    assert get_active_locks(db_session, subscription_id=str(subscription.id)) == []
 
 
 def test_funding_cohort_excludes_service_less_prepaid_timer_repair_input(

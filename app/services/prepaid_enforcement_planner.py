@@ -48,7 +48,9 @@ class PrepaidEnforcementAction(StrEnum):
     not_applicable = "not_applicable"
     billing_profile_invalid = "billing_profile_invalid"
     coverage_unresolved = "coverage_unresolved"
+    renewal_terms_unresolved = "renewal_terms_unresolved"
     clear_stale_timers = "clear_stale_timers"
+    repair_stale_locks = "repair_stale_locks"
     restore = "restore"
     warn = "warn"
     waiting = "waiting"
@@ -64,6 +66,7 @@ class PrepaidEnforcementReasonSource(StrEnum):
     OWNER = "owner"
     BILLING_PROFILE = "billing_profile"
     COVERAGE = "prepaid_service_coverage"
+    RENEWAL = "prepaid_service_renewals"
     WINDOW = "enforcement_window"
     SHIELD = "financial_shield"
 
@@ -100,6 +103,7 @@ class PrepaidEnforcementPlanItem:
     non_billable_subscription_ids: tuple[UUID, ...]
     actionable_uncovered_subscription_ids: tuple[UUID, ...]
     unresolved_projection_subscription_ids: tuple[UUID, ...]
+    unresolved_renewal_subscription_ids: tuple[UUID, ...]
     prepaid_low_balance_at: datetime | None
     grace_days: int
     grace_source: GracePolicySource
@@ -135,6 +139,9 @@ class PrepaidEnforcementPlanItem:
             ],
             "unresolved_projection_subscription_ids": [
                 str(value) for value in self.unresolved_projection_subscription_ids
+            ],
+            "unresolved_renewal_subscription_ids": [
+                str(value) for value in self.unresolved_renewal_subscription_ids
             ],
             "prepaid_low_balance_at": self.prepaid_low_balance_at,
             "grace_days": self.grace_days,
@@ -479,7 +486,7 @@ def plan_prepaid_account(
         reason = "account_billing_disabled"
     elif not profile.has_collectible_subscriptions:
         if active_prepaid_lock_count > 0:
-            action = PrepaidEnforcementAction.state_drift
+            action = PrepaidEnforcementAction.repair_stale_locks
             reason = "prepaid_lock_without_collectible_service"
         elif has_timers:
             action = PrepaidEnforcementAction.clear_stale_timers
@@ -496,7 +503,10 @@ def plan_prepaid_account(
         )
         reason_source = PrepaidEnforcementReasonSource.BILLING_PROFILE
     elif profile.effective_mode != BillingMode.prepaid:
-        if (
+        if active_prepaid_lock_count > 0:
+            action = PrepaidEnforcementAction.repair_stale_locks
+            reason = "non_prepaid_account_has_prepaid_lock"
+        elif (
             account.prepaid_low_balance_at is not None
             or account.prepaid_deactivation_at is not None
         ):
@@ -509,6 +519,10 @@ def plan_prepaid_account(
         action = PrepaidEnforcementAction.coverage_unresolved
         reason = "future_billing_anchor_without_current_coverage_evidence"
         reason_source = PrepaidEnforcementReasonSource.COVERAGE
+    elif funding.unresolved_renewal_subscription_ids:
+        action = PrepaidEnforcementAction.renewal_terms_unresolved
+        reason = "contracted_prepaid_renewal_terms_unavailable"
+        reason_source = PrepaidEnforcementReasonSource.RENEWAL
     elif funding.funded:
         if (
             account.prepaid_low_balance_at is not None
@@ -582,6 +596,9 @@ def plan_prepaid_account(
         ),
         unresolved_projection_subscription_ids=(
             funding.unresolved_projection_subscription_ids
+        ),
+        unresolved_renewal_subscription_ids=(
+            funding.unresolved_renewal_subscription_ids
         ),
         prepaid_low_balance_at=account.prepaid_low_balance_at,
         grace_days=grace.policy.days,

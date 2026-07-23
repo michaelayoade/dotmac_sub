@@ -30,7 +30,6 @@ commit 5 app/tasks/ont_runtime_status.py
 commit 1 app/tasks/ont_signal_observations.py
 commit 2 app/tasks/radius.py
 commit 26 app/tasks/router_sync.py
-commit 3 app/tasks/team_inbox.py
 commit 1 app/tasks/topology_lldp.py
 commit 1 app/tasks/topology_outage.py
 commit 1 app/tasks/topology_ufiber_link.py
@@ -40,7 +39,6 @@ commit 7 app/tasks/uisp_control.py
 commit 1 app/tasks/uisp_ip_backfill.py
 commit 1 app/tasks/unmatched_radio.py
 commit 2 app/tasks/usage.py
-commit 1 app/tasks/vacation_holds.py
 commit 2 app/web/admin/catalog.py
 commit 2 app/web/admin/customers.py
 commit 1 app/web/admin/dashboard.py
@@ -96,7 +94,6 @@ rollback 11 app/tasks/tr069.py
 rollback 3 app/tasks/uisp_control.py
 rollback 4 app/tasks/uisp_ip_backfill.py
 rollback 1 app/tasks/unmatched_radio.py
-rollback 1 app/tasks/vacation_holds.py
 rollback 2 app/web/admin/billing_accounts.py
 rollback 2 app/web/admin/billing_consolidated.py
 rollback 2 app/web/admin/billing_credits.py

@@ -10,60 +10,42 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
-from app.db import get_db
-from app.models.team_inbox import (
-    InboxChannelType,
-    InboxConversationStatus,
-)
-from app.services import (
-    subscriber_summary as subscriber_summary_service,
-)
+from app.db import finish_read_transaction, get_db
 from app.services import (
     team_inbox_commands,
     team_inbox_contact_links,
-    team_inbox_metrics,
     team_inbox_operations,
-    team_inbox_read,
+    team_inbox_projection,
+    team_inbox_read_state,
 )
 from app.services.auth_dependencies import require_permission
-from app.services.list_query import (
-    ListDefinition,
-    ListFieldDefinition,
-    PageMeta,
-    request_needs_canonicalization,
-)
+from app.services.owner_commands import CommandContext
 
 router = APIRouter(prefix="/inbox", tags=["web-admin-inbox"])
 templates = Jinja2Templates(directory="templates")
 
-# The inbox queue's declared capabilities. The default sort is "priority", which
-# list_conversations maps to the urgency composite (priority, then recency), so
-# the default view is unchanged; last_message_at / created_at are single-column
-# sorts. All filters are declared so list_query.url round-trips them on a
-# sort/page click.
-INBOX_LIST_DEFINITION = ListDefinition(
-    key="team_inbox",
-    fields=(
-        ListFieldDefinition("status", "Status", filterable=True),
-        ListFieldDefinition("channel_type", "Channel", filterable=True),
-        ListFieldDefinition("service_team_id", "Team", filterable=True),
-        ListFieldDefinition("assigned_person_id", "Assignee", filterable=True),
-        ListFieldDefinition("contact_resolution_status", "Contact", filterable=True),
-        ListFieldDefinition("needs_response", "Needs response", filterable=True),
-        ListFieldDefinition("muted", "Muted", filterable=True),
-        ListFieldDefinition("snoozed", "Snoozed", filterable=True),
-        ListFieldDefinition("open_only", "Open only", filterable=True),
-        ListFieldDefinition("unassigned", "Unassigned", filterable=True),
-        ListFieldDefinition("priority_at_most", "Max priority", filterable=True),
-        ListFieldDefinition("priority", "Priority", sortable=True),
-        ListFieldDefinition("last_message_at", "Last activity", sortable=True),
-        ListFieldDefinition("created_at", "Created", sortable=True),
-    ),
-    default_sort="priority",
-    default_sort_dir="asc",
-    per_page_options=(10, 25, 50, 100),
-    default_per_page=25,
-)
+
+def _prepare_mutation(db: Session) -> None:
+    """Close permission/sidebar reads before entering a public owner command."""
+    finish_read_transaction(db)
+
+
+def _query_text(value: object) -> str | None:
+    """Normalize direct-call FastAPI parameter sentinels at the adapter."""
+
+    return value if isinstance(value, str) else None
+
+
+def _query_bool(value: object, *, default: bool = False) -> bool:
+    return value if isinstance(value, bool) else default
+
+
+def _query_optional_bool(value: object) -> bool | None:
+    return value if isinstance(value, bool) else None
+
+
+def _query_int(value: object, *, default: int | None = None) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else default
 
 
 def _ctx(request: Request, db: Session) -> dict:
@@ -76,16 +58,6 @@ def _ctx(request: Request, db: Session) -> dict:
         "current_user": get_current_user(request),
         "sidebar_stats": get_sidebar_stats(db),
     }
-
-
-def _clean_uuid(value: str | None) -> str | None:
-    candidate = (value or "").strip()
-    if not candidate:
-        return None
-    try:
-        return str(UUID(candidate))
-    except (TypeError, ValueError, AttributeError):
-        return None
 
 
 @router.get(
@@ -107,6 +79,7 @@ def team_inbox_queue(
     snoozed: bool | None = Query(default=None),
     open_only: bool = Query(default=False),
     unassigned: bool = Query(default=False),
+    unread: bool = Query(default=False),
     sort_by: str | None = Query(default=None, alias="sort"),
     sort_dir: str | None = Query(default=None, alias="dir"),
     page: int = Query(default=1),
@@ -114,211 +87,88 @@ def team_inbox_queue(
     c: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
-    # FastAPI resolves Query defaults before normal route execution, but focused
-    # route tests and internal adapters can call this function directly. In that
-    # case omitted values are still ``Query`` objects; normalize them at the
-    # adapter boundary so they cannot look truthy or trigger a false redirect.
-    search = search if isinstance(search, str) else None
-    status = status if isinstance(status, str) else None
-    channel_type = channel_type if isinstance(channel_type, str) else None
-    service_team_id = service_team_id if isinstance(service_team_id, str) else None
-    assigned_person_id = (
-        assigned_person_id if isinstance(assigned_person_id, str) else None
-    )
-    needs_response = needs_response if isinstance(needs_response, bool) else False
-    contact_resolution_status = (
-        contact_resolution_status
-        if isinstance(contact_resolution_status, str)
-        else None
-    )
-    priority_at_most = (
-        priority_at_most
-        if isinstance(priority_at_most, int) and not isinstance(priority_at_most, bool)
-        else None
-    )
-    muted = muted if isinstance(muted, bool) else None
-    snoozed = snoozed if isinstance(snoozed, bool) else None
-    open_only = open_only if isinstance(open_only, bool) else False
-    unassigned = unassigned if isinstance(unassigned, bool) else False
-    sort_by = sort_by if isinstance(sort_by, str) else None
-    sort_dir = sort_dir if isinstance(sort_dir, str) else None
-    page = page if isinstance(page, int) and not isinstance(page, bool) else 1
-    per_page = (
-        per_page if isinstance(per_page, int) and not isinstance(per_page, bool) else 25
-    )
-    c = c if isinstance(c, str) else None
-    requested_status = status
-    requested_channel_type = channel_type
-    requested_service_team_id = service_team_id
-    requested_assigned_person_id = assigned_person_id
-    requested_priority_at_most = priority_at_most
-    status_values = {item.value for item in InboxConversationStatus}
-    channel_values = {item.value for item in InboxChannelType}
-    status = status if status in status_values else None
-    channel_type = channel_type if channel_type in channel_values else None
-    service_team_id = _clean_uuid(service_team_id)
-    assigned_person_id = _clean_uuid(assigned_person_id)
-    clean_contact_resolution_status = (
-        contact_resolution_status.strip()
-        if isinstance(contact_resolution_status, str)
-        and contact_resolution_status.strip()
-        else None
-    )
-    clean_priority_at_most = (
-        priority_at_most
-        if isinstance(priority_at_most, int) and 0 <= priority_at_most <= 999
-        else None
-    )
-    clean_muted = muted if isinstance(muted, bool) else None
-    clean_snoozed = snoozed if isinstance(snoozed, bool) else None
-    clean_open_only = open_only if isinstance(open_only, bool) else False
-    clean_unassigned = unassigned if isinstance(unassigned, bool) else False
-    definition = INBOX_LIST_DEFINITION
-    safe_sort = (
-        sort_by if sort_by in definition.sortable_keys else definition.default_sort
-    )
-    safe_dir = sort_dir if sort_dir in ("asc", "desc") else None
-    safe_per_page = (
-        per_page
-        if per_page in definition.per_page_options
-        else definition.default_per_page
-    )
-    requested_query = definition.build_query(
-        search=search,
-        filters={
-            "status": status,
-            "channel_type": channel_type,
-            "service_team_id": service_team_id,
-            "assigned_person_id": assigned_person_id,
-            "contact_resolution_status": clean_contact_resolution_status,
-            "needs_response": "true" if needs_response else None,
-            "muted": ("true" if clean_muted else "false")
-            if clean_muted is not None
-            else None,
-            "snoozed": ("true" if clean_snoozed else "false")
-            if clean_snoozed is not None
-            else None,
-            "open_only": "true" if clean_open_only else None,
-            "unassigned": "true" if clean_unassigned else None,
-            "priority_at_most": str(clean_priority_at_most)
-            if clean_priority_at_most is not None
-            else None,
-        },
-        sort_by=safe_sort,
-        sort_dir=safe_dir,
-        page=max(1, page),
-        per_page=safe_per_page,
-    )
-    result = team_inbox_read.list_conversations(
+    actor_id = _actor_id_from_request(request)
+    try:
+        actor_person_id = UUID(actor_id) if actor_id else None
+    except ValueError:
+        actor_person_id = None
+    projection = team_inbox_projection.build_queue_projection(
         db,
-        search=requested_query.search,
-        status=status,
-        channel_type=channel_type,
-        service_team_id=service_team_id,
-        assigned_person_id=assigned_person_id,
-        needs_response=needs_response,
-        contact_resolution_status=clean_contact_resolution_status,
-        priority_at_most=clean_priority_at_most,
-        muted=clean_muted,
-        snoozed=clean_snoozed,
-        open_only=clean_open_only,
-        unassigned=clean_unassigned,
-        order_by=requested_query.sort_by,
-        order_dir=requested_query.sort_dir,
-        limit=requested_query.per_page,
-        offset=requested_query.offset,
+        team_inbox_projection.InboxQueueRequest(
+            search=_query_text(search),
+            status=_query_text(status),
+            channel_type=_query_text(channel_type),
+            service_team_id=_query_text(service_team_id),
+            assigned_person_id=_query_text(assigned_person_id),
+            needs_response=_query_bool(needs_response),
+            contact_resolution_status=_query_text(contact_resolution_status),
+            priority_at_most=_query_int(priority_at_most),
+            muted=_query_optional_bool(muted),
+            snoozed=_query_optional_bool(snoozed),
+            open_only=_query_bool(open_only),
+            unassigned=_query_bool(unassigned),
+            unread=_query_bool(unread),
+            sort_by=_query_text(sort_by),
+            sort_dir=_query_text(sort_dir),
+            page=_query_int(page, default=1) or 1,
+            per_page=_query_int(per_page, default=25) or 25,
+            selected_conversation_id=_query_text(c),
+            actor_person_id=actor_person_id,
+        ),
     )
-    page_meta = PageMeta.from_query(requested_query, result.count)
-    list_query = requested_query.with_page(page_meta.page)
-    if list_query.page != requested_query.page:
-        result = team_inbox_read.list_conversations(
-            db,
-            search=list_query.search,
-            status=status,
-            channel_type=channel_type,
-            service_team_id=service_team_id,
-            assigned_person_id=assigned_person_id,
-            needs_response=needs_response,
-            contact_resolution_status=clean_contact_resolution_status,
-            priority_at_most=clean_priority_at_most,
-            muted=clean_muted,
-            snoozed=clean_snoozed,
-            open_only=clean_open_only,
-            unassigned=clean_unassigned,
-            order_by=list_query.sort_by,
-            order_dir=list_query.sort_dir,
-            limit=list_query.per_page,
-            offset=list_query.offset,
-        )
-    raw_filters = {
-        "status": requested_status,
-        "channel_type": requested_channel_type,
-        "service_team_id": requested_service_team_id,
-        "assigned_person_id": requested_assigned_person_id,
-        "contact_resolution_status": contact_resolution_status,
-        "needs_response": "true" if needs_response else None,
-        "muted": ("true" if muted else "false") if muted is not None else None,
-        "snoozed": ("true" if snoozed else "false") if snoozed is not None else None,
-        "open_only": "true" if open_only else None,
-        "unassigned": "true" if unassigned else None,
-        "priority_at_most": str(requested_priority_at_most)
-        if requested_priority_at_most is not None
-        else None,
-    }
-    if request_needs_canonicalization(
-        list_query,
-        search=search,
-        filters=raw_filters,
-        sort_by=sort_by,
-        sort_dir=sort_dir,
-        page=page,
-        per_page=per_page,
-    ):
-        return RedirectResponse(url=list_query.url("/admin/inbox"), status_code=307)
+    if projection.canonical_url is not None:
+        return RedirectResponse(url=projection.canonical_url, status_code=307)
     context = _ctx(request, db)
     context.update(
         {
-            "rows": result.items,
-            "queue_metrics": team_inbox_operations.queue_metrics(db),
-            "count": result.count,
-            "list_query": list_query,
-            "page_meta": page_meta,
-            "page": page_meta.page,
-            "per_page": page_meta.per_page,
-            "has_previous": page_meta.has_previous,
-            "has_next": page_meta.has_next,
-            "search": list_query.search or "",
-            "status": status or "",
-            "channel_type": channel_type or "",
-            "service_team_id": service_team_id or "",
-            "assigned_person_id": assigned_person_id or "",
-            "needs_response": needs_response,
-            "contact_resolution_status": clean_contact_resolution_status or "",
-            "priority_at_most": clean_priority_at_most,
-            "muted": clean_muted,
-            "snoozed": clean_snoozed,
-            "open_only": clean_open_only,
-            "unassigned": clean_unassigned,
-            "service_team_options": team_inbox_metrics.active_service_team_options(db),
-            "status_options": [item.value for item in InboxConversationStatus],
-            "channel_options": [item.value for item in InboxChannelType],
-            "label_options": team_inbox_operations.list_labels(db),
-            "saved_filters": team_inbox_operations.list_saved_filters(
-                db, person_id=_actor_id_from_request(request)
+            "rows": projection.rows,
+            "queue_metrics": projection.queue_metrics,
+            "operator_unread_count": projection.operator_unread_count,
+            "count": projection.count,
+            "list_query": projection.list_query,
+            "page_meta": projection.page_meta,
+            "page": projection.page_meta.page,
+            "per_page": projection.page_meta.per_page,
+            "has_previous": projection.page_meta.has_previous,
+            "has_next": projection.page_meta.has_next,
+            "search": projection.list_query.search or "",
+            "status": projection.status,
+            "channel_type": projection.channel_type,
+            "service_team_id": projection.service_team_id,
+            "assigned_person_id": projection.assigned_person_id,
+            "needs_response": projection.needs_response,
+            "contact_resolution_status": projection.contact_resolution_status,
+            "priority_at_most": projection.priority_at_most,
+            "muted": projection.muted,
+            "snoozed": projection.snoozed,
+            "open_only": projection.open_only,
+            "unassigned": projection.unassigned,
+            "unread": projection.unread,
+            "service_team_options": projection.service_team_options,
+            "status_options": projection.status_options,
+            "channel_options": projection.channel_options,
+            "label_options": projection.label_options,
+            "saved_filters": projection.saved_filters,
+            "selected": (
+                projection.selected.timeline
+                if projection.selected is not None
+                else None
             ),
         }
     )
-    selected_view = None
-    if c:
-        try:
-            selected_view = _conversation_view(db, request, UUID(c))
-        except (ValueError, TypeError):
-            selected_view = None
-    if selected_view is not None:
-        context["selected"] = selected_view["timeline"]
-        context.update(selected_view)
-    else:
-        context["selected"] = None
+    if projection.selected is not None:
+        context.update(
+            {
+                "timeline": projection.selected.timeline,
+                "subscriber_summary": projection.selected.subscriber_summary,
+                "contact_link_candidates": projection.selected.contact_link_candidates,
+                "conversation_labels": projection.selected.conversation_labels,
+                "macro_options": projection.selected.macro_options,
+                "template_options": projection.selected.template_options,
+                "action_eligibility": projection.selected.action_eligibility,
+                "is_unread": projection.selected.is_unread,
+            }
+        )
     return templates.TemplateResponse("admin/inbox/index.html", context)
 
 
@@ -337,70 +187,6 @@ def _detail_redirect(
     )
 
 
-def _candidate_terms(timeline: team_inbox_read.InboxConversationTimeline) -> list[str]:
-    values = [
-        timeline.contact_address,
-        timeline.subject,
-        timeline.external_thread_id,
-    ]
-    if timeline.metadata:
-        resolution = timeline.metadata.get("contact_resolution")
-        if isinstance(resolution, dict):
-            values.extend(
-                [
-                    resolution.get("normalized_contact"),
-                    resolution.get("subscriber_id"),
-                    resolution.get("reseller_id"),
-                ]
-            )
-    terms: list[str] = []
-    for value in values:
-        text = str(value or "").strip()
-        if len(text) >= 3 and text not in terms:
-            terms.append(text)
-    return terms[:6]
-
-
-def _contact_link_candidates(
-    db: Session,
-    timeline: team_inbox_read.InboxConversationTimeline,
-) -> dict[str, list[dict[str, str]]]:
-    return team_inbox_contact_links.contact_link_candidates(
-        db,
-        _candidate_terms(timeline),
-    )
-
-
-def _subscriber_summary(db: Session, subscriber_id: str | None) -> dict | None:
-    """Thin adapter over the shared subscriber-summary read-owner."""
-    return subscriber_summary_service.subscriber_summary(db, subscriber_id)
-
-
-def _conversation_view(
-    db: Session, request: Request, conversation_id: UUID
-) -> dict | None:
-    """Full conversation projection shared by the workspace page and the HTMX
-    detail partial. Returns None when the conversation does not exist."""
-    timeline = team_inbox_read.get_conversation_timeline(db, conversation_id)
-    if timeline is None:
-        return None
-    return {
-        "timeline": timeline,
-        "subscriber_summary": _subscriber_summary(db, timeline.subscriber_id),
-        "contact_link_candidates": _contact_link_candidates(db, timeline),
-        "label_options": team_inbox_operations.list_labels(db),
-        "conversation_labels": team_inbox_operations.conversation_labels(
-            db, conversation_id
-        ),
-        "macro_options": team_inbox_operations.list_macros(
-            db, person_id=_actor_id_from_request(request)
-        ),
-        "template_options": team_inbox_operations.list_templates(
-            db, channel_type=timeline.channel_type
-        ),
-    }
-
-
 @router.get(
     "/{conversation_id}",
     response_class=HTMLResponse,
@@ -411,7 +197,31 @@ def team_inbox_detail(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    view = _conversation_view(db, request, conversation_id)
+    actor_id = _actor_id_from_request(request)
+    try:
+        actor_person_id = UUID(actor_id) if actor_id else None
+    except ValueError:
+        actor_person_id = None
+    projection = team_inbox_projection.get_conversation_projection(
+        db,
+        conversation_id=conversation_id,
+        actor_person_id=actor_person_id,
+    )
+    view = (
+        {
+            "timeline": projection.timeline,
+            "subscriber_summary": projection.subscriber_summary,
+            "contact_link_candidates": projection.contact_link_candidates,
+            "label_options": projection.label_options,
+            "conversation_labels": projection.conversation_labels,
+            "macro_options": projection.macro_options,
+            "template_options": projection.template_options,
+            "action_eligibility": projection.action_eligibility,
+            "is_unread": projection.is_unread,
+        }
+        if projection is not None
+        else None
+    )
     if view is None:
         return RedirectResponse(
             url="/admin/inbox?status=error&message=Conversation%20not%20found",
@@ -432,6 +242,58 @@ def _actor_id_from_request(request: Request) -> str | None:
     return web_admin_service.get_actor_id(request)
 
 
+def _actor_uuid_from_request(request: Request) -> UUID | None:
+    actor_id = _actor_id_from_request(request)
+    try:
+        return UUID(actor_id) if actor_id else None
+    except ValueError:
+        return None
+
+
+@router.post(
+    "/{conversation_id}/read",
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def team_inbox_mark_read(
+    conversation_id: UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    actor_person_id = _actor_uuid_from_request(request)
+    if actor_person_id is None:
+        return _detail_redirect(
+            conversation_id,
+            status="error",
+            message="Authenticated operator identity is required.",
+        )
+    _prepare_mutation(db)
+    try:
+        team_inbox_read_state.mark_conversation_read(
+            db,
+            team_inbox_read_state.MarkConversationReadCommand(
+                context=CommandContext.system(
+                    actor=f"person:{actor_person_id}",
+                    scope="team-inbox:operator-read-state",
+                    reason="operator explicitly marked conversation read",
+                    idempotency_key=f"{actor_person_id}:{conversation_id}:read",
+                ),
+                conversation_id=conversation_id,
+                person_id=actor_person_id,
+            ),
+        )
+    except team_inbox_read_state.TeamInboxReadStateError as exc:
+        return _detail_redirect(
+            conversation_id,
+            status="error",
+            message=exc.message,
+        )
+    return _detail_redirect(
+        conversation_id,
+        status="success",
+        message="Conversation marked read.",
+    )
+
+
 @router.post(
     "/{conversation_id}/reply",
     dependencies=[Depends(require_permission("support:ticket:update"))],
@@ -444,6 +306,7 @@ def team_inbox_reply(
     template_id: str | None = Form(default=None),
     db: Session = Depends(get_db),
 ):
+    _prepare_mutation(db)
     try:
         outcome = team_inbox_commands.reply(
             db,
@@ -488,6 +351,7 @@ def team_inbox_label_create(
     color: str | None = Form(default=None),
     db: Session = Depends(get_db),
 ):
+    _prepare_mutation(db)
     try:
         team_inbox_commands.create_label(db, name=name, color=color)
     except (
@@ -512,6 +376,7 @@ def team_inbox_label_apply(
     label_id: str = Form(...),
     db: Session = Depends(get_db),
 ):
+    _prepare_mutation(db)
     try:
         team_inbox_commands.apply_label(
             db,
@@ -545,6 +410,7 @@ def team_inbox_label_remove(
     label_id: str = Form(...),
     db: Session = Depends(get_db),
 ):
+    _prepare_mutation(db)
     try:
         team_inbox_commands.remove_label(
             db,
@@ -581,6 +447,7 @@ def team_inbox_macro_create(
     visibility: str = Form(default="shared"),
     db: Session = Depends(get_db),
 ):
+    _prepare_mutation(db)
     try:
         team_inbox_commands.create_macro(
             db,
@@ -616,6 +483,7 @@ def team_inbox_template_create(
     provider_template_language: str | None = Form(default=None),
     db: Session = Depends(get_db),
 ):
+    _prepare_mutation(db)
     try:
         team_inbox_commands.create_template(
             db,
@@ -647,6 +515,7 @@ def team_inbox_message_retry(
     request: Request,
     db: Session = Depends(get_db),
 ):
+    _prepare_mutation(db)
     try:
         conversation_id = team_inbox_commands.retry_message(
             db,
@@ -678,6 +547,7 @@ def team_inbox_message_retry(
 def team_inbox_retry_failed_batch(
     db: Session = Depends(get_db),
 ):
+    _prepare_mutation(db)
     retry_count = team_inbox_commands.retry_failed_batch(db, limit=50)
     return RedirectResponse(
         url=(
@@ -700,6 +570,7 @@ def team_inbox_workflow_action(
     snooze_minutes: int | None = Form(default=None),
     db: Session = Depends(get_db),
 ):
+    _prepare_mutation(db)
     try:
         team_inbox_commands.update_workflow(
             db,
@@ -744,6 +615,7 @@ def team_inbox_saved_filter_create(
 ):
     clean_open_only = open_only if isinstance(open_only, bool) else False
     clean_unassigned = unassigned if isinstance(unassigned, bool) else False
+    _prepare_mutation(db)
     try:
         team_inbox_commands.save_filter(
             db,
@@ -811,6 +683,7 @@ def team_inbox_bulk_action(
     auto_assign: bool = Form(default=True),
     db: Session = Depends(get_db),
 ):
+    _prepare_mutation(db)
     try:
         outcome = team_inbox_commands.bulk_action(
             db,
@@ -852,6 +725,7 @@ def team_inbox_contact_link(
     note: str | None = Form(default=None),
     db: Session = Depends(get_db),
 ):
+    _prepare_mutation(db)
     try:
         outcome = team_inbox_commands.link_contact(
             db,
@@ -894,6 +768,7 @@ def team_inbox_internal_note(
     body_text: str = Form(...),
     db: Session = Depends(get_db),
 ):
+    _prepare_mutation(db)
     try:
         team_inbox_commands.create_internal_note(
             db,
@@ -929,6 +804,7 @@ def team_inbox_comment_create(
     message_id: str | None = Form(default=None),
     db: Session = Depends(get_db),
 ):
+    _prepare_mutation(db)
     try:
         team_inbox_commands.create_comment(
             db,
@@ -963,6 +839,7 @@ def team_inbox_comment_resolve(
     request: Request,
     db: Session = Depends(get_db),
 ):
+    _prepare_mutation(db)
     try:
         conversation_id = team_inbox_commands.resolve_comment(
             db,
@@ -994,6 +871,7 @@ def team_inbox_status_action(
     status_value: str = Form(...),
     db: Session = Depends(get_db),
 ):
+    _prepare_mutation(db)
     try:
         outcome = team_inbox_commands.update_status(
             db,

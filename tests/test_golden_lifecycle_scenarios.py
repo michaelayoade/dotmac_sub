@@ -339,6 +339,7 @@ class TestSuspendRestoreRowShapes:
         assert lock.source == "golden-scenario"
         assert lock.is_active is True
         assert lock.resolved_at is None
+        db_session.commit()
 
         suspend_events = (
             db_session.query(SubscriptionLifecycleEvent)
@@ -359,6 +360,7 @@ class TestSuspendRestoreRowShapes:
             resolved_by="golden-tester",
         )
         assert restored is True
+        db_session.commit()
 
         db_session.refresh(lock)
         assert lock.is_active is False

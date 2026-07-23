@@ -24,8 +24,6 @@ communications.ephemeral_actions
 communications.intents
 communications.notification_service
 communications.staff_notifications
-communications.team_inbox
-communications.team_inbox_campaigns
 control.domain_settings
 control.feature_registry
 control.module_manager

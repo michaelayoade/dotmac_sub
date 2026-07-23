@@ -238,8 +238,8 @@ Keep branding minimal until operations are stable. Invoice identity, contact det
 
 | Mode | Description | When to Use |
 |------|-------------|-------------|
-| **Prepaid** | Customer pays before service starts. Balance checked. Auto-suspend on zero balance | Residential customers, pay-as-you-go |
-| **Postpaid** | Customer pays after service delivery. Invoiced at end of cycle | Business customers, credit terms |
+| **Prepaid** | Customer funds exact taxed contracted service periods before renewal; canonical coverage and funding decide access | Residential customers, pay-as-you-go |
+| **Postpaid** | Customer pays collectible invoice receivables under dunning policy | Business customers, credit terms |
 
 #### Step 5: Contract Terms
 
@@ -419,22 +419,17 @@ Store keys in OpenBao: `bao://secret/paystack#secret_key`
 | Secret Hash | Webhook verification hash |
 | Failover Enabled | true (auto-switch if primary fails) |
 
-### Auto-Suspension Flow
+### Financial access enforcement
 
-| Setting | Default | Controls |
-|---------|---------|----------|
-| Auto-Suspend on Overdue | true | Enable/disable auto-suspension |
-| Suspension Grace Hours | 48 | Hours of warning before suspension |
-| Invoice Reminder Days | 7, 1 | Send reminders N days before due |
-| Dunning Escalation Days | 3, 7, 14, 30 | Escalation after overdue |
+Financial enforcement has no enable switch or hard-coded global day ladder.
+Postpaid consequences follow the active dunning policy; prepaid consequences
+follow exact coverage, funding, contracted renewal terms, account-specific
+grace, and the shared time-of-day window. Payment receipt alone does not promise
+restoration: the owner recomputes settlement or funding and clears only the
+eligible reason-scoped lock.
 
-**Flow:**
-1. Invoice issued → payment due in 14 days
-2. 7 days before due → payment reminder email
-3. 1 day before due → urgent reminder
-4. Invoice overdue → warning email + 48-hour grace
-5. After 48 hours → subscriber suspended, RADIUS removed
-6. Payment received → auto-reactivated
+The complete current contract and operator workflow lives only in
+`docs/FINANCIAL_ACCESS_ENFORCEMENT.md`.
 
 ### Billing Configuration Smoke Test
 
@@ -896,10 +891,10 @@ pending → active → suspended → active (reactivate)
 | From | To | Trigger | Automatic? |
 |------|----|---------|-----------|
 | pending | active | First invoice paid or admin activation | Both |
-| active | suspended | Overdue invoice (after grace) | Yes |
+| active | suspended | Confirmed lifecycle consequence from canonical financial or access policy | Both |
 | active | canceled | Admin or customer request | Manual |
 | active | expired | End date reached | Yes (Celery task) |
-| suspended | active | Payment received | Yes |
+| suspended | active | Confirmed restoration after the originating reason is resolved | Both |
 | any | canceled | Admin action | Manual |
 
 ### Plan Changes
@@ -910,7 +905,7 @@ pending → active → suspended → active (reactivate)
 
 | Billing Mode | On Upgrade | On Downgrade |
 |-------------|------------|-------------|
-| Prepaid | Prorated invoice for price difference | Credit note for overpayment |
+| Prepaid | Canonical prepaid plan-change debit from available funding | Canonical reviewed credit/adjustment outcome |
 | Postpaid | Next invoice reflects new rate | Next invoice reflects new rate |
 
 **Proration Calculation:**
@@ -925,110 +920,19 @@ net = charge - credit
 
 ## 15. Dunning & Collections Configuration
 
-### Dunning Settings
+**Admin surfaces:** `/admin/billing/collections` and
+`/admin/system/settings-hub` → Billing.
 
-**URL:** `/admin/system/settings-hub` → Billing
+Configure dunning policy, account/policy grace, prepaid minimum funding,
+currency, notification templates, task cadence, and the shared local
+enforcement start/end time through their owning admin surfaces. Core lifecycle
+work cannot be disabled, and there is no weekend, holiday, activation,
+readiness, or health bypass.
 
-| Setting | Default | Purpose |
-|---------|---------|---------|
-| Dunning Enabled | true | Run dunning checks |
-| Dunning Interval | 86400 sec | Check frequency |
-| Prepaid Enforcement | false | Customer-impacting balance enforcement gate |
-| Prepaid Blocking Time | 08:00 | Time of day to block |
-| Prepaid Skip Weekends | false | Skip blocking on weekends |
-| Prepaid Default Grace Period | 0 | Billing-mode fallback after account/policy overrides |
-| Prepaid Default Min Balance | ₦0.00 | Billing-owned fallback minimum threshold |
-| Prepaid Enforcement Currency | NGN | Currency unit for balance and threshold comparisons |
-| Prepaid Activation Time | unset | Reviewed ISO-8601 cutover time; required before adverse action |
-| Funding Readiness Max Age | 60 min | Maximum configured snapshot-to-activation interval |
-| Activation Max Grace | 0 days | Blocks cutover readiness if an underfunded account exceeds it |
-
-`Prepaid Grace Days` and `Prepaid Deactivation Days` are retired settings and
-must not be used. Grace precedence is account → active policy set → prepaid
-billing default.
-
-### Dunning Actions
-
-| Action | Description |
-|--------|-------------|
-| notify | Send dunning notice email/SMS |
-| throttle | Reduce speed via RADIUS profile |
-| suspend | Suspend subscription |
-| reject | Block all traffic |
-
-### Collections Workflow
-
-1. **Day 0:** Invoice overdue → `invoice_overdue` notification
-2. **Day 3:** First dunning notice → `dunning_notice` email
-3. **Day 7:** Second notice → escalated dunning
-4. **Day 14:** Third notice → suspension warning
-5. **Day 30:** Final notice → service disconnection
-
-### Enforcement Caution
-
-Apply aggressive collections settings only after confirming payment posting latency. If payment imports or webhook confirmation are delayed, customers can be suspended incorrectly.
-
-Before enabling prepaid enforcement, generate the side-effect-free production
-plan from the materialized funding owner and review every action bucket:
-
-```bash
-docker compose exec -T -e PYTHONPATH=/app app \
-  python scripts/one_off/plan_prepaid_balance_sweep.py \
-  --activation-at 2026-07-20T08:00:00+01:00 \
-  --out /tmp/prepaid-balance-sweep-plan.json
-```
-
-Prepaid funding authority must first be materialized through the final reviewed
-cutover in `docs/designs/PREPAID_FUNDING_RECONSTRUCTION.md`. This is not a
-feature toggle and has no Splynx fallback. Resolve every reconstruction blocker,
-using bank statements and Splynx exports only as reviewed migration evidence,
-then apply the exact full-cohort manifest before starting the enforcement
-release. Missing pre-cutover opening balances fail closed; never enter zero for
-an unknown balance.
-
-If the exact blocker manifest reports only
-`source_service_without_paid_through_period` and the authorized service review
-confirms those services have never been paid through, use the hash-bound
-`no_paid_through_due_immediately` adjudication workflow in the reconstruction
-design. It preserves every opening balance and makes the affected services due
-immediately. It cannot clear another blocker class or act as a suspension
-allowlist.
-
-The audit exporter must seal the clean full-cohort manifest with an Ed25519
-private key resolved from an audit-only OpenBao reference. Configure
-`billing.prepaid_reconstruction_attestation_public_key_ref` with a separate
-OpenBao reference to the public key before dry-run or apply. The application
-must not have access to the private-key path. Unsigned or modified manifests,
-non-zero blocker manifests, and a second seal for an existing reviewed manifest
-are rejected. The artifact contains funding facts only; required balance and
-grace policy continue to resolve from live configuration.
-
-The report runs even while the control is disabled. It includes account IDs,
-available and required balances, lifecycle projection drift, safety shields,
-enforcement lock/timer drift, and infrastructure outage/ticket notice
-suppression. It never arms timers,
-queues notices, changes service state, or disconnects sessions. Enable the
-control only after reviewing the complete plan and recording exact parity:
-
-```bash
-docker compose exec -T -e PYTHONPATH=/app app \
-  python scripts/one_off/plan_prepaid_balance_sweep.py \
-  --activation-at 2026-07-20T08:00:00+01:00 \
-  --record-readiness \
-  --evidence-ref reconciliation-run:prepaid-cutover \
-  --verified-by billing-operations
-```
-
-The evidence reference must not contain bank credentials or statement data.
-The planner accepts no external funding snapshot. Dry-run, readiness, and the
-executable sweep all read `financial.prepaid_funding_reconstruction`, so an
-operator report cannot diverge from execution by selecting another balance.
-Until the first eligible sweep seals activation, a candidate-cohort, policy,
-live-funding, or active reconstruction-evidence change invalidates the record;
-rerun the complete review and record fresh readiness.
-With the configured prepaid grace default of zero, an eligible underfunded
-account is suspended on the first sweep; an explicit account or policy-set
-grace override remains authoritative and appears in the plan.
+Do not copy an enforcement ladder, balance formula, reconstruction command, or
+repair procedure from this general admin guide. The single current ownership,
+decision, dry-run/apply, lock/RADIUS, retry, daily-review, and incident contract
+is [Financial access enforcement](FINANCIAL_ACCESS_ENFORCEMENT.md).
 
 ---
 

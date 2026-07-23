@@ -33,7 +33,6 @@ app/services/catalog/radius.py
 app/services/catalog/subscriptions.py
 app/services/catalog/validation.py
 app/services/catalog_billing_governance.py
-app/services/chat_session.py
 app/services/collections/_core.py
 app/services/common.py
 app/services/comms.py
@@ -158,7 +157,6 @@ app/services/subscription_lifecycle.py
 app/services/subscription_lifecycle_commands.py
 app/services/system_jobs.py
 app/services/table_config.py
-app/services/team_inbox_widget.py
 app/services/tr069.py
 app/services/usage.py
 app/services/user_profile.py

@@ -1,10 +1,10 @@
 """Billing liveness / anomaly signals for monitoring (metrics + alerts).
 
 These are MONITORING checks — surfaced as Prometheus gauges and operator
-alerts. They are deliberately NOT enforcement gates: they never block a
-suspension (that is ``billing_enforcement_guards``). They answer "is the billing
-system producing correct, complete output?", not "is it safe to cut this
-customer now?".
+alerts. They are deliberately NOT fleet-wide enforcement gates. They answer
+"is the billing system producing correct, complete output?", not "should this
+specific customer be cut?". Canonical account facts, shields, and the financial
+access owner decide that consequence.
 
 Signals:
 * paid-with-balance — invoices marked ``paid`` that still carry a non-zero

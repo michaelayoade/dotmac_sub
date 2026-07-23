@@ -38,6 +38,161 @@ class DomainSOT:
     rule: str
 
 
+def _team_inbox_contract(
+    *,
+    service_name: str,
+    concerns: tuple[tuple[str, OwnerRole], ...],
+    inputs: tuple[AuthorityInput, ...],
+    transaction_mode: TransactionMode,
+    event_types: tuple[str, ...] = (),
+    projections: tuple[str, ...] = (),
+    mapping_owner: str = "Team Inbox transport and web adapters",
+) -> ServiceContract:
+    """Build the uniformly complete contract shared by the Inbox owner family."""
+
+    input_names = tuple(item.name for item in inputs)
+    writer_roles = {
+        OwnerRole.AUTHORITATIVE_RECORD,
+        OwnerRole.OBSERVATION_COLLECTOR,
+        OwnerRole.COMMAND_WRITER,
+        OwnerRole.RECONCILER,
+        OwnerRole.PROJECTION_WRITER,
+    }
+    has_writer = any(role in writer_roles for _name, role in concerns)
+    boundary_codes = (
+        owner_command_boundary_error_codes(service_name)
+        if transaction_mode
+        in {TransactionMode.OWNER_MANAGED, TransactionMode.COORDINATOR_MANAGED}
+        else ()
+    )
+    return ServiceContract(
+        concerns=tuple(
+            ConcernContract(
+                name=name,
+                role=role,
+                input_names=input_names,
+                canonical_writer=service_name if role in writer_roles else None,
+            )
+            for name, role in concerns
+        ),
+        authoritative_inputs=inputs,
+        transaction=TransactionContract(
+            mode=transaction_mode,
+            boundary=(
+                "Public commands enter execute_owner_command once on a transaction-free "
+                "session; participants only flush; read and transport owners never "
+                "complete a business transaction."
+            ),
+            locking=(
+                "Conversation, observation, assignment, contact-link, message, and read "
+                "cursor identities are locked in stable aggregate order; database unique "
+                "constraints arbitrate concurrent provider and operator retries."
+            ),
+            idempotency=(
+                "Provider/account/event identity, external message identity, communication "
+                "intent identity, active assignment/contact uniqueness, and operator read "
+                "cursors replay the same stable outcome or reject changed evidence."
+            ),
+            retries=(
+                "Adapters retry only after complete rollback; deterministic duplicates and "
+                "reordered receipts return stable non-regressing outcomes."
+            ),
+        ),
+        errors=ErrorContract(
+            domain_codes=(
+                f"{service_name}.invalid_command",
+                f"{service_name}.invalid_observation",
+                f"{service_name}.invalid_read_time",
+                f"{service_name}.not_found",
+                f"{service_name}.conversation_not_found",
+                f"{service_name}.message_not_found",
+                f"{service_name}.message_scope_mismatch",
+                f"{service_name}.observation_not_found",
+                f"{service_name}.identity_collision",
+                f"{service_name}.provider_event_identity_collision",
+                f"{service_name}.command_rejected",
+                *boundary_codes,
+            ),
+            mapping_owner=mapping_owner,
+            retryable_codes=(),
+            fail_closed_on=(
+                "unverified provider provenance",
+                "ambiguous contact identity",
+                "provider identity reuse with changed evidence",
+                "stale or cross-conversation operator input",
+            ),
+        ),
+        events=(
+            EventContract(
+                event_types=event_types or (f"{service_name}.changed.v1",),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility=(
+                    "Version 1 carries stable message, conversation, participant, channel, "
+                    "command/correlation, provenance, and outcome identifiers without raw "
+                    "provider payloads."
+                ),
+                replay=(
+                    "Authoritative Inbox rows plus observation, intent, assignment, contact, "
+                    "receipt, and read-cursor evidence deterministically rebuild projections."
+                ),
+            )
+            if has_writer
+            else None
+        ),
+        projections=tuple(
+            ProjectionContract(
+                name=name,
+                input_names=input_names,
+                writer=service_name,
+                freshness="Transaction-current for database reads; realtime is best effort.",
+                stale_behavior=(
+                    "Database truth remains usable with explicit freshness; realtime clients "
+                    "refetch when an event is missed or unavailable."
+                ),
+                drift_signal=(
+                    "Projection parity queries compare cohort counts, read cursors, receipt "
+                    "order, contact links, and current conversation/message state."
+                ),
+                rebuild_operation=(
+                    "The owner recomputes the projection from authoritative Inbox rows and "
+                    "committed provider observations without replaying transports."
+                ),
+                repair_owner=service_name,
+            )
+            for name in projections
+        ),
+        migration=MigrationContract(
+            state=AuthorityMigrationState.COMPLETE,
+            old_owner=(
+                "communications.team_inbox catch-all plus route-owned list contracts and "
+                "helper-level transaction completion"
+            ),
+            new_owner=service_name,
+            verification=(
+                "Focused Inbox behavior, idempotency, projection, UI contract, and architecture tests."
+            ),
+            cutover_gate=(
+                "Every adapter delegates to the typed owner and all provider facts are durable before consequences."
+            ),
+            fallback_retirement=(
+                "The catch-all legacy manifest rows, route list definition, raw provider decision paths, and helper commits are removed."
+            ),
+        ),
+        steward="customer experience platform",
+        design_refs=(
+            "docs/designs/TEAM_INBOX_SOURCE_OF_TRUTH.md",
+            "docs/SOT_RELATIONSHIP_MAP.md",
+            "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+        ),
+        test_refs=(
+            "tests/test_team_inbox_sot_completion.py",
+            "tests/architecture/test_team_inbox_boundaries.py",
+            "tests/architecture/test_team_inbox_sot_contracts.py",
+        ),
+    )
+
+
 DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
     DomainSOT(
         domain="party_identity",
@@ -191,7 +346,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "Party contact-point verification and consent coverage report",
                     "Team Inbox canonical contact-point projection debt report",
                 ),
-                depends_on=("party.registry", "communications.team_inbox"),
+                depends_on=(
+                    "party.registry",
+                    "communications.team_inbox_contact_resolution",
+                ),
                 notes=(
                     "Reports only aggregate schema, identity, contact-point, and "
                     "Inbox routing-projection counts. It never emits identity "
@@ -643,8 +801,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     steward="finance operations",
                     design_refs=(
                         "docs/SOT_RELATIONSHIP_MAP.md",
-                        "docs/designs/PREPAID_INVOICE_DEPOSIT_ALIGNMENT.md",
-                        "docs/designs/PREPAID_SERVICE_COVERAGE.md",
+                        "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
                     ),
                     test_refs=(
                         "tests/test_customer_financial_ledger.py",
@@ -3851,7 +4008,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     steward="billing and finance operations",
                     design_refs=(
                         "docs/designs/SUBSCRIPTION_BILLING_TREATMENTS.md",
-                        "docs/designs/PREPAID_SERVICE_COVERAGE.md",
+                        "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
                         "docs/SOT_RELATIONSHIP_MAP.md",
                     ),
                     test_refs=(
@@ -3989,7 +4146,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     ),
                     steward="billing and network access",
                     design_refs=(
-                        "docs/designs/PREPAID_SERVICE_COVERAGE.md",
+                        "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
                         "docs/SOT_RELATIONSHIP_MAP.md",
                     ),
                     test_refs=(
@@ -4184,7 +4341,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     ),
                     steward="billing operations",
                     design_refs=(
-                        "docs/designs/PREPAID_SERVICE_COVERAGE.md",
+                        "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
                         "docs/SOT_RELATIONSHIP_MAP.md",
                     ),
                     test_refs=(
@@ -4206,13 +4363,14 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "customer.accounts",
                     "financial.prepaid_currency",
                     "financial.prepaid_service_coverage",
+                    "financial.prepaid_service_renewals",
                     "financial.subscription_billing_treatments",
-                    "service_intent.catalog_policy",
                 ),
                 notes=(
-                    "Returns typed minimum and unfunded-renewal provenance. Missing "
-                    "accounts, invalid minimums, absent prices, and cross-currency "
-                    "evidence fail closed."
+                    "Returns typed minimum and unfunded-renewal provenance. Renewal "
+                    "and enforcement consume one exact taxed contract charge. Missing "
+                    "renewal terms produce a typed protected outcome; missing accounts, "
+                    "invalid minimums, and cross-currency evidence fail closed."
                 ),
                 contract=ServiceContract(
                     concerns=(
@@ -4233,7 +4391,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "canonical collectible prepaid subscriptions",
                                 "canonical current service coverage",
                                 "effective subscription billing treatment",
-                                "canonical recurring catalog prices",
+                                "exact taxed contracted renewal charge",
                                 "canonical prepaid currency",
                                 "prepaid threshold protocol",
                             ),
@@ -4280,11 +4438,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             ),
                         ),
                         AuthorityInput(
-                            name="canonical recurring catalog prices",
-                            owner="service_intent.catalog_policy",
-                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            name="exact taxed contracted renewal charge",
+                            owner="financial.prepaid_service_renewals",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
                             source=(
-                                "newest active recurring OfferVersionPrice or OfferPrice"
+                                "positive Subscription unit_price with effective discount, "
+                                "tax precedence, currency, and monthly cadence"
                             ),
                         ),
                         AuthorityInput(
@@ -4298,9 +4457,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             owner="financial.prepaid_threshold",
                             kind=AuthorityKind.CONTROL_INPUT,
                             source=(
-                                "collectible status set, coverage precedence, newest-price "
-                                "ordering, discount semantics, current-coverage precedence, "
-                                "and due-only max(minimum, renewal) rule"
+                                "collectible status set, coverage precedence, typed missing-"
+                                "renewal protection, current-coverage precedence, and due-"
+                                "only max(minimum, renewal) rule"
                             ),
                         ),
                     ),
@@ -4308,8 +4467,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         mode=TransactionMode.READ_ONLY,
                         boundary=(
                             "Caller creates and closes the session; the batched resolver "
-                            "reads canonical account, service, coverage, price, and setting "
-                            "evidence without writes or transaction completion."
+                            "reads canonical account, service, coverage, exact renewal "
+                            "charge, and setting evidence without writes or transaction "
+                            "completion."
                         ),
                         locking=(
                             "No row lock for projections. State-changing enforcement "
@@ -4320,8 +4480,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "evidence produce identical typed threshold decisions."
                         ),
                         retries=(
-                            "Transient reads may be retried. Missing, invalid, unpriced, or "
-                            "cross-currency evidence remains a deterministic failure."
+                            "Transient reads may be retried. Missing renewal terms remain a "
+                            "deterministic protected outcome; invalid or cross-currency "
+                            "evidence remains a deterministic failure."
                         ),
                     ),
                     errors=ErrorContract(
@@ -4329,7 +4490,6 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "financial.prepaid_threshold.account_not_found",
                             "financial.prepaid_threshold.currency_mismatch",
                             "financial.prepaid_threshold.invalid_minimum_balance",
-                            "financial.prepaid_threshold.missing_subscription_price",
                         ),
                         mapping_owner=(
                             "access, enforcement, status, audit, and reporting adapters"
@@ -4337,7 +4497,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         fail_closed_on=(
                             "missing requested account",
                             "negative, non-finite, or malformed minimum balance",
-                            "unfunded collectible subscription without a price",
+                            "unfunded collectible subscription without exact renewal terms",
                             "price and enforcement currency mismatch",
                             "missing or invalid canonical prepaid currency",
                         ),
@@ -4351,8 +4511,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         new_owner="financial.prepaid_threshold",
                         verification=(
-                            "Scalar/batch parity, query budget, price precedence, paid "
-                            "coverage, provenance, failure, caller, and architecture tests."
+                            "Scalar/batch parity, query budget, renewal-charge/tax parity, "
+                            "missing-term protection, paid coverage, provenance, caller, "
+                            "and architecture tests."
                         ),
                         cutover_gate=(
                             "Access consumes the typed threshold decision; service status "
@@ -4366,6 +4527,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     ),
                     steward="billing operations",
                     design_refs=(
+                        "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
                         "docs/SOT_RELATIONSHIP_MAP.md",
                         "docs/audits/BILLING_SOT_AUDIT_2026-07-12.md",
                         "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
@@ -4788,7 +4950,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     ),
                     steward="billing operations",
                     design_refs=(
-                        "docs/designs/PREPAID_FUNDING_RECONSTRUCTION.md",
+                        "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
                         "docs/SOT_RELATIONSHIP_MAP.md",
                         "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
                     ),
@@ -4939,7 +5101,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     ),
                     steward="billing operations",
                     design_refs=(
-                        "docs/designs/PREPAID_FUNDING_RECONSTRUCTION.md",
+                        "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
                         "docs/SOT_RELATIONSHIP_MAP.md",
                         "docs/adr/0002-owner-command-transaction-boundary.md",
                     ),
@@ -7123,6 +7285,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "device operation re-execution eligibility",
                     "immutable redrive lineage and reviewed-head evidence",
                     "typed recovery eligibility and retry limits",
+                    "customer subscription/device command scope and typed outcomes",
                 ),
                 depends_on=("network.identity",),
                 notes=(
@@ -7136,6 +7299,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "remain immutable; approved retries create linked operations "
                     "through app.services.network_operation_recovery. Unregistered "
                     "device writes fail closed."
+                    " Customer reboot and Wi-Fi adapters delegate subscription,"
+                    " subscriber, and active assignment scope to"
+                    " app.services.customer_device_commands; its stable outcome"
+                    " carries the exact subscription, device, and operation IDs."
                 ),
             ),
             SOTService(
@@ -8110,38 +8277,644 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
-                name="communications.team_inbox",
-                module="app.services.team_inbox_commands",
+                name="communications.team_inbox_observations",
+                module="app.services.team_inbox_observations",
+                owns=("normalized inbound provider observation ledger",),
+                depends_on=("integration.inbox",),
+                contract=_team_inbox_contract(
+                    service_name="communications.team_inbox_observations",
+                    concerns=(
+                        (
+                            "normalized inbound provider observation ledger",
+                            OwnerRole.OBSERVATION_COLLECTOR,
+                        ),
+                    ),
+                    inputs=(
+                        AuthorityInput(
+                            name="verified normalized provider fact",
+                            owner="external:communications_provider",
+                            kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                            source="Authenticated email, WhatsApp, social, or widget adapter output with bounded message or receipt fields.",
+                        ),
+                        AuthorityInput(
+                            name="verified webhook admission",
+                            owner="integration.inbox",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Committed integration receipt trust binding, provider-event identity, digest, and retry lifecycle.",
+                        ),
+                    ),
+                    transaction_mode=TransactionMode.OWNER_MANAGED,
+                    event_types=("team_inbox.provider_observation_recorded.v1",),
+                ),
+            ),
+            SOTService(
+                name="communications.team_inbox_processing",
+                module="app.services.team_inbox_processing",
+                owns=("provider observation consequence coordination",),
+                depends_on=(
+                    "communications.team_inbox_observations",
+                    "communications.team_inbox_threads",
+                    "communications.team_inbox_contact_resolution",
+                    "communications.team_inbox_routing",
+                    "communications.team_inbox_delivery_receipts",
+                ),
+                contract=_team_inbox_contract(
+                    service_name="communications.team_inbox_processing",
+                    concerns=(
+                        (
+                            "provider observation consequence coordination",
+                            OwnerRole.APPLICATION_COORDINATOR,
+                        ),
+                    ),
+                    inputs=(
+                        AuthorityInput(
+                            name="committed normalized observation",
+                            owner="communications.team_inbox_observations",
+                            kind=AuthorityKind.OBSERVATION,
+                            source="Locked InboxProviderObservation recorded in an earlier owner transaction.",
+                        ),
+                        AuthorityInput(
+                            name="conversation identity",
+                            owner="communications.team_inbox_threads",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Canonical provider, channel, thread, conversation, and message identity.",
+                        ),
+                        AuthorityInput(
+                            name="contact decision",
+                            owner="communications.team_inbox_contact_resolution",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="Explicit matched, ambiguous, suppressed, or unmatched contact outcome.",
+                        ),
+                        AuthorityInput(
+                            name="routing decision",
+                            owner="communications.team_inbox_routing",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="Effective team, assignment, and escalation outcome.",
+                        ),
+                        AuthorityInput(
+                            name="delivery receipt state",
+                            owner="communications.team_inbox_delivery_receipts",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="Timestamp-monotonic provider delivery state.",
+                        ),
+                    ),
+                    transaction_mode=TransactionMode.COORDINATOR_MANAGED,
+                ),
+            ),
+            SOTService(
+                name="communications.team_inbox_threads",
+                module="app.services.team_inbox_receive",
                 owns=(
-                    "conversation collaboration",
-                    "conversation assignment",
-                    "inbox reply and contact-link workflows",
-                    "inbound channel ingestion",
-                    "admin inbox mutation transactions",
-                    "InboxContactLink canonical contact-point routing projection",
-                    "exact open, response, assignment, mute, and snooze queue cohorts",
-                    "failed outbound queue count and worklist",
+                    "conversation identity and threading",
+                    "authoritative conversation and message records",
+                ),
+                depends_on=("communications.team_inbox_observations",),
+                contract=_team_inbox_contract(
+                    service_name="communications.team_inbox_threads",
+                    concerns=(
+                        ("conversation identity and threading", OwnerRole.RESOLVER),
+                        (
+                            "authoritative conversation and message records",
+                            OwnerRole.AUTHORITATIVE_RECORD,
+                        ),
+                    ),
+                    inputs=(
+                        AuthorityInput(
+                            name="normalized inbound message fact",
+                            owner="communications.team_inbox_observations",
+                            kind=AuthorityKind.OBSERVATION,
+                            source="Provider/account/message identity, channel, observed time, references, subject, participant address, and bounded content.",
+                        ),
+                    ),
+                    transaction_mode=TransactionMode.PARTICIPANT,
+                    event_types=(
+                        "team_inbox.message_recorded.v1",
+                        "team_inbox.conversation_opened.v1",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="communications.team_inbox_contact_resolution",
+                module="app.services.team_inbox_contact_links",
+                owns=(
+                    "contact subscriber reseller and ticket association resolution",
+                    "reviewed contact association and projection repair",
                 ),
                 depends_on=(
                     "party.registry",
                     "customer.identity_scope",
+                    "communications.team_inbox_threads",
+                ),
+                contract=_team_inbox_contract(
+                    service_name="communications.team_inbox_contact_resolution",
+                    concerns=(
+                        (
+                            "contact subscriber reseller and ticket association resolution",
+                            OwnerRole.RESOLVER,
+                        ),
+                        (
+                            "reviewed contact association and projection repair",
+                            OwnerRole.PROJECTION_WRITER,
+                        ),
+                    ),
+                    inputs=(
+                        AuthorityInput(
+                            name="canonical party contact facts",
+                            owner="party.registry",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Reviewed Party, contact point, provider scope, and relationship evidence.",
+                        ),
+                        AuthorityInput(
+                            name="customer identity scope",
+                            owner="customer.identity_scope",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Active Subscriber and reseller ownership identifiers; never fuzzy name or shared-address inference.",
+                        ),
+                        AuthorityInput(
+                            name="conversation contact route",
+                            owner="communications.team_inbox_threads",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Conversation channel and normalized contact address.",
+                        ),
+                    ),
+                    transaction_mode=TransactionMode.OWNER_MANAGED,
+                    event_types=("team_inbox.contact_link_changed.v1",),
+                    projections=(
+                        "InboxContactLink canonical contact-point projection",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="communications.team_inbox_routing",
+                module="app.services.team_inbox_assignment",
+                owns=(
+                    "routing assignment and escalation policy",
+                    "routing assignment and escalation transitions",
+                ),
+                depends_on=(
+                    "communications.team_inbox_threads",
+                    "operations.sla_escalation",
+                    "auth.permission_gate",
+                ),
+                contract=_team_inbox_contract(
+                    service_name="communications.team_inbox_routing",
+                    concerns=(
+                        ("routing assignment and escalation policy", OwnerRole.POLICY),
+                        (
+                            "routing assignment and escalation transitions",
+                            OwnerRole.COMMAND_WRITER,
+                        ),
+                    ),
+                    inputs=(
+                        AuthorityInput(
+                            name="conversation routing facts",
+                            owner="communications.team_inbox_threads",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Recipients, current owner team, assignment, priority, and lifecycle.",
+                        ),
+                        AuthorityInput(
+                            name="operational escalation policy",
+                            owner="operations.sla_escalation",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="Configured Inbox event, severity, delay, participant, and level.",
+                        ),
+                        AuthorityInput(
+                            name="operator authorization",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="Granular assignment and escalation permission evidence.",
+                        ),
+                    ),
+                    transaction_mode=TransactionMode.OWNER_MANAGED,
+                    event_types=(
+                        "team_inbox.assignment_changed.v1",
+                        "team_inbox.escalated.v1",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="communications.team_inbox_operator_state",
+                module="app.services.team_inbox_read_state",
+                owns=("operator read cursor", "operator unread projection repair"),
+                depends_on=(
+                    "communications.team_inbox_threads",
+                    "auth.permission_gate",
+                ),
+                contract=_team_inbox_contract(
+                    service_name="communications.team_inbox_operator_state",
+                    concerns=(
+                        ("operator read cursor", OwnerRole.COMMAND_WRITER),
+                        ("operator unread projection repair", OwnerRole.RECONCILER),
+                    ),
+                    inputs=(
+                        AuthorityInput(
+                            name="message chronology",
+                            owner="communications.team_inbox_threads",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Inbound occurrence time and stable message/conversation identity.",
+                        ),
+                        AuthorityInput(
+                            name="operator principal",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="Authenticated person UUID and granular Inbox update scope.",
+                        ),
+                    ),
+                    transaction_mode=TransactionMode.OWNER_MANAGED,
+                    event_types=("team_inbox.operator_read_state_changed.v1",),
+                    projections=("per-operator unread conversation projection",),
+                ),
+            ),
+            SOTService(
+                name="communications.team_inbox_outbound_intents",
+                module="app.services.team_inbox_outbound",
+                owns=(
+                    "transactional outbound communication intent",
+                    "outbound Inbox message attempt projection",
+                ),
+                depends_on=(
+                    "communications.team_inbox_threads",
+                    "communications.intents",
                     "communications.channel_policy",
-                    "communications.notification_service",
+                ),
+                contract=_team_inbox_contract(
+                    service_name="communications.team_inbox_outbound_intents",
+                    concerns=(
+                        (
+                            "transactional outbound communication intent",
+                            OwnerRole.COMMAND_WRITER,
+                        ),
+                        (
+                            "outbound Inbox message attempt projection",
+                            OwnerRole.PROJECTION_WRITER,
+                        ),
+                    ),
+                    inputs=(
+                        AuthorityInput(
+                            name="conversation reply target",
+                            owner="communications.team_inbox_threads",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Active unresolved conversation, channel, participant, subject, and team sender context.",
+                        ),
+                        AuthorityInput(
+                            name="communication intent lifecycle",
+                            owner="communications.intents",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Transactional intent, Notification outbox identity, eligibility, and queue outcome.",
+                        ),
+                        AuthorityInput(
+                            name="effective channel policy",
+                            owner="communications.channel_policy",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="Provider-neutral channel and sender eligibility.",
+                        ),
+                    ),
+                    transaction_mode=TransactionMode.OWNER_MANAGED,
+                    event_types=("team_inbox.outbound_intent_recorded.v1",),
+                    projections=("outbound attempt and failed-worklist projection",),
+                ),
+            ),
+            SOTService(
+                name="communications.team_inbox_delivery_receipts",
+                module="app.services.team_inbox_delivery_receipts",
+                owns=("provider delivery receipt reconciliation",),
+                depends_on=(
+                    "communications.team_inbox_observations",
+                    "communications.team_inbox_outbound_intents",
+                ),
+                contract=_team_inbox_contract(
+                    service_name="communications.team_inbox_delivery_receipts",
+                    concerns=(
+                        (
+                            "provider delivery receipt reconciliation",
+                            OwnerRole.PROJECTION_WRITER,
+                        ),
+                    ),
+                    inputs=(
+                        AuthorityInput(
+                            name="normalized receipt",
+                            owner="communications.team_inbox_observations",
+                            kind=AuthorityKind.OBSERVATION,
+                            source="Provider message identity, bounded status, observed time, recipient reference, and error codes.",
+                        ),
+                        AuthorityInput(
+                            name="outbound attempt identity",
+                            owner="communications.team_inbox_outbound_intents",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Inbox message and communication intent provider-message linkage.",
+                        ),
+                    ),
+                    transaction_mode=TransactionMode.PARTICIPANT,
+                    event_types=("team_inbox.delivery_receipt_reconciled.v1",),
+                    projections=("timestamp-monotonic Inbox delivery state",),
+                ),
+            ),
+            SOTService(
+                name="communications.team_inbox_commands",
+                module="app.services.team_inbox_commands",
+                owns=("operator conversation and collaboration commands",),
+                depends_on=(
+                    "auth.permission_gate",
+                    "communications.team_inbox_threads",
+                    "communications.team_inbox_contact_resolution",
+                    "communications.team_inbox_routing",
+                    "communications.team_inbox_outbound_intents",
+                    "communications.team_inbox_operator_state",
+                ),
+                contract=_team_inbox_contract(
+                    service_name="communications.team_inbox_commands",
+                    concerns=(
+                        (
+                            "operator conversation and collaboration commands",
+                            OwnerRole.APPLICATION_COORDINATOR,
+                        ),
+                    ),
+                    inputs=(
+                        AuthorityInput(
+                            name="authenticated operator command",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="CommandContext, granular permission, typed targets, expected state, and reason.",
+                        ),
+                        AuthorityInput(
+                            name="current conversation state",
+                            owner="communications.team_inbox_threads",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Locked conversation, collaboration records, labels, comments, and messages.",
+                        ),
+                        AuthorityInput(
+                            name="contact association decision",
+                            owner="communications.team_inbox_contact_resolution",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="Reviewed subscriber/reseller/contact-point outcome.",
+                        ),
+                        AuthorityInput(
+                            name="routing transition decision",
+                            owner="communications.team_inbox_routing",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="Assignment, escalation, and lifecycle eligibility.",
+                        ),
+                        AuthorityInput(
+                            name="outbound intent outcome",
+                            owner="communications.team_inbox_outbound_intents",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Stable queued or suppressed intent and message identifiers.",
+                        ),
+                        AuthorityInput(
+                            name="operator read state",
+                            owner="communications.team_inbox_operator_state",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="Per-person read cursor and unread cohort.",
+                        ),
+                    ),
+                    transaction_mode=TransactionMode.COORDINATOR_MANAGED,
+                ),
+            ),
+            SOTService(
+                name="communications.team_inbox_widget",
+                module="app.services.team_inbox_widget",
+                owns=("authenticated visitor message and read-state commands",),
+                depends_on=(
+                    "customer.identity_scope",
+                    "communications.team_inbox_threads",
+                ),
+                contract=_team_inbox_contract(
+                    service_name="communications.team_inbox_widget",
+                    concerns=(
+                        (
+                            "authenticated visitor message and read-state commands",
+                            OwnerRole.COMMAND_WRITER,
+                        ),
+                    ),
+                    inputs=(
+                        AuthorityInput(
+                            name="authenticated visitor principal",
+                            owner="customer.identity_scope",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="Exact Subscriber or reseller principal and bounded signed widget-session identity.",
+                        ),
+                        AuthorityInput(
+                            name="widget conversation identity",
+                            owner="communications.team_inbox_threads",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Native chat-widget conversation and message chronology.",
+                        ),
+                    ),
+                    transaction_mode=TransactionMode.OWNER_MANAGED,
+                    event_types=(
+                        "team_inbox.widget_message_recorded.v1",
+                        "team_inbox.widget_read_state_changed.v1",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="communications.team_inbox_projection",
+                module="app.services.team_inbox_projection",
+                owns=("Inbox list detail metrics unread and action projection",),
+                depends_on=(
+                    "communications.team_inbox_threads",
+                    "communications.team_inbox_contact_resolution",
+                    "communications.team_inbox_routing",
+                    "communications.team_inbox_delivery_receipts",
+                    "communications.team_inbox_operator_state",
+                ),
+                contract=_team_inbox_contract(
+                    service_name="communications.team_inbox_projection",
+                    concerns=(
+                        (
+                            "Inbox list detail metrics unread and action projection",
+                            OwnerRole.RESOLVER,
+                        ),
+                    ),
+                    inputs=(
+                        AuthorityInput(
+                            name="conversation records",
+                            owner="communications.team_inbox_threads",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Current conversation/message chronology and lifecycle.",
+                        ),
+                        AuthorityInput(
+                            name="contact projection",
+                            owner="communications.team_inbox_contact_resolution",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="Reviewed link and explicit resolution state.",
+                        ),
+                        AuthorityInput(
+                            name="routing state",
+                            owner="communications.team_inbox_routing",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Team, assignee, escalation, priority, mute, and snooze state.",
+                        ),
+                        AuthorityInput(
+                            name="delivery projection",
+                            owner="communications.team_inbox_delivery_receipts",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="Current monotonic delivery state and bounded failure codes.",
+                        ),
+                        AuthorityInput(
+                            name="unread projection",
+                            owner="communications.team_inbox_operator_state",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="Per-person read cursor and unread decision.",
+                        ),
+                    ),
+                    transaction_mode=TransactionMode.READ_ONLY,
+                    projections=(
+                        "Inbox queue detail metrics actions and unread cohorts",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="communications.team_inbox_maintenance",
+                module="app.services.team_inbox_maintenance",
+                owns=("scheduled Inbox projection maintenance and repair",),
+                depends_on=(
+                    "communications.team_inbox_threads",
+                    "communications.team_inbox_outbound_intents",
+                    "communications.team_inbox_projection",
+                ),
+                contract=_team_inbox_contract(
+                    service_name="communications.team_inbox_maintenance",
+                    concerns=(
+                        (
+                            "scheduled Inbox projection maintenance and repair",
+                            OwnerRole.RECONCILER,
+                        ),
+                    ),
+                    inputs=(
+                        AuthorityInput(
+                            name="current Inbox projection",
+                            owner="communications.team_inbox_projection",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="Failed outbound, stale conversation, and unmaterialized media worklists.",
+                        ),
+                        AuthorityInput(
+                            name="canonical conversation identity",
+                            owner="communications.team_inbox_threads",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Current conversation, message, lifecycle, and attachment metadata.",
+                        ),
+                        AuthorityInput(
+                            name="outbound intent state",
+                            owner="communications.team_inbox_outbound_intents",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Retryable failed communication intent and message evidence.",
+                        ),
+                    ),
+                    transaction_mode=TransactionMode.OWNER_MANAGED,
+                    event_types=("team_inbox.projection_repaired.v1",),
+                    projections=("repairable Inbox worklists and media projection",),
+                ),
+            ),
+            SOTService(
+                name="communications.team_inbox_realtime",
+                module="app.services.team_inbox_realtime",
+                owns=("best-effort realtime Inbox projection and rebuild",),
+                depends_on=("communications.team_inbox_projection",),
+                contract=_team_inbox_contract(
+                    service_name="communications.team_inbox_realtime",
+                    concerns=(
+                        (
+                            "best-effort realtime Inbox projection and rebuild",
+                            OwnerRole.TRANSPORT,
+                        ),
+                    ),
+                    inputs=(
+                        AuthorityInput(
+                            name="current Inbox projection",
+                            owner="communications.team_inbox_projection",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="Committed conversation state serialized into the realtime v1 envelope.",
+                        ),
+                    ),
+                    transaction_mode=TransactionMode.NOT_APPLICABLE,
+                    projections=("best-effort conversation topic projection",),
+                ),
+            ),
+            SOTService(
+                name="communications.team_inbox_smtp_transport",
+                module="app.services.team_inbox_smtp_inbound",
+                owns=("dedicated SMTP intake process and envelope transport",),
+                depends_on=("communications.team_inbox_observations",),
+                contract=_team_inbox_contract(
+                    service_name="communications.team_inbox_smtp_transport",
+                    concerns=(
+                        (
+                            "dedicated SMTP intake process and envelope transport",
+                            OwnerRole.TRANSPORT,
+                        ),
+                    ),
+                    inputs=(
+                        AuthorityInput(
+                            name="SMTP envelope and RFC822 bytes",
+                            owner="external:customer_mail_server",
+                            kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                            source="Allowed recipient envelope and RFC822 bytes normalized before observation admission.",
+                        ),
+                    ),
+                    transaction_mode=TransactionMode.NOT_APPLICABLE,
+                ),
+            ),
+            SOTService(
+                name="communications.team_inbox_health",
+                module="app.services.team_inbox_health",
+                owns=("verified SMTP probe delivery projection",),
+                depends_on=("communications.team_inbox_threads",),
+                contract=_team_inbox_contract(
+                    service_name="communications.team_inbox_health",
+                    concerns=(
+                        (
+                            "verified SMTP probe delivery projection",
+                            OwnerRole.PROJECTION_WRITER,
+                        ),
+                    ),
+                    inputs=(
+                        AuthorityInput(
+                            name="exact synthetic SMTP message",
+                            owner="communications.team_inbox_threads",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Exact runtime-generated Message-ID and bounded probe marker on the committed Inbox message.",
+                        ),
+                    ),
+                    transaction_mode=TransactionMode.OWNER_MANAGED,
+                    projections=("verified SMTP delivery health evidence",),
                 ),
             ),
             SOTService(
                 name="communications.team_inbox_campaigns",
                 module="app.services.team_inbox_campaigns",
-                owns=(
-                    "campaign-sourced inbox conversation materialization",
-                    "campaign outbound inbox message rows",
+                owns=("campaign-sourced conversation and message materialization",),
+                depends_on=(
+                    "communications.team_inbox_threads",
+                    "communications.team_inbox_outbound_intents",
                 ),
-                depends_on=("communications.team_inbox",),
-                notes=(
-                    "Campaigns decide audience, sequence, and content; inbox "
-                    "rows stay inside the team-inbox family. comms_campaigns "
-                    "requests materialization here instead of writing inbox "
-                    "ORM rows itself."
+                contract=_team_inbox_contract(
+                    service_name="communications.team_inbox_campaigns",
+                    concerns=(
+                        (
+                            "campaign-sourced conversation and message materialization",
+                            OwnerRole.PROJECTION_WRITER,
+                        ),
+                    ),
+                    inputs=(
+                        AuthorityInput(
+                            name="canonical conversation identity",
+                            owner="communications.team_inbox_threads",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Existing channel/subscriber thread or deterministic campaign thread identity.",
+                        ),
+                        AuthorityInput(
+                            name="outbound intent",
+                            owner="communications.team_inbox_outbound_intents",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Stable intent, Notification, channel, content, and delivery state.",
+                        ),
+                    ),
+                    transaction_mode=TransactionMode.PARTICIPANT,
+                    event_types=("team_inbox.campaign_message_materialized.v1",),
+                    projections=(
+                        "campaign conversation and outbound message projection",
+                    ),
                 ),
             ),
         ),
@@ -8429,7 +9202,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "channel alert severity contract",
                 ),
                 depends_on=(
-                    "communications.team_inbox",
+                    "communications.team_inbox_commands",
                     "observability.recording",
                 ),
             ),
@@ -14987,6 +15760,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "billing and access impact projection",
                     "service-change delivery-mode decision",
                     "service-address qualification and field-fee preview",
+                    "vacation-hold duration, annual-limit, cooldown, and resume policy",
                     "subscription command and outcome contracts",
                 ),
                 depends_on=(
@@ -15018,6 +15792,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "subscription command idempotent replay",
                     "structured subscription command outcomes",
                     "persisted relocation qualification and fee evidence",
+                    "vacation-hold and exact customer-lock resume orchestration",
                     "independently committed subscription command batches",
                 ),
                 depends_on=(
@@ -15039,6 +15814,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "service_intent.subscription_lifecycle_scheduling. Admin "
                     "single and bulk adapters delegate here instead of writing "
                     "subscription lifecycle fields directly."
+                    " Customer, admin, and automatic vacation-hold adapters all "
+                    "delegate customer_hold lock creation/resolution here."
                 ),
             ),
             SOTService(
@@ -15070,6 +15847,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "paid relocation fulfillment release",
                     "remote reprovision verification",
                     "verified service-change finalization",
+                    "interrupted execution-chain reconciliation",
                 ),
                 depends_on=(
                     "service_intent.subscription_lifecycle_execution",
@@ -15113,6 +15891,16 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             input_names=(
                                 "canonical provisioning-readiness decision",
                                 "canonical subscription-change execution state",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="interrupted execution-chain reconciliation",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "canonical invoice and payment allocation evidence",
+                                "canonical RADIUS profile observation",
+                                "canonical subscription-change execution state",
+                                "canonical provisioning-readiness decision",
                             ),
                         ),
                     ),
@@ -15199,6 +15987,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "service_intent.subscription_change_execution.remote_access_credential_ambiguous",
                             "service_intent.subscription_change_execution.remote_reprovision_verification_missing",
                             "service_intent.subscription_change_execution.service_change_not_finalizable",
+                            "service_intent.subscription_change_execution.reconciliation_head_invalid",
+                            "service_intent.subscription_change_execution.reconciliation_head_stale",
+                            "service_intent.subscription_change_execution.reconciliation_key_invalid",
+                            "service_intent.subscription_change_execution.reconciliation_key_conflict",
+                            "service_intent.subscription_change_execution.reconciliation_reason_invalid",
+                            "service_intent.subscription_change_execution.reconciliation_not_repairable",
                             "service_intent.subscription_change_execution.invalid_command_context",
                             "service_intent.subscription_change_execution.command_contract_violation",
                             "service_intent.subscription_change_execution.nested_owner_command",
@@ -15236,7 +16030,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                     ),
                     migration=MigrationContract(
-                        state=AuthorityMigrationState.CUTOVER_READY,
+                        state=AuthorityMigrationState.COMPLETE,
                         new_owner="service_intent.subscription_change_execution",
                         old_owner=(
                             "unimplemented handoff after awaiting_payment with no "
@@ -15247,6 +16041,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "Focused tests cover charge creation, exact settlement, "
                             "fulfillment release, RADIUS and field verification gates, "
                             "and replay."
+                            " Reviewed operator repair covers interrupted states,"
+                            " stale-head rejection, and durable idempotent replay."
                         ),
                         cutover_gate=(
                             "Migrations 401-402 backfill deferred execution state; every "

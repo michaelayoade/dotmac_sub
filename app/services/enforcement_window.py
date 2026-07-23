@@ -7,7 +7,7 @@ timezone math.
 Pure decision helper (``window_block_reason``) + thin settings resolvers. The
 celery cadence must fire often enough (hourly) for a window to be effective — a
 daily 01:00-UTC run with a 09:00 window would never act. See
-``docs/designs/BILLING_ENFORCEMENT_WINDOW.md``.
+``docs/FINANCIAL_ACCESS_ENFORCEMENT.md``.
 
 Timezone note: celery beat fires on the celery *app* timezone (UTC today); the
 window comparisons here use the ``scheduler.timezone`` setting (local TZ).
