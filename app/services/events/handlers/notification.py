@@ -90,6 +90,23 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
         subject="About your connection",
         body="Dear {subscriber_name},\n\n{message}",
     ),
+    # Ticket acknowledgement. `customer_ticket_created` was already emitted by
+    # the portal (app/web/customer/routes.py) but no spec consumed it, so a
+    # customer raising a ticket got silence — the top driver of "did you get
+    # my message?" follow-ups. Later movements are notified from
+    # app.services.support (staff reply, status change, resolution).
+    EventType.customer_ticket_created: EventNotificationSpec(
+        template_code="customer_ticket_created",
+        category="support",
+        channels=(NotificationChannel.email,),
+        subject="We received your request ({ticket_number})",
+        body=(
+            "Dear {subscriber_name},\n\n"
+            "We've logged your request as ticket {ticket_number} and the "
+            "support team has it.\n\n"
+            "You can follow it in the portal at any time."
+        ),
+    ),
     EventType.subscriber_created: EventNotificationSpec(
         template_code="subscriber_created",
         category="account",

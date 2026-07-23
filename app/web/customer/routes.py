@@ -444,6 +444,9 @@ def customer_support_create(
             {
                 "ticket_id": str(ticket_id),
                 "subscriber_id": subscriber_lookup,
+                # The acknowledgement template renders {ticket_number}; fall
+                # back to the id so the message never ships an empty ref.
+                "ticket_number": str(ticket.get("number") or ticket_id),
             },
         )
         return RedirectResponse(url=f"/portal/support/{ticket_id}", status_code=303)
