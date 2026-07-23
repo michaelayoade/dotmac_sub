@@ -173,14 +173,24 @@ def resolve_pop_coordinates(
         key = normalize_site_name(site["title"])
         if point is None:
             unmatched.append(
-                {"splynx_id": site["id"], "title": site["title"],
-                 "gps": site["gps"], "reason": "unparseable_gps", "match_key": key}
+                {
+                    "splynx_id": site["id"],
+                    "title": site["title"],
+                    "gps": site["gps"],
+                    "reason": "unparseable_gps",
+                    "match_key": key,
+                }
             )
             continue
         pop = _match_pop(key, pop_index)
         if pop is None:
-            record = {"splynx_id": site["id"], "title": site["title"],
-                      "gps": site["gps"], "reason": "no_pop_match", "match_key": key}
+            record = {
+                "splynx_id": site["id"],
+                "title": site["title"],
+                "gps": site["gps"],
+                "reason": "no_pop_match",
+                "match_key": key,
+            }
             if create_missing:
                 name = clean_pop_name(site["title"])
                 if dry_run:
@@ -190,9 +200,12 @@ def resolve_pop_coordinates(
                 else:
                     new_pop = create_site(
                         db,
-                        {"name": name, "region": detect_region(site["title"]),
-                         "is_active": True,
-                         "notes": f"Imported from Splynx network_sites id={site['id']}"},
+                        {
+                            "name": name,
+                            "region": detect_region(site["title"]),
+                            "is_active": True,
+                            "notes": f"Imported from Splynx network_sites id={site['id']}",
+                        },
                     )
                     pop_index[normalize_site_name(new_pop.name)].append(new_pop)
                     coordinates[new_pop.id] = (point.latitude, point.longitude)
@@ -205,10 +218,17 @@ def resolve_pop_coordinates(
         coordinates[pop.id] = (point.latitude, point.longitude)
         if point.swapped or point.needs_review:
             review.append(
-                {"kind": "pop", "splynx_id": site["id"], "title": site["title"],
-                 "pop_name": pop.name, "gps": site["gps"],
-                 "latitude": point.latitude, "longitude": point.longitude,
-                 "swapped": point.swapped, "needs_review": point.needs_review}
+                {
+                    "kind": "pop",
+                    "splynx_id": site["id"],
+                    "title": site["title"],
+                    "pop_name": pop.name,
+                    "gps": site["gps"],
+                    "latitude": point.latitude,
+                    "longitude": point.longitude,
+                    "swapped": point.swapped,
+                    "needs_review": point.needs_review,
+                }
             )
     return coordinates, created, unmatched, review
 
@@ -434,8 +454,15 @@ def main() -> int:
             _write_csv(
                 args.out / "created_pops.csv",
                 created,
-                ["splynx_id", "title", "gps", "reason", "match_key",
-                 "action", "pop_name"],
+                [
+                    "splynx_id",
+                    "title",
+                    "gps",
+                    "reason",
+                    "match_key",
+                    "action",
+                    "pop_name",
+                ],
             )
             created_count = len(created)
             existing_matches = len(coords) - (0 if args.dry_run else created_count)
