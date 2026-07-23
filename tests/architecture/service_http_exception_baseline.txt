@@ -40,7 +40,6 @@ app/services/comms_campaigns.py
 app/services/connector.py
 app/services/contracts.py
 app/services/crm_api.py
-app/services/crm_portal.py
 app/services/crud.py
 app/services/customer_location_requests.py
 app/services/customer_portal_context.py
@@ -156,12 +155,8 @@ app/services/subscription_changes.py
 app/services/subscription_engine.py
 app/services/subscription_lifecycle.py
 app/services/subscription_lifecycle_commands.py
-app/services/support.py
-app/services/support_automation.py
 app/services/system_jobs.py
 app/services/table_config.py
-app/services/ticket_assignment/admin.py
-app/services/ticket_validation.py
 app/services/tr069.py
 app/services/usage.py
 app/services/user_profile.py
@@ -198,8 +193,6 @@ app/services/web_provisioning_migration.py
 app/services/web_reseller_auth.py
 app/services/web_reseller_routes.py
 app/services/web_subscriber_actions.py
-app/services/web_support_ticket_bulk.py
-app/services/web_support_tickets.py
 app/services/web_system_billing_forms.py
 app/services/web_system_common.py
 app/services/web_system_db_inspector.py

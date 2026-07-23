@@ -167,7 +167,6 @@ app.services.stale_overdue_lock_reconcile
 app.services.subscription_changes
 app.services.subscription_engine
 app.services.subscription_lifecycle_events
-app.services.support_automation
 app.services.system_jobs
 app.services.table_config
 app.services.team_inbox_channel_receive
@@ -175,9 +174,6 @@ app.services.team_inbox_media
 app.services.team_inbox_operations
 app.services.team_inbox_rfc822
 app.services.team_inbox_routing
-app.services.ticket_assignment.admin
-app.services.ticket_assignment.engine
-app.services.ticket_assignment.selectors
 app.services.topology.availability_log
 app.services.topology.live_status
 app.services.topology.lldp_poller

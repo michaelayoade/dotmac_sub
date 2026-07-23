@@ -7,7 +7,8 @@ support.Tickets / TicketComments service so the portal works standalone.
 
 import uuid
 
-from app.models.support import Ticket, TicketCommentAuthorType
+from app.models.sequence import DocumentSequence
+from app.models.support import Ticket, TicketChannel, TicketCommentAuthorType
 from app.schemas.support import TicketCommentCreate
 from app.services import crm_portal
 from app.services import support as support_service
@@ -28,6 +29,34 @@ def test_create_uses_local_ticket_module(db_session, subscriber):
     assert ticket["subscriber_id"] == str(subscriber.id)
     # persisted in the local support_tickets table
     assert db_session.get(Ticket, uuid.UUID(ticket["id"])) is not None
+
+
+def test_create_advances_past_an_existing_imported_ticket_number(
+    db_session, subscriber
+):
+    db_session.add(
+        Ticket(
+            subscriber_id=subscriber.id,
+            number="1",
+            title="Imported ticket",
+            description="Existing external identity",
+            channel=TicketChannel.api,
+        )
+    )
+    db_session.add(DocumentSequence(key="support_ticket", next_value=1))
+    db_session.commit()
+
+    result = crm_portal.handle_ticket_create(
+        db_session,
+        {},
+        str(subscriber.id),
+        "New request",
+        "Please investigate",
+        "normal",
+    )
+
+    assert result["success"] is True, result
+    assert result["ticket"]["ticket_number"] == "2"
 
 
 def test_list_and_detail_round_trip(db_session, subscriber):

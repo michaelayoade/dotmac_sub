@@ -61,6 +61,10 @@ MAX_RATE_TOLERANCE = (
 # devices. The installed routeros_api version does not support socket timeout
 # kwargs, so asyncio.wait_for provides the async-side guard.
 DEVICE_IO_TIMEOUT_SEC = int(os.getenv("BANDWIDTH_DEVICE_IO_TIMEOUT_SEC", "12"))
+# Persistently unreachable routers remain visible in the health snapshot, but
+# do not need a fresh connection attempt every minute.  A bounded exponential
+# backoff protects the poller and logs while still probing recovery.
+FAILURE_BACKOFF_MAX_SECONDS = 15 * 60
 # Bound Redis I/O so a slow/unreachable Redis drops one poll cycle's samples
 # instead of stalling the whole poller (the publish is best-effort telemetry).
 REDIS_IO_TIMEOUT_SEC = int(os.getenv("BANDWIDTH_REDIS_IO_TIMEOUT_SEC", "5"))
@@ -373,9 +377,10 @@ class MikroTikConnection:
         # Back off exponentially based on failures
         if self._consecutive_failures == 0:
             return True
-        backoff_seconds = 2**self._consecutive_failures
-        if backoff_seconds > 60:
-            backoff_seconds = 60
+        backoff_seconds = min(
+            2**self._consecutive_failures,
+            FAILURE_BACKOFF_MAX_SECONDS,
+        )
         # Compare against the last attempt (success or failure). Using
         # _last_connected alone would skip backoff entirely for devices that
         # have never connected — producing a 1-Hz retry storm.

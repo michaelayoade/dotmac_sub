@@ -24,6 +24,9 @@ from app.services import subscriber as subscriber_service
 from app.services import web_catalog_subscriptions as core
 from app.services.audit_helpers import build_audit_activities
 from app.services.common import coerce_uuid
+from app.services.prepaid_funding_reconstruction import (
+    PrepaidFundingBaselineMissingError,
+)
 from app.services.subscription_lifecycle import (
     SubscriptionCommandKind,
     SubscriptionCommandOutcomeStatus,
@@ -48,6 +51,11 @@ from app.services.subscription_lifecycle_schedules import (
 )
 
 logger = logging.getLogger(__name__)
+
+SERVICE_CHANGE_FINANCIAL_POSITION_MESSAGE = (
+    "The verified prepaid funding position is still under review. "
+    "Complete the reviewed reconstruction before changing this service."
+)
 
 
 _CREATE_LIFECYCLE_COMMANDS = {
@@ -120,6 +128,15 @@ def preview_lifecycle_command_response(
             reason=reason,
         )
         preview = preview_subscription_command(db, command)
+    except PrepaidFundingBaselineMissingError:
+        return (
+            {
+                "status": "unavailable",
+                "message": SERVICE_CHANGE_FINANCIAL_POSITION_MESSAGE,
+                "error_code": "financial_position_unavailable",
+            },
+            409,
+        )
     except (SubscriptionLifecycleError, ValueError) as exc:
         missing = "not found" in str(exc).lower()
         return (
@@ -202,6 +219,19 @@ def execute_lifecycle_command_response(
             command,
             actor_id=actor_id,
             actor_type=AuditActorType.user if actor_id else AuditActorType.system,
+        )
+    except PrepaidFundingBaselineMissingError:
+        return (
+            {
+                "status": "unavailable",
+                "message": SERVICE_CHANGE_FINANCIAL_POSITION_MESSAGE,
+                "previous_head": expected_head,
+                "current_head": expected_head,
+                "artifact_ids": [],
+                "error_code": "financial_position_unavailable",
+                "replayed": False,
+            },
+            409,
         )
     except (SubscriptionLifecycleError, ValueError) as exc:
         missing = "not found" in str(exc).lower()

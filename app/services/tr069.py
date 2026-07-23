@@ -47,6 +47,11 @@ from app.services.network.ont_desired_config import (
     desired_config,
     get_desired_config_value,
 )
+from app.services.network.ont_serials import (
+    ActiveOntSerialIndex,
+    build_active_ont_serial_index,
+    find_unique_active_ont_by_serial,
+)
 from app.services.network.ont_status import (
     apply_status_snapshot,
     resolve_acs_online_window_minutes_for_model,
@@ -441,12 +446,20 @@ def _resolve_default_acs_server(db: Session) -> Tr069AcsServer | None:
     )
 
 
-def _find_matching_ont_for_serial(db: Session, serial: str | None):
+def _find_matching_ont_for_serial(
+    db: Session,
+    serial: str | None,
+    *,
+    serial_index: ActiveOntSerialIndex | None = None,
+) -> OntUnit | None:
     if not serial:
         return None
-    from app.services.network.ont_serials import find_unique_active_ont_by_serial
 
-    ont = find_unique_active_ont_by_serial(db, serial)
+    ont = (
+        serial_index.find_unique(serial)
+        if serial_index is not None
+        else find_unique_active_ont_by_serial(db, serial)
+    )
     if ont is None:
         logger.info(
             "TR-069 serial %s did not resolve to a unique active ONT; leaving unlinked",
@@ -460,11 +473,16 @@ def _link_unassigned_inform_device_to_matching_ont(
     device: Tr069CpeDevice,
     *,
     serial: str | None,
+    serial_index: ActiveOntSerialIndex | None = None,
 ) -> None:
     """Link an existing unassigned TR-069 device to a unique ONT serial match."""
     if getattr(device, "ont_unit_id", None):
         return
-    ont = _find_matching_ont_for_serial(db, serial or device.serial_number)
+    ont = _find_matching_ont_for_serial(
+        db,
+        serial or device.serial_number,
+        serial_index=serial_index,
+    )
     if ont is None:
         return
     link_tr069_device_to_ont(db, device, ont, acs_server_id=device.acs_server_id)
@@ -1077,6 +1095,11 @@ class CpeDevices(ListResponseMixin):
         except GenieACSError as e:
             raise HTTPException(status_code=502, detail=f"GenieACS error: {e}")
 
+        # A full ACS sync may process thousands of devices.  Resolve ONT serial
+        # identity from one authoritative snapshot instead of querying every
+        # active ONT once per CPE (and again in the auto-link pass).
+        serial_index = build_active_ont_serial_index(db)
+
         created, updated = 0, 0
         datetime.now(UTC)
 
@@ -1185,6 +1208,7 @@ class CpeDevices(ListResponseMixin):
                 db,
                 existing,
                 serial=serial_number,
+                serial_index=serial_index,
             )
 
             # Flush each batch so a large inventory doesn't hold one long write
@@ -1248,8 +1272,6 @@ class CpeDevices(ListResponseMixin):
         serial_updated = 0
         status_snapshot_updated = 0
         try:
-            from app.models.network import OntUnit
-
             unlinked_devices = (
                 db.query(Tr069CpeDevice)
                 .filter(
@@ -1267,14 +1289,10 @@ class CpeDevices(ListResponseMixin):
                 if not cpe_dev.serial_number:
                     continue
                 cpe_serial = str(cpe_dev.serial_number).strip()
-                from app.services.network.ont_serials import (
-                    find_unique_active_ont_by_serial,
-                )
-
-                ont = find_unique_active_ont_by_serial(db, cpe_serial)
+                ont = serial_index.find_unique(cpe_serial)
 
                 if not ont and cpe_dev.ont_unit_id:
-                    ont = db.get(OntUnit, cpe_dev.ont_unit_id)
+                    ont = serial_index.get(cpe_dev.ont_unit_id)
 
                 if ont:
                     previous_ont_id = cpe_dev.ont_unit_id

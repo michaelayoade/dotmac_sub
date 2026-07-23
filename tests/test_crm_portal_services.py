@@ -352,6 +352,9 @@ def test_handle_ticket_create_normalizes_unknown_priority(monkeypatch) -> None:
         return _ticket(id="ticket-1", subscriber_id=sid)
 
     monkeypatch.setattr("app.services.support.Tickets.create", _create)
+    monkeypatch.setattr(
+        crm_portal.db_session_adapter, "release_read_transaction", lambda db: None
+    )
 
     result = crm_portal.handle_ticket_create(
         Mock(), {}, sid, "Slow internet", "Please investigate.", "not-a-priority"
@@ -430,11 +433,14 @@ def test_handle_ticket_comment_success(monkeypatch) -> None:
     )
     captured: dict[str, object] = {}
 
-    def _create(_db, ticket, payload, actor_id=None):
+    def _create(_db, ticket_id, payload, actor_id=None):
         captured["body"] = payload.body
         captured["is_internal"] = payload.is_internal
 
-    monkeypatch.setattr("app.services.support.TicketComments.create", _create)
+    monkeypatch.setattr("app.services.support.Tickets.create_comment", _create)
+    monkeypatch.setattr(
+        crm_portal.db_session_adapter, "release_read_transaction", lambda db: None
+    )
 
     result = crm_portal.handle_ticket_comment(
         db, {}, ["sub-1"], "ticket-1", "Please update me."
@@ -443,7 +449,7 @@ def test_handle_ticket_comment_success(monkeypatch) -> None:
     assert result == {"success": True}
     assert captured["body"] == "Please update me."
     assert captured["is_internal"] is False
-    db.commit.assert_called_once()
+    db.commit.assert_not_called()
 
 
 def test_handle_ticket_comment_returns_error_on_failure(monkeypatch) -> None:
@@ -455,7 +461,10 @@ def test_handle_ticket_comment_returns_error_on_failure(monkeypatch) -> None:
     def _boom(db, ticket, payload, actor_id=None):
         raise RuntimeError("db down")
 
-    monkeypatch.setattr("app.services.support.TicketComments.create", _boom)
+    monkeypatch.setattr("app.services.support.Tickets.create_comment", _boom)
+    monkeypatch.setattr(
+        crm_portal.db_session_adapter, "release_read_transaction", lambda db: None
+    )
 
     result = crm_portal.handle_ticket_comment(
         Mock(), {}, ["sub-1"], "ticket-1", "Please update me."

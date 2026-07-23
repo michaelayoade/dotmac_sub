@@ -176,10 +176,6 @@ sessions.enforcement
 sessions.radius_accounting_health
 sessions.radius_reconciliation
 subscriber.growth_reports
-support.ticket_bulk_commands
-support.ticket_configuration
-support.ticket_lifecycle
-support.ticket_work_order_handoff
 ui.action_form_contracts
 ui.audit_events_list_projection
 ui.bulk_action_contracts
@@ -200,8 +196,6 @@ ui.project_list_projection
 ui.reseller_list_projection
 ui.status_presentation
 ui.subscriber_list_projection
-ui.support_ticket_bulk_action_projection
-ui.support_ticket_list_projection
 ui.work_order_list_projection
 vpn.key_material
 vpn.routing_readiness

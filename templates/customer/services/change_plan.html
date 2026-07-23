@@ -43,6 +43,18 @@
     </div>
     {% endif %}
 
+    {% if financial_position_unavailable %}
+    <div data-testid="plan-change-financial-unavailable" class="rounded-xl border border-amber-200 bg-amber-50 p-5 shadow-sm dark:border-amber-900/40 dark:bg-amber-900/20">
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+                <h2 class="text-base font-semibold text-amber-900 dark:text-amber-100">Service change temporarily unavailable</h2>
+                <p class="mt-1 text-sm text-amber-800 dark:text-amber-200">Your verified prepaid funding position is still under review. We will not estimate or assume a balance. Support can verify the account evidence and help you continue.</p>
+            </div>
+            <a href="/portal/support/new" class="inline-flex shrink-0 items-center justify-center rounded-lg bg-amber-700 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-800">Contact support</a>
+        </div>
+    </div>
+    {% endif %}
+
     {% if insufficient_funding %}
     <div class="rounded-xl border border-amber-200 bg-amber-50 p-5 dark:border-amber-900/40 dark:bg-amber-900/20">
         <h2 class="text-sm font-semibold text-amber-900 dark:text-amber-100">Additional Prepaid Funding Required</h2>
@@ -106,7 +118,7 @@
     </div>
     {% endif %}
 
-    {% if not in_arrears %}
+    {% if not in_arrears and not financial_position_unavailable %}
     <form action="/portal/services/{{ subscription.id }}/change" method="POST" class="space-y-6" @submit.prevent="confirmAndSubmit($event)">
         {% include "components/forms/csrf_input.html" %}
         <input type="hidden" name="preview_fingerprint" :value="changeQuote?.preview_fingerprint || ''">
