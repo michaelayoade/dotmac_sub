@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from app.models.subscriber import Address, AddressType
-from app.services.service_address import pick_service_address, service_address
+from app.services.service_address import (
+    address_parts,
+    pick_service_address,
+    service_address,
+)
 
 
 def _add(db, subscriber_id, **kw):
@@ -67,3 +71,22 @@ class TestPickServiceAddress:
             is_primary=False,
         )
         assert pick_service_address([only]) is only
+
+
+class TestAddressParts:
+    def test_prefers_canonical_address(self, db_session, subscriber):
+        _add(
+            db_session,
+            subscriber.id,
+            address_type=AddressType.service,
+            is_primary=True,
+            city="AddrCity",
+        )
+        db_session.refresh(subscriber)
+        assert address_parts(subscriber).city == "AddrCity"
+
+    def test_falls_back_to_inline(self, db_session, subscriber):
+        subscriber.city = "InlineCity"
+        db_session.commit()
+        db_session.refresh(subscriber)
+        assert address_parts(subscriber).city == "InlineCity"

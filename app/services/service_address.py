@@ -11,11 +11,12 @@ the service ``Address``; this is how everyone else reads it.
 from __future__ import annotations
 
 import uuid
+from typing import NamedTuple
 
 from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription, SubscriptionStatus
-from app.models.subscriber import Address, AddressType
+from app.models.subscriber import Address, AddressType, Subscriber
 
 
 def service_address(db: Session, subscriber_id: str | uuid.UUID) -> Address | None:
@@ -84,3 +85,32 @@ def pick_service_address(addresses: list[Address] | None) -> Address | None:
         )
     )
     return items[0]
+
+
+class AddressParts(NamedTuple):
+    address_line1: str | None
+    address_line2: str | None
+    city: str | None
+    region: str | None
+    postal_code: str | None
+    country_code: str | None
+
+
+def address_parts(subscriber: Subscriber) -> AddressParts:
+    """Display address components for a subscriber, from the canonical Address.
+
+    Reads the subscriber's service ``Address`` (via its loaded ``addresses``),
+    falling back to the legacy inline ``subscriber.*`` columns only while those
+    still exist. The single place readers depend on inline address; when the
+    columns are dropped, only this fallback is removed. Requires
+    ``subscriber.addresses`` to be loaded (lazy-loads otherwise).
+    """
+    source = pick_service_address(getattr(subscriber, "addresses", None)) or subscriber
+    return AddressParts(
+        address_line1=getattr(source, "address_line1", None),
+        address_line2=getattr(source, "address_line2", None),
+        city=getattr(source, "city", None),
+        region=getattr(source, "region", None),
+        postal_code=getattr(source, "postal_code", None),
+        country_code=getattr(source, "country_code", None),
+    )
