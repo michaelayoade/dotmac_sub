@@ -145,7 +145,7 @@ jobs:
           # Use 3.12's sys.monitoring coverage backend — much lower instrumentation
           # overhead than the legacy trace function. Unit tests only.
           COVERAGE_CORE: sysmon
-        run: poetry run pytest tests/ --ignore=tests/integration --ignore=tests/e2e -n auto --durations=25 --cov=app --cov-report=xml -q
+        run: make test-ci
 
       - name: Upload coverage
         if: github.event_name == 'pull_request'
@@ -339,7 +339,7 @@ jobs:
       - name: Run integration tests
         # No `|| true`: these are the module flow gates (native Phase 3 paths
         # on real PostgreSQL). If they fail, the build fails.
-        run: poetry run pytest tests/integration/ -v --tb=short -o "addopts="
+        run: make test-integration
 
   publish-image:
     name: Publish Docker Image

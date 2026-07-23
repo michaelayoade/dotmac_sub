@@ -1,4 +1,4 @@
-.PHONY: help test lint type-check format security check lint-file type-check-file check-file migrate dev docker-up docker-down docker-logs worker beat coverage clean prod-build prod-pin prod-deploy prod-up prod-down prod-logs prod-restart prod-smtp-inbound-up prod-smtp-inbound-probe prod-migrate prod-check bump-version prod-ghcr-pin prod-ghcr-deploy deploy
+.PHONY: help test test-v test-cov test-ci test-fast test-integration test-architecture test-architecture-serial test-e2e lint type-check format security check lint-file type-check-file check-file migrate dev docker-up docker-down docker-logs worker beat coverage clean prod-build prod-pin prod-deploy prod-up prod-down prod-logs prod-restart prod-smtp-inbound-up prod-smtp-inbound-probe prod-migrate prod-check bump-version prod-ghcr-pin prod-ghcr-deploy deploy
 
 # Production runs IMMUTABLE images: the base docker-compose.yml has no source
 # bind-mounts and pulls code only from the baked image (built by `prod-build`).
@@ -56,17 +56,27 @@ bump-version: ## Bump app version (usage: make bump-version BUMP=patch or VERSIO
 
 # ─── Testing ──────────────────────────────────────────────
 
-test: ## Run test suite
-	poetry run pytest tests/ -q
+UNIT_TEST_PATHS := tests/ --ignore=tests/integration --ignore=tests/e2e
+UNIT_TEST_WORKERS ?= auto
+UNIT_TEST_ARGS = $(UNIT_TEST_PATHS) -n $(UNIT_TEST_WORKERS) --durations=25
 
-test-v: ## Run test suite (verbose)
-	poetry run pytest tests/ -v
+test: ## Run the parallel non-integration suite (override UNIT_TEST_WORKERS as needed)
+	poetry run pytest $(UNIT_TEST_ARGS) -q
 
-test-cov: ## Run tests with coverage report
-	poetry run pytest tests/ --cov=app --cov-report=term-missing
+test-v: ## Run the parallel non-integration suite (verbose)
+	poetry run pytest $(UNIT_TEST_ARGS) -v
 
-test-fast: ## Run tests, stop on first failure
-	poetry run pytest tests/ -x --tb=short
+test-cov: ## Run the parallel non-integration suite with terminal coverage
+	poetry run pytest $(UNIT_TEST_ARGS) --cov=app --cov-report=term-missing -q
+
+test-ci: ## Run the canonical CI unit suite with XML coverage
+	poetry run pytest $(UNIT_TEST_ARGS) --cov=app --cov-report=xml -q
+
+test-fast: ## Run the parallel non-integration suite, stopping on first failure
+	poetry run pytest $(UNIT_TEST_ARGS) -x --tb=short -q
+
+test-integration: ## Run the PostgreSQL integration gate
+	poetry run pytest tests/integration/ -v --tb=short -o "addopts="
 
 test-architecture: ## Run architecture guards with the measured four-worker default
 	poetry run pytest tests/architecture -q -n 4
