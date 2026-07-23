@@ -386,19 +386,26 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Allocation preview', style: theme.textTheme.titleMedium),
+                  Text(
+                    'Allocation preview',
+                    style: theme.textTheme.titleMedium,
+                  ),
                   const SizedBox(height: 12),
                   Text(
-                    'Requested deposit: ${Fmt.money(_preview!.requestedDeposit, page.currency)}',
+                    'Requested deposit: '
+                    '${Fmt.money(_preview!.requestedDeposit, page.currency)}',
                   ),
                   Text(
-                    'Applied to invoices: ${Fmt.money(_preview!.totalAppliedToInvoices, page.currency)}',
+                    'Applied to invoices: '
+                    '${Fmt.money(_preview!.totalAppliedToInvoices, page.currency)}',
                   ),
                   Text(
-                    'Invoice amount left: ${Fmt.money(_preview!.totalOutstandingAfterApplication, page.currency)}',
+                    'Invoice amount left: '
+                    '${Fmt.money(_preview!.totalOutstandingAfterApplication, page.currency)}',
                   ),
                   Text(
-                    'Remaining account credit: ${Fmt.money(_preview!.remainingAccountCredit, page.currency)}',
+                    'Remaining account credit: '
+                    '${Fmt.money(_preview!.remainingAccountCredit, page.currency)}',
                   ),
                   if (_preview!.invoiceApplications.isNotEmpty) ...[
                     const SizedBox(height: 12),
@@ -406,7 +413,8 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
                       Text(
                         '${item.invoiceNumber ?? item.invoiceId}: '
                         '${Fmt.money(item.amountApplied, item.currency)} applied, '
-                        '${Fmt.money(item.outstandingAfterApplication, item.currency)} outstanding',
+                        '${Fmt.money(item.outstandingAfterApplication, item.currency)} '
+                        'outstanding',
                       ),
                   ],
                 ],

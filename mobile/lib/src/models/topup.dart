@@ -190,7 +190,8 @@ class TopupPreview {
         currency: json['currency'] as String? ?? 'NGN',
         currentAccountCredit: asDouble(json['current_account_credit']),
         requestedDeposit: asDouble(json['requested_deposit']),
-        eligibleInvoiceCount: (json['eligible_invoice_count'] as num?)?.toInt() ?? 0,
+        eligibleInvoiceCount:
+            (json['eligible_invoice_count'] as num?)?.toInt() ?? 0,
         invoiceApplications: (json['invoice_applications'] as List? ?? const [])
             .cast<Map<String, dynamic>>()
             .map(TopupPreviewInvoiceApplication.fromJson)
