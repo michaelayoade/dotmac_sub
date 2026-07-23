@@ -38,6 +38,7 @@
 
     <form method="post" action="{{ action_url }}" class="space-y-4">
         {% include "components/forms/csrf_input.html" %}
+        <input type="hidden" name="draft_idempotency_key" value="{{ draft_idempotency_key }}">
 
         <div class="grid gap-4 lg:grid-cols-3">
             <div class="space-y-4 lg:col-span-2">
@@ -58,14 +59,11 @@
                             </div>
                             <div>
                                 <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Status</label>
-                                {% set invoice_status = invoice.status.value if invoice and invoice.status else 'draft' %}
-                                <select name="status" x-model="status"
-                                        class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                                    <option value="draft" {% if invoice_status == 'draft' %}selected{% endif %}>Draft</option>
-                                    <option value="issued" {% if invoice_status == 'issued' %}selected{% endif %}>Issued</option>
-                                    <option value="overdue" {% if invoice_status == 'overdue' %}selected{% endif %}>Overdue</option>
-                                </select>
-                                <p class="mt-1 text-xs text-slate-500">Paid, partially paid, void, and written-off states are managed by their exact owner evidence workflows.</p>
+                                <input type="hidden" name="status" value="draft">
+                                <div class="rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-700 dark:border-slate-600 dark:bg-slate-900/40 dark:text-slate-300">
+                                    Draft
+                                </div>
+                                <p class="mt-1 text-xs text-slate-500">Issue, send, void, and write-off are separate actions after the complete draft is saved.</p>
                             </div>
                         </div>
 
@@ -301,23 +299,10 @@
                         <div class="border-b border-slate-200 px-4 py-3 dark:border-slate-700">
                             <h3 class="text-sm font-semibold text-slate-900 dark:text-white">After Creating</h3>
                         </div>
-                        <div class="space-y-3 p-4">
-                            <label class="flex items-start gap-3 cursor-pointer">
-                                <input type="checkbox" name="issue_immediately" value="1"
-                                       class="mt-0.5 h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
-                                <div>
-                                    <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Issue immediately</span>
-                                    <p class="text-xs text-slate-500 dark:text-slate-400">Set status to Issued instead of Draft</p>
-                                </div>
-                            </label>
-                            <label class="flex items-start gap-3 cursor-pointer">
-                                <input type="checkbox" name="send_notification" value="1"
-                                       class="mt-0.5 h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
-                                <div>
-                                    <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Send email notification</span>
-                                    <p class="text-xs text-slate-500 dark:text-slate-400">Email invoice to customer on creation</p>
-                                </div>
-                            </label>
+                        <div class="p-4">
+                            <p class="text-sm text-slate-600 dark:text-slate-300">
+                                The complete invoice and all line items are saved as one draft. Review the totals, then issue or send it from the invoice page.
+                            </p>
                         </div>
                     </div>
                     {% endif %}

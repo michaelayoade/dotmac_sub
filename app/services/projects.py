@@ -38,15 +38,16 @@ from __future__ import annotations
 import enum as enum_module
 import html
 import logging
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, ClassVar, TypeVar
 from uuid import UUID
 
-from fastapi import HTTPException
 from sqlalchemy import exists, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.sql.elements import ColumnElement
 
+from app.models.audit import AuditActorType, AuditEvent
 from app.models.domain_settings import SettingDomain
 from app.models.project import (
     Project,
@@ -72,6 +73,7 @@ from app.models.ticket_workflow import (
     SlaClock,
     SlaClockStatus,
     SlaPolicy,
+    TicketAssignmentRule,
     WorkflowEntityType,
 )
 from app.schemas.project import (
@@ -95,15 +97,262 @@ from app.services.common import (
     ensure_exists,
     validate_enum,
 )
+from app.services.db_session_adapter import db_session_adapter
+from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.numbering import generate_number
+from app.services.owner_commands import (
+    CommandContext,
+    OwnerCommandDefinition,
+    execute_owner_command,
+)
 from app.services.response import ListResponseMixin
 from app.services.staff_notifications import queue_staff_email, queue_staff_push
 
 logger = logging.getLogger(__name__)
 
 _EnumT = TypeVar("_EnumT", bound=enum_module.Enum)
+
+_PROJECT_RECONCILE = OwnerCommandDefinition(
+    owner="operations.project_lifecycle",
+    concern="project derived-state reconciliation",
+    name="reconcile_project_projection",
+)
+_PROJECT_MUTATION = OwnerCommandDefinition(
+    owner="operations.project_lifecycle",
+    concern="Project and ProjectTask identity and lifecycle",
+    name="mutate_project_aggregate",
+)
+
+
+def _project_command_context(
+    *, action: str, actor: UUID | str | None, aggregate_id: UUID | str | None = None
+) -> CommandContext:
+    return CommandContext.system(
+        actor=str(actor or "system:projects-adapter"),
+        scope="operations:projects",
+        reason=action,
+        idempotency_key=(
+            f"{action}:{aggregate_id}" if aggregate_id is not None else None
+        ),
+    )
+
+
+def _stage_project_audit(
+    db: Session,
+    *,
+    context: CommandContext,
+    action: str,
+    entity_type: str,
+    entity_id: UUID,
+    changed_fields: list[str] | None = None,
+) -> None:
+    actor = context.actor.strip()
+    db.add(
+        AuditEvent(
+            actor_type=(
+                AuditActorType.system
+                if actor.startswith("system:")
+                else AuditActorType.user
+            ),
+            actor_id=actor,
+            action=action,
+            entity_type=entity_type,
+            entity_id=str(entity_id),
+            request_id=str(context.correlation_id),
+            metadata_={
+                "command_id": str(context.command_id),
+                "reason": context.reason,
+                "changed_fields": sorted(changed_fields or []),
+            },
+        )
+    )
+    db.flush()
+
+
+@dataclass(frozen=True)
+class ProjectProjectionRepairOutcome:
+    project_id: UUID
+    task_count: int
+    repaired_sla_clocks: int
+    repaired_primary_assignees: int
+
+
+def reconcile_project_projection(
+    db: Session,
+    *,
+    project_id: UUID,
+    context: CommandContext,
+) -> ProjectProjectionRepairOutcome:
+    """Idempotently repair synchronous Project-derived state."""
+
+    db_session_adapter.release_read_transaction(db)
+
+    def operation() -> ProjectProjectionRepairOutcome:
+        project = db.scalar(
+            select(Project).where(Project.id == project_id).with_for_update()
+        )
+        if project is None:
+            raise SalesProjectLifecycleError(
+                "operations.project_lifecycle.not_found", "Project not found"
+            )
+        before_project_clock = _latest_project_sla_clock(db, project.id)
+        _sync_project_sla_clock(db, project)
+        db.flush()
+        repaired_clocks = int(
+            before_project_clock is None
+            and _latest_project_sla_clock(db, project.id) is not None
+        )
+        tasks = db.scalars(
+            select(ProjectTask)
+            .where(ProjectTask.project_id == project.id)
+            .order_by(ProjectTask.id)
+            .with_for_update()
+        ).all()
+        repaired_assignees = 0
+        for task in tasks:
+            before_task_clock = _latest_task_sla_clock(db, task.id)
+            _sync_task_sla_clock(db, task)
+            db.flush()
+            repaired_clocks += int(
+                before_task_clock is None
+                and _latest_task_sla_clock(db, task.id) is not None
+            )
+            normalized = _normalize_assignee_ids(
+                [str(row.person_id) for row in task.assignees]
+            )
+            if (
+                task.assigned_to_person_id
+                and str(task.assigned_to_person_id) not in normalized
+            ):
+                normalized.insert(0, str(task.assigned_to_person_id))
+                _sync_project_task_assignees(db, task, normalized)
+                repaired_assignees += 1
+        db.flush()
+        return ProjectProjectionRepairOutcome(
+            project_id=project.id,
+            task_count=len(tasks),
+            repaired_sla_clocks=repaired_clocks,
+            repaired_primary_assignees=repaired_assignees,
+        )
+
+    return execute_owner_command(
+        db,
+        definition=_PROJECT_RECONCILE,
+        context=context,
+        operation=operation,
+    )
+
+
+def apply_project_assignment_rule(
+    db: Session,
+    *,
+    project: Project,
+    rule: TicketAssignmentRule,
+    authoritative_creation: bool,
+) -> dict[str, object] | None:
+    """Apply a policy decision inside the Project owner's transaction.
+
+    The shared ticket-assignment engine evaluates and orders rules but delegates
+    every authoritative Project and ProjectTask write to this flush-only helper.
+    """
+    config = rule.match_config if isinstance(rule.match_config, dict) else {}
+    assignee = str(config.get("assignee_person_id") or "").strip() or None
+    target = str(config.get("assignment_target") or "technician").strip().lower()
+    has_scope = any(
+        config.get(key)
+        for key in (
+            "entity_types",
+            "ticket_types",
+            "project_types",
+            "regions",
+            "service_team_ids",
+            "tags_any",
+        )
+    )
+    if authoritative_creation:
+        if assignee or not has_scope:
+            return None
+        changed = False
+        if rule.team_id and project.service_team_id != rule.team_id:
+            project.service_team_id = rule.team_id
+            changed = True
+        for field in (
+            "manager_person_id",
+            "project_manager_person_id",
+            "assistant_manager_person_id",
+        ):
+            if getattr(project, field):
+                setattr(project, field, None)
+                changed = True
+        if changed:
+            db.flush()
+        return {
+            "assigned": bool(rule.team_id),
+            "project_id": str(project.id),
+            "rule_id": str(rule.id),
+            "rule_name": rule.name,
+            "strategy": "group" if rule.team_id else None,
+            "assignment_target": "team" if rule.team_id else "rule_scope",
+            "fallback_service_team_id": str(rule.team_id) if rule.team_id else None,
+            "reason": "group_assigned"
+            if rule.team_id
+            else "individual_assignment_suppressed_by_rule",
+        }
+    if not assignee:
+        return None
+    assignee_uuid = coerce_uuid(assignee)
+    changed = False
+    if target == "technical_supervisor":
+        for field in ("manager_person_id", "project_manager_person_id"):
+            if not getattr(project, field):
+                setattr(project, field, assignee_uuid)
+                changed = True
+    elif target == "site_coordinator":
+        if not project.assistant_manager_person_id:
+            project.assistant_manager_person_id = assignee_uuid
+            changed = True
+    elif target == "technician":
+        tasks = db.scalars(
+            select(ProjectTask)
+            .where(ProjectTask.project_id == project.id)
+            .where(ProjectTask.is_active.is_(True))
+            .order_by(ProjectTask.id)
+        ).all()
+        for task in tasks:
+            if not task.assigned_to_person_id:
+                task.assigned_to_person_id = assignee_uuid
+                changed = True
+            if not any(str(row.person_id) == assignee for row in task.assignees):
+                task.assignees.append(
+                    ProjectTaskAssignee(task_id=task.id, person_id=assignee_uuid)
+                )
+                changed = True
+    else:
+        return {
+            "assigned": False,
+            "project_id": str(project.id),
+            "rule_id": str(rule.id),
+            "rule_name": rule.name,
+            "assignment_target": target,
+            "assignee_person_id": assignee,
+            "reason": "unsupported_assignment_target",
+        }
+    if changed:
+        db.flush()
+    return {
+        "assigned": changed,
+        "project_id": str(project.id),
+        "rule_id": str(rule.id),
+        "rule_name": rule.name,
+        "strategy": "direct",
+        "assignment_target": target,
+        "candidate_count": 1,
+        "assignee_person_id": assignee,
+        "reason": "assigned" if changed else "already_assigned",
+    }
+
 
 FIBER_INSTALLATION_STAGE_ORDER: tuple[str, ...] = (
     "project_plan",
@@ -138,6 +387,24 @@ _PROJECT_TERMINAL_STATUSES = {
     ProjectStatus.completed.value,
     ProjectStatus.canceled.value,
 }
+_PROJECT_STATUS_TRANSITIONS: dict[str, frozenset[str]] = {
+    status.value: frozenset(
+        candidate.value
+        for candidate in ProjectStatus
+        if candidate.value not in {status.value}
+    )
+    for status in ProjectStatus
+    if status.value not in _PROJECT_TERMINAL_STATUSES
+}
+_PROJECT_TASK_STATUS_TRANSITIONS: dict[str, frozenset[str]] = {
+    status.value: frozenset(
+        candidate.value
+        for candidate in ProjectTaskStatus
+        if candidate.value not in {status.value}
+    )
+    for status in ProjectTaskStatus
+    if status.value not in _TASK_TERMINAL_STATUSES
+}
 
 
 class SalesProjectLifecycleError(ValueError):
@@ -147,6 +414,37 @@ class SalesProjectLifecycleError(ValueError):
         super().__init__(message)
         self.code = code
         self.kind = kind
+
+
+class ProjectServiceError(DomainError):
+    """Transport-neutral Projects boundary error."""
+
+
+def _project_error(code: str, message: str, **details: object) -> ProjectServiceError:
+    return ProjectServiceError(
+        code=f"operations.project_lifecycle.{code}",
+        message=message,
+        details=details,
+    )
+
+
+def _require_status_transition(
+    *,
+    current: str,
+    requested: str,
+    transitions: dict[str, frozenset[str]],
+    aggregate: str,
+) -> None:
+    if current == requested:
+        return
+    if requested not in transitions.get(current, frozenset()):
+        raise _project_error(
+            "invalid_transition",
+            f"Invalid {aggregate} status transition",
+            aggregate=aggregate,
+            current_status=current,
+            requested_status=requested,
+        )
 
 
 def _sales_project_enum(value: str, enum_cls: type[_EnumT], label: str) -> _EnumT:
@@ -1072,7 +1370,7 @@ def _notify_project_roles_created_in_app(db: Session, project: Project) -> None:
             body="\n".join(body_lines),
         )
 
-    db.commit()
+    db.flush()
 
 
 # ── reference guards ──────────────────────────────────────────────────────────
@@ -1083,13 +1381,13 @@ def _ensure_staff_uuid(person_id: str) -> None:
     try:
         coerce_uuid(str(person_id))
     except (ValueError, TypeError) as exc:
-        raise HTTPException(status_code=400, detail="Invalid person id") from exc
+        raise _project_error("invalid_input", "Invalid person id") from exc
 
 
 def _ensure_project_template(db: Session, template_id: str) -> ProjectTemplate:
     template = db.get(ProjectTemplate, coerce_uuid(template_id))
     if not template:
-        raise HTTPException(status_code=404, detail="Project template not found")
+        raise _project_error("not_found", "Project template not found")
     return template
 
 
@@ -1100,13 +1398,13 @@ def _ensure_subscriber(db: Session, subscriber_id: str) -> None:
 def _ensure_lead(db: Session, lead_id: str) -> None:
     lead = db.get(Lead, coerce_uuid(lead_id))
     if not lead:
-        raise HTTPException(status_code=404, detail="Lead not found")
+        raise _project_error("not_found", "Lead not found")
 
 
 def _ensure_ticket(db: Session, ticket_id) -> None:
     ticket = db.get(Ticket, coerce_uuid(str(ticket_id)))
     if not ticket:
-        raise HTTPException(status_code=404, detail="Ticket not found")
+        raise _project_error("not_found", "Ticket not found")
 
 
 # ── assignee handling ─────────────────────────────────────────────────────────
@@ -1316,7 +1614,9 @@ def _notify_project_task_assigned(
         )
 
 
-def _maybe_auto_assign_project(db: Session, project: Project):
+def _maybe_auto_assign_project(
+    db: Session, project: Project, *, context: CommandContext
+):
     """Apply workflow rule-based project assignments when enabled.
 
     The shared workflow control keeps its established external key
@@ -1327,40 +1627,33 @@ def _maybe_auto_assign_project(db: Session, project: Project):
     if not enabled:
         return None
 
-    from app.services.audit_helpers import log_audit_event
     from app.services.ticket_assignment import auto_assign_project
 
     actor_id = (
         str(project.created_by_person_id) if project.created_by_person_id else None
     )
     results = auto_assign_project(
-        db, str(project.id), trigger="create", actor_person_id=actor_id
+        db,
+        str(project.id),
+        trigger="create",
+        actor_person_id=actor_id,
+        context=context,
     )
     for result in results:
         action = (
             "project_auto_assigned" if result.assigned else "project_auto_assign_noop"
         )
-        log_audit_event(
+        _stage_project_audit(
             db,
-            None,
+            context=context,
             action=action,
             entity_type="project",
-            entity_id=str(project.id),
-            actor_id=actor_id,
-            metadata={
-                "assigned": bool(result.assigned),
-                "rule_id": result.rule_id,
-                "rule_name": result.rule_name,
-                "strategy": result.strategy,
-                "assignment_target": result.assignment_target,
-                "candidate_count": result.candidate_count,
-                "assignee_person_id": result.assignee_person_id,
-                "reason": result.reason,
-            },
+            entity_id=project.id,
+            changed_fields=["assignment"] if result.assigned else [],
         )
     # The engine flushes; persist assignments + audit rows here (the CRM
     # engine committed per rule).
-    db.commit()
+    db.flush()
     return results
 
 
@@ -1449,7 +1742,23 @@ class Projects(ListResponseMixin):
         )
 
     @staticmethod
-    def create(db: Session, payload: ProjectCreate):
+    def create(
+        db: Session,
+        payload: ProjectCreate,
+        *,
+        context: CommandContext | None = None,
+    ):
+        if context is None:
+            context = _project_command_context(
+                action="create_project", actor=payload.created_by_person_id
+            )
+            db_session_adapter.release_read_transaction(db)
+            return execute_owner_command(
+                db,
+                definition=_PROJECT_MUTATION,
+                context=context,
+                operation=lambda: Projects.create(db, payload, context=context),
+            )
         if payload.created_by_person_id:
             _ensure_staff_uuid(str(payload.created_by_person_id))
         if payload.owner_person_id:
@@ -1526,12 +1835,12 @@ class Projects(ListResponseMixin):
         db.add(project)
         db.flush()
         _sync_project_sla_clock(db, project)
-        db.commit()
+        db.flush()
         db.refresh(project)
 
         if not payload.project_template_id:
             _seed_fiber_installation_tasks(db, project)
-            db.commit()
+            db.flush()
             db.refresh(project)
 
         customer_name = _subscriber_name(project.subscriber)
@@ -1544,9 +1853,9 @@ class Projects(ListResponseMixin):
                 project_id=str(project.id),
                 template_id=str(payload.project_template_id),
             )
-            _maybe_auto_assign_project(db, project)
+            _maybe_auto_assign_project(db, project, context=context)
         else:
-            _maybe_auto_assign_project(db, project)
+            _maybe_auto_assign_project(db, project, context=context)
 
         # Emit project created event after core project setup so failed
         # handlers cannot prevent template task creation or other intrinsic
@@ -1564,17 +1873,15 @@ class Projects(ListResponseMixin):
                 "customer_name": customer_name,
             },
         )
+        _stage_project_audit(
+            db,
+            context=context,
+            action="create",
+            entity_type="project",
+            entity_id=project.id,
+        )
 
-        # In-app notifications for internal project roles. Project has already
-        # been committed above, so failures here won't roll back creation.
-        try:
-            _notify_project_roles_created_in_app(db, project)
-        except Exception:  # noqa: BLE001 - advisory
-            db.rollback()
-            logger.exception(
-                "project_created_in_app_notifications_failed project_id=%s",
-                project.id,
-            )
+        _notify_project_roles_created_in_app(db, project)
 
         return project
 
@@ -1582,16 +1889,16 @@ class Projects(ListResponseMixin):
     def get(db: Session, project_id: str):
         project = db.get(Project, coerce_uuid(project_id))
         if not project:
-            raise HTTPException(status_code=404, detail="Project not found")
+            raise _project_error("not_found", "Project not found")
         return project
 
     @staticmethod
     def get_by_number(db: Session, number: str):
         if not number:
-            raise HTTPException(status_code=404, detail="Project not found")
+            raise _project_error("not_found", "Project not found")
         project = db.query(Project).filter(Project.number == number).first()
         if not project:
-            raise HTTPException(status_code=404, detail="Project not found")
+            raise _project_error("not_found", "Project not found")
         return project
 
     @staticmethod
@@ -1683,6 +1990,7 @@ class Projects(ListResponseMixin):
                 "priority": Project.priority,
             },
         )
+        query = query.order_by(Project.id.asc())
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
@@ -1755,7 +2063,6 @@ class Projects(ListResponseMixin):
     @staticmethod
     def update_gantt_date(db: Session, project_id: str, field: str, value: str) -> dict:
         """Update a project date through the canonical project writer."""
-        Projects.get(db, project_id)
         field_map = {
             "due_date": "due_at",
             "start_date": "start_at",
@@ -1765,11 +2072,11 @@ class Projects(ListResponseMixin):
             "completed_at": "completed_at",
         }
         if field not in field_map:
-            raise HTTPException(status_code=400, detail="Invalid field")
+            raise _project_error("invalid_input", "Invalid field", field=field)
         try:
             target_day = date.fromisoformat(value)
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail="Invalid date") from exc
+            raise _project_error("invalid_input", "Invalid date", field=field) from exc
         Projects.update(
             db,
             project_id,
@@ -1788,33 +2095,103 @@ class Projects(ListResponseMixin):
     @staticmethod
     def update_status(db: Session, project_id: str, new_status: str) -> dict:
         """Move a Kanban card through the canonical project lifecycle writer."""
-        Projects.get(db, project_id)
         try:
             payload = ProjectUpdate(status=ProjectStatus(new_status))
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail="Invalid status") from exc
+            raise _project_error("invalid_transition", "Invalid status") from exc
         Projects.update(db, project_id, payload)
         return {"status": "ok"}
 
     @staticmethod
-    def delete(db: Session, project_id: str):
+    def delete(
+        db: Session,
+        project_id: str,
+        *,
+        actor_id: UUID | None = None,
+        context: CommandContext | None = None,
+    ):
         """Soft delete a project."""
-        project = db.get(Project, coerce_uuid(project_id))
+        if context is None:
+            context = _project_command_context(
+                action="delete_project", actor=actor_id, aggregate_id=project_id
+            )
+            db_session_adapter.release_read_transaction(db)
+            return execute_owner_command(
+                db,
+                definition=_PROJECT_MUTATION,
+                context=context,
+                operation=lambda: Projects.delete(
+                    db,
+                    project_id,
+                    actor_id=actor_id,
+                    context=context,
+                ),
+            )
+        project = db.scalar(
+            select(Project)
+            .where(Project.id == coerce_uuid(project_id))
+            .with_for_update()
+        )
         if not project:
-            raise HTTPException(status_code=404, detail="Project not found")
+            raise _project_error("not_found", "Project not found")
         project.is_active = False
-        db.commit()
+        _stage_project_audit(
+            db,
+            context=context,
+            action="delete",
+            entity_type="project",
+            entity_id=project.id,
+            changed_fields=["is_active"],
+        )
+        db.flush()
 
     @staticmethod
-    def update(db: Session, project_id: str, payload: ProjectUpdate):
-        project = db.get(Project, coerce_uuid(project_id))
+    def update(
+        db: Session,
+        project_id: str,
+        payload: ProjectUpdate,
+        *,
+        actor_id: UUID | None = None,
+        context: CommandContext | None = None,
+    ):
+        if context is None:
+            context = _project_command_context(
+                action="update_project",
+                actor=actor_id or payload.created_by_person_id,
+                aggregate_id=project_id,
+            )
+            db_session_adapter.release_read_transaction(db)
+            return execute_owner_command(
+                db,
+                definition=_PROJECT_MUTATION,
+                context=context,
+                operation=lambda: Projects.update(
+                    db,
+                    project_id,
+                    payload,
+                    actor_id=actor_id,
+                    context=context,
+                ),
+            )
+        project = db.scalar(
+            select(Project)
+            .where(Project.id == coerce_uuid(project_id))
+            .with_for_update()
+        )
         if not project:
-            raise HTTPException(status_code=404, detail="Project not found")
+            raise _project_error("not_found", "Project not found")
         previous_status = project.status
         previous_template_id = (
             str(project.project_template_id) if project.project_template_id else None
         )
         data = _model_data(payload.model_dump(exclude_unset=True))
+        if data.get("status"):
+            _require_status_transition(
+                current=project.status,
+                requested=str(data["status"]),
+                transitions=_PROJECT_STATUS_TRANSITIONS,
+                aggregate="project",
+            )
         if data.get("created_by_person_id"):
             _ensure_staff_uuid(str(data["created_by_person_id"]))
         if data.get("owner_person_id"):
@@ -1861,7 +2238,7 @@ class Projects(ListResponseMixin):
         ):
             project.completed_at = datetime.now(UTC)
         _sync_project_sla_clock(db, project)
-        db.commit()
+        db.flush()
         db.refresh(project)
 
         # Emit events based on status changes
@@ -1925,8 +2302,15 @@ class Projects(ListResponseMixin):
                 ProjectTemplateTasks.replace_project_tasks(
                     db=db, project_id=str(project.id), template_id=new_template_id
                 )
-        # Persist notifications/events queued after the initial update commit.
-        db.commit()
+        _stage_project_audit(
+            db,
+            context=context,
+            action="update",
+            entity_type="project",
+            entity_id=project.id,
+            changed_fields=changed_fields,
+        )
+        db.flush()
         return project
 
 
@@ -1944,7 +2328,7 @@ class ProjectTemplates(ListResponseMixin):
     def get(db: Session, template_id: str):
         template = db.get(ProjectTemplate, coerce_uuid(template_id))
         if not template:
-            raise HTTPException(status_code=404, detail="Project template not found")
+            raise _project_error("not_found", "Project template not found")
         return template
 
     @staticmethod
@@ -1980,7 +2364,7 @@ class ProjectTemplates(ListResponseMixin):
     def update(db: Session, template_id: str, payload: ProjectTemplateUpdate):
         template = db.get(ProjectTemplate, coerce_uuid(template_id))
         if not template:
-            raise HTTPException(status_code=404, detail="Project template not found")
+            raise _project_error("not_found", "Project template not found")
         data = _model_data(payload.model_dump(exclude_unset=True))
         for key, value in data.items():
             setattr(template, key, value)
@@ -1992,7 +2376,7 @@ class ProjectTemplates(ListResponseMixin):
     def delete(db: Session, template_id: str):
         template = db.get(ProjectTemplate, coerce_uuid(template_id))
         if not template:
-            raise HTTPException(status_code=404, detail="Project template not found")
+            raise _project_error("not_found", "Project template not found")
         template.is_active = False
         db.commit()
 
@@ -2025,9 +2409,7 @@ class ProjectTemplateTasks(ListResponseMixin):
     def get(db: Session, task_id: str):
         task = db.get(ProjectTemplateTask, coerce_uuid(task_id))
         if not task:
-            raise HTTPException(
-                status_code=404, detail="Project template task not found"
-            )
+            raise _project_error("not_found", "Project template task not found")
         return task
 
     @staticmethod
@@ -2064,9 +2446,7 @@ class ProjectTemplateTasks(ListResponseMixin):
     def update(db: Session, task_id: str, payload: ProjectTemplateTaskUpdate):
         task = db.get(ProjectTemplateTask, coerce_uuid(task_id))
         if not task:
-            raise HTTPException(
-                status_code=404, detail="Project template task not found"
-            )
+            raise _project_error("not_found", "Project template task not found")
         data = _model_data(payload.model_dump(exclude_unset=True))
         for key, value in data.items():
             setattr(task, key, value)
@@ -2078,9 +2458,7 @@ class ProjectTemplateTasks(ListResponseMixin):
     def delete(db: Session, task_id: str):
         task = db.get(ProjectTemplateTask, coerce_uuid(task_id))
         if not task:
-            raise HTTPException(
-                status_code=404, detail="Project template task not found"
-            )
+            raise _project_error("not_found", "Project template task not found")
         task.is_active = False
         db.query(ProjectTemplateTaskDependency).filter(
             ProjectTemplateTaskDependency.template_task_id == task.id
@@ -2108,7 +2486,7 @@ class ProjectTemplateTasks(ListResponseMixin):
             ProjectTask.template_task_id.isnot(None),
         ).delete(synchronize_session=False)
         if not template_id:
-            db.commit()
+            db.flush()
             return
         template_tasks = (
             db.query(ProjectTemplateTask)
@@ -2189,7 +2567,7 @@ class ProjectTemplateTasks(ListResponseMixin):
         )
         _calculate_task_dates(task_obj_map, dep_graph, project_start)
 
-        db.commit()
+        db.flush()
 
 
 def _calculate_task_dates(
@@ -2234,14 +2612,30 @@ def _calculate_task_dates(
 
 class ProjectTasks(ListResponseMixin):
     @staticmethod
-    def create(db: Session, payload: ProjectTaskCreate):
+    def create(
+        db: Session,
+        payload: ProjectTaskCreate,
+        *,
+        context: CommandContext | None = None,
+    ):
+        if context is None:
+            context = _project_command_context(
+                action="create_project_task", actor=payload.created_by_person_id
+            )
+            db_session_adapter.release_read_transaction(db)
+            return execute_owner_command(
+                db,
+                definition=_PROJECT_MUTATION,
+                context=context,
+                operation=lambda: ProjectTasks.create(db, payload, context=context),
+            )
         project = db.get(Project, coerce_uuid(str(payload.project_id)))
         if not project:
-            raise HTTPException(status_code=404, detail="Project not found")
+            raise _project_error("not_found", "Project not found")
         if payload.parent_task_id:
             parent = db.get(ProjectTask, coerce_uuid(str(payload.parent_task_id)))
             if not parent:
-                raise HTTPException(status_code=404, detail="Parent task not found")
+                raise _project_error("not_found", "Parent task not found")
         if payload.assigned_to_person_id:
             _ensure_staff_uuid(str(payload.assigned_to_person_id))
         if payload.created_by_person_id:
@@ -2294,7 +2688,7 @@ class ProjectTasks(ListResponseMixin):
             task.completed_at = datetime.now(UTC)
         _sync_task_sla_clock(db, task)
         _sync_project_task_assignees(db, task, assignee_ids)
-        db.commit()
+        db.flush()
         db.refresh(task)
         if task.assigned_to_person_id:
             assigned_to = db.get(SystemUser, task.assigned_to_person_id)
@@ -2309,22 +2703,41 @@ class ProjectTasks(ListResponseMixin):
                     assigned_to=assigned_to,
                     created_by=created_by,
                 )
+        _stage_project_audit(
+            db,
+            context=context,
+            action="create",
+            entity_type="project_task",
+            entity_id=task.id,
+        )
+        emit_event(
+            db,
+            EventType.custom,
+            {
+                "name": "project_task.created",
+                "task_id": str(task.id),
+                "project_id": str(project.id),
+                "status": task.status,
+                "priority": task.priority,
+            },
+            subscriber_id=project.subscriber_id,
+        )
         return task
 
     @staticmethod
     def get(db: Session, task_id: str):
         task = db.get(ProjectTask, coerce_uuid(task_id))
         if not task:
-            raise HTTPException(status_code=404, detail="Project task not found")
+            raise _project_error("not_found", "Project task not found")
         return task
 
     @staticmethod
     def get_by_number(db: Session, number: str):
         if not number:
-            raise HTTPException(status_code=404, detail="Project task not found")
+            raise _project_error("not_found", "Project task not found")
         task = db.query(ProjectTask).filter(ProjectTask.number == number).first()
         if not task:
-            raise HTTPException(status_code=404, detail="Project task not found")
+            raise _project_error("not_found", "Project task not found")
         return task
 
     @staticmethod
@@ -2388,13 +2801,50 @@ class ProjectTasks(ListResponseMixin):
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
-    def update(db: Session, task_id: str, payload: ProjectTaskUpdate):
-        task = db.get(ProjectTask, coerce_uuid(task_id))
+    def update(
+        db: Session,
+        task_id: str,
+        payload: ProjectTaskUpdate,
+        *,
+        actor_id: UUID | None = None,
+        context: CommandContext | None = None,
+    ):
+        if context is None:
+            context = _project_command_context(
+                action="update_project_task",
+                actor=actor_id or payload.created_by_person_id,
+                aggregate_id=task_id,
+            )
+            db_session_adapter.release_read_transaction(db)
+            return execute_owner_command(
+                db,
+                definition=_PROJECT_MUTATION,
+                context=context,
+                operation=lambda: ProjectTasks.update(
+                    db,
+                    task_id,
+                    payload,
+                    actor_id=actor_id,
+                    context=context,
+                ),
+            )
+        task = db.scalar(
+            select(ProjectTask)
+            .where(ProjectTask.id == coerce_uuid(task_id))
+            .with_for_update()
+        )
         if not task:
-            raise HTTPException(status_code=404, detail="Project task not found")
+            raise _project_error("not_found", "Project task not found")
         previous_status = task.status
         changed_fields: list[str] = []
         data = _model_data(payload.model_dump(exclude_unset=True))
+        if data.get("status"):
+            _require_status_transition(
+                current=task.status,
+                requested=str(data["status"]),
+                transitions=_PROJECT_TASK_STATUS_TRANSITIONS,
+                aggregate="project_task",
+            )
         assignee_ids: list[str] | None = None
         if "assigned_to_person_ids" in payload.model_fields_set:
             assignee_ids = [
@@ -2409,11 +2859,11 @@ class ProjectTasks(ListResponseMixin):
         if "project_id" in data:
             project = db.get(Project, coerce_uuid(str(data["project_id"])))
             if not project:
-                raise HTTPException(status_code=404, detail="Project not found")
+                raise _project_error("not_found", "Project not found")
         if data.get("parent_task_id"):
             parent = db.get(ProjectTask, coerce_uuid(str(data["parent_task_id"])))
             if not parent:
-                raise HTTPException(status_code=404, detail="Parent task not found")
+                raise _project_error("not_found", "Parent task not found")
         if data.get("assigned_to_person_id"):
             _ensure_staff_uuid(str(data["assigned_to_person_id"]))
         if data.get("created_by_person_id"):
@@ -2428,7 +2878,7 @@ class ProjectTasks(ListResponseMixin):
             task.completed_at = datetime.now(UTC)
         _sync_task_sla_clock(db, task)
         _sync_project_task_assignees(db, task, assignee_ids)
-        db.commit()
+        db.flush()
         db.refresh(task)
         if (
             "assigned_to_person_ids" in payload.model_fields_set
@@ -2454,7 +2904,7 @@ class ProjectTasks(ListResponseMixin):
             project = db.get(Project, task.project_id)
             if project:
                 _notify_customer_task_completed(db, project, task)
-                db.commit()
+                db.flush()
             emit_event(
                 db,
                 EventType.custom,
@@ -2469,15 +2919,59 @@ class ProjectTasks(ListResponseMixin):
                 {"name": "project_task.updated", **event_payload},
                 subscriber_id=project.subscriber_id if project else None,
             )
+        _stage_project_audit(
+            db,
+            context=context,
+            action="update",
+            entity_type="project_task",
+            entity_id=task.id,
+            changed_fields=changed_fields,
+        )
         return task
 
     @staticmethod
-    def delete(db: Session, task_id: str):
-        task = db.get(ProjectTask, coerce_uuid(task_id))
+    def delete(
+        db: Session,
+        task_id: str,
+        *,
+        actor_id: UUID | None = None,
+        context: CommandContext | None = None,
+    ):
+        if context is None:
+            context = _project_command_context(
+                action="delete_project_task",
+                actor=actor_id,
+                aggregate_id=task_id,
+            )
+            db_session_adapter.release_read_transaction(db)
+            return execute_owner_command(
+                db,
+                definition=_PROJECT_MUTATION,
+                context=context,
+                operation=lambda: ProjectTasks.delete(
+                    db,
+                    task_id,
+                    actor_id=actor_id,
+                    context=context,
+                ),
+            )
+        task = db.scalar(
+            select(ProjectTask)
+            .where(ProjectTask.id == coerce_uuid(task_id))
+            .with_for_update()
+        )
         if not task:
-            raise HTTPException(status_code=404, detail="Project task not found")
+            raise _project_error("not_found", "Project task not found")
         task.is_active = False
-        db.commit()
+        _stage_project_audit(
+            db,
+            context=context,
+            action="delete",
+            entity_type="project_task",
+            entity_id=task.id,
+            changed_fields=["is_active"],
+        )
+        db.flush()
 
 
 class ProjectTaskComments(ListResponseMixin):
@@ -2485,7 +2979,7 @@ class ProjectTaskComments(ListResponseMixin):
     def create(db: Session, payload: ProjectTaskCommentCreate):
         task = db.get(ProjectTask, coerce_uuid(str(payload.task_id)))
         if not task:
-            raise HTTPException(status_code=404, detail="Project task not found")
+            raise _project_error("not_found", "Project task not found")
         if payload.author_person_id:
             _ensure_staff_uuid(str(payload.author_person_id))
         comment = ProjectTaskComment(**payload.model_dump())
@@ -2520,7 +3014,7 @@ class ProjectComments(ListResponseMixin):
     def create(db: Session, payload: ProjectCommentCreate):
         project = db.get(Project, coerce_uuid(str(payload.project_id)))
         if not project:
-            raise HTTPException(status_code=404, detail="Project not found")
+            raise _project_error("not_found", "Project not found")
         if payload.author_person_id:
             _ensure_staff_uuid(str(payload.author_person_id))
         comment = ProjectComment(**payload.model_dump())
@@ -2533,7 +3027,7 @@ class ProjectComments(ListResponseMixin):
     def update(db: Session, comment_id: str, payload: ProjectCommentUpdate):
         comment = db.get(ProjectComment, coerce_uuid(comment_id))
         if not comment:
-            raise HTTPException(status_code=404, detail="Comment not found")
+            raise _project_error("not_found", "Comment not found")
         data = payload.model_dump(exclude_unset=True)
         if "body" in data and data["body"] is None:
             data.pop("body")

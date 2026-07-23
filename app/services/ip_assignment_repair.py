@@ -5,7 +5,7 @@ whose ``IPAssignment`` set disagrees with the served IPv4 (the
 ``subscription.ipv4_address`` column, which equals the external radreply
 Framed-IP for every sub). The served value is what the customer routes on right
 now, so it is the operational truth; the IPAM set is the drifted, neglected
-side. See ``docs/designs/SERVICE_LIFECYCLE_BUNDLE_INTEGRITY.md`` §5b.
+side. See ``docs/FINANCIAL_ACCESS_ENFORCEMENT.md``.
 
 This module makes the *ledger* reflect that reality — it NEVER changes a served
 IP, so it is non-customer-impacting:

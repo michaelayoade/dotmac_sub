@@ -1,10 +1,10 @@
 """Derive and apply the RADIUS access state.
 
-``derive_access_state`` is the pure policy mapping.
-``set_subscription_access_state`` — write app DB ``access_state`` and expose
-the subscriber aggregate consumed by the external projection owner.
+``derive_access_state`` is the pure policy mapping. Persisted
+``Subscription.access_state`` is written only by
+``access.subscription_lifecycle``.
 
-See ``docs/radius_state_refactor/phase0_state_model.md``.
+See ``docs/FINANCIAL_ACCESS_ENFORCEMENT.md``.
 """
 
 from __future__ import annotations
@@ -24,8 +24,6 @@ from app.models.catalog import (
 from app.models.enforcement_lock import AccessRestrictionMode
 from app.models.subscriber import Subscriber
 from app.services.common import coerce_uuid
-
-AccessStateWriteResult = dict[str, int | str | None]
 
 
 def stage_subscription_radius_profile(
@@ -133,6 +131,10 @@ def derive_access_state(
     policy resolved a persisted restriction to that effective mode.
     """
     if subscription_status in _ACTIVE_STATUSES:
+        if restriction_mode == AccessRestrictionMode.captive:
+            return AccessState.captive
+        if restriction_mode == AccessRestrictionMode.hard_reject or hard_reject:
+            return AccessState.suspended
         return AccessState.active
     if subscription_status in _BLOCKED_STATUSES:
         if restriction_mode is None:
@@ -205,67 +207,3 @@ def derive_subscriber_access_state(
         if candidate in states:
             return candidate
     return None
-
-
-def set_subscription_access_state(
-    db: Session,
-    subscription_id: str,
-    state: AccessState | None,
-) -> AccessStateWriteResult:
-    """Set ``subscription.access_state`` and derive the subscriber aggregate.
-
-    Two writes happen:
-
-      1. ``subscription.access_state = state`` (per-sub column write).
-         Reflects what this single subscription thinks its state should
-         be. Used for observability/debugging.
-
-      2. The subscriber aggregate is returned to callers for observability.
-         ``radius_population`` derives and projects the configured access group
-         after the source transaction is durable.
-
-    Returns counts for observability:
-      {"credentials": n, "external_rows_written": n,
-       "external_rows_deleted": n, "aggregate_state": str | None}
-    """
-    sub = db.get(Subscription, coerce_uuid(subscription_id))
-    if sub is None:
-        return {
-            "credentials": 0,
-            "external_rows_written": 0,
-            "external_rows_deleted": 0,
-            "aggregate_state": None,
-        }
-
-    # 1. Per-sub column write
-    new_value = state.value if state is not None else None
-    if sub.access_state != new_value:
-        sub.access_state = new_value
-        db.flush()
-
-    # 2. Subscriber aggregate is returned for observability. External group
-    # projection is owned by radius_population and is requested by the caller
-    # after the source-state transaction is durable.
-    aggregate_state = derive_subscriber_access_state(db, sub.subscriber_id)
-
-    credentials = list(
-        db.scalars(
-            select(AccessCredential).where(
-                AccessCredential.subscriber_id == sub.subscriber_id
-            )
-        ).all()
-    )
-    if not credentials:
-        return {
-            "credentials": 0,
-            "external_rows_written": 0,
-            "external_rows_deleted": 0,
-            "aggregate_state": aggregate_state.value if aggregate_state else None,
-        }
-
-    return {
-        "credentials": len(credentials),
-        "external_rows_written": 0,
-        "external_rows_deleted": 0,
-        "aggregate_state": aggregate_state.value if aggregate_state else None,
-    }

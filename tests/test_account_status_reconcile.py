@@ -19,12 +19,13 @@ def _subscriber(db, email, status=SubscriberStatus.blocked):
     return s
 
 
-def _sub(db, subscriber, offer, status):
+def _sub(db, subscriber, offer, status, *, access_state=None):
     sub = Subscription(
         subscriber_id=subscriber.id,
         offer_id=offer.id,
         status=status,
         login=f"login-{subscriber.email.split('@')[0]}",
+        access_state=access_state,
     )
     db.add(sub)
     db.flush()
@@ -64,7 +65,13 @@ def test_finder_includes_mixed_status_when_one_service_is_active(
 
 def test_finder_excludes_already_active_subscriber(db_session, catalog_offer):
     s = _subscriber(db_session, "fine@e.com", status=SubscriberStatus.active)
-    _sub(db_session, s, catalog_offer, SubscriptionStatus.active)
+    _sub(
+        db_session,
+        s,
+        catalog_offer,
+        SubscriptionStatus.active,
+        access_state="active",
+    )
     db_session.commit()
 
     ids = find_account_projection_drift_ids(db_session)
@@ -74,7 +81,13 @@ def test_finder_excludes_already_active_subscriber(db_session, catalog_offer):
 def test_finder_excludes_explicit_account_override(db_session, catalog_offer):
     s = _subscriber(db_session, "admin-blocked@e.com")
     s.lifecycle_override_status = SubscriberStatus.blocked
-    _sub(db_session, s, catalog_offer, SubscriptionStatus.active)
+    _sub(
+        db_session,
+        s,
+        catalog_offer,
+        SubscriptionStatus.active,
+        access_state="suspended",
+    )
     db_session.commit()
 
     ids = find_account_projection_drift_ids(db_session)
@@ -82,8 +95,59 @@ def test_finder_excludes_explicit_account_override(db_session, catalog_offer):
     assert str(s.id) not in ids
     assert account_eligibility(db_session, str(s.id)) == (
         False,
-        "explicit_lifecycle_override",
+        "already_converged",
     )
+
+
+def test_finder_repairs_child_drift_under_explicit_override(
+    db_session,
+    catalog_offer,
+):
+    s = _subscriber(db_session, "admin-child-drift@e.com")
+    s.lifecycle_override_status = SubscriberStatus.blocked
+    subscription = _sub(
+        db_session,
+        s,
+        catalog_offer,
+        SubscriptionStatus.active,
+        access_state="active",
+    )
+    db_session.commit()
+
+    assert str(s.id) in find_account_projection_drift_ids(db_session)
+    result = reconcile_account(db_session, str(s.id))
+
+    assert result.changed is False
+    assert result.access_states_changed == 1
+    assert subscription.access_state == "suspended"
+
+
+def test_finder_repairs_account_active_projection_drift(
+    db_session,
+    catalog_offer,
+):
+    subscriber = _subscriber(
+        db_session,
+        "account-active-drift@e.com",
+        status=SubscriberStatus.active,
+    )
+    subscriber.is_active = False
+    subscription = _sub(
+        db_session,
+        subscriber,
+        catalog_offer,
+        SubscriptionStatus.active,
+        access_state="active",
+    )
+    db_session.commit()
+
+    assert str(subscriber.id) in find_account_projection_drift_ids(db_session)
+    result = reconcile_account(db_session, str(subscriber.id))
+
+    assert result.changed is False
+    assert result.account_active_changed is True
+    assert subscriber.is_active is True
+    assert subscription.access_state == "active"
 
 
 def test_reconcile_account_flips_to_active(db_session, catalog_offer):
@@ -122,13 +186,19 @@ def test_eligibility_classifies_reasons(db_session, catalog_offer):
     _sub(db_session, mixed, catalog_offer, SubscriptionStatus.active)
     _sub(db_session, mixed, catalog_offer, SubscriptionStatus.suspended)
     active = _subscriber(db_session, "act@e.com", status=SubscriberStatus.active)
-    _sub(db_session, active, catalog_offer, SubscriptionStatus.active)
+    _sub(
+        db_session,
+        active,
+        catalog_offer,
+        SubscriptionStatus.active,
+        access_state="active",
+    )
     db_session.commit()
 
     assert account_eligibility(db_session, str(blocked_ok.id)) == (True, None)
     assert account_eligibility(db_session, str(mixed.id)) == (True, None)
     ok, reason = account_eligibility(db_session, str(active.id))
-    assert ok is False and "parent_already_permissive" in reason
+    assert ok is False and reason == "already_converged"
 
 
 def test_account_ids_filters_ineligible_and_skips(db_session, catalog_offer):
@@ -136,7 +206,13 @@ def test_account_ids_filters_ineligible_and_skips(db_session, catalog_offer):
     _sub(db_session, blocked_ok, catalog_offer, SubscriptionStatus.active)
     overridden = _subscriber(db_session, "override@e.com")
     overridden.lifecycle_override_status = SubscriberStatus.blocked
-    _sub(db_session, overridden, catalog_offer, SubscriptionStatus.active)
+    _sub(
+        db_session,
+        overridden,
+        catalog_offer,
+        SubscriptionStatus.active,
+        access_state="suspended",
+    )
     db_session.commit()
 
     # Targeted apply over both — the explicit override remains authoritative.
@@ -151,7 +227,7 @@ def test_account_ids_filters_ineligible_and_skips(db_session, catalog_offer):
     assert summary.changed == 1
     assert len(summary.skipped) == 1
     assert summary.skipped[0]["account_id"] == str(overridden.id)
-    assert summary.skipped[0]["reason"] == "explicit_lifecycle_override"
+    assert summary.skipped[0]["reason"] == "already_converged"
     assert db_session.get(Subscriber, overridden.id).status == SubscriberStatus.blocked
     assert db_session.get(Subscriber, blocked_ok.id).status == SubscriberStatus.active
 

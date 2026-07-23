@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from unittest.mock import patch
+
 from tests.test_scheduled_tasks_registered import _declared_scheduled_task_names
 
 TASK = "app.tasks.radius.run_enforcement_reconciler"
@@ -25,10 +28,32 @@ def test_enforcement_reconciler_has_reliability_contract() -> None:
 
 
 def test_enforcement_reconciler_is_permanent() -> None:
-    from app.services.scheduler import PERMANENT_CUSTOMER_LIFECYCLE_TASKS
+    from app.services.scheduler import PERMANENT_LIFECYCLE_TASKS
 
-    assert TASK in PERMANENT_CUSTOMER_LIFECYCLE_TASKS
+    assert TASK in PERMANENT_LIFECYCLE_TASKS
 
 
 def test_radius_refresh_transport_is_not_scheduled_independently() -> None:
     assert RADIUS_REFRESH_TASK not in _declared_scheduled_task_names()
+
+
+def test_enforcement_reconciler_is_single_flight() -> None:
+    from app.tasks.radius import run_enforcement_reconciler
+
+    @contextmanager
+    def _already_running(*args, **kwargs):
+        yield False
+
+    with (
+        patch(
+            "app.tasks.radius.postgres_session_advisory_lock",
+            _already_running,
+        ),
+        patch("app.tasks.radius._run_enforcement_reconciler") as run,
+        patch("app.services.task_heartbeat.record_skip") as record_skip,
+    ):
+        result = run_enforcement_reconciler.run()
+
+    assert result == {"skipped_already_running": 1}
+    run.assert_not_called()
+    record_skip.assert_called_once_with(TASK)

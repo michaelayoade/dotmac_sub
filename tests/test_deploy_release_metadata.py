@@ -17,11 +17,17 @@ def _run_deploy(
     *,
     revision: str = REVISION,
     health_success: bool = True,
-) -> tuple[subprocess.CompletedProcess[str], Path]:
+    proxy_ready: bool = True,
+    migration_lock_failures: int = 0,
+) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
     deploy_dir = tmp_path / "deploy"
     bin_dir = tmp_path / "bin"
     deploy_dir.mkdir()
     bin_dir.mkdir()
+    docker_log = tmp_path / "docker.log"
+    docker_log.write_text("")
+    migration_attempts = tmp_path / "migration-attempts"
+    migration_attempts.write_text("0")
     (deploy_dir / ".env").write_text(
         "APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-old0000\n"
         "GIT_SHA=old0000000000000000000000000000000000000\n"
@@ -30,10 +36,31 @@ def _run_deploy(
         bin_dir / "docker",
         f"""#!/usr/bin/env bash
 set -eu
+printf '%s\\n' "$*" >> "$DOCKER_LOG"
 if [[ "$1 $2" == "image inspect" ]]; then
   printf '%s\\n' "{revision}"
 fi
+if [[ "$*" == *"alembic upgrade heads"* ]]; then
+  attempts="$(cat "$MIGRATION_ATTEMPTS")"
+  if ((attempts < {migration_lock_failures})); then
+    printf '%s\\n' "$((attempts + 1))" > "$MIGRATION_ATTEMPTS"
+    echo "canceling statement due to lock timeout" >&2
+    exit 1
+  fi
+fi
 exit 0
+""",
+    )
+    nginx_config = (
+        "upstream dotmac_sub_app {\n  server 127.0.0.1:18001 backup;\n}"
+        if proxy_ready
+        else "upstream dotmac_sub_app {\n  server 127.0.0.1:8001;\n}"
+    )
+    _write_executable(
+        bin_dir / "nginx",
+        f"""#!/usr/bin/env bash
+set -eu
+printf '%s\\n' "{nginx_config}"
 """,
     )
     curl_exit_code = 0 if health_success else 1
@@ -51,6 +78,10 @@ exit 0
         "SKIP_BACKUP": "1",
         "IMAGE_RETAIN_COUNT": "0",
         "HEALTH_TIMEOUT_SECONDS": "0" if not health_success else "180",
+        "CANDIDATE_DRAIN_SECONDS": "0",
+        "MIGRATION_RETRY_SECONDS": "0",
+        "DOCKER_LOG": str(docker_log),
+        "MIGRATION_ATTEMPTS": str(migration_attempts),
     }
     result = subprocess.run(
         ["bash", str(repo_root / "scripts/deploy.sh"), "sha-32eebc1"],
@@ -60,11 +91,11 @@ exit 0
         capture_output=True,
         check=False,
     )
-    return result, deploy_dir / ".env"
+    return result, deploy_dir / ".env", docker_log
 
 
 def test_deploy_pins_git_sha_from_image_revision(tmp_path: Path) -> None:
-    result, env_file = _run_deploy(tmp_path)
+    result, env_file, _docker_log = _run_deploy(tmp_path)
 
     assert result.returncode == 0, result.stderr
     env_text = env_file.read_text()
@@ -75,7 +106,7 @@ def test_deploy_pins_git_sha_from_image_revision(tmp_path: Path) -> None:
 def test_deploy_rejects_tag_revision_mismatch_without_changing_env(
     tmp_path: Path,
 ) -> None:
-    result, env_file = _run_deploy(tmp_path, revision="f" * 40)
+    result, env_file, _docker_log = _run_deploy(tmp_path, revision="f" * 40)
 
     assert result.returncode != 0
     assert "IMAGE INTEGRITY FAILURE" in result.stderr
@@ -85,10 +116,69 @@ def test_deploy_rejects_tag_revision_mismatch_without_changing_env(
 
 
 def test_deploy_restores_image_and_git_sha_after_health_failure(tmp_path: Path) -> None:
-    result, env_file = _run_deploy(tmp_path, health_success=False)
+    result, env_file, _docker_log = _run_deploy(tmp_path, health_success=False)
 
     assert result.returncode != 0
-    assert "Health gate FAILED" in result.stdout
+    assert "Warm candidate health gate failed" in result.stderr
     env_text = env_file.read_text()
     assert "APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-old0000" in env_text
     assert "GIT_SHA=old0000000000000000000000000000000000000" in env_text
+
+
+def test_deploy_verifies_schema_then_warms_candidate_before_recreate(
+    tmp_path: Path,
+) -> None:
+    result, _env_file, docker_log = _run_deploy(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    commands = docker_log.read_text().splitlines()
+    migration = next(
+        index
+        for index, command in enumerate(commands)
+        if "alembic upgrade heads" in command
+    )
+    verification = next(
+        index
+        for index, command in enumerate(commands)
+        if "scripts.migration.verify_schema_contracts" in command
+    )
+    candidate = next(
+        index
+        for index, command in enumerate(commands)
+        if "127.0.0.1:18001:8001" in command
+    )
+    recreate = next(
+        index
+        for index, command in enumerate(commands)
+        if "compose -f docker-compose.yml up -d app" in command
+    )
+
+    assert migration < verification < candidate < recreate
+
+
+def test_deploy_refuses_replacement_without_proxy_handoff(
+    tmp_path: Path,
+) -> None:
+    result, env_file, docker_log = _run_deploy(tmp_path, proxy_ready=False)
+
+    assert result.returncode != 0
+    assert "DEPLOY AVAILABILITY FAILURE" in result.stderr
+    assert (
+        "APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-old0000" in env_file.read_text()
+    )
+    assert docker_log.read_text() == ""
+
+
+def test_deploy_retries_a_bounded_migration_lock_timeout(tmp_path: Path) -> None:
+    result, _env_file, docker_log = _run_deploy(
+        tmp_path,
+        migration_lock_failures=2,
+    )
+
+    assert result.returncode == 0, result.stderr
+    attempts = [
+        command
+        for command in docker_log.read_text().splitlines()
+        if "alembic upgrade heads" in command
+    ]
+    assert len(attempts) == 3

@@ -9,6 +9,8 @@ It never creates payments or ledger entries directly and never commits.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -46,6 +48,7 @@ from app.services.billing._common import (
 from app.services.billing.ledger import LedgerEntries
 from app.services.billing.payments import PaymentAllocations
 from app.services.common import coerce_uuid, round_money, to_decimal
+from app.services.domain_errors import DomainError
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +72,33 @@ class AccountCreditApplicationResult:
     @property
     def changed(self) -> bool:
         return self.applied > 0
+
+
+@dataclass(frozen=True, slots=True)
+class AccountCreditInvoiceFundingPreview:
+    """Exact payment-backed funding available to one invoice."""
+
+    invoice_id: UUID
+    account_id: UUID
+    currency: str
+    invoice_remaining: Decimal
+    account_credit: Decimal
+    payment_backed_credit: Decimal
+    spendable_credit: Decimal
+    shortfall: Decimal
+    unbacked_credit: Decimal
+    source_payment_ids: tuple[UUID, ...]
+    fingerprint: str
+
+    @property
+    def fully_funded(self) -> bool:
+        return self.invoice_remaining > Decimal("0.00") and self.shortfall == Decimal(
+            "0.00"
+        )
+
+
+class AccountCreditApplicationError(DomainError):
+    """Fail-closed exact account-credit application failure."""
 
 
 @dataclass(frozen=True)
@@ -173,6 +203,7 @@ def eligible_invoices(db: Session, account_id: str) -> list[Invoice]:
         db.query(Invoice)
         .filter(Invoice.account_id == coerce_uuid(account_id))
         .filter(Invoice.is_active.is_(True))
+        .filter(Invoice.is_proforma.is_not(True))
         .filter(Invoice.status.in_(ELIGIBLE_INVOICE_STATUSES))
         .filter(Invoice.balance_due > 0)
         .order_by(
@@ -226,8 +257,178 @@ def _allocation_key(payment: Payment, invoice: Invoice) -> str:
     return f"account-credit-apply-{payment.id}-{invoice.id}"
 
 
+def _invoice_funding_fingerprint(payload: dict[str, object]) -> str:
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 class AccountCreditApplications:
     """Single orchestration owner for payment-backed account-credit use."""
+
+    @staticmethod
+    def preview_invoice_funding(
+        db: Session,
+        invoice: Invoice,
+    ) -> AccountCreditInvoiceFundingPreview:
+        """Project exact payment-backed credit for one invoice without writes."""
+
+        currency = (invoice.currency or "NGN").upper()
+        invoice_remaining = max(
+            Decimal("0.00"),
+            round_money(to_decimal(invoice.balance_due or Decimal("0.00"))),
+        )
+        account_credit = max(
+            Decimal("0.00"),
+            round_money(
+                get_account_credit_balance(
+                    db,
+                    str(invoice.account_id),
+                    currency=currency,
+                )
+            ),
+        )
+        sources = tuple(
+            (payment, room)
+            for payment, room in _source_payments(db, str(invoice.account_id))
+            if (payment.currency or "NGN").upper() == currency
+        )
+        payment_backed = round_money(
+            sum((room for _payment, room in sources), Decimal("0.00"))
+        )
+        spendable = min(account_credit, payment_backed)
+        shortfall = max(
+            Decimal("0.00"),
+            round_money(invoice_remaining - spendable),
+        )
+        unbacked = max(
+            Decimal("0.00"),
+            round_money(account_credit - payment_backed),
+        )
+        source_payment_ids = tuple(payment.id for payment, _room in sources)
+        payload: dict[str, object] = {
+            "invoice_id": invoice.id,
+            "account_id": invoice.account_id,
+            "status": invoice.status.value,
+            "currency": currency,
+            "invoice_remaining": invoice_remaining,
+            "account_credit": account_credit,
+            "payment_backed_credit": payment_backed,
+            "spendable_credit": spendable,
+            "shortfall": shortfall,
+            "unbacked_credit": unbacked,
+            "source_payments": tuple(
+                (payment.id, round_money(room)) for payment, room in sources
+            ),
+        }
+        return AccountCreditInvoiceFundingPreview(
+            invoice_id=invoice.id,
+            account_id=invoice.account_id,
+            currency=currency,
+            invoice_remaining=invoice_remaining,
+            account_credit=account_credit,
+            payment_backed_credit=payment_backed,
+            spendable_credit=spendable,
+            shortfall=shortfall,
+            unbacked_credit=unbacked,
+            source_payment_ids=source_payment_ids,
+            fingerprint=_invoice_funding_fingerprint(payload),
+        )
+
+    @staticmethod
+    def apply_invoice_fully(
+        db: Session,
+        invoice: Invoice,
+        *,
+        preview_fingerprint: str,
+    ) -> AccountCreditApplicationResult:
+        """Apply exact payment-backed credit only when it covers the invoice."""
+
+        lock_account(db, str(invoice.account_id))
+        db.refresh(invoice)
+        preview = AccountCreditApplications.preview_invoice_funding(db, invoice)
+        if preview.fingerprint != preview_fingerprint:
+            raise AccountCreditApplicationError(
+                code="financial.account_credit_applications.stale_preview",
+                message="Invoice funding changed after preview; preview again.",
+                details={"invoice_id": str(invoice.id)},
+            )
+        if not preview.fully_funded:
+            raise AccountCreditApplicationError(
+                code="financial.account_credit_applications.insufficient_funding",
+                message="Exact payment-backed credit does not fully fund the invoice.",
+                details={
+                    "invoice_id": str(invoice.id),
+                    "shortfall": str(preview.shortfall),
+                },
+            )
+
+        result = AccountCreditApplicationResult(
+            account_id=str(invoice.account_id),
+            available_credit=preview.spendable_credit,
+            unbacked_credit=preview.unbacked_credit,
+        )
+        remaining = preview.invoice_remaining
+        sources = [
+            (payment, room)
+            for payment, room in _source_payments(db, str(invoice.account_id))
+            if (payment.currency or "NGN").upper() == preview.currency
+        ]
+        for payment, room in sources:
+            if remaining <= Decimal("0.00"):
+                break
+            amount = min(remaining, room)
+            if amount <= Decimal("0.00"):
+                continue
+            request = PaymentAllocationPreviewRequest(
+                payment_id=payment.id,
+                invoice_id=invoice.id,
+                amount=amount,
+            )
+            try:
+                allocation_preview = PaymentAllocations.preview(db, request)
+                confirmation = PaymentAllocations.stage_confirm(
+                    db,
+                    PaymentAllocationConfirm(
+                        **request.model_dump(),
+                        preview_fingerprint=allocation_preview.fingerprint,
+                        idempotency_key=_allocation_key(payment, invoice),
+                    ),
+                )
+            except HTTPException as exc:
+                raise AccountCreditApplicationError(
+                    code="financial.account_credit_applications.allocation_rejected",
+                    message="Payment-allocation owner rejected exact invoice funding.",
+                    details={
+                        "invoice_id": str(invoice.id),
+                        "payment_id": str(payment.id),
+                        "reason": str(exc.detail),
+                    },
+                ) from exc
+            applied = round_money(to_decimal(confirmation.allocation.amount))
+            result.applied = round_money(result.applied + applied)
+            result.allocation_ids.append(str(confirmation.allocation.id))
+            remaining = round_money(remaining - applied)
+
+        db.flush()
+        db.refresh(invoice)
+        if remaining != Decimal("0.00") or invoice.status != InvoiceStatus.paid:
+            raise AccountCreditApplicationError(
+                code="financial.account_credit_applications.incomplete_application",
+                message="Exact invoice funding did not produce a paid invoice.",
+                details={
+                    "invoice_id": str(invoice.id),
+                    "remaining": str(remaining),
+                    "status": invoice.status.value,
+                },
+            )
+        result.invoices_touched.append(str(invoice.id))
+        result.invoices_settled.append(str(invoice.id))
+        return result
 
     @staticmethod
     def apply(db: Session, account_id: str) -> AccountCreditApplicationResult:
@@ -584,6 +785,8 @@ class AccountCreditApplications:
 
 
 __all__ = [
+    "AccountCreditApplicationError",
+    "AccountCreditInvoiceFundingPreview",
     "AccountCreditApplicationResult",
     "AccountCreditApplications",
     "AccountCreditInvariantViolation",

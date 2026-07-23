@@ -179,9 +179,9 @@ prod-smtp-inbound-up: ## Start/recreate the opt-in, single-instance SMTP intake
 prod-smtp-inbound-probe: ## Prove SMTP intake creates a marked team-inbox message
 	$(PROD_COMPOSE) --profile smtp-inbound exec -T team-inbox-smtp python -m app.team_inbox_smtp e2e-probe
 
-prod-migrate: ## Apply DB migrations in the prod stack (alembic baked in; retries on lock_timeout)
+prod-migrate: ## Apply migrations, retry lock timeouts, then verify schema contracts
 	@n=0; until [ $$n -ge 4 ]; do \
-	  out=$$($(PROD_COMPOSE) run --rm app alembic upgrade heads 2>&1); rc=$$?; \
+	  out=$$($(PROD_COMPOSE) run --rm --no-deps app alembic upgrade heads 2>&1); rc=$$?; \
 	  echo "$$out"; \
 	  [ $$rc -eq 0 ] && break; \
 	  if echo "$$out" | grep -qiE "lock timeout|canceling statement due to lock"; then \
@@ -190,7 +190,8 @@ prod-migrate: ## Apply DB migrations in the prod stack (alembic baked in; retrie
 	    echo ">> prod-migrate failed (not a lock_timeout) — aborting; app is untouched (migrate runs before recreate)"; exit $$rc; \
 	  fi; \
 	done; \
-	[ $$n -lt 4 ] || { echo ">> prod-migrate still lock-blocked after retries — quiesce the app (stop app+workers), run migrate, then recreate. See seabone-staging-deploy-quirks."; exit 1; }
+	[ $$n -lt 4 ] || { echo ">> prod-migrate still lock-blocked after retries — quiesce the app (stop app+workers), run migrate, then recreate. See seabone-staging-deploy-quirks."; exit 1; }; \
+	$(PROD_COMPOSE) run --rm --no-deps app python -m scripts.migration.verify_schema_contracts
 
 # ─── GHCR deploy (RECOMMENDED) ─────────────────────────────────────────────
 # Pull the exact CI-built, CI-tested image instead of building on the host —
@@ -199,7 +200,7 @@ prod-migrate: ## Apply DB migrations in the prod stack (alembic baked in; retrie
 #
 # `make deploy TAG=sha-<shortsha>` runs the hardened scripts/deploy.sh:
 #   verify image on GHCR -> DB backup -> pin APP_IMAGE -> pull ->
-#   alembic upgrade heads -> recreate app+workers -> health gate -> auto-rollback.
+#   migrate + verify -> warm candidate -> recreate app+workers -> health gate.
 # CI (.github/workflows/ghcr.yml) pushes ghcr.io/<owner>/dotmac_sub per main push;
 # the host must `docker login ghcr.io` (PAT with read:packages) once.
 deploy: ## Hardened GHCR deploy. Usage: make deploy TAG=sha-abc1234

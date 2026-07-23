@@ -102,20 +102,33 @@ class BillingAdapter:
         lines: list[InvoiceLineIntent],
     ):
         billing_service = self._service()
-
-        invoice = self.create_invoice(db, intent)
-        for line in lines:
-            billing_service.invoice_lines.create(
-                db,
-                InvoiceLineCreate(
-                    invoice_id=invoice.id,
-                    description=line.description,
-                    quantity=line.quantity,
-                    unit_price=line.unit_price,
-                    tax_rate_id=line.tax_rate_id,
-                ),
+        payload = InvoiceCreate(
+            account_id=intent.account_id,
+            invoice_number=intent.invoice_number,
+            currency=self._currency(db, intent.currency),
+            subtotal=intent.total,
+            total=intent.total,
+            balance_due=intent.total,
+            status=intent.status,
+            memo=intent.memo,
+            issued_at=intent.issued_at,
+            due_at=intent.due_at,
+        )
+        line_payloads = tuple(
+            InvoiceLineCreate(
+                invoice_id=UUID(int=0),
+                description=line.description,
+                quantity=line.quantity,
+                unit_price=line.unit_price,
+                tax_rate_id=line.tax_rate_id,
             )
-        return invoice
+            for line in lines
+        )
+        return billing_service.invoices.create_with_lines(
+            db,
+            payload,
+            line_payloads,
+        )
 
     def record_payment(self, db: Session, intent: PaymentIntent):
         billing_service = self._service()

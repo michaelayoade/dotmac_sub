@@ -41,7 +41,7 @@ VICTORIAMETRICS_WRITE_FAILURES = Counter(
     ["adapter", "operation"],
 )
 
-# Connectivity state-machine observability (CONNECTIVITY_STATE_MACHINE.md step 2c).
+# Connectivity projection observability (FINANCIAL_ACCESS_ENFORCEMENT.md).
 # Direct (legacy) writes of connectivity-derived state, labelled by field and
 # the write source. ``source=reconciler`` is the legitimate single writer;
 # any other source is a legacy direct write we want to drive to zero before

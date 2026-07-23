@@ -7,7 +7,6 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription
-from app.models.subscriber import Subscriber
 from app.services import fup_enforcement
 from app.services import radius as radius_service
 from app.services import radius_reject as radius_reject_service
@@ -24,17 +23,12 @@ from app.services.enforcement_event_policy import (
     ResolveFupEventPolicy,
     parse_fup_action_override,
     resolve_fup_event_policy,
-    resolve_group_routing_policy,
     resolve_session_refresh_policy,
 )
 from app.services.events.types import Event, EventType
 from app.services.fup_state import (
     ApplyFupRuntimeState,
     FupRuntimeStateError,
-)
-from app.services.radius_access_state import (
-    derive_access_state,
-    set_subscription_access_state,
 )
 
 logger = logging.getLogger(__name__)
@@ -109,42 +103,6 @@ class EnforcementHandler:
         elif event.event_type == EventType.invoice_overdue:
             self._handle_invoice_overdue(db, event)
 
-    def _shadow_write_access_state(self, db: Session, subscription_id: str) -> None:
-        """Mirror the derived access state locally, and to radusergroup when
-        group routing is enabled.
-
-        ``subscription.access_state`` is now an operational truth for portals
-        and audits, so keep it current even while the external radusergroup
-        path remains feature-flagged off.
-        """
-        sub = db.get(Subscription, subscription_id)
-        if not sub:
-            return
-        subscriber = (
-            db.get(Subscriber, sub.subscriber_id) if sub.subscriber_id else None
-        )
-        from app.services.walled_garden_policy import resolve_subscription_restriction
-
-        restriction = resolve_subscription_restriction(db, sub, account=subscriber)
-        state = derive_access_state(
-            sub.status,
-            restriction_mode=(restriction.effective_mode if restriction else None),
-        )
-        target = state.value if state else None
-        if getattr(sub, "access_state", None) != target:
-            sub.access_state = target
-            db.flush()
-
-        if not resolve_group_routing_policy(db).enabled:
-            return
-        result = set_subscription_access_state(db, str(subscription_id), state)
-        logger.info(
-            "shadow access_state: sub=%s state=%s %s",
-            subscription_id,
-            state.value if state else None,
-            result,
-        )
-
     def _enqueue_subscription_session_cleanup(
         self, subscription_id: str, *, reason: str
     ) -> None:
@@ -195,9 +153,9 @@ class EnforcementHandler:
                 result = radius_service.reconcile_subscription_connectivity(
                     db, str(subscription_id)
                 )
-                projection_ready = bool(result.get("ok"))
+                projection_ready = result.ok
                 if not projection_ready:
-                    errors.append("radius_projection:not_converged")
+                    errors.append(f"radius_projection:{result.disposition.value}")
             except Exception as exc:
                 logger.error(
                     "Failed to project blocked RADIUS state for subscription %s: %s",
@@ -205,18 +163,6 @@ class EnforcementHandler:
                     exc,
                 )
                 errors.append(f"radius_projection:{exc}")
-
-        # Compatibility shadow write: mirror the derived state to radusergroup.
-        # No-op unless the enforcement event policy enables group routing.
-        try:
-            self._shadow_write_access_state(db, str(subscription_id))
-        except Exception as exc:
-            logger.error(
-                "Failed to write shadow access state for subscription %s: %s",
-                subscription_id,
-                exc,
-            )
-            errors.append(f"access_state_projection:{exc}")
 
         if projection_ready:
             try:
@@ -328,9 +274,9 @@ class EnforcementHandler:
                 result = radius_service.reconcile_subscription_connectivity(
                     db, str(subscription_id)
                 )
-                projection_ready = bool(result.get("ok"))
+                projection_ready = result.ok
                 if not projection_ready:
-                    errors.append("radius_projection:not_converged")
+                    errors.append(f"radius_projection:{result.disposition.value}")
             except Exception as exc:
                 logger.error(
                     "Failed to project restored RADIUS state for subscription %s: %s",
@@ -338,18 +284,6 @@ class EnforcementHandler:
                     exc,
                 )
                 errors.append(f"radius_projection:{exc}")
-
-        # Compatibility shadow write: mirror the restored state to radusergroup.
-        # No-op unless the enforcement event policy enables group routing.
-        try:
-            self._shadow_write_access_state(db, str(subscription_id))
-        except Exception as exc:
-            logger.error(
-                "Failed to write restored access state for subscription %s: %s",
-                subscription_id,
-                exc,
-            )
-            errors.append(f"access_state_projection:{exc}")
 
         # Refresh sessions and remove address block
         try:
@@ -386,7 +320,7 @@ class EnforcementHandler:
             projection = radius_service.reconcile_subscription_connectivity(
                 db, str(subscription_id)
             )
-            if not projection.get("ok"):
+            if not projection.ok:
                 raise RuntimeError("RADIUS projection did not converge")
             updated = update_subscription_sessions(
                 db,

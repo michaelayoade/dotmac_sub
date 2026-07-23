@@ -1702,6 +1702,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "eligible invoice selection for evidenced account credit",
                     "deterministic payment-credit source selection",
                     "oldest-payable-debt application orchestration",
+                    "exact invoice payment-backed funding preview",
+                    "all-or-nothing exact invoice credit application",
                     "invoice-void release of exact account-credit allocations",
                     "account-credit application invariant monitoring",
                 ),
@@ -2547,7 +2549,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "observability.audit_log",
                 ),
                 notes=(
-                    "A deposit first records the whole confirmed receipt as "
+                    "A deposit preview may include current eligible invoices and "
+                    "the exact oldest-debt application before any checkout starts. "
+                    "The deposit first records the whole confirmed receipt as "
                     "unallocated account credit, grants no service duration, and "
                     "then asks the canonical applicator to settle eligible debt. "
                     "Only after that application completes does its chained event "
@@ -2642,7 +2646,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             kind=AuthorityKind.CONTROL_INPUT,
                             source=(
                                 "typed purpose, allocation/application policy, version, "
-                                "supported currency, amount bounds, and pending-intent rule"
+                                "supported currency, amount bounds, reviewed-preview rule, "
+                                "and pending-intent rule"
                             ),
                         ),
                         AuthorityInput(
@@ -2651,7 +2656,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             kind=AuthorityKind.CONTROL_INPUT,
                             source=(
                                 "typed coordinator-admitted account, amount, provider, "
-                                "reference, expiry, channel, actor, and idempotency evidence"
+                                "reference, expiry, channel, actor, reviewed preview "
+                                "fingerprint, and idempotency evidence"
                             ),
                         ),
                         AuthorityInput(
@@ -2712,8 +2718,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         locking=(
                             "Intent creation and settlement lock the subscriber account "
-                            "first; settlement then locks the exact intent before composing "
-                            "payment and oldest-debt application owners."
+                            "first; preview and creation share that account-scoped "
+                            "invoice-order snapshot; settlement then locks the exact "
+                            "intent before composing payment and oldest-debt application "
+                            "owners."
                         ),
                         idempotency=(
                             "Intent creation uses one account/purpose/key identity. Settlement "
@@ -2733,7 +2741,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "deposit_currency_unsupported",
                             "deposit_amount_below_minimum",
                             "deposit_amount_above_maximum",
-                            "deposit_payable_invoices_exist",
+                            "deposit_preview_stale",
                             "deposit_intent_already_pending",
                             "deposit_idempotency_invalid",
                             "deposit_idempotency_conflict",
@@ -2758,8 +2766,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         retryable_codes=(),
                         fail_closed_on=(
-                            "inactive or missing account, incompatible payable debt, or invalid "
-                            "amount/currency policy",
+                            "inactive or missing account, stale reviewed preview, pending "
+                            "deposit intent, or invalid amount/currency policy",
                             "missing, untyped, wrong-provider, wrong-amount, wrong-currency, or "
                             "uncorrelated intent/receipt evidence",
                             "conflicting provider transaction or incomplete completed-payment link",
@@ -2908,10 +2916,175 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="financial.invoice_draft_authoring",
+                module="app.services.invoice_draft_authoring",
+                owns=("administrative invoice draft authoring coordination",),
+                depends_on=(
+                    "customer.accounts",
+                    "financial.invoices",
+                    "financial.tax_configuration",
+                    "events.dispatcher",
+                ),
+                notes=(
+                    "This coordinator is the only administrative writer for a "
+                    "complete draft invoice aggregate. It admits a typed header and "
+                    "line set, locks the account before the invoice, and commits the "
+                    "document, totals, audit, idempotency evidence, and outbox event "
+                    "once. Issue, void, write-off, settlement, and repair remain with "
+                    "their named financial owners."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="administrative invoice draft authoring coordination",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "authenticated administrative draft command",
+                                "canonical customer account",
+                                "canonical invoice draft aggregate",
+                                "canonical invoice tax rates",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="authenticated administrative draft command",
+                            owner="financial.invoice_draft_authoring",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed header, complete line set, actor, scope, "
+                                "reason, correlation, and idempotency context"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical customer account",
+                            owner="customer.accounts",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="locked Subscriber account row",
+                        ),
+                        AuthorityInput(
+                            name="canonical invoice draft aggregate",
+                            owner="financial.invoices",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked Invoice row and active InvoiceLine rows with "
+                                "owner-derived totals"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical invoice tax rates",
+                            owner="financial.tax_configuration",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="referenced TaxRate rows",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        boundary=(
+                            "Create or update enters execute_owner_command once on a "
+                            "transaction-free session; header, active lines, totals, "
+                            "idempotency reservation, audit, and outbox event commit or "
+                            "roll back together."
+                        ),
+                        locking=(
+                            "The customer account is locked first, followed by the "
+                            "invoice and its active lines. New drafts reserve the "
+                            "account-scoped idempotency result in the same transaction."
+                        ),
+                        idempotency=(
+                            "Create hashes the caller key and replays the same invoice "
+                            "identifier. Update replaces the complete desired draft "
+                            "state under locks, so an identical retry converges without "
+                            "duplicating lines."
+                        ),
+                        retries=(
+                            "Adapters retry only the whole command after rollback. "
+                            "Stale, issued, cross-account, duplicate-number, or changed "
+                            "line evidence fails closed."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "financial.invoice_draft_authoring.account_not_found",
+                            "financial.invoice_draft_authoring.currency_invalid",
+                            "financial.invoice_draft_authoring.invoice_number_conflict",
+                            "financial.invoice_draft_authoring.line_required",
+                            "financial.invoice_draft_authoring.line_invalid",
+                            "financial.invoice_draft_authoring.tax_rate_not_found",
+                            "financial.invoice_draft_authoring.line_not_found",
+                            "financial.invoice_draft_authoring.idempotency_conflict",
+                            "financial.invoice_draft_authoring.invoice_not_found",
+                            "financial.invoice_draft_authoring.account_mismatch",
+                            "financial.invoice_draft_authoring.invoice_not_editable",
+                            "financial.invoice_draft_authoring.currency_mismatch",
+                            "financial.invoice_draft_authoring.invalid_command_context",
+                            "financial.invoice_draft_authoring.command_contract_violation",
+                            "financial.invoice_draft_authoring.nested_owner_command",
+                            "financial.invoice_draft_authoring.active_caller_transaction",
+                            "financial.invoice_draft_authoring.nested_transaction_completion",
+                        ),
+                        mapping_owner="administrative billing web adapters",
+                        retryable_codes=(),
+                        fail_closed_on=(
+                            "missing account, tax rate, or line evidence",
+                            "empty draft or duplicate invoice number",
+                            "non-draft, cross-account, or changed-currency update",
+                            "active caller transaction or manifest mismatch",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("invoice_created",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 includes canonical invoice, account, status, "
+                            "amount, due-date, currency, and proforma evidence."
+                        ),
+                        replay=(
+                            "Draft-created events rebuild projections and audit views; "
+                            "notification policy suppresses customer delivery until "
+                            "explicit issue or send."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "administrative web form header commit followed by "
+                            "independent invoice-line commits"
+                        ),
+                        new_owner="financial.invoice_draft_authoring",
+                        verification=(
+                            "Atomic rollback, create replay, draft-only update, "
+                            "proforma, event payload, adapter, manifest, and "
+                            "architecture tests."
+                        ),
+                        cutover_gate=(
+                            "Administrative create and edit adapters invoke only the "
+                            "typed owner command on a transaction-free session."
+                        ),
+                        fallback_retirement=(
+                            "The web adapter no longer commits invoice headers or "
+                            "iterates independent line create/update/delete writers."
+                        ),
+                    ),
+                    steward="finance operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/designs/INVOICE_DRAFT_AUTHORING.md",
+                    ),
+                    test_refs=(
+                        "tests/test_invoice_draft_authoring.py",
+                        "tests/test_web_billing_invoice_forms.py",
+                        "tests/architecture/test_invoice_draft_authoring_ownership.py",
+                    ),
+                ),
+            ),
+            SOTService(
                 name="financial.invoices",
                 module="app.services.billing.invoices",
                 owns=(
                     "invoice document lifecycle",
+                    "atomic invoice and invoice-line construction",
                     "invoice status transitions",
                     "invoice adjustment and reversal postings",
                     "automation invoice creation and draft issuance",
@@ -5341,10 +5514,249 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="financial.prepaid_draft_reconciliation",
+                module="app.services.prepaid_draft_reconciliation",
+                owns=(
+                    "stranded prepaid draft classification",
+                    "stranded prepaid draft invoice reconciliation",
+                ),
+                depends_on=(
+                    "financial.account_credit_applications",
+                    "financial.invoices",
+                    "financial.payments",
+                    "financial.prepaid_service_renewals",
+                    "observability.audit_log",
+                ),
+                notes=(
+                    "The read-only classifier distinguishes exact native payment "
+                    "funding, insufficient funding, legacy/unbacked credit, exact "
+                    "direct-renewal overlap, and ambiguity. Confirmation either "
+                    "fully settles from exact payment-backed credit or voids a "
+                    "duplicate direct-renewal draft at zero economic delta. During "
+                    "cutover, the funding-change owner invokes the same flush-only "
+                    "classification/action participant before any invoice-less "
+                    "renewal; every existing draft blocks that parallel path."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="stranded prepaid draft classification",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical prepaid draft invoice",
+                                "canonical payment-backed account credit",
+                                "canonical funded service entitlement",
+                                "canonical direct-renewal debit",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="stranded prepaid draft invoice reconciliation",
+                            role=OwnerRole.RECONCILER,
+                            input_names=(
+                                "reviewed reconciliation command",
+                                "canonical prepaid draft invoice",
+                                "canonical payment-backed account credit",
+                                "canonical funded service entitlement",
+                                "canonical direct-renewal debit",
+                                "invoice and payment participant protocols",
+                            ),
+                            canonical_writer="financial.prepaid_draft_reconciliation",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="reviewed reconciliation command",
+                            owner="financial.prepaid_draft_reconciliation",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed invoice identity, exact preview fingerprint, "
+                                "effective timestamp, actor, reason, command, "
+                                "correlation, and idempotency evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical prepaid draft invoice",
+                            owner="financial.invoices",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked active non-proforma draft, exact positive "
+                                "subscription line, period, currency, totals, and "
+                                "existing settlement evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical payment-backed account credit",
+                            owner="financial.account_credit_applications",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "exact active succeeded settlement capacity, current "
+                                "account-credit projection, source payments, and "
+                                "shortfall"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical funded service entitlement",
+                            owner="financial.prepaid_service_renewals",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active entitlement account, subscription, exact "
+                                "period, funding amount, currency, and source link"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical direct-renewal debit",
+                            owner="financial.prepaid_service_renewals",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "unreversed prepaid-service-renewal adjustment and "
+                                "linked active ledger debit"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="invoice and payment participant protocols",
+                            owner="financial.invoices",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "flush-only invoice issue/void and exact "
+                                "payment-allocation confirmation protocols"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "Reviewed confirmation enters execute_owner_command once "
+                            "on a transaction-free session and commits or rolls back "
+                            "the invoice lifecycle, exact payment applications, audit, "
+                            "and idempotency evidence together. The funding-change "
+                            "cutover caller uses the same required flush-only "
+                            "participant inside its existing owner transaction."
+                        ),
+                        locking=(
+                            "Lock account first, then invoice, then re-read payment, "
+                            "entitlement, adjustment, and allocation evidence. A "
+                            "multiple-draft account is not automatically repaired."
+                        ),
+                        idempotency=(
+                            "A caller-supplied key is reserved per invoice; invoice "
+                            "metadata and participant idempotency keys replay the same "
+                            "paid or void result and reject changed evidence."
+                        ),
+                        retries=(
+                            "Retry transient database failures with the same key and "
+                            "preview only after state is unchanged. Stale, short, "
+                            "unbacked, overlapping, or ambiguous evidence requires a "
+                            "fresh preview or manual review."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "financial.prepaid_draft_reconciliation.invoice_not_found",
+                            "financial.prepaid_draft_reconciliation.missing_idempotency_key",
+                            "financial.prepaid_draft_reconciliation.idempotency_conflict",
+                            "financial.prepaid_draft_reconciliation.stale_preview",
+                            "financial.prepaid_draft_reconciliation.not_actionable",
+                            "financial.prepaid_draft_reconciliation.participant_rejected",
+                            "financial.prepaid_draft_reconciliation.incomplete_repair",
+                            "financial.prepaid_draft_reconciliation.invalid_command_context",
+                            "financial.prepaid_draft_reconciliation.command_contract_violation",
+                            "financial.prepaid_draft_reconciliation.nested_owner_command",
+                            "financial.prepaid_draft_reconciliation.active_caller_transaction",
+                            "financial.prepaid_draft_reconciliation.nested_transaction_completion",
+                        ),
+                        mapping_owner="billing reconciliation CLI and funding-change adapters",
+                        retryable_codes=(),
+                        fail_closed_on=(
+                            "any funding shortfall including NGN 0.50",
+                            "legacy or unbacked account credit",
+                            "multiple drafts or positive lines",
+                            "partial or ambiguous entitlement overlap",
+                            "stale preview or changed payment capacity",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("prepaid_draft.reconciled",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Additive payload fields are permitted; invoice, action, "
+                            "source disposition, final status, amount, currency, and "
+                            "preview fingerprint retain their meaning."
+                        ),
+                        replay=(
+                            "The event records the committed reconciliation outcome. "
+                            "Consumers may replay consequences but never re-decide or "
+                            "rewrite invoice, payment, or entitlement state."
+                        ),
+                    ),
+                    projections=(
+                        ProjectionContract(
+                            name="stranded prepaid draft classification",
+                            input_names=(
+                                "canonical prepaid draft invoice",
+                                "canonical payment-backed account credit",
+                                "canonical funded service entitlement",
+                                "canonical direct-renewal debit",
+                            ),
+                            writer="financial.prepaid_draft_reconciliation",
+                            freshness="computed from the current database snapshot",
+                            stale_behavior=(
+                                "Confirmation rejects a changed fingerprint and requires "
+                                "a fresh preview."
+                            ),
+                            drift_signal=(
+                                "An active prepaid draft classified as exact-payment "
+                                "fundable, already renewed, legacy-unbacked, insufficient, "
+                                "or manual review remains visible in the cohort."
+                            ),
+                            rebuild_operation=(
+                                "preview_prepaid_draft_cohort deterministically "
+                                "reclassifies the bounded or complete active cohort."
+                            ),
+                            repair_owner="financial.prepaid_draft_reconciliation",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.CUT_OVER,
+                        old_owner=(
+                            "billing.reconcile_unposted issue-then-return helper and "
+                            "invoice-less funding-change renewal when a draft exists"
+                        ),
+                        new_owner="financial.prepaid_draft_reconciliation",
+                        verification=(
+                            "Exact-funding, fifty-kobo shortfall, unbacked credit, "
+                            "direct-renewal overlap, stale preview, replay, funding-"
+                            "change, and architecture tests."
+                        ),
+                        cutover_gate=(
+                            "Funding-change handling checks the authoritative draft "
+                            "before direct renewal; the reviewed CLI defaults to dry-run."
+                        ),
+                        fallback_retirement=(
+                            "Remove the compatibility issue-then-return helper after "
+                            "all remaining callers use the classifier and the backlog "
+                            "has been reviewed."
+                        ),
+                    ),
+                    steward="billing operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
+                        "docs/designs/PREPAID_DRAFT_RECONCILIATION.md",
+                    ),
+                    test_refs=(
+                        "tests/test_prepaid_draft_reconciliation.py",
+                        "tests/test_prepaid_service_renewals.py",
+                        "tests/architecture/test_prepaid_draft_reconciliation_ownership.py",
+                    ),
+                ),
+            ),
+            SOTService(
                 name="financial.prepaid_service_renewals",
                 module="app.services.prepaid_service_renewals",
                 owns=(
                     "due prepaid service-cycle funding preview",
+                    "settled-payment evidence validation and evaluation outcome",
                     "locked and idempotent prepaid renewal debit",
                     "exact debit-to-entitlement evidence",
                     "prepaid subscription paid-through advancement",
@@ -5355,6 +5767,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=(
                     "financial.account_adjustments",
                     "financial.invoices",
+                    "financial.payments",
                     "financial.prepaid_funding_reconstruction",
                     "financial.subscription_billing_grants",
                     "financial.subscription_billing_treatments",
@@ -5362,10 +5775,14 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
                 notes=(
                     "A payment receipt proves cash settlement, not service duration. "
+                    "A funding-change event is complete only when the referenced "
+                    "payment has canonical succeeded and settlement evidence. "
                     "Each forward renewal stages prepaid_service.renewed with the "
                     "exact entitlement, debit and renewed-through boundary in the "
                     "same transaction; payment correlation is a trigger, not source "
-                    "attribution for pooled account credit."
+                    "attribution for pooled account credit. Incomplete evidence raises "
+                    "through the durable event-handler attempt so the permanent event "
+                    "redriver retries it; an explicit no-due-service outcome is success."
                 ),
             ),
             SOTService(
@@ -7524,6 +7941,262 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "dispatch row before entering device code. Operation status "
                     "remains the device/business outcome; transport uncertainty is "
                     "preserved separately and fails closed for reviewed recovery."
+                ),
+            ),
+            SOTService(
+                name="network.tr069_commands",
+                module="app.services.network.tr069_job_commands",
+                owns=(
+                    "TR-069 command admission coordination",
+                    "TR-069 command execution coordination",
+                    "TR-069 command outcome coordination",
+                ),
+                depends_on=(
+                    "auth.permission_gate",
+                    "control.feature_registry",
+                    "network.identity",
+                    "network.operation_ledger",
+                    "network.operation_dispatch",
+                    "events.dispatcher",
+                ),
+                notes=(
+                    "Owns the complete command lifecycle boundary. Adapters submit "
+                    "typed intent; the operation ledger owns lifecycle, the durable "
+                    "dispatch owns broker delivery, GenieACS supplies observations, "
+                    "and tr069_jobs is a read-only operator projection. Disabling "
+                    "admission never stops accepted-work drainage."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="TR-069 command admission coordination",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "authenticated TR-069 command evidence",
+                                "canonical TR-069 device and ACS binding",
+                                "TR-069 command admission capability",
+                                "canonical network operation lifecycle",
+                                "durable network command dispatch",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="TR-069 command execution coordination",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "canonical TR-069 device and ACS binding",
+                                "canonical network operation lifecycle",
+                                "durable network command dispatch",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="TR-069 command outcome coordination",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "canonical network operation lifecycle",
+                                "durable network command dispatch",
+                                "normalized GenieACS command observation",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="authenticated TR-069 command evidence",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "admin authorization plus typed actor, scope, reason, "
+                                "command, correlation, and idempotency context"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical TR-069 device and ACS binding",
+                            owner="network.identity",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked active Tr069CpeDevice identity, GenieACS "
+                                "device id, and active Tr069AcsServer binding"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="TR-069 command admission capability",
+                            owner="control.feature_registry",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="network.tr069_command_admission",
+                        ),
+                        AuthorityInput(
+                            name="canonical network operation lifecycle",
+                            owner="network.operation_ledger",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "cpe_tr069_command NetworkOperation identity and "
+                                "guarded lifecycle state"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="durable network command dispatch",
+                            owner="network.operation_dispatch",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "cpe_tr069_command.v1 outbox row, publication "
+                                "attempts, and worker claim"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="normalized GenieACS command observation",
+                            owner="external:genieacs",
+                            kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                            source=(
+                                "accepted task ids, pending task inventory, faults, "
+                                "and absence after acceptance"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        boundary=(
+                            "Each public admission, execution claim, or observation "
+                            "enters execute_owner_command once on a transaction-free "
+                            "session; the operation, dispatch, encrypted payload, job "
+                            "projection, and event evidence commit atomically."
+                        ),
+                        locking=(
+                            "Admission locks the target device; execution and outcome "
+                            "lock the operation and job projection. Unique active "
+                            "correlation and one-job-per-operation constraints arbitrate "
+                            "concurrent requests."
+                        ),
+                        idempotency=(
+                            "A device, command kind, and encrypted-payload fingerprint "
+                            "return the active operation. Dispatch claims permit one "
+                            "queued-to-running transition and terminal observations do "
+                            "not regress."
+                        ),
+                        retries=(
+                            "Broker publication may retry before worker claim. ACS "
+                            "submission is never automatically replayed; interrupted "
+                            "or ambiguous delivery becomes unverified and requires "
+                            "review of current device state."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "network.tr069_commands.invalid_parameter",
+                            "network.tr069_commands.invalid_parameter_type",
+                            "network.tr069_commands.invalid_parameter_value",
+                            "network.tr069_commands.invalid_download",
+                            "network.tr069_commands.invalid_command",
+                            "network.tr069_commands.invalid_refresh_root",
+                            "network.tr069_commands.admission_disabled",
+                            "network.tr069_commands.device_not_found",
+                            "network.tr069_commands.device_inactive",
+                            "network.tr069_commands.device_not_registered",
+                            "network.tr069_commands.acs_unavailable",
+                            "network.tr069_commands.operation_projection_missing",
+                            "network.tr069_commands.invalid_observation",
+                            "network.tr069_commands.device_command_in_progress",
+                            "network.tr069_commands.device_state_review_required",
+                            "network.tr069_commands.concurrent_admission",
+                            *owner_command_boundary_error_codes(
+                                "network.tr069_commands"
+                            ),
+                        ),
+                        mapping_owner=(
+                            "app.services.web_network_tr069 and "
+                            "app.tasks.tr069 adapters"
+                        ),
+                        retryable_codes=(),
+                        fail_closed_on=(
+                            "disabled admission",
+                            "inactive or unregistered target",
+                            "missing ACS binding",
+                            "operation/projection mismatch",
+                            "ambiguous ACS delivery",
+                            "active caller transaction",
+                            "manifest mismatch",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "tr069_job.accepted",
+                            "tr069_job.completed",
+                            "tr069_job.failed",
+                            "tr069_job.unverified",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Additive payload evolution within version 1; no event "
+                            "contains command values, firmware URLs, or credentials."
+                        ),
+                        replay=(
+                            "The event store retries delivery by event identity; "
+                            "consumers treat job and operation ids as immutable "
+                            "lifecycle evidence."
+                        ),
+                    ),
+                    projections=(
+                        ProjectionContract(
+                            name="tr069_jobs operator lifecycle projection",
+                            input_names=(
+                                "canonical TR-069 device and ACS binding",
+                                "canonical network operation lifecycle",
+                                "durable network command dispatch",
+                                "normalized GenieACS command observation",
+                            ),
+                            writer="network.tr069_commands",
+                            freshness=(
+                                "Admission and normalized observations update the "
+                                "projection in the owning transaction; the permanent "
+                                "resolver checks active ACS tasks every scheduler pass."
+                            ),
+                            stale_behavior=(
+                                "Readers show the last committed state and "
+                                "last_observed_at. Missing or ambiguous confirmation "
+                                "becomes unverified rather than inferred success."
+                            ),
+                            drift_signal=(
+                                "Operation/job status disagreement, an unlinked active "
+                                "job, or an expired running/pending confirmation window."
+                            ),
+                            rebuild_operation=(
+                                "app.tasks.tr069.reconcile_command_outcomes"
+                            ),
+                            repair_owner="network.tr069_commands",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        new_owner="network.tr069_commands",
+                        old_owner=(
+                            "app.services.tr069.JobProjections mutation methods and "
+                            "app.tasks.tr069.execute_bulk_action"
+                        ),
+                        verification=(
+                            "Focused lifecycle and architecture tests prove atomic "
+                            "admission, guarded execution, terminal ambiguity, "
+                            "permanent drainage, secret redaction, and absence of old "
+                            "producers."
+                        ),
+                        cutover_gate=(
+                            "Migration 409 terminalizes every unlinked executable row "
+                            "and moves the old flag value to the admission-only control."
+                        ),
+                        fallback_retirement=(
+                            "Legacy create/update/delete/execute/cancel methods, bulk "
+                            "task, runtime adoption, and old control alias are removed."
+                        ),
+                    ),
+                    steward="network operations",
+                    design_refs=(
+                        "docs/designs/TR069_COMMAND_LIFECYCLE.md",
+                        "docs/runbooks/TR069_COMMAND_CUTOVER.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/CODING_STANDARD.md",
+                    ),
+                    test_refs=(
+                        "tests/test_tr069_job_commands.py",
+                        "tests/architecture/test_tr069_job_lifecycle_boundary.py",
+                    ),
                 ),
             ),
             SOTService(
@@ -11224,7 +11897,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     steward="service delivery and network operations",
                     design_refs=(
                         "docs/designs/PROVISIONING_LIFECYCLE_SOT.md",
-                        "docs/designs/CONNECTIVITY_STATE_MACHINE.md",
+                        "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
                         "docs/SOT_RELATIONSHIP_MAP.md",
                     ),
                     test_refs=(
@@ -11535,19 +12208,262 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 name="operations.project_lifecycle",
                 module="app.services.projects",
                 owns=(
-                    "native project field and status mutations",
-                    "project SLA clock synchronization",
-                    "project lifecycle event and notification requests",
+                    "Project and ProjectTask identity and lifecycle",
+                    "project and task allowed status transitions",
+                    "project and task assignment and scheduling",
+                    "project manager assistant manager service-team and task-assignee changes",
+                    "Project-to-ProjectTask and project/task-to-work-order relationships",
+                    "project audit records and transactional domain events",
+                    "project derived-state reconciliation",
                 ),
                 depends_on=(
+                    "auth.permission_gate",
                     "events.dispatcher",
                     "communications.staff_notifications",
+                    "operations.work_order_commands",
                 ),
                 notes=(
                     "Customer and reseller reads consume the read-only "
                     "customer.experience_lifecycle projection. There is no CRM "
                     "project mirror, read-flip fallback, or connector operation "
                     "that can read project/work-order authority."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="Project and ProjectTask identity and lifecycle",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical project aggregate",
+                                "authorized project command",
+                            ),
+                            canonical_writer="operations.project_lifecycle",
+                        ),
+                        ConcernContract(
+                            name="project and task allowed status transitions",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical project aggregate",
+                                "project transition protocol",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="project and task assignment and scheduling",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical project aggregate",
+                                "project assignment decision",
+                                "authorized project command",
+                            ),
+                            canonical_writer="operations.project_lifecycle",
+                        ),
+                        ConcernContract(
+                            name="project manager assistant manager service-team and task-assignee changes",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical project aggregate",
+                                "project assignment decision",
+                                "authorized project command",
+                            ),
+                            canonical_writer="operations.project_lifecycle",
+                        ),
+                        ConcernContract(
+                            name="Project-to-ProjectTask and project/task-to-work-order relationships",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "canonical project aggregate",
+                                "canonical work-order relationship",
+                            ),
+                            canonical_writer="operations.project_lifecycle",
+                        ),
+                        ConcernContract(
+                            name="project audit records and transactional domain events",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "canonical project aggregate",
+                                "authorized project command",
+                            ),
+                            canonical_writer="operations.project_lifecycle",
+                        ),
+                        ConcernContract(
+                            name="project derived-state reconciliation",
+                            role=OwnerRole.RECONCILER,
+                            input_names=("canonical project aggregate",),
+                            canonical_writer="operations.project_lifecycle",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical project aggregate",
+                            owner="operations.project_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="locked native Project, ProjectTask, ProjectTaskAssignee, dependency, comment, and SLA records keyed only by native UUIDs",
+                        ),
+                        AuthorityInput(
+                            name="project transition protocol",
+                            owner="operations.project_lifecycle",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="typed ProjectStatus and ProjectTaskStatus transition tables",
+                        ),
+                        AuthorityInput(
+                            name="authorized project command",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="authenticated actor, scope, reason, correlation id, and idempotency key",
+                        ),
+                        AuthorityInput(
+                            name="project assignment decision",
+                            owner="operations.project_assignment_policy",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="typed rule match and candidate decision; it never mutates a Project aggregate",
+                        ),
+                        AuthorityInput(
+                            name="canonical work-order relationship",
+                            owner="operations.work_order_commands",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="native WorkOrder.project_id and WorkOrder.project_task_id foreign keys",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary="Every public state-changing command enters execute_owner_command once on a transaction-free adapter session; all nested helpers are flush-only.",
+                        locking="Lock Project before its tasks, then tasks by UUID; assignment and relationship changes re-read locked rows in that order.",
+                        idempotency="CommandContext idempotency keys identify externally retryable commands; identical completed intent replays its stable typed outcome and changed-state no-ops are safe.",
+                        retries="Adapters retry serialization failures, deadlocks, and lock timeouts as a complete command; validation, stale-state, authorization, and idempotency conflicts are not retryable.",
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "operations.project_lifecycle.not_found",
+                            "operations.project_lifecycle.invalid_input",
+                            "operations.project_lifecycle.invalid_transition",
+                            "operations.project_lifecycle.stale_state",
+                            "operations.project_lifecycle.idempotency_conflict",
+                            "operations.project_lifecycle.relationship_conflict",
+                            *owner_command_boundary_error_codes(
+                                "operations.project_lifecycle"
+                            ),
+                        ),
+                        mapping_owner="project API, admin-web, job, and assignment adapters",
+                        retryable_codes=("operations.project_lifecycle.stale_state",),
+                        fail_closed_on=(
+                            "unknown native identity",
+                            "stale transition evidence",
+                            "ambiguous assignment target",
+                            "external identifier without native relationship",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "project.created",
+                            "project.updated",
+                            "project.completed",
+                            "project.canceled",
+                            "project_task.created",
+                            "project_task.updated",
+                            "project_task.completed",
+                            "project.assignment_changed",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility="Version 1 payloads are additive and preserve native aggregate identifiers; CRM identifiers are optional provenance only.",
+                        replay="Rebuild consequences from the durable event/audit record; replay never re-runs lifecycle eligibility.",
+                    ),
+                    projections=(
+                        ProjectionContract(
+                            name="project SLA and assignment projections",
+                            input_names=("canonical project aggregate",),
+                            writer="operations.project_lifecycle",
+                            freshness="synchronous in the owner transaction",
+                            stale_behavior="fail closed for action eligibility and expose drift to operators",
+                            drift_signal="reconciliation reports missing, duplicate, or mismatched SLA clocks and task-assignee rows",
+                            rebuild_operation="reconcile_project_projection(project_id) deterministically rebuilds derived rows from the locked native aggregate",
+                            repair_owner="operations.project_lifecycle",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        new_owner="operations.project_lifecycle",
+                        old_owner="legacy Projects/web_projects/ticket_assignment direct writers",
+                        verification="Projects contract, adapter-boundary, assignment ownership, projection parity, and reconciliation tests",
+                        cutover_gate="all project and task mutations delegate to the owner command and architecture guards reject direct adapter writes",
+                        fallback_retirement="HTTP-coupled domain errors, adapter commits, and assignment-engine Project writes removed",
+                    ),
+                    steward="service delivery",
+                    design_refs=(
+                        "docs/designs/PROJECTS_SOT_COMPLETION.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_projects_service.py",
+                        "tests/test_project_assignment_engine.py",
+                        "tests/architecture/test_projects_sot_boundary.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="operations.project_assignment_policy",
+                module="app.services.ticket_assignment.rules",
+                owns=("project assignment-rule evaluation",),
+                depends_on=("operations.project_lifecycle", "control.settings_spec"),
+                notes="Evaluates typed rules and candidates only. It cannot mutate Project, ProjectTask, or assignee rows; the lifecycle owner applies its decision under lock.",
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="project assignment-rule evaluation",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical project assignment facts",
+                                "configured assignment rules",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical project assignment facts",
+                            owner="operations.project_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="native project type, region, service team, and current assignment state",
+                        ),
+                        AuthorityInput(
+                            name="configured assignment rules",
+                            owner="control.settings_spec",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="validated active assignment rule configuration and ordering",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary="Pure rule evaluation inside the lifecycle owner's transaction or a read-only preview.",
+                        locking="No locks and no writes; the lifecycle owner locks and revalidates before applying a decision.",
+                        idempotency="Same normalized facts and rule version produce the same ordered decision.",
+                        retries="Read availability failures may be retried; invalid or ambiguous rules fail closed.",
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "operations.project_assignment_policy.invalid_rule",
+                            "operations.project_assignment_policy.ambiguous_target",
+                        ),
+                        mapping_owner="operations.project_lifecycle and assignment preview adapters",
+                        fail_closed_on=(
+                            "invalid rule",
+                            "ambiguous target",
+                            "unknown candidate identity",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        new_owner="operations.project_assignment_policy",
+                        old_owner="ticket_assignment engine direct Project writer",
+                        verification="assignment policy and architecture boundary tests",
+                        cutover_gate="engine delegates Project writes to operations.project_lifecycle",
+                        fallback_retirement="direct Project and ProjectTask assignment writes removed from ticket_assignment.engine",
+                    ),
+                    steward="service delivery",
+                    design_refs=("docs/designs/PROJECTS_SOT_COMPLETION.md",),
+                    test_refs=(
+                        "tests/test_project_assignment_engine.py",
+                        "tests/architecture/test_projects_sot_boundary.py",
+                    ),
                 ),
             ),
             SOTService(
@@ -14894,11 +15810,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         ),
         entrypoints=("app.tasks.*", "app.web.admin.system", "app.main"),
         rule=(
-            "Core customer-financial lifecycle tasks are always registered and cannot "
-            "be disabled, renamed, or deleted. Optional capability scheduling composes "
-            "through the feature control plane. Event-driven transports remain "
-            "requestable but cannot register as independent periodic repair owners; "
-            "task bodies remain thin adapters."
+            "Core lifecycle tasks are always registered and cannot be disabled, "
+            "renamed, or deleted. This includes customer-financial lifecycle work "
+            "and durable command dispatch/drainage after acceptance. Optional "
+            "capability scheduling composes through the feature control plane. "
+            "Event-driven transports remain requestable but cannot register as "
+            "independent periodic repair owners; task bodies remain thin adapters."
         ),
     ),
     DomainSOT(
@@ -14912,11 +15829,20 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "persisted access restriction intent",
                     "subscription access-status transitions",
                     "subscriber access-status projection",
+                    "subscriber portal/account-active projection",
                     "atomic account and child-service access projection",
+                    "sole persisted Subscription.access_state writes",
                 ),
                 depends_on=(
                     "events.dispatcher",
                     "financial.prepaid_enforcement_state",
+                ),
+                notes=(
+                    "Locks, subscriber status, subscriber account-active state, "
+                    "subscription status and every child access-state projection are "
+                    "derived under the lifecycle transaction. "
+                    "Adapters request a lifecycle command or reconciliation; they do not "
+                    "write the access-state projection."
                 ),
             ),
             SOTService(
@@ -15237,10 +16163,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             SOTService(
                 name="access.radius_state",
                 module="app.services.radius_access_state",
-                owns=("desired RADIUS state mapping", "RADIUS group/profile actions"),
+                owns=("pure desired RADIUS access-state mapping",),
                 depends_on=(
-                    "financial.access_resolution",
+                    "access.subscription_lifecycle",
                     "access.walled_garden_policy",
+                    "financial.access_resolution",
+                ),
+                notes=(
+                    "Maps canonical lifecycle status and effective restriction to an "
+                    "AccessState. It writes neither lifecycle rows nor external RADIUS."
                 ),
             ),
             SOTService(
@@ -15272,13 +16203,19 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "radcheck/radreply/radusergroup customer projection",
                     "radcheck_admin/radreply_admin device-login projection",
                     "idempotent per-target advisory-locked RADIUS auth projection",
+                    "credential-independent hard-reject projection",
+                    "unbuildable active/captive login classification and preservation",
+                    "secret-safe exact RADIUS-row projection fingerprint",
                     "walled-garden/reject radreply on blocked/suspended access",
+                    "RADIUS simultaneous-session check/control placement and cutover",
                     "bidirectional desired-versus-observed projection drift",
                 ),
                 depends_on=(
+                    "access.subscription_lifecycle",
                     "access.radius_state",
                     "access.radius_reject",
                     "access.radius_target_registry",
+                    "control.settings_spec",
                 ),
                 notes=(
                     "Single writer of the FreeRADIUS auth tables across every "
@@ -15287,15 +16224,37 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "tables directly. The permanent account-access reconciler is the "
                     "only periodic drift detector and requests the full writer only "
                     "when drift exists; the writer is never independently scheduled. "
-                    "The writer and reconciler consume the same per-login plan and "
-                    "therefore cannot reinterpret lifecycle statuses independently."
+                    "Hard reject does not depend on a recoverable "
+                    "customer password. An active/captive login that cannot be built "
+                    "is preserved and reported, never treated as a successful refresh. "
+                    "The writer and reconciler consume the same exact, secret-safe "
+                    "per-login fingerprint and therefore cannot reinterpret lifecycle "
+                    "statuses or silently ignore attribute drift. "
+                    "Simultaneous-Use is projected to radcheck only after the "
+                    "database-owned cutover gate is enabled; radacct remains observed "
+                    "session evidence and never owns credential or service identity."
                 ),
             ),
             SOTService(
                 name="access.session_enforcement",
                 module="app.services.enforcement",
-                owns=("access-state CoA/disconnect execution",),
-                depends_on=("access.radius_state", "sessions.radius_resolution"),
+                owns=(
+                    "typed access-state CoA/disconnect execution",
+                    "NAS-evidenced accounting-session closure",
+                    "single-flight access-control recovery execution",
+                ),
+                depends_on=(
+                    "access.radius_projection",
+                    "access.radius_state",
+                    "sessions.radius_resolution",
+                ),
+                notes=(
+                    "Disconnect ACK, RFC 5176 session-not-found, rejection, timeout "
+                    "and configuration failure remain distinct outcomes. Accounting "
+                    "closes only when the NAS explicitly reports that the session "
+                    "context is absent. The periodic recovery loop is single-flight "
+                    "and caps attempts rather than successes."
+                ),
             ),
             SOTService(
                 name="access.fup_rule_engine",
@@ -17933,6 +18892,84 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "projection declares the list capabilities and normalizes "
                     "request state, then delegates the read. It issues no query of "
                     "its own. Gated by the existing granular project:read."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="admin project searchable fields",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical project list facts",
+                                "shared list contract",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="admin project filter and stable sort semantics",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical project list facts",
+                                "shared list contract",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="admin project list pagination normalization",
+                            role=OwnerRole.POLICY,
+                            input_names=("shared list contract",),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical project list facts",
+                            owner="operations.project_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="native active Project rows and owner-projected action eligibility",
+                        ),
+                        AuthorityInput(
+                            name="shared list contract",
+                            owner="ui.list_contracts",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="typed search, filters, stable sort, pagination, permission scope, and action eligibility request",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary="Typed ProjectListQuery executes without committing or mutating ORM state.",
+                        locking="No locks; stable ordering includes native Project UUID as the final tie-breaker.",
+                        idempotency="Equivalent query and visibility scope return the same page for the same authoritative snapshot.",
+                        retries="Read availability errors may be retried; invalid filters and unauthorized scopes are not retryable.",
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "ui.project_list_projection.invalid_filter",
+                            "ui.project_list_projection.invalid_sort",
+                            "ui.project_list_projection.invalid_page",
+                            "ui.project_list_projection.unauthorized",
+                        ),
+                        mapping_owner="project API and admin-web adapters",
+                        fail_closed_on=(
+                            "unknown filter field",
+                            "unknown sort field",
+                            "missing permission scope",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        new_owner="ui.project_list_projection",
+                        old_owner="route/template-local project list decisions",
+                        verification="typed query contract, API/admin parity, and template projection architecture tests",
+                        cutover_gate="all list routes delegate typed filter, sort, pagination, status, permission, and eligibility inputs",
+                        fallback_retirement="route and template list-policy inference removed",
+                    ),
+                    steward="service delivery UI",
+                    design_refs=(
+                        "docs/designs/PROJECTS_SOT_COMPLETION.md",
+                        "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                    ),
+                    test_refs=(
+                        "tests/test_web_projects_service.py",
+                        "tests/test_projects_api.py",
+                        "tests/architecture/test_projects_sot_boundary.py",
+                    ),
                 ),
             ),
             SOTService(

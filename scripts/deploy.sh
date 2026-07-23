@@ -22,7 +22,7 @@
 # Procedure:
 #   verify image on GHCR -> DB backup -> pull -> verify OCI revision ->
 #   pin APP_IMAGE + GIT_SHA in .env ->
-#   alembic upgrade heads (one-off container) -> recreate app+workers -> health gate.
+#   migrate + verify -> warm candidate -> recreate app+workers -> health gate.
 #
 # On a failed health gate the previous image is re-pinned and the services are
 # recreated on it. Migrations are NOT reverted automatically — new revisions must
@@ -42,6 +42,12 @@ HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-180}"
 # into the next retry.
 HEALTH_CURL_TIMEOUT="${HEALTH_CURL_TIMEOUT:-5}"
 IMAGE_RETAIN_COUNT="${IMAGE_RETAIN_COUNT:-5}"
+MIGRATION_MAX_ATTEMPTS="${MIGRATION_MAX_ATTEMPTS:-4}"
+MIGRATION_RETRY_SECONDS="${MIGRATION_RETRY_SECONDS:-10}"
+CANDIDATE_CONTAINER="${CANDIDATE_CONTAINER:-dotmac_sub_app_candidate}"
+CANDIDATE_PORT="${CANDIDATE_PORT:-18001}"
+CANDIDATE_HEALTH_URL="${CANDIDATE_HEALTH_URL:-http://127.0.0.1:${CANDIDATE_PORT}/health}"
+CANDIDATE_DRAIN_SECONDS="${CANDIDATE_DRAIN_SECONDS:-2}"
 # Every service that runs the app image and must be recreated on a new build.
 APP_SERVICES=(app celery-worker celery-worker-bandwidth celery-worker-ingestion \
   celery-worker-billing celery-worker-tr069 celery-beat bandwidth-poller \
@@ -88,6 +94,88 @@ fi
 
 log() { printf '\n==> %s\n' "$*"; }
 
+wait_for_health() {
+  local url="$1"
+  local label="$2"
+  local deadline=$((SECONDS + HEALTH_TIMEOUT_SECONDS))
+  while true; do
+    if curl -fsS --connect-timeout "${HEALTH_CURL_TIMEOUT}" \
+      --max-time "${HEALTH_CURL_TIMEOUT}" -o /dev/null "${url}" 2>/dev/null; then
+      return 0
+    fi
+    if ((SECONDS >= deadline)); then
+      echo "${label} health gate failed: ${url}" >&2
+      return 1
+    fi
+    sleep 5
+  done
+}
+
+assert_proxy_handoff_contract() {
+  local config
+  if ! command -v nginx >/dev/null; then
+    echo "DEPLOY AVAILABILITY FAILURE: nginx is not installed or not on PATH." >&2
+    return 1
+  fi
+  if ! config="$(nginx -T 2>&1)"; then
+    echo "DEPLOY AVAILABILITY FAILURE: nginx configuration cannot be read." >&2
+    echo "Run 'nginx -T' on the host for the configuration error." >&2
+    return 1
+  fi
+  if ! grep -Eq \
+    "^[[:space:]]*server[[:space:]]+127\\.0\\.0\\.1:${CANDIDATE_PORT}[[:space:]]+backup" \
+    <<<"${config}"; then
+    echo "DEPLOY AVAILABILITY FAILURE: nginx has no warm candidate upstream on" >&2
+    echo "127.0.0.1:${CANDIDATE_PORT}. Install nginx/selfcare.dotmac.io.conf and reload nginx." >&2
+    return 1
+  fi
+}
+
+CANDIDATE_STARTED=0
+PRIMARY_REPLACED=0
+
+cleanup_candidate() {
+  if [[ "${CANDIDATE_STARTED}" == "1" ]]; then
+    docker rm -f "${CANDIDATE_CONTAINER}" >/dev/null 2>&1 || true
+    CANDIDATE_STARTED=0
+  fi
+}
+
+stop_candidate_gracefully() {
+  if [[ "${CANDIDATE_STARTED}" != "1" ]]; then
+    return
+  fi
+  sleep "${CANDIDATE_DRAIN_SECONDS}"
+  docker stop --time 30 "${CANDIDATE_CONTAINER}" >/dev/null 2>&1 || true
+  docker rm -f "${CANDIDATE_CONTAINER}" >/dev/null 2>&1 || true
+  CANDIDATE_STARTED=0
+}
+
+run_migrations() {
+  local attempt=1
+  local output
+  local rc
+  while ((attempt <= MIGRATION_MAX_ATTEMPTS)); do
+    if output="$("${COMPOSE[@]}" run --rm --no-deps app alembic upgrade heads 2>&1)"; then
+      printf '%s\n' "${output}"
+      return 0
+    else
+      rc=$?
+    fi
+    printf '%s\n' "${output}" >&2
+    if ! grep -qiE "lock timeout|canceling statement due to lock" <<<"${output}"; then
+      return "${rc}"
+    fi
+    if ((attempt == MIGRATION_MAX_ATTEMPTS)); then
+      echo "Migration remained lock-blocked after ${MIGRATION_MAX_ATTEMPTS} attempts." >&2
+      return "${rc}"
+    fi
+    log "Migration lock timeout (attempt ${attempt}/${MIGRATION_MAX_ATTEMPTS}); retrying in ${MIGRATION_RETRY_SECONDS}s"
+    sleep "${MIGRATION_RETRY_SECONDS}"
+    attempt=$((attempt + 1))
+  done
+}
+
 # Deploy-integrity gate. The immutable image must not be shadowed by a host
 # source bind-mount: a `/app/app` mount means a dev overlay (docker-compose.dev.yml,
 # or a legacy auto-loaded docker-compose.override.yml) got layered on, so the
@@ -96,11 +184,12 @@ log() { printf '\n==> %s\n' "$*"; }
 # explicitly. `/app/uploads` and other named volumes are fine; only `/app/app`
 # (the Python package) shadowing the image is the failure.
 assert_no_source_mount() {
+  local container="${1:-${APP_CONTAINER}}"
   local mounts
-  mounts="$(docker inspect "${APP_CONTAINER}" \
+  mounts="$(docker inspect "${container}" \
     --format '{{range .Mounts}}{{println .Destination}}{{end}}' 2>/dev/null || true)"
   if grep -qx '/app/app' <<<"${mounts}"; then
-    echo "DEPLOY INTEGRITY FAILURE: ${APP_CONTAINER} has a host bind-mount at /app/app —" >&2
+    echo "DEPLOY INTEGRITY FAILURE: ${container} has a host bind-mount at /app/app —" >&2
     echo "the working tree is shadowing the image, so '${TAG:-?}' is NOT the running code." >&2
     echo "Cause: a dev overlay was loaded (stray docker-compose.override.yml, or a bare" >&2
     echo "'docker compose up/restart' on the host). Fix on the host, then redeploy:" >&2
@@ -190,6 +279,9 @@ fi
 
 log "Deploying ${IMAGE} (currently pinned: ${PREV_IMAGE:-none})"
 
+log "Verifying Nginx warm-handoff contract"
+assert_proxy_handoff_contract
+
 log "Verifying image exists on registry"
 docker manifest inspect "${IMAGE}" >/dev/null
 
@@ -228,16 +320,20 @@ repin_prev() {
 # reports the ORIGINAL failure once the trap returns.
 restore_prev() {
   repin_prev
-  if [[ -n "${PREV_IMAGE}" ]]; then
+  if [[ "${PRIMARY_REPLACED}" == "1" && -n "${PREV_IMAGE}" ]]; then
     "${COMPOSE[@]}" up -d "${APP_SERVICES[@]}" || true
+    if [[ "${CANDIDATE_STARTED}" == "1" ]]; then
+      wait_for_health "${HEALTH_URL}" "Rolled-back primary" || true
+    fi
   fi
+  cleanup_candidate
 }
 trap 'restore_prev; echo "Deploy FAILED — APP_IMAGE/GIT_SHA restored to the previous release; previous image brought back up where possible" >&2' ERR
 
 # From here on APP_IMAGE may already be pinned, so an interrupt must restore it
 # too -- not just terminate the backup child. (Migrations are NOT reverted; new
 # revisions must stay backward-compatible with the previous release.)
-trap 'cleanup_children; repin_prev; echo "Deploy interrupted — APP_IMAGE/GIT_SHA restored to the previous release" >&2; exit 130' INT TERM HUP
+trap 'cleanup_children; restore_prev; echo "Deploy interrupted — previous release restored" >&2; exit 130' INT TERM HUP
 
 log "Pulling image"
 docker pull "${IMAGE}"
@@ -258,9 +354,24 @@ set_env_value GIT_SHA "${FULL_SHA}"
 # Multi-head safe: sub has hit multi-head states (e.g. the bundles migration that
 # merged heads), so use `heads` (plural), never `head`.
 log "Applying migrations (alembic upgrade heads)"
-"${COMPOSE[@]}" run --rm --no-deps app alembic upgrade heads
+run_migrations
+
+log "Verifying database schema contracts"
+"${COMPOSE[@]}" run --rm --no-deps app \
+  python -m scripts.migration.verify_schema_contracts
+
+log "Starting warm candidate on 127.0.0.1:${CANDIDATE_PORT}"
+docker rm -f "${CANDIDATE_CONTAINER}" >/dev/null 2>&1 || true
+"${COMPOSE[@]}" run --rm --no-deps -d \
+  --name "${CANDIDATE_CONTAINER}" \
+  -p "127.0.0.1:${CANDIDATE_PORT}:8001" \
+  app >/dev/null
+CANDIDATE_STARTED=1
+assert_no_source_mount "${CANDIDATE_CONTAINER}"
+wait_for_health "${CANDIDATE_HEALTH_URL}" "Warm candidate"
 
 log "Recreating services: ${APP_SERVICES[*]}"
+PRIMARY_REPLACED=1
 "${COMPOSE[@]}" up -d "${APP_SERVICES[@]}"
 
 log "Verifying deploy integrity (no host source bind-mount shadowing the image)"
@@ -269,32 +380,23 @@ if ! assert_no_source_mount; then
   exit 1
 fi
 
-# The app service has no docker healthcheck, so gate on its HTTP /health endpoint.
+# Nginx serves the healthy candidate while Compose replaces the primary.
 log "Waiting for app health at ${HEALTH_URL} (timeout ${HEALTH_TIMEOUT_SECONDS}s)"
-deadline=$((SECONDS + HEALTH_TIMEOUT_SECONDS))
-healthy=0
-while ((SECONDS < deadline)); do
-  if curl -fsS --connect-timeout "${HEALTH_CURL_TIMEOUT}" --max-time "${HEALTH_CURL_TIMEOUT}" \
-    -o /dev/null "${HEALTH_URL}" 2>/dev/null; then
-    healthy=1
-    break
-  fi
-  sleep 5
-done
-
-if ((healthy == 0)); then
+if ! wait_for_health "${HEALTH_URL}" "Primary app"; then
   trap - ERR
   log "Health gate FAILED (${HEALTH_URL} never became healthy) — rolling back to ${PREV_IMAGE:-none}"
   if [[ -n "${PREV_IMAGE}" ]]; then
-    repin_prev
-    "${COMPOSE[@]}" pull app || true
-    "${COMPOSE[@]}" up -d "${APP_SERVICES[@]}"
+    restore_prev
     log "Rolled back to ${PREV_IMAGE}. NOTE: migrations from ${TAG} were NOT reverted."
   else
+    cleanup_candidate
     log "No previous image recorded — cannot auto-roll-back. Investigate the app container."
   fi
   exit 1
 fi
+
+log "Primary is healthy; draining warm candidate"
+stop_candidate_gracefully
 
 trap - ERR
 log "Deployed ${TAG} successfully (was ${PREV_IMAGE:-none})"
