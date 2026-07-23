@@ -65,3 +65,22 @@ def service_address(db: Session, subscriber_id: str | uuid.UUID) -> Address | No
         .order_by(Address.created_at.asc())
         .first()
     )
+
+
+def pick_service_address(addresses: list[Address] | None) -> Address | None:
+    """Pick the service ``Address`` from an already-loaded list, or ``None``.
+
+    The no-DB counterpart to :func:`service_address`, for formatters that
+    already hold ``subscriber.addresses``. Prefers primary service-type, then
+    primary, then any (stable on the list's existing order for ties).
+    """
+    items = list(addresses or [])
+    if not items:
+        return None
+    items.sort(
+        key=lambda a: (
+            0 if getattr(a, "is_primary", False) else 1,
+            0 if getattr(a, "address_type", None) == AddressType.service else 1,
+        )
+    )
+    return items[0]

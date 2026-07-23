@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from app.models.subscriber import Address, AddressType
-from app.services.service_address import service_address
+from app.services.service_address import pick_service_address, service_address
 
 
 def _add(db, subscriber_id, **kw):
@@ -37,3 +37,33 @@ class TestServiceAddress:
             is_primary=False,
         )
         assert service_address(db_session, subscriber.id).id == want.id
+
+
+class TestPickServiceAddress:
+    def test_none_for_empty(self):
+        assert pick_service_address(None) is None
+        assert pick_service_address([]) is None
+
+    def test_prefers_primary_service(self):
+        billing = Address(
+            subscriber_id=None,
+            address_line1="b",
+            address_type=AddressType.billing,
+            is_primary=True,
+        )
+        service = Address(
+            subscriber_id=None,
+            address_line1="s",
+            address_type=AddressType.service,
+            is_primary=True,
+        )
+        assert pick_service_address([billing, service]) is service
+
+    def test_returns_only_address(self):
+        only = Address(
+            subscriber_id=None,
+            address_line1="x",
+            address_type=AddressType.service,
+            is_primary=False,
+        )
+        assert pick_service_address([only]) is only
