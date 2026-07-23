@@ -131,6 +131,54 @@ def test_full_sweep_projects_every_login(_radius_env, db_session):
     assert "scoped_targets" not in stats
 
 
+def test_hard_reject_does_not_require_customer_credential(
+    _radius_env,
+    db_session,
+):
+    offer = _offer(db_session)
+    account = _account(db_session)
+    account.status = "blocked"
+    subscription = Subscription(
+        subscriber_id=account.id,
+        offer_id=offer.id,
+        status=SubscriptionStatus.active,
+        billing_mode=BillingMode.prepaid,
+        login="blocked-without-secret",
+    )
+    db_session.add(subscription)
+    db_session.commit()
+
+    stats = radius_population.populate(dry_run=True)
+
+    assert stats["projected_logins"] == 1
+    assert stats["rejected_users_written"] == 1
+    assert stats["unbuildable_logins"] == 0
+    assert stats["projection_complete"] is True
+
+
+def test_active_login_without_credential_is_reported_unbuildable(
+    _radius_env,
+    db_session,
+):
+    offer = _offer(db_session)
+    account = _account(db_session)
+    subscription = Subscription(
+        subscriber_id=account.id,
+        offer_id=offer.id,
+        status=SubscriptionStatus.active,
+        billing_mode=BillingMode.prepaid,
+        login="active-without-secret",
+    )
+    db_session.add(subscription)
+    db_session.commit()
+
+    stats = radius_population.populate(dry_run=True)
+
+    assert stats["projected_logins"] == 0
+    assert stats["unbuildable_logins"] == 1
+    assert stats["projection_complete"] is False
+
+
 def test_scoped_reconcile_writes_only_the_requested_login(_radius_env, db_session):
     a1, a2, b1 = _seed(db_session)
     stats = radius_population.reconcile_usernames({a1}, dry_run=True)
@@ -151,6 +199,8 @@ def test_empty_target_set_is_a_noop(_radius_env, db_session):
     _seed(db_session)
     stats = radius_population.reconcile_usernames(set(), dry_run=True)
     assert stats["radcheck_upserts"] == 0
+    assert stats["projected_logins"] == 0
+    assert stats["projection_complete"] is True
 
 
 def test_scoped_reconcile_fans_out_to_every_configured_target(

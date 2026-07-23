@@ -58,6 +58,10 @@ from app.services.provisioning_adapters import (
     get_provisioner,
     register_provisioner,
 )
+from app.services.radius import (
+    ConnectivityProjectionDisposition,
+    SubscriptionConnectivityOutcome,
+)
 
 # ---------------------------------------------------------------------------
 # EventType enum tests
@@ -394,7 +398,13 @@ class TestEnforcementHandler:
     def _successful_radius_projection(self, monkeypatch):
         monkeypatch.setattr(
             "app.services.events.handlers.enforcement.radius_service.reconcile_subscription_connectivity",
-            lambda _db, _subscription_id: {"ok": True},
+            lambda _db, subscription_id: SubscriptionConnectivityOutcome(
+                subscription_id=str(subscription_id),
+                disposition=ConnectivityProjectionDisposition.projected,
+                requested_logins=1,
+                projected_logins=1,
+                projection_targets=1,
+            ),
         )
 
     def _make_event(self, event_type, payload=None, **kwargs):

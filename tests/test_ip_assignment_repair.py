@@ -1,7 +1,7 @@
 """Tests for step-2a IPAM-to-served repair.
 
 Repairs the IPAM ledger to match the served IPv4; never changes a served IP;
-refuses conflicts. See docs/designs/SERVICE_LIFECYCLE_BUNDLE_INTEGRITY.md §5b.
+refuses conflicts. See docs/FINANCIAL_ACCESS_ENFORCEMENT.md.
 """
 
 from __future__ import annotations

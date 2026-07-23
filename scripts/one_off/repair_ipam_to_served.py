@@ -6,7 +6,7 @@ Makes ``IPAssignment`` reflect what RADIUS actually serves
 IP — it only backfills/repoints the ledger, so it is non-customer-impacting.
 Refuses to auto-fix conflicts (served IP already assigned to another subscriber,
 management/ONT address, or a subscriber claiming two IPs). See
-docs/designs/SERVICE_LIFECYCLE_BUNDLE_INTEGRITY.md §5b.
+docs/FINANCIAL_ACCESS_ENFORCEMENT.md.
 
 Usage (inside the app container; PYTHONPATH=/app so `app` resolves):
 

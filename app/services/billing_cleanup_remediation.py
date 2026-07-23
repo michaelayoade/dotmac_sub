@@ -979,7 +979,9 @@ def _execute_item(db: Session, item: dict[str, Any]) -> dict[str, Any]:
     if item["action"] == "sync_missing_radius_subscription":
         from app.services.radius import reconcile_subscription_connectivity
 
-        return dict(reconcile_subscription_connectivity(db, item["subscription_id"]))
+        return reconcile_subscription_connectivity(
+            db, item["subscription_id"]
+        ).as_dict()
     if item["action"] == "retire_unfunded_prepaid_ar":
         invoice = db.get(Invoice, coerce_uuid(item["invoice_id"]))
         if invoice is None:

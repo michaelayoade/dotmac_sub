@@ -2,7 +2,7 @@
 
 Quantifies drift between the THREE places an active subscriber's IPv4 lives,
 without touching any device (read-only). See
-``docs/designs/SERVICE_LIFECYCLE_BUNDLE_INTEGRITY.md``.
+``docs/FINANCIAL_ACCESS_ENFORCEMENT.md``.
 
 The three sources, in sync when a subscriber has a pinned (static) IPv4:
 

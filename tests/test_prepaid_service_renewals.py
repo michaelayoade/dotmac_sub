@@ -11,6 +11,8 @@ from app.models.billing import (
     InvoiceStatus,
     LedgerEntryType,
     LedgerSource,
+    Payment,
+    PaymentStatus,
     ServiceEntitlement,
 )
 from app.models.catalog import (
@@ -25,6 +27,9 @@ from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.event_store import EventStore
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services.customer_financial_ledger import calculate_customer_balance
+from app.services.domain_errors import DomainError
+from app.services.events.handlers.prepaid_renewal import PrepaidRenewalHandler
+from app.services.events.types import Event, EventType
 from app.services.prepaid_service_renewals import (
     FundingChangeRenewalDisposition,
     PrepaidServiceRenewalError,
@@ -34,6 +39,45 @@ from app.services.prepaid_service_renewals import (
     run_due_prepaid_service_renewals,
 )
 from tests.prepaid_funding_helpers import materialize_test_prepaid_opening_balance
+
+
+def test_funding_event_without_payment_id_remains_retryable(db_session, subscriber):
+    event = Event(
+        event_type=EventType.payment_received,
+        payload={},
+        account_id=subscriber.id,
+    )
+
+    with pytest.raises(DomainError) as exc_info:
+        PrepaidRenewalHandler().handle(db_session, event)
+
+    assert exc_info.value.code.endswith("event_payment_missing")
+
+
+def test_succeeded_payment_without_settlement_evidence_remains_retryable(
+    db_session,
+    subscriber,
+):
+    payment = Payment(
+        account_id=subscriber.id,
+        amount=Decimal("100.00"),
+        currency="NGN",
+        status=PaymentStatus.succeeded,
+        paid_at=datetime(2026, 7, 23, tzinfo=UTC),
+        is_active=True,
+    )
+    db_session.add(payment)
+    db_session.flush()
+    event = Event(
+        event_type=EventType.payment_received,
+        payload={"payment_id": str(payment.id)},
+        account_id=subscriber.id,
+    )
+
+    with pytest.raises(PrepaidServiceRenewalError) as exc_info:
+        PrepaidRenewalHandler().handle(db_session, event)
+
+    assert exc_info.value.code.endswith("settlement_missing")
 
 
 def _prepare(db_session, subscriber, subscription, amount="100.00"):

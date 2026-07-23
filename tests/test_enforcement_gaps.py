@@ -11,13 +11,29 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
+import pytest
+
 from app.models.catalog import (
     AccessCredential,
     NasDevice,
     RadiusProfile,
     Subscription,
 )
+from app.services.enforcement import (
+    CoADisconnectDisposition,
+    CoADisconnectOutcome,
+)
 from app.services.events.types import Event, EventType
+from app.services.radius import (
+    ConnectivityProjectionDisposition,
+    RadiusConnectivityProjectionIncomplete,
+    SubscriptionConnectivityOutcome,
+)
+
+
+def _coa(disposition: CoADisconnectDisposition) -> CoADisconnectOutcome:
+    return CoADisconnectOutcome(disposition)
+
 
 # ---------------------------------------------------------------------------
 # _build_mikrotik_rate_limit
@@ -255,11 +271,46 @@ class TestProvisioningHandlerAutoProvisioning:
             ) as mock_sync,
             patch(
                 "app.services.radius.reconcile_subscription_connectivity",
-                return_value={"ok": True},
+                return_value=SubscriptionConnectivityOutcome(
+                    subscription_id=str(uuid4()),
+                    disposition=ConnectivityProjectionDisposition.projected,
+                    requested_logins=1,
+                    projected_logins=1,
+                    projection_targets=1,
+                ),
             ),
         ):
             handler._sync_radius_on_activation(db, str(uuid4()))
             mock_sync.assert_called_once()
+
+
+def test_restore_connectivity_fails_when_radius_projection_is_incomplete():
+    from app.services.enforcement import restore_subscription_connectivity
+
+    db = MagicMock()
+    subscription = MagicMock(spec=Subscription)
+    subscription.id = uuid4()
+    subscription.subscriber_id = uuid4()
+    db.get.return_value = subscription
+    db.query.return_value.filter.return_value.filter.return_value.all.return_value = []
+
+    with (
+        patch("app.services.connectivity_backup.capture_connectivity_state"),
+        patch(
+            "app.services.radius.reconcile_subscription_connectivity",
+            return_value=SubscriptionConnectivityOutcome(
+                subscription_id=str(subscription.id),
+                disposition=ConnectivityProjectionDisposition.target_unavailable,
+            ),
+        ),
+        patch(
+            "app.services.enforcement.remove_subscription_address_list_block"
+        ) as remove_block,
+        pytest.raises(RadiusConnectivityProjectionIncomplete),
+    ):
+        restore_subscription_connectivity(db, str(subscription.id))
+
+    remove_block.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -313,14 +364,20 @@ class TestCoaNegativeCache:
             patch("app.services.enforcement._coa_retries", return_value=0),
             patch("app.services.enforcement._radius_timeout_sec", return_value=0.01),
         ):
-            assert _send_coa_disconnect(db, device, "u", "1.2.3.4", "sid") is False
+            assert (
+                _send_coa_disconnect(db, device, "u", "1.2.3.4", "sid").disposition
+                is CoADisconnectDisposition.timeout
+            )
 
         assert _coa_disabled_for_nas(nas_id) is True
 
         # Second call must short-circuit: Client must NOT be instantiated again.
         mock_client_cls.reset_mock()
         with patch("app.services.enforcement._coa_enabled", return_value=True):
-            assert _send_coa_disconnect(db, device, "u", "1.2.3.4", "sid") is False
+            assert (
+                _send_coa_disconnect(db, device, "u", "1.2.3.4", "sid").disposition
+                is CoADisconnectDisposition.temporarily_suppressed
+            )
         mock_client_cls.assert_not_called()
 
     @patch("app.services.enforcement.decrypt_credential", return_value="secret")
@@ -358,7 +415,7 @@ class TestCoaNegativeCache:
             patch("app.services.enforcement._coa_retries", return_value=0),
             patch("app.services.enforcement._radius_timeout_sec", return_value=0.01),
         ):
-            assert _send_coa_disconnect(db, device, "u", "1.2.3.4", "sid") is True
+            assert _send_coa_disconnect(db, device, "u", "1.2.3.4", "sid").disconnected
 
         # Successful send must keep the cache clear.
         assert _coa_disabled_for_nas(nas_id) is False
@@ -389,8 +446,38 @@ class TestCoaNegativeCache:
             patch("app.services.enforcement._coa_retries", return_value=0),
             patch("app.services.enforcement._radius_timeout_sec", return_value=0.01),
         ):
-            assert _send_coa_disconnect(db, device, "u", "1.2.3.4", "sid") is False
+            assert (
+                _send_coa_disconnect(db, device, "u", "1.2.3.4", "sid").disposition
+                is CoADisconnectDisposition.rejected
+            )
         assert _coa_disabled_for_nas(nas_id) is False
+
+    @patch("app.services.enforcement.decrypt_credential", return_value="secret")
+    @patch("app.services.enforcement._radius_dictionary_path", return_value="/dict")
+    @patch("app.services.enforcement.Dictionary")
+    @patch("app.services.enforcement.Client")
+    def test_disconnect_nak_session_not_found_is_typed_evidence(
+        self, mock_client_cls, mock_dict, mock_path, mock_decrypt
+    ):
+        from pyrad.packet import DisconnectNAK
+
+        from app.services.enforcement import _send_coa_disconnect
+
+        db = MagicMock()
+        device = self._device(uuid4())
+        response = MagicMock()
+        response.code = DisconnectNAK
+        response.__getitem__.return_value = [b"503"]
+        mock_client_cls.return_value.SendPacket.return_value = response
+
+        with (
+            patch("app.services.enforcement._coa_enabled", return_value=True),
+            patch("app.services.enforcement._coa_retries", return_value=0),
+            patch("app.services.enforcement._radius_timeout_sec", return_value=0.01),
+        ):
+            outcome = _send_coa_disconnect(db, device, "u", "1.2.3.4", "sid")
+
+        assert outcome.session_absent
 
     def test_reset_coa_cache_all_and_per_nas(self):
         from app.services.enforcement import (
@@ -517,7 +604,9 @@ class TestResolveCoaSecret:
                 return_value="radius-secret",
             ),
         ):
-            assert _send_coa_disconnect(MagicMock(), device, "u", None, "sid") is True
+            assert _send_coa_disconnect(
+                MagicMock(), device, "u", None, "sid"
+            ).disconnected
         assert mock_client_cls.call_args.kwargs["secret"] == b"radius-secret"
 
     def test_unusable_local_secret_falls_through_to_external(self):
@@ -626,7 +715,10 @@ class TestDisconnectRouterOsApiGate:
                 "app.services.enforcement._resolve_nas_device",
                 return_value=nas_device,
             ),
-            patch("app.services.enforcement._send_coa_disconnect", return_value=False),
+            patch(
+                "app.services.enforcement._send_coa_disconnect",
+                return_value=_coa(CoADisconnectDisposition.rejected),
+            ),
             patch(
                 "app.services.enforcement._mikrotik_api_session_kick_enabled",
                 return_value=False,
@@ -662,7 +754,10 @@ class TestDisconnectRouterOsApiGate:
                 "app.services.enforcement._resolve_nas_device",
                 return_value=nas_device,
             ),
-            patch("app.services.enforcement._send_coa_disconnect", return_value=False),
+            patch(
+                "app.services.enforcement._send_coa_disconnect",
+                return_value=_coa(CoADisconnectDisposition.rejected),
+            ),
             patch(
                 "app.services.enforcement._mikrotik_api_session_kick_enabled",
                 return_value=True,

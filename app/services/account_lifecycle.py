@@ -36,7 +36,9 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from sqlalchemy import select
 
@@ -1263,6 +1265,75 @@ def derive_account_status(db: Session, subscriber_id: str) -> SubscriberStatus:
     return SubscriberStatus.canceled
 
 
+def derive_account_active_projection(
+    subscriber: Subscriber,
+    *,
+    account_status: SubscriberStatus | None = None,
+) -> bool:
+    """Return the portal/account-active projection for canonical account state."""
+    projected_status = account_status or subscriber.status
+    explicitly_suspended = (
+        subscriber.lifecycle_override_status == SubscriberStatus.suspended
+    )
+    return projected_status in {
+        SubscriberStatus.active,
+        SubscriberStatus.new,
+        SubscriberStatus.blocked,
+        SubscriberStatus.delinquent,
+    } or (projected_status == SubscriberStatus.suspended and not explicitly_suspended)
+
+
+def derive_subscription_access_projection(
+    db: Session,
+    subscriber: Subscriber,
+    *,
+    account_status: SubscriberStatus | None = None,
+) -> dict[UUID, str | None]:
+    """Return every child service's canonical desired access-state value."""
+    from app.services.access_resolution import resolve_customer_access
+    from app.services.walled_garden_policy import resolve_subscription_restriction
+
+    projected_status = account_status or subscriber.status
+    projected_is_active = derive_account_active_projection(
+        subscriber,
+        account_status=projected_status,
+    )
+    account_input = SimpleNamespace(
+        id=subscriber.id,
+        status=projected_status,
+        billing_mode=subscriber.billing_mode,
+        is_active=projected_is_active,
+        billing_enabled=subscriber.billing_enabled,
+        captive_redirect_enabled=subscriber.captive_redirect_enabled,
+        user_type=subscriber.user_type,
+        metadata_=subscriber.metadata_,
+        reseller=subscriber.reseller,
+        reseller_id=subscriber.reseller_id,
+    )
+    projected: dict[UUID, str | None] = {}
+    subscriptions = list(
+        db.scalars(
+            select(Subscription).where(Subscription.subscriber_id == subscriber.id)
+        ).all()
+    )
+    for subscription in subscriptions:
+        restriction = resolve_subscription_restriction(
+            db,
+            subscription,
+            account=account_input,  # type: ignore[arg-type]
+        )
+        decision = resolve_customer_access(
+            subscription,
+            subscriber=account_input,
+            access_restriction_mode=(
+                restriction.effective_mode if restriction is not None else None
+            ),
+        )
+        state = decision.radius_access_state
+        projected[subscription.id] = state.value if state is not None else None
+    return projected
+
+
 def _stage_subscription_access_projection(
     db: Session,
     subscriber: Subscriber,
@@ -1275,30 +1346,21 @@ def _stage_subscription_access_projection(
     from being fed back into RADIUS policy after a payment or restoration.
     External RADIUS remains eventual and is reconciled only after commit.
     """
-    from app.services.access_resolution import resolve_customer_access
-    from app.services.walled_garden_policy import resolve_subscription_restriction
-
+    # The application session runs with autoflush disabled. Persist newly
+    # staged lock transitions before deriving access so this transaction cannot
+    # project yesterday's lock set.
+    db.flush()
     changed = 0
-    subscriptions = list(
-        db.scalars(
+    subscriptions = {
+        subscription.id: subscription
+        for subscription in db.scalars(
             select(Subscription).where(Subscription.subscriber_id == subscriber.id)
         ).all()
-    )
-    for subscription in subscriptions:
-        restriction = resolve_subscription_restriction(
-            db,
-            subscription,
-            account=subscriber,
-        )
-        decision = resolve_customer_access(
-            subscription,
-            subscriber=subscriber,
-            access_restriction_mode=(
-                restriction.effective_mode if restriction is not None else None
-            ),
-        )
-        state = decision.radius_access_state
-        projected = state.value if state is not None else None
+    }
+    for subscription_id, projected in derive_subscription_access_projection(
+        db, subscriber
+    ).items():
+        subscription = subscriptions[subscription_id]
         if subscription.access_state == projected:
             continue
         subscription.access_state = projected
@@ -1357,17 +1419,10 @@ def compute_account_status(db: Session, subscriber_id: str) -> SubscriberStatus:
     # keeps portal access so the customer can view invoices and pay. An explicit
     # account suspension is an administrative access decision and disables the
     # account until that override is cleared.
-    explicitly_suspended = (
-        subscriber.lifecycle_override_status == SubscriberStatus.suspended
+    should_be_active = derive_account_active_projection(
+        subscriber,
+        account_status=new_status,
     )
-    should_be_active = new_status in {
-        SubscriberStatus.active,
-        SubscriberStatus.new,
-        SubscriberStatus.blocked,
-        # Delinquent = past due but service still running; keep portal access
-        # so they can log in and pay down the balance.
-        SubscriberStatus.delinquent,
-    } or (new_status == SubscriberStatus.suspended and not explicitly_suspended)
     if subscriber.is_active != should_be_active:
         subscriber.is_active = should_be_active
 

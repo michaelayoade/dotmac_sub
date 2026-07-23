@@ -51,7 +51,6 @@ commit 2 app/web/admin/network_operations.py
 commit 2 app/web/admin/reports.py
 commit 1 app/web/admin/system.py
 commit 2 app/web/customer/location.py
-flush 1 app/services/events/handlers/enforcement.py
 flush 1 app/tasks/alert_evaluation.py
 flush 1 app/tasks/nin_tasks.py
 flush 1 app/tasks/uisp_control.py

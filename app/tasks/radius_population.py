@@ -25,7 +25,7 @@ _POPULATE_LOCK_KEY = 778_001
 @celery_app.task(name="app.tasks.radius_population.refresh_radius_from_subs")
 def refresh_radius_from_subs() -> dict[str, object]:
     """Rebuild radcheck + radreply from dotmac_sub authoritative joins."""
-    from app.services.radius_population import populate
+    from app.services.radius_population import populate, require_complete_projection
 
     logger.info("RADIUS refresh-from-subs starting")
     with postgres_session_advisory_lock(_POPULATE_LOCK_KEY) as acquired:
@@ -35,6 +35,7 @@ def refresh_radius_from_subs() -> dict[str, object]:
             )
             return {"skipped_locked": 1}
         result = populate(dry_run=False)
+        require_complete_projection(result)
     logger.info("RADIUS refresh-from-subs complete: %s", result)
     return result
 

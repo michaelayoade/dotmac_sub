@@ -533,14 +533,22 @@ def _collect_infrastructure_findings(db: Session) -> list[AlertFinding]:
 def _access_control_findings() -> list[AlertFinding]:
     """Report a completed access-control pass that did not converge."""
     from app.services.job_heartbeat import get_last_result
+    from app.services.task_heartbeat import snapshot
 
-    result = get_last_result("app.tasks.radius.run_enforcement_reconciler")
-    if not result or result.get("status") == "ok":
+    task_name = "app.tasks.radius.run_enforcement_reconciler"
+    result = get_last_result(task_name)
+    heartbeat = snapshot(task_name)
+    skip_streak = int(heartbeat.get("skip_streak") or 0)
+    if (not result or result.get("status") == "ok") and skip_streak < 3:
         return []
+    result = result or {"status": "unknown", "detail": None}
     detail = result.get("detail")
     counters = detail if isinstance(detail, dict) else {}
     unconverged = int(counters.get("radius_projection_unconverged") or 0)
+    unbuildable = int(counters.get("radius_unbuildable_logins") or 0)
     errors = int(counters.get("account_projection_errors") or 0)
+    kick_failed = int(counters.get("kick_failed") or 0)
+    kicks_capped = int(counters.get("kicks_capped") or 0)
     target_configured = int(counters.get("accounting_target_configured") or 0)
     return [
         AlertFinding(
@@ -549,15 +557,18 @@ def _access_control_findings() -> list[AlertFinding]:
             source="access-control-reconciler",
             severity=(
                 AlertSeverity.critical
-                if not target_configured or errors
+                if (counters and not target_configured) or errors
                 else AlertSeverity.warning
             ),
             title="Customer access reconciliation is not converged",
             summary=(
                 f"The latest access-control pass reported {unconverged} RADIUS "
-                f"projection difference(s) and {errors} local projection error(s)."
+                f"projection difference(s), {unbuildable} unbuildable login(s), "
+                f"{errors} local projection error(s), {kick_failed} failed "
+                f"disconnect attempt(s), {kicks_capped} deferred by the cap, "
+                f"and {skip_streak} consecutive overlapping run(s)."
             ),
-            details=_json_safe(result),
+            details=_json_safe({**result, "single_flight": heartbeat}),
         )
     ]
 

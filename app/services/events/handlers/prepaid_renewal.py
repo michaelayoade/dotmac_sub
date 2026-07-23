@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.billing import Payment, PaymentSettlement, PaymentStatus
 from app.services.common import coerce_uuid
+from app.services.domain_errors import DomainError
 from app.services.events.types import Event, EventType
 from app.services.prepaid_service_renewals import (
-    apply_due_prepaid_service_after_funding_change,
+    evaluate_prepaid_service_after_settlement,
 )
 
 logger = logging.getLogger(__name__)
@@ -25,57 +24,54 @@ class PrepaidRenewalHandler:
     """Thin event adapter around the prepaid service-renewal owner."""
 
     def handle(self, db: Session, event: Event) -> None:
-        if event.event_type not in HANDLED_EVENT_TYPES or event.account_id is None:
+        if event.event_type not in HANDLED_EVENT_TYPES:
             return
+        if event.account_id is None:
+            raise DomainError(
+                code="financial.prepaid_service_renewals.event_account_missing",
+                message="Funding-change event has no account identifier.",
+                details={"event_id": str(event.event_id)},
+            )
         payment_id = event.payload.get("payment_id")
         if not payment_id:
-            return
-        payment = db.get(Payment, coerce_uuid(payment_id))
-        settlement_id = (
-            db.scalar(
-                select(PaymentSettlement.id).where(
-                    PaymentSettlement.payment_id == payment.id
-                )
+            raise DomainError(
+                code="financial.prepaid_service_renewals.event_payment_missing",
+                message="Funding-change event has no payment identifier.",
+                details={"event_id": str(event.event_id)},
             )
-            if payment is not None
-            else None
-        )
-        if (
-            payment is None
-            or payment.account_id != event.account_id
-            or payment.status != PaymentStatus.succeeded
-            or not payment.is_active
-            or settlement_id is None
-        ):
-            return
-        effective_at = payment.paid_at or payment.created_at
-        if effective_at is None:
-            return
-        result = apply_due_prepaid_service_after_funding_change(
+        evaluation = evaluate_prepaid_service_after_settlement(
             db,
             account_id=event.account_id,
-            effective_at=effective_at,
-            funding_currency=payment.currency,
+            payment_id=coerce_uuid(payment_id),
             evidence_ref=f"{event.event_type.value}:{event.event_id}",
-            trigger_payment_id=payment.id,
         )
+        result = evaluation.renewal
         logger.info(
             "prepaid_renewal_after_funding_change",
             extra={
                 "event": "prepaid_renewal_after_funding_change",
                 "event_id": str(event.event_id),
-                "payment_id": str(payment.id),
+                "payment_id": str(evaluation.payment_id),
                 "account_id": str(event.account_id),
-                "disposition": result.disposition.value,
-                "scanned": result.scanned,
-                "funded": result.funded,
-                "unfunded": result.unfunded,
-                "already_covered": result.already_covered,
-                "missing_price": result.missing_price,
-                "currency_mismatch": result.currency_mismatch,
-                "renewed_through": [
-                    outcome.renewed_through.isoformat() for outcome in result.renewals
-                ],
+                "evaluation_disposition": evaluation.disposition.value,
+                "renewal_disposition": (
+                    result.disposition.value if result is not None else None
+                ),
+                "scanned": result.scanned if result is not None else 0,
+                "funded": result.funded if result is not None else 0,
+                "unfunded": result.unfunded if result is not None else 0,
+                "already_covered": (
+                    result.already_covered if result is not None else 0
+                ),
+                "missing_price": result.missing_price if result is not None else 0,
+                "currency_mismatch": (
+                    result.currency_mismatch if result is not None else 0
+                ),
+                "renewed_through": (
+                    [outcome.renewed_through.isoformat() for outcome in result.renewals]
+                    if result is not None
+                    else []
+                ),
             },
         )
 

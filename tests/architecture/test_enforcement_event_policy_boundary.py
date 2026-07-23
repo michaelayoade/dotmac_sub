@@ -76,5 +76,5 @@ def test_callers_consume_typed_policy_outcomes_only() -> None:
 
     assert "resolve_fup_event_policy(" in handler_source
     assert "resolve_session_refresh_policy(" in handler_source
-    assert "resolve_group_routing_policy(" in handler_source
+    assert "resolve_group_routing_policy(" not in handler_source
     assert "resolve_group_routing_policy(" in projection_source
