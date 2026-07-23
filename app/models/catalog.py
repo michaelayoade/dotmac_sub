@@ -157,7 +157,7 @@ PLAN_FAMILY_VALUES = ("unlimited", "dedicated", "home_flex")
 
 class AccessState(enum.Enum):
     """Network access state — single source of truth for what RADIUS does
-    with a subscriber. See docs/radius_state_refactor/phase0_state_model.md.
+    with a subscriber. See docs/FINANCIAL_ACCESS_ENFORCEMENT.md.
 
     Derived from ``SubscriptionStatus`` + persisted enforcement locks through
     the canonical walled-garden policy
@@ -165,7 +165,7 @@ class AccessState(enum.Enum):
     a string column rather than a PG enum so future states (e.g.
     ``throttled``, ``trial_expired``) can be added by code change alone.
 
-    Maps to RADIUS groups during the access-profile migration:
+    Maps to the canonical RADIUS projection:
       active     → dotmac-active     (normal customer)
       suspended  → dotmac-suspended  (hard block, Auth-Type := Reject)
       captive    → dotmac-captive    (soft block, captive portal)
@@ -799,8 +799,8 @@ class Subscription(Base):
         Enum(SubscriptionStatus), default=SubscriptionStatus.pending
     )
     # access_state is the RADIUS-facing state, derived from `status` +
-    # canonical persisted access restriction. Nullable until its backfill completes.
-    # See docs/radius_state_refactor/phase0_state_model.md.
+    # canonical persisted access restriction.
+    # See docs/FINANCIAL_ACCESS_ENFORCEMENT.md.
     access_state: Mapped[str | None] = mapped_column(String(20))
     billing_mode: Mapped[BillingMode] = mapped_column(
         Enum(BillingMode), default=BillingMode.prepaid
@@ -845,7 +845,7 @@ class Subscription(Base):
     # DESIRED/served IP owned by the IP assignment + connectivity reconciler.
     # Splitting observed from desired stops the live IP overwriting the desired
     # IP and being re-emitted by the RADIUS sweep — see
-    # docs/designs/CONNECTIVITY_STATE_MACHINE.md §3.1.
+    # docs/FINANCIAL_ACCESS_ENFORCEMENT.md.
     last_seen_framed_ipv4: Mapped[str | None] = mapped_column(String(64))
     last_seen_framed_ipv6: Mapped[str | None] = mapped_column(String(128))
     mac_address: Mapped[str | None] = mapped_column(String(64))
@@ -1120,8 +1120,8 @@ class RadiusProfile(Base):
     """
     RADIUS profile defining authentication and authorization attributes.
 
-    Profiles define speed limits, VLAN assignments, and other settings
-    sent to NAS devices via RADIUS reply attributes.
+    Profiles define speed limits, VLAN assignments, session controls, and other
+    settings projected to the appropriate RADIUS check or reply tables.
     """
 
     __tablename__ = "radius_profiles"

@@ -5,14 +5,16 @@ from __future__ import annotations
 import logging
 import re
 import threading
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
 from fastapi import HTTPException
 from pyrad.client import Client, Timeout
 from pyrad.dictionary import Dictionary
-from pyrad.packet import CoARequest, DisconnectNAK, DisconnectRequest
+from pyrad.packet import CoARequest, DisconnectACK, DisconnectNAK, DisconnectRequest
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
@@ -39,6 +41,52 @@ logger = logging.getLogger(__name__)
 
 # Characters that could break RouterOS CLI quoting or inject commands
 _ROUTEROS_UNSAFE_RE = re.compile(r'[";\\{}\n\r]')
+
+
+class CoADisconnectDisposition(StrEnum):
+    """Transport-neutral evidence from one RADIUS Disconnect request."""
+
+    disconnected = "disconnected"
+    session_not_found = "session_not_found"
+    disabled = "disabled"
+    temporarily_suppressed = "temporarily_suppressed"
+    missing_nas_host = "missing_nas_host"
+    missing_dictionary = "missing_dictionary"
+    invalid_dictionary = "invalid_dictionary"
+    missing_secret = "missing_secret"
+    rejected = "rejected"
+    timeout = "timeout"
+    transport_error = "transport_error"
+    unexpected_response = "unexpected_response"
+
+
+@dataclass(frozen=True)
+class CoADisconnectOutcome:
+    disposition: CoADisconnectDisposition
+
+    @property
+    def disconnected(self) -> bool:
+        return self.disposition is CoADisconnectDisposition.disconnected
+
+    @property
+    def session_absent(self) -> bool:
+        return self.disposition is CoADisconnectDisposition.session_not_found
+
+    @property
+    def terminal(self) -> bool:
+        return self.disconnected or self.session_absent
+
+
+def _disconnect_error_cause(response: object) -> int | None:
+    """Return RFC 5176 Error-Cause without exposing response payloads."""
+    try:
+        values = response["Error-Cause"]  # type: ignore[index]
+        raw = values[0] if isinstance(values, (list, tuple)) else values
+        if isinstance(raw, bytes):
+            raw = raw.decode("ascii", errors="ignore")
+        return int(raw)
+    except (KeyError, IndexError, TypeError, ValueError):
+        return None
 
 
 def _sanitize_routeros_value(value: str) -> str:
@@ -342,27 +390,27 @@ def _send_coa_disconnect(
     username: str | None,
     framed_ip: str | None,
     session_id: str | None,
-) -> bool:
+) -> CoADisconnectOutcome:
     if not _coa_enabled(db):
-        return False
+        return CoADisconnectOutcome(CoADisconnectDisposition.disabled)
     if _coa_disabled_for_nas(nas_device.id):
         logger.debug(
             "Skipping CoA disconnect for NAS %s (negative-cached).", nas_device.id
         )
-        return False
+        return CoADisconnectOutcome(CoADisconnectDisposition.temporarily_suppressed)
     host = nas_device.nas_ip or nas_device.management_ip or nas_device.ip_address
     if not host:
         logger.warning("Missing NAS host for CoA disconnect.")
-        return False
+        return CoADisconnectOutcome(CoADisconnectDisposition.missing_nas_host)
     dict_path = _radius_dictionary_path(db)
     if not dict_path:
         logger.warning("Missing RADIUS dictionary path for CoA disconnect.")
-        return False
+        return CoADisconnectOutcome(CoADisconnectDisposition.missing_dictionary)
     try:
         dictionary = Dictionary(dict_path)
     except Exception as exc:
         logger.warning("Failed to load RADIUS dictionary: %s", exc)
-        return False
+        return CoADisconnectOutcome(CoADisconnectDisposition.invalid_dictionary)
     decrypted_secret = _resolve_coa_secret(db, nas_device)
     if not decrypted_secret:
         logger.warning(
@@ -370,7 +418,7 @@ def _send_coa_disconnect(
             "(nas_devices decrypt failed and no radius.nas row).",
             host,
         )
-        return False
+        return CoADisconnectOutcome(CoADisconnectDisposition.missing_secret)
     client = Client(
         server=host,
         secret=decrypted_secret.encode("utf-8"),
@@ -389,18 +437,31 @@ def _send_coa_disconnect(
     try:
         response = client.SendPacket(req)
         _mark_coa_supported(nas_device.id)
-        if getattr(response, "code", None) == DisconnectNAK:
-            # The NAS speaks CoA but refused the disconnect (e.g. stale
-            # Framed-IP-Address AND-match) — not a kill, so the SSH
-            # fallback must still run. Do NOT negative-cache the NAS.
+        response_code = getattr(response, "code", None)
+        if response_code == DisconnectACK:
+            return CoADisconnectOutcome(CoADisconnectDisposition.disconnected)
+        if response_code == DisconnectNAK:
+            error_cause = _disconnect_error_cause(response)
+            if error_cause == 503:
+                logger.info(
+                    "Disconnect-NAK session-not-found from NAS %s for session %s.",
+                    nas_device.id,
+                    session_id,
+                )
+                return CoADisconnectOutcome(CoADisconnectDisposition.session_not_found)
             logger.warning(
-                "Disconnect-NAK from NAS %s for session %s — session not "
-                "killed, falling back to SSH kick.",
+                "Disconnect-NAK from NAS %s for session %s — disconnect was "
+                "not confirmed; falling back to another transport.",
                 nas_device.id,
                 session_id,
             )
-            return False
-        return True
+            return CoADisconnectOutcome(CoADisconnectDisposition.rejected)
+        logger.warning(
+            "Unexpected CoA response from NAS %s for session %s.",
+            nas_device.id,
+            session_id,
+        )
+        return CoADisconnectOutcome(CoADisconnectDisposition.unexpected_response)
     except Timeout:
         _mark_coa_unsupported(nas_device.id)
         logger.warning(
@@ -408,10 +469,10 @@ def _send_coa_disconnect(
             nas_device.id,
             _COA_NEG_TTL,
         )
-        return False
+        return CoADisconnectOutcome(CoADisconnectDisposition.timeout)
     except Exception as exc:
         logger.warning("CoA disconnect failed for NAS %s: %s", nas_device.id, exc)
-        return False
+        return CoADisconnectOutcome(CoADisconnectDisposition.transport_error)
 
 
 def _build_mikrotik_rate_limit(profile: RadiusProfile) -> str | None:
@@ -579,9 +640,10 @@ def update_subscription_sessions(
                 # profile. CoA → RouterOS API (read-back verified) → SSH, the
                 # same fallback chain the suspend/cancel disconnect path uses,
                 # so API-only NAS (no SSH creds) are still refreshed.
-                if _send_coa_disconnect(
+                disconnect = _send_coa_disconnect(
                     db, nas_device, username, framed_ip, session_id
-                ):
+                )
+                if disconnect.terminal:
                     count += 1
                 elif _api_kick_session(db, nas_device, username):
                     count += 1
@@ -940,7 +1002,10 @@ def disconnect_subscription_sessions(
         coa_ok: set[int] = set()
         needs_ssh_kick = False
         for idx, (_, username, session_id, framed_ip) in enumerate(entries):
-            if _send_coa_disconnect(db, nas_device, username, framed_ip, session_id):
+            disconnect = _send_coa_disconnect(
+                db, nas_device, username, framed_ip, session_id
+            )
+            if disconnect.terminal:
                 coa_ok.add(idx)
                 count += 1
             else:
@@ -1082,7 +1147,7 @@ def reauth_subscription_on_identity_change(
     try:
         from app.services.radius import reconcile_subscription_connectivity
 
-        reconcile_subscription_connectivity(db, subscription_id)
+        reconcile_subscription_connectivity(db, subscription_id).require_projected()
     except Exception as exc:  # pragma: no cover - operational guard
         logger.warning(
             "reauth: RADIUS reconcile failed for sub=%s: %s; session CoA deferred",
@@ -1617,28 +1682,14 @@ def restore_subscription_connectivity(
         stats["radius_users_reactivated"] += 1
 
     # 2. Sync credentials back to external RADIUS
-    projection_ready = False
-    try:
-        result = reconcile_subscription_connectivity(db, subscription_id)
-        stats["external_radius_synced"] = result.get("external_credentials_synced", 0)
-        projection_ready = bool(result.get("ok"))
-    except Exception as exc:
-        logger.warning("RADIUS sync on restore failed: %s", exc)
+    result = reconcile_subscription_connectivity(db, subscription_id)
+    result.require_projected()
+    stats["external_radius_synced"] = result.external_credentials_synced
 
     # 3. Remove address list blocks
-    if projection_ready:
-        try:
-            stats["address_list_unblocked"] = remove_subscription_address_list_block(
-                db, subscription_id
-            )
-        except Exception as exc:
-            logger.warning("Address list unblock on restore failed: %s", exc)
-    else:
-        logger.error(
-            "Address-list restore deferred for subscription %s: external RADIUS "
-            "projection is incomplete",
-            subscription_id,
-        )
+    stats["address_list_unblocked"] = remove_subscription_address_list_block(
+        db, subscription_id
+    )
 
     db.flush()
     logger.info(

@@ -5351,6 +5351,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.prepaid_service_renewals",
                 owns=(
                     "due prepaid service-cycle funding preview",
+                    "settled-payment evidence validation and evaluation outcome",
                     "locked and idempotent prepaid renewal debit",
                     "exact debit-to-entitlement evidence",
                     "prepaid subscription paid-through advancement",
@@ -5361,6 +5362,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=(
                     "financial.account_adjustments",
                     "financial.invoices",
+                    "financial.payments",
                     "financial.prepaid_funding_reconstruction",
                     "financial.subscription_billing_grants",
                     "financial.subscription_billing_treatments",
@@ -5368,10 +5370,14 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
                 notes=(
                     "A payment receipt proves cash settlement, not service duration. "
+                    "A funding-change event is complete only when the referenced "
+                    "payment has canonical succeeded and settlement evidence. "
                     "Each forward renewal stages prepaid_service.renewed with the "
                     "exact entitlement, debit and renewed-through boundary in the "
                     "same transaction; payment correlation is a trigger, not source "
-                    "attribution for pooled account credit."
+                    "attribution for pooled account credit. Incomplete evidence raises "
+                    "through the durable event-handler attempt so the permanent event "
+                    "redriver retries it; an explicit no-due-service outcome is success."
                 ),
             ),
             SOTService(
@@ -7530,6 +7536,262 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "dispatch row before entering device code. Operation status "
                     "remains the device/business outcome; transport uncertainty is "
                     "preserved separately and fails closed for reviewed recovery."
+                ),
+            ),
+            SOTService(
+                name="network.tr069_commands",
+                module="app.services.network.tr069_job_commands",
+                owns=(
+                    "TR-069 command admission coordination",
+                    "TR-069 command execution coordination",
+                    "TR-069 command outcome coordination",
+                ),
+                depends_on=(
+                    "auth.permission_gate",
+                    "control.feature_registry",
+                    "network.identity",
+                    "network.operation_ledger",
+                    "network.operation_dispatch",
+                    "events.dispatcher",
+                ),
+                notes=(
+                    "Owns the complete command lifecycle boundary. Adapters submit "
+                    "typed intent; the operation ledger owns lifecycle, the durable "
+                    "dispatch owns broker delivery, GenieACS supplies observations, "
+                    "and tr069_jobs is a read-only operator projection. Disabling "
+                    "admission never stops accepted-work drainage."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="TR-069 command admission coordination",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "authenticated TR-069 command evidence",
+                                "canonical TR-069 device and ACS binding",
+                                "TR-069 command admission capability",
+                                "canonical network operation lifecycle",
+                                "durable network command dispatch",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="TR-069 command execution coordination",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "canonical TR-069 device and ACS binding",
+                                "canonical network operation lifecycle",
+                                "durable network command dispatch",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="TR-069 command outcome coordination",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "canonical network operation lifecycle",
+                                "durable network command dispatch",
+                                "normalized GenieACS command observation",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="authenticated TR-069 command evidence",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "admin authorization plus typed actor, scope, reason, "
+                                "command, correlation, and idempotency context"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical TR-069 device and ACS binding",
+                            owner="network.identity",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked active Tr069CpeDevice identity, GenieACS "
+                                "device id, and active Tr069AcsServer binding"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="TR-069 command admission capability",
+                            owner="control.feature_registry",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="network.tr069_command_admission",
+                        ),
+                        AuthorityInput(
+                            name="canonical network operation lifecycle",
+                            owner="network.operation_ledger",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "cpe_tr069_command NetworkOperation identity and "
+                                "guarded lifecycle state"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="durable network command dispatch",
+                            owner="network.operation_dispatch",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "cpe_tr069_command.v1 outbox row, publication "
+                                "attempts, and worker claim"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="normalized GenieACS command observation",
+                            owner="external:genieacs",
+                            kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                            source=(
+                                "accepted task ids, pending task inventory, faults, "
+                                "and absence after acceptance"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        boundary=(
+                            "Each public admission, execution claim, or observation "
+                            "enters execute_owner_command once on a transaction-free "
+                            "session; the operation, dispatch, encrypted payload, job "
+                            "projection, and event evidence commit atomically."
+                        ),
+                        locking=(
+                            "Admission locks the target device; execution and outcome "
+                            "lock the operation and job projection. Unique active "
+                            "correlation and one-job-per-operation constraints arbitrate "
+                            "concurrent requests."
+                        ),
+                        idempotency=(
+                            "A device, command kind, and encrypted-payload fingerprint "
+                            "return the active operation. Dispatch claims permit one "
+                            "queued-to-running transition and terminal observations do "
+                            "not regress."
+                        ),
+                        retries=(
+                            "Broker publication may retry before worker claim. ACS "
+                            "submission is never automatically replayed; interrupted "
+                            "or ambiguous delivery becomes unverified and requires "
+                            "review of current device state."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "network.tr069_commands.invalid_parameter",
+                            "network.tr069_commands.invalid_parameter_type",
+                            "network.tr069_commands.invalid_parameter_value",
+                            "network.tr069_commands.invalid_download",
+                            "network.tr069_commands.invalid_command",
+                            "network.tr069_commands.invalid_refresh_root",
+                            "network.tr069_commands.admission_disabled",
+                            "network.tr069_commands.device_not_found",
+                            "network.tr069_commands.device_inactive",
+                            "network.tr069_commands.device_not_registered",
+                            "network.tr069_commands.acs_unavailable",
+                            "network.tr069_commands.operation_projection_missing",
+                            "network.tr069_commands.invalid_observation",
+                            "network.tr069_commands.device_command_in_progress",
+                            "network.tr069_commands.device_state_review_required",
+                            "network.tr069_commands.concurrent_admission",
+                            *owner_command_boundary_error_codes(
+                                "network.tr069_commands"
+                            ),
+                        ),
+                        mapping_owner=(
+                            "app.services.web_network_tr069 and "
+                            "app.tasks.tr069 adapters"
+                        ),
+                        retryable_codes=(),
+                        fail_closed_on=(
+                            "disabled admission",
+                            "inactive or unregistered target",
+                            "missing ACS binding",
+                            "operation/projection mismatch",
+                            "ambiguous ACS delivery",
+                            "active caller transaction",
+                            "manifest mismatch",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "tr069_job.accepted",
+                            "tr069_job.completed",
+                            "tr069_job.failed",
+                            "tr069_job.unverified",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Additive payload evolution within version 1; no event "
+                            "contains command values, firmware URLs, or credentials."
+                        ),
+                        replay=(
+                            "The event store retries delivery by event identity; "
+                            "consumers treat job and operation ids as immutable "
+                            "lifecycle evidence."
+                        ),
+                    ),
+                    projections=(
+                        ProjectionContract(
+                            name="tr069_jobs operator lifecycle projection",
+                            input_names=(
+                                "canonical TR-069 device and ACS binding",
+                                "canonical network operation lifecycle",
+                                "durable network command dispatch",
+                                "normalized GenieACS command observation",
+                            ),
+                            writer="network.tr069_commands",
+                            freshness=(
+                                "Admission and normalized observations update the "
+                                "projection in the owning transaction; the permanent "
+                                "resolver checks active ACS tasks every scheduler pass."
+                            ),
+                            stale_behavior=(
+                                "Readers show the last committed state and "
+                                "last_observed_at. Missing or ambiguous confirmation "
+                                "becomes unverified rather than inferred success."
+                            ),
+                            drift_signal=(
+                                "Operation/job status disagreement, an unlinked active "
+                                "job, or an expired running/pending confirmation window."
+                            ),
+                            rebuild_operation=(
+                                "app.tasks.tr069.reconcile_command_outcomes"
+                            ),
+                            repair_owner="network.tr069_commands",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        new_owner="network.tr069_commands",
+                        old_owner=(
+                            "app.services.tr069.JobProjections mutation methods and "
+                            "app.tasks.tr069.execute_bulk_action"
+                        ),
+                        verification=(
+                            "Focused lifecycle and architecture tests prove atomic "
+                            "admission, guarded execution, terminal ambiguity, "
+                            "permanent drainage, secret redaction, and absence of old "
+                            "producers."
+                        ),
+                        cutover_gate=(
+                            "Migration 409 terminalizes every unlinked executable row "
+                            "and moves the old flag value to the admission-only control."
+                        ),
+                        fallback_retirement=(
+                            "Legacy create/update/delete/execute/cancel methods, bulk "
+                            "task, runtime adoption, and old control alias are removed."
+                        ),
+                    ),
+                    steward="network operations",
+                    design_refs=(
+                        "docs/designs/TR069_COMMAND_LIFECYCLE.md",
+                        "docs/runbooks/TR069_COMMAND_CUTOVER.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/CODING_STANDARD.md",
+                    ),
+                    test_refs=(
+                        "tests/test_tr069_job_commands.py",
+                        "tests/architecture/test_tr069_job_lifecycle_boundary.py",
+                    ),
                 ),
             ),
             SOTService(
@@ -11230,7 +11492,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     steward="service delivery and network operations",
                     design_refs=(
                         "docs/designs/PROVISIONING_LIFECYCLE_SOT.md",
-                        "docs/designs/CONNECTIVITY_STATE_MACHINE.md",
+                        "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
                         "docs/SOT_RELATIONSHIP_MAP.md",
                     ),
                     test_refs=(
@@ -11541,19 +11803,262 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 name="operations.project_lifecycle",
                 module="app.services.projects",
                 owns=(
-                    "native project field and status mutations",
-                    "project SLA clock synchronization",
-                    "project lifecycle event and notification requests",
+                    "Project and ProjectTask identity and lifecycle",
+                    "project and task allowed status transitions",
+                    "project and task assignment and scheduling",
+                    "project manager assistant manager service-team and task-assignee changes",
+                    "Project-to-ProjectTask and project/task-to-work-order relationships",
+                    "project audit records and transactional domain events",
+                    "project derived-state reconciliation",
                 ),
                 depends_on=(
+                    "auth.permission_gate",
                     "events.dispatcher",
                     "communications.staff_notifications",
+                    "operations.work_order_commands",
                 ),
                 notes=(
                     "Customer and reseller reads consume the read-only "
                     "customer.experience_lifecycle projection. There is no CRM "
                     "project mirror, read-flip fallback, or connector operation "
                     "that can read project/work-order authority."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="Project and ProjectTask identity and lifecycle",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical project aggregate",
+                                "authorized project command",
+                            ),
+                            canonical_writer="operations.project_lifecycle",
+                        ),
+                        ConcernContract(
+                            name="project and task allowed status transitions",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical project aggregate",
+                                "project transition protocol",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="project and task assignment and scheduling",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical project aggregate",
+                                "project assignment decision",
+                                "authorized project command",
+                            ),
+                            canonical_writer="operations.project_lifecycle",
+                        ),
+                        ConcernContract(
+                            name="project manager assistant manager service-team and task-assignee changes",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical project aggregate",
+                                "project assignment decision",
+                                "authorized project command",
+                            ),
+                            canonical_writer="operations.project_lifecycle",
+                        ),
+                        ConcernContract(
+                            name="Project-to-ProjectTask and project/task-to-work-order relationships",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "canonical project aggregate",
+                                "canonical work-order relationship",
+                            ),
+                            canonical_writer="operations.project_lifecycle",
+                        ),
+                        ConcernContract(
+                            name="project audit records and transactional domain events",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "canonical project aggregate",
+                                "authorized project command",
+                            ),
+                            canonical_writer="operations.project_lifecycle",
+                        ),
+                        ConcernContract(
+                            name="project derived-state reconciliation",
+                            role=OwnerRole.RECONCILER,
+                            input_names=("canonical project aggregate",),
+                            canonical_writer="operations.project_lifecycle",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical project aggregate",
+                            owner="operations.project_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="locked native Project, ProjectTask, ProjectTaskAssignee, dependency, comment, and SLA records keyed only by native UUIDs",
+                        ),
+                        AuthorityInput(
+                            name="project transition protocol",
+                            owner="operations.project_lifecycle",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="typed ProjectStatus and ProjectTaskStatus transition tables",
+                        ),
+                        AuthorityInput(
+                            name="authorized project command",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="authenticated actor, scope, reason, correlation id, and idempotency key",
+                        ),
+                        AuthorityInput(
+                            name="project assignment decision",
+                            owner="operations.project_assignment_policy",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="typed rule match and candidate decision; it never mutates a Project aggregate",
+                        ),
+                        AuthorityInput(
+                            name="canonical work-order relationship",
+                            owner="operations.work_order_commands",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="native WorkOrder.project_id and WorkOrder.project_task_id foreign keys",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary="Every public state-changing command enters execute_owner_command once on a transaction-free adapter session; all nested helpers are flush-only.",
+                        locking="Lock Project before its tasks, then tasks by UUID; assignment and relationship changes re-read locked rows in that order.",
+                        idempotency="CommandContext idempotency keys identify externally retryable commands; identical completed intent replays its stable typed outcome and changed-state no-ops are safe.",
+                        retries="Adapters retry serialization failures, deadlocks, and lock timeouts as a complete command; validation, stale-state, authorization, and idempotency conflicts are not retryable.",
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "operations.project_lifecycle.not_found",
+                            "operations.project_lifecycle.invalid_input",
+                            "operations.project_lifecycle.invalid_transition",
+                            "operations.project_lifecycle.stale_state",
+                            "operations.project_lifecycle.idempotency_conflict",
+                            "operations.project_lifecycle.relationship_conflict",
+                            *owner_command_boundary_error_codes(
+                                "operations.project_lifecycle"
+                            ),
+                        ),
+                        mapping_owner="project API, admin-web, job, and assignment adapters",
+                        retryable_codes=("operations.project_lifecycle.stale_state",),
+                        fail_closed_on=(
+                            "unknown native identity",
+                            "stale transition evidence",
+                            "ambiguous assignment target",
+                            "external identifier without native relationship",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "project.created",
+                            "project.updated",
+                            "project.completed",
+                            "project.canceled",
+                            "project_task.created",
+                            "project_task.updated",
+                            "project_task.completed",
+                            "project.assignment_changed",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility="Version 1 payloads are additive and preserve native aggregate identifiers; CRM identifiers are optional provenance only.",
+                        replay="Rebuild consequences from the durable event/audit record; replay never re-runs lifecycle eligibility.",
+                    ),
+                    projections=(
+                        ProjectionContract(
+                            name="project SLA and assignment projections",
+                            input_names=("canonical project aggregate",),
+                            writer="operations.project_lifecycle",
+                            freshness="synchronous in the owner transaction",
+                            stale_behavior="fail closed for action eligibility and expose drift to operators",
+                            drift_signal="reconciliation reports missing, duplicate, or mismatched SLA clocks and task-assignee rows",
+                            rebuild_operation="reconcile_project_projection(project_id) deterministically rebuilds derived rows from the locked native aggregate",
+                            repair_owner="operations.project_lifecycle",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        new_owner="operations.project_lifecycle",
+                        old_owner="legacy Projects/web_projects/ticket_assignment direct writers",
+                        verification="Projects contract, adapter-boundary, assignment ownership, projection parity, and reconciliation tests",
+                        cutover_gate="all project and task mutations delegate to the owner command and architecture guards reject direct adapter writes",
+                        fallback_retirement="HTTP-coupled domain errors, adapter commits, and assignment-engine Project writes removed",
+                    ),
+                    steward="service delivery",
+                    design_refs=(
+                        "docs/designs/PROJECTS_SOT_COMPLETION.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_projects_service.py",
+                        "tests/test_project_assignment_engine.py",
+                        "tests/architecture/test_projects_sot_boundary.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="operations.project_assignment_policy",
+                module="app.services.ticket_assignment.rules",
+                owns=("project assignment-rule evaluation",),
+                depends_on=("operations.project_lifecycle", "control.settings_spec"),
+                notes="Evaluates typed rules and candidates only. It cannot mutate Project, ProjectTask, or assignee rows; the lifecycle owner applies its decision under lock.",
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="project assignment-rule evaluation",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical project assignment facts",
+                                "configured assignment rules",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical project assignment facts",
+                            owner="operations.project_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="native project type, region, service team, and current assignment state",
+                        ),
+                        AuthorityInput(
+                            name="configured assignment rules",
+                            owner="control.settings_spec",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="validated active assignment rule configuration and ordering",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary="Pure rule evaluation inside the lifecycle owner's transaction or a read-only preview.",
+                        locking="No locks and no writes; the lifecycle owner locks and revalidates before applying a decision.",
+                        idempotency="Same normalized facts and rule version produce the same ordered decision.",
+                        retries="Read availability failures may be retried; invalid or ambiguous rules fail closed.",
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "operations.project_assignment_policy.invalid_rule",
+                            "operations.project_assignment_policy.ambiguous_target",
+                        ),
+                        mapping_owner="operations.project_lifecycle and assignment preview adapters",
+                        fail_closed_on=(
+                            "invalid rule",
+                            "ambiguous target",
+                            "unknown candidate identity",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        new_owner="operations.project_assignment_policy",
+                        old_owner="ticket_assignment engine direct Project writer",
+                        verification="assignment policy and architecture boundary tests",
+                        cutover_gate="engine delegates Project writes to operations.project_lifecycle",
+                        fallback_retirement="direct Project and ProjectTask assignment writes removed from ticket_assignment.engine",
+                    ),
+                    steward="service delivery",
+                    design_refs=("docs/designs/PROJECTS_SOT_COMPLETION.md",),
+                    test_refs=(
+                        "tests/test_project_assignment_engine.py",
+                        "tests/architecture/test_projects_sot_boundary.py",
+                    ),
                 ),
             ),
             SOTService(
@@ -14900,11 +15405,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         ),
         entrypoints=("app.tasks.*", "app.web.admin.system", "app.main"),
         rule=(
-            "Core customer-financial lifecycle tasks are always registered and cannot "
-            "be disabled, renamed, or deleted. Optional capability scheduling composes "
-            "through the feature control plane. Event-driven transports remain "
-            "requestable but cannot register as independent periodic repair owners; "
-            "task bodies remain thin adapters."
+            "Core lifecycle tasks are always registered and cannot be disabled, "
+            "renamed, or deleted. This includes customer-financial lifecycle work "
+            "and durable command dispatch/drainage after acceptance. Optional "
+            "capability scheduling composes through the feature control plane. "
+            "Event-driven transports remain requestable but cannot register as "
+            "independent periodic repair owners; task bodies remain thin adapters."
         ),
     ),
     DomainSOT(
@@ -14918,11 +15424,20 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "persisted access restriction intent",
                     "subscription access-status transitions",
                     "subscriber access-status projection",
+                    "subscriber portal/account-active projection",
                     "atomic account and child-service access projection",
+                    "sole persisted Subscription.access_state writes",
                 ),
                 depends_on=(
                     "events.dispatcher",
                     "financial.prepaid_enforcement_state",
+                ),
+                notes=(
+                    "Locks, subscriber status, subscriber account-active state, "
+                    "subscription status and every child access-state projection are "
+                    "derived under the lifecycle transaction. "
+                    "Adapters request a lifecycle command or reconciliation; they do not "
+                    "write the access-state projection."
                 ),
             ),
             SOTService(
@@ -15243,10 +15758,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             SOTService(
                 name="access.radius_state",
                 module="app.services.radius_access_state",
-                owns=("desired RADIUS state mapping", "RADIUS group/profile actions"),
+                owns=("pure desired RADIUS access-state mapping",),
                 depends_on=(
-                    "financial.access_resolution",
+                    "access.subscription_lifecycle",
                     "access.walled_garden_policy",
+                    "financial.access_resolution",
+                ),
+                notes=(
+                    "Maps canonical lifecycle status and effective restriction to an "
+                    "AccessState. It writes neither lifecycle rows nor external RADIUS."
                 ),
             ),
             SOTService(
@@ -15278,13 +15798,19 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "radcheck/radreply/radusergroup customer projection",
                     "radcheck_admin/radreply_admin device-login projection",
                     "idempotent per-target advisory-locked RADIUS auth projection",
+                    "credential-independent hard-reject projection",
+                    "unbuildable active/captive login classification and preservation",
+                    "secret-safe exact RADIUS-row projection fingerprint",
                     "walled-garden/reject radreply on blocked/suspended access",
+                    "RADIUS simultaneous-session check/control placement and cutover",
                     "bidirectional desired-versus-observed projection drift",
                 ),
                 depends_on=(
+                    "access.subscription_lifecycle",
                     "access.radius_state",
                     "access.radius_reject",
                     "access.radius_target_registry",
+                    "control.settings_spec",
                 ),
                 notes=(
                     "Single writer of the FreeRADIUS auth tables across every "
@@ -15293,15 +15819,37 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "tables directly. The permanent account-access reconciler is the "
                     "only periodic drift detector and requests the full writer only "
                     "when drift exists; the writer is never independently scheduled. "
-                    "The writer and reconciler consume the same per-login plan and "
-                    "therefore cannot reinterpret lifecycle statuses independently."
+                    "Hard reject does not depend on a recoverable "
+                    "customer password. An active/captive login that cannot be built "
+                    "is preserved and reported, never treated as a successful refresh. "
+                    "The writer and reconciler consume the same exact, secret-safe "
+                    "per-login fingerprint and therefore cannot reinterpret lifecycle "
+                    "statuses or silently ignore attribute drift. "
+                    "Simultaneous-Use is projected to radcheck only after the "
+                    "database-owned cutover gate is enabled; radacct remains observed "
+                    "session evidence and never owns credential or service identity."
                 ),
             ),
             SOTService(
                 name="access.session_enforcement",
                 module="app.services.enforcement",
-                owns=("access-state CoA/disconnect execution",),
-                depends_on=("access.radius_state", "sessions.radius_resolution"),
+                owns=(
+                    "typed access-state CoA/disconnect execution",
+                    "NAS-evidenced accounting-session closure",
+                    "single-flight access-control recovery execution",
+                ),
+                depends_on=(
+                    "access.radius_projection",
+                    "access.radius_state",
+                    "sessions.radius_resolution",
+                ),
+                notes=(
+                    "Disconnect ACK, RFC 5176 session-not-found, rejection, timeout "
+                    "and configuration failure remain distinct outcomes. Accounting "
+                    "closes only when the NAS explicitly reports that the session "
+                    "context is absent. The periodic recovery loop is single-flight "
+                    "and caps attempts rather than successes."
+                ),
             ),
             SOTService(
                 name="access.fup_rule_engine",
@@ -17939,6 +18487,84 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "projection declares the list capabilities and normalizes "
                     "request state, then delegates the read. It issues no query of "
                     "its own. Gated by the existing granular project:read."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="admin project searchable fields",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical project list facts",
+                                "shared list contract",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="admin project filter and stable sort semantics",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical project list facts",
+                                "shared list contract",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="admin project list pagination normalization",
+                            role=OwnerRole.POLICY,
+                            input_names=("shared list contract",),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical project list facts",
+                            owner="operations.project_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="native active Project rows and owner-projected action eligibility",
+                        ),
+                        AuthorityInput(
+                            name="shared list contract",
+                            owner="ui.list_contracts",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="typed search, filters, stable sort, pagination, permission scope, and action eligibility request",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary="Typed ProjectListQuery executes without committing or mutating ORM state.",
+                        locking="No locks; stable ordering includes native Project UUID as the final tie-breaker.",
+                        idempotency="Equivalent query and visibility scope return the same page for the same authoritative snapshot.",
+                        retries="Read availability errors may be retried; invalid filters and unauthorized scopes are not retryable.",
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "ui.project_list_projection.invalid_filter",
+                            "ui.project_list_projection.invalid_sort",
+                            "ui.project_list_projection.invalid_page",
+                            "ui.project_list_projection.unauthorized",
+                        ),
+                        mapping_owner="project API and admin-web adapters",
+                        fail_closed_on=(
+                            "unknown filter field",
+                            "unknown sort field",
+                            "missing permission scope",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        new_owner="ui.project_list_projection",
+                        old_owner="route/template-local project list decisions",
+                        verification="typed query contract, API/admin parity, and template projection architecture tests",
+                        cutover_gate="all list routes delegate typed filter, sort, pagination, status, permission, and eligibility inputs",
+                        fallback_retirement="route and template list-policy inference removed",
+                    ),
+                    steward="service delivery UI",
+                    design_refs=(
+                        "docs/designs/PROJECTS_SOT_COMPLETION.md",
+                        "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                    ),
+                    test_refs=(
+                        "tests/test_web_projects_service.py",
+                        "tests/test_projects_api.py",
+                        "tests/architecture/test_projects_sot_boundary.py",
+                    ),
                 ),
             ),
             SOTService(

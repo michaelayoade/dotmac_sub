@@ -130,6 +130,13 @@ _ONT_DESIRED_CONFIG_CREDENTIAL_PATHS: tuple[tuple[str, ...], ...] = (
 
 _RAW_ENCRYPTED_COLUMNS: tuple[tuple[str, str, str, str, str], ...] = (
     (
+        "Tr069Job.secure_payload",
+        "secure_payload",
+        "SELECT secure_payload FROM tr069_jobs WHERE secure_payload IS NOT NULL",
+        "SELECT id, secure_payload FROM tr069_jobs WHERE secure_payload IS NOT NULL",
+        "UPDATE tr069_jobs SET secure_payload = :value WHERE id = :id",
+    ),
+    (
         "ConnectorConfig.headers",
         "headers",
         "SELECT headers FROM connector_configs WHERE headers IS NOT NULL",

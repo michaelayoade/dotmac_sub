@@ -255,7 +255,7 @@ Link a RADIUS reply profile to control:
 - Mikrotik-Rate-Limit (speed)
 - Framed-Pool (IP pool)
 - Service-Type
-- Simultaneous-Use
+- Simultaneous-Use (authentication concurrency check)
 - Delegated-IPv6-Prefix-Pool
 
 ### Plan Variants
@@ -530,6 +530,19 @@ Customer logs in at `/portal` with PPPoE username + password:
 
 **Example:** Prefix `1050`, padding 5, start 1 → `105000001`, `105000002`, ...
 
+### RADIUS Check/Control Attributes
+
+| Attribute | Example | Purpose |
+|-----------|---------|---------|
+| Cleartext-Password | managed secret | Authenticate the PPPoE login |
+| Simultaneous-Use | 1 | Maximum concurrent sessions for one login |
+
+`Simultaneous-Use` belongs in `radcheck`. It is deliberately cut over through
+the database-owned `radius.simultaneous_use_enforcement_enabled` setting, which
+defaults to `false`. Before enabling it, complete the stale-session and
+shared-credential checks in
+`docs/designs/RADIUS_SIMULTANEOUS_USE_CUTOVER.md`.
+
 ### RADIUS Reply Attributes
 
 For each RADIUS profile linked to an offer, these attributes are synced:
@@ -540,7 +553,6 @@ For each RADIUS profile linked to an offer, these attributes are synced:
 | Framed-Pool | pool-residential | IP address pool |
 | Service-Type | Framed-User | RADIUS service type |
 | Framed-Protocol | PPP | Connection protocol |
-| Simultaneous-Use | 1 | Max concurrent sessions |
 | Delegated-IPv6-Prefix-Pool | pool-v6 | IPv6 pool |
 
 ### RADIUS Sync Configuration

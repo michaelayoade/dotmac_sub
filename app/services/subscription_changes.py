@@ -570,7 +570,9 @@ class SubscriptionChangeRequests(ListResponseMixin):
             from app.services.enforcement import update_subscription_sessions
             from app.services.radius import reconcile_subscription_connectivity
 
-            reconcile_subscription_connectivity(db, str(subscription.id))
+            reconcile_subscription_connectivity(
+                db, str(subscription.id)
+            ).require_projected()
             if subscription.status == SubscriptionStatus.active:
                 update_subscription_sessions(
                     db, str(subscription.id), reason="profile_change"

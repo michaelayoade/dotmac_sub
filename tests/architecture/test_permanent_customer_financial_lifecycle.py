@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from app.services.control_registry import all_controls
-from app.services.scheduler import PERMANENT_CUSTOMER_LIFECYCLE_TASKS
+from app.services.scheduler import PERMANENT_LIFECYCLE_TASKS
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -42,7 +42,7 @@ def test_financial_lifecycle_controls_are_absent_from_registry():
 
 
 def test_core_lifecycle_tasks_are_declared_permanent():
-    assert REQUIRED_PERMANENT_TASKS <= PERMANENT_CUSTOMER_LIFECYCLE_TASKS
+    assert REQUIRED_PERMANENT_TASKS <= PERMANENT_LIFECYCLE_TASKS
 
 
 def test_only_shared_enforcement_time_window_remains():

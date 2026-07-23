@@ -290,7 +290,7 @@ class TestConverge:
 
 
 class TestDesiredConnectivity:
-    """Pure transition table — CONNECTIVITY_STATE_MACHINE.md §2 invariants."""
+    """Pure transition table — canonical service/network projection invariants."""
 
     def test_active_full_access_no_kick(self):
         d = derive_desired_connectivity(SubscriptionStatus.active)
@@ -410,8 +410,7 @@ class TestShadowDiff:
 
 class TestShadowDiffIpv4Cache:
     """The ipv4_cache dimension (INV-4 / R2): served column must equal the
-    active assignment IP when an IP is retained. This gauge sizes the cutover
-    that removes the accounting dual-write into the served column."""
+    active assignment IP when an IP is retained."""
 
     def test_diff_when_served_column_differs_from_assignment(
         self, db_session, catalog_offer
@@ -458,9 +457,7 @@ class TestShadowDiffIpv4Cache:
 
 
 class TestAccountingObservedIpSplit:
-    """§3.1: the live framed IP from accounting goes to last_seen_framed_*,
-    NOT the served-IP column (except the retained legacy dual-write for ACTIVE
-    subs)."""
+    """Accounting writes live framed IP only to the observation fields."""
 
     def test_observed_ip_recorded_to_last_seen_and_spares_served_when_inactive(
         self, db_session, catalog_offer
@@ -480,7 +477,7 @@ class TestAccountingObservedIpSplit:
         assert sub.last_seen_framed_ipv4 == "10.0.0.99"  # observed recorded
         assert sub.ipv4_address == "10.0.0.5"  # served column untouched (suspended)
 
-    def test_active_sub_still_dual_writes_served_column(
+    def test_active_sub_observation_does_not_write_served_column(
         self, db_session, catalog_offer
     ):
         from app.services.usage import _write_subscription_ips_from_accounting
@@ -496,7 +493,7 @@ class TestAccountingObservedIpSplit:
             db_session, sub.id, ipv4="10.0.0.99", ipv6=None
         )
         assert sub.last_seen_framed_ipv4 == "10.0.0.99"
-        assert sub.ipv4_address == "10.0.0.99"  # legacy dual-write retained
+        assert sub.ipv4_address == "10.0.0.5"
 
 
 class TestConnectivityShadowAudit:

@@ -423,9 +423,12 @@ def tr069_device_action(
     acs_server_id = str(form.get("acs_server_id") or "").strip() or ""
     try:
         job = web_network_tr069_service.queue_device_job(
-            db, tr069_device_id=device_id, action=action
+            db,
+            tr069_device_id=device_id,
+            action=action,
+            request=request,
         )
-        message = quote_plus(f"Action queued: {job.command}")
+        message = quote_plus(f"Action accepted: {job.command.value}")
         return RedirectResponse(
             f"/admin/network/tr069?acs_server_id={acs_server_id}&status=success&message={message}",
             status_code=303,
@@ -519,14 +522,17 @@ def tr069_bulk_action(
         if not action:
             raise ValueError("No action selected")
 
-        task_id = web_network_tr069_service.queue_bulk_action(
+        outcome = web_network_tr069_service.queue_bulk_action(
             db,
             device_ids=device_ids,
             action=action,
             params=None,
             request=request,
         )
-        message = quote_plus(f"Bulk {action} queued for {len(device_ids)} device(s)")
+        message = quote_plus(
+            f"Bulk {action} accepted for {len(outcome.accepted)} device(s); "
+            f"{len(outcome.rejected)} rejected"
+        )
         return RedirectResponse(
             f"/admin/network/tr069?acs_server_id={acs_server_id}&status=success&message={message}",
             status_code=303,

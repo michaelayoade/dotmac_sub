@@ -305,17 +305,15 @@ _FEATURE_CONTROLS: tuple[Control, ...] = (
         description="TR-069 inventory sync.",
     ),
     Control(
-        key="network.tr069_job_execution",
+        key="network.tr069_command_admission",
         layer=Layer.feature,
         owner_module="network",
         default=True,
         on_missing=True,
-        legacy=(
-            LegacyAlias(
-                _NET, "tr069_job_execution_enabled", "TR069_JOB_EXECUTION_ENABLED"
-            ),
+        description=(
+            "Admission of new TR-069 CPE commands. Accepted commands continue "
+            "through durable dispatch when this capability is disabled."
         ),
-        description="TR-069 job execution.",
     ),
     Control(
         key="network.tr069_health_check",

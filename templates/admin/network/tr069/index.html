@@ -33,6 +33,7 @@
         {{ stats_card("Seen 24h", stats.seen_24h, color="emerald") }}
         {{ stats_card("Unlinked", stats.unlinked, color="amber") }}
         {{ stats_card("Pending Jobs", stats.jobs_pending, color="amber") }}
+        {{ stats_card("Unverified", stats.jobs_unverified, color="amber") }}
         {{ stats_card("Failed Jobs", stats.jobs_failed, color="rose") }}
     </div>
 
@@ -509,6 +510,8 @@
                         {{ status_badge('Pending', 'warning') }}
                     {% elif job.status.value == 'failed' %}
                         {{ status_badge('Failed', 'inactive') }}
+                    {% elif job.status.value == 'unverified' %}
+                        {{ status_badge('Unverified', 'warning') }}
                     {% else %}
                         <span class="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-200">{{ job.status.value | title }}</span>
                     {% endif %}

@@ -15,9 +15,13 @@ Usage:
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 import logging
 import sys
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from typing import cast
 
 import psycopg
@@ -42,6 +46,7 @@ from app.services.external_radius_targets import (
     external_radius_table,
     get_external_engine,
 )
+from app.services.radius_access_state import ACTIVE_STATUSES, BLOCKED_STATUSES
 from app.services.radius_address_lists import (
     DEFAULT_SUSPENDED_ADDRESS_LIST,
     suspended_address_list,
@@ -53,6 +58,22 @@ logger = logging.getLogger(__name__)
 
 ACCT_INTERIM_SECONDS = 300  # 5 min Acct-Interim-Update cadence
 SUSPENDED_ADDRESS_LIST = DEFAULT_SUSPENDED_ADDRESS_LIST
+
+RadiusAttribute = tuple[str, str, str]
+
+
+@dataclass(frozen=True, slots=True)
+class RadiusProjectionWorkItem:
+    """Typed per-login input consumed by the sole RADIUS projection writer."""
+
+    username: str
+    cleartext_password: str
+    check_attrs: tuple[RadiusAttribute, ...]
+    reply_attrs: tuple[RadiusAttribute, ...]
+    blocked: bool
+    status: SubscriptionStatus
+    mode: str
+    profile_group: str | None
 
 
 def _result_count(result: Mapping[str, object], key: str) -> int:
@@ -109,6 +130,37 @@ def _effective_profile(
     return subscription_profile
 
 
+def simultaneous_use_enforcement_enabled(db) -> bool:
+    """Return the database-owned cutover gate for RADIUS concurrency checks."""
+    from app.models.domain_settings import SettingDomain
+    from app.services import settings_spec
+
+    return (
+        settings_spec.resolve_value(
+            db,
+            SettingDomain.radius,
+            "simultaneous_use_enforcement_enabled",
+        )
+        is True
+    )
+
+
+def _simultaneous_use_value(profile: RadiusProfile | None) -> str:
+    """Resolve the profile limit, preserving the historical default of one."""
+    return str((profile.simultaneous_use if profile else None) or 1)
+
+
+def _radcheck_policy_attrs(
+    profile: RadiusProfile | None,
+    *,
+    simultaneous_use_enabled: bool,
+) -> list[RadiusAttribute]:
+    """Build FreeRADIUS check/control attributes for an authenticating login."""
+    if not simultaneous_use_enabled:
+        return []
+    return [("Simultaneous-Use", ":=", _simultaneous_use_value(profile))]
+
+
 def _radreply_attrs(
     sub: Subscription,
     offer: CatalogOffer,
@@ -120,7 +172,8 @@ def _radreply_attrs(
     framed_ipv6: str | None = None,
     delegated_ipv6: str | None = None,
     suspended_list_name: str = SUSPENDED_ADDRESS_LIST,
-) -> list[tuple[str, str, str]]:
+    simultaneous_use_enabled: bool = False,
+) -> list[RadiusAttribute]:
     """Compute the list of (attribute, op, value) tuples for radreply.
 
     `subscriber_blocked`: customer-level block.
@@ -148,6 +201,12 @@ def _radreply_attrs(
     sweep's `DELETE FROM radreply` wipes the Framed-IPv6-Prefix that
     build_radius_reply_attributes wrote on activation, so IPv6 RADIUS could never
     be durable (same wipe hazard the Framed-Route handling already guards against).
+
+    `simultaneous_use_enabled`: cutover gate for the corrected FreeRADIUS
+    check/control projection. Before cutover, retain the legacy radreply row so
+    deployment alone does not silently change fleet-wide authentication policy.
+    After cutover, `_radcheck_policy_attrs` owns the attribute and this reply
+    builder omits it.
     """
     ipv4 = framed_ipv4 if framed_ipv4 is not None else sub.ipv4_address
     if ipv4 == "0.0.0.0":  # nosec B104  # noqa: S104 — IP-string compare, not a bind
@@ -157,7 +216,7 @@ def _radreply_attrs(
     )
     ipv6 = (str(ipv6).strip() or None) if ipv6 else None
 
-    attrs: list[tuple[str, str, str]] = [
+    attrs: list[RadiusAttribute] = [
         ("Service-Type", ":=", "Framed-User"),
         ("Framed-Protocol", ":=", "PPP"),
         ("Acct-Interim-Interval", ":=", str(ACCT_INTERIM_SECONDS)),
@@ -175,8 +234,8 @@ def _radreply_attrs(
     if rate:
         attrs.append(("Mikrotik-Rate-Limit", ":=", rate))
 
-    sim = (profile.simultaneous_use if profile else None) or 1
-    attrs.append(("Simultaneous-Use", ":=", str(sim)))
+    if not simultaneous_use_enabled:
+        attrs.append(("Simultaneous-Use", ":=", _simultaneous_use_value(profile)))
 
     if profile and profile.idle_timeout:
         attrs.append(("Idle-Timeout", ":=", str(profile.idle_timeout)))
@@ -217,6 +276,159 @@ class RadiusProjectionIncomplete(RuntimeError):
         )
 
 
+class RadiusProjectionUnbuildable(RuntimeError):
+    """One or more desired active/captive logins could not be rebuilt."""
+
+
+def require_complete_projection(result: Mapping[str, object]) -> None:
+    if result.get("projection_complete") is not True:
+        raise RadiusProjectionUnbuildable(
+            "RADIUS projection contains one or more unbuildable logins"
+        )
+
+
+def _projection_rows_for_item(
+    item: RadiusProjectionWorkItem,
+    config: Mapping[str, object],
+    *,
+    access_groups: Mapping[str, str],
+    access_group_priority: int,
+    group_routing_enabled: bool,
+) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
+    """Build the exact external rows used by both writer and comparator."""
+    if item.mode == "reject":
+        check_rows: list[dict[str, object]] = [
+            {
+                "username": item.username,
+                "attribute": "Auth-Type",
+                "op": ":=",
+                "value": "Reject",
+            }
+        ]
+        reply_rows: list[dict[str, object]] = []
+    else:
+        check_rows = [
+            {
+                "username": item.username,
+                "attribute": config["password_attribute"],
+                "op": config["password_op"],
+                "value": item.cleartext_password,
+            }
+        ]
+        check_rows.extend(
+            {
+                "username": item.username,
+                "attribute": attribute,
+                "op": op,
+                "value": value,
+            }
+            for attribute, op, value in item.check_attrs
+        )
+        reply_rows = [
+            {
+                "username": item.username,
+                "attribute": attribute,
+                "op": op or config["default_reply_op"],
+                "value": value,
+            }
+            for attribute, op, value in item.reply_attrs
+        ]
+
+    group_rows: list[dict[str, object]] = []
+    if config["use_group"] and item.profile_group and item.mode == "active":
+        group_rows.append(
+            {
+                "username": item.username,
+                "groupname": item.profile_group,
+                "priority": config["group_priority"],
+            }
+        )
+    if group_routing_enabled:
+        access_key = (
+            "captive"
+            if item.mode == "captive"
+            else "suspended"
+            if item.mode == "reject"
+            else "active"
+        )
+        access_group = access_groups.get(access_key)
+        if access_group:
+            group_rows.append(
+                {
+                    "username": item.username,
+                    "groupname": access_group,
+                    "priority": access_group_priority,
+                }
+            )
+    return check_rows, reply_rows, group_rows
+
+
+def _projection_fingerprint(
+    *,
+    radcheck_rows: Iterable[Mapping[str, object]],
+    radreply_rows: Iterable[Mapping[str, object]],
+    radusergroup_rows: Iterable[Mapping[str, object]],
+) -> str:
+    """Return a keyed digest; password values never leave this owner."""
+
+    def normalized(
+        rows: Iterable[Mapping[str, object]], columns: tuple[str, ...]
+    ) -> list[list[str]]:
+        return sorted(
+            [[str(row.get(column) or "") for column in columns] for row in rows]
+        )
+
+    payload = json.dumps(
+        {
+            "radcheck": normalized(
+                radcheck_rows, ("username", "attribute", "op", "value")
+            ),
+            "radreply": normalized(
+                radreply_rows, ("username", "attribute", "op", "value")
+            ),
+            "radusergroup": normalized(
+                radusergroup_rows, ("username", "groupname", "priority")
+            ),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    key = get_encryption_key()
+    if key is None:
+        raise RuntimeError("Credential encryption key is required for RADIUS parity")
+    return hmac.new(key, payload, hashlib.sha256).hexdigest()
+
+
+def fingerprint_observed_radius_rows(
+    *,
+    radcheck_rows: Iterable[Mapping[str, object]],
+    radreply_rows: Iterable[Mapping[str, object]],
+    radusergroup_rows: Iterable[Mapping[str, object]],
+) -> dict[str, str]:
+    """Fingerprint complete observed rows per login without exposing secrets."""
+    checks: dict[str, list[Mapping[str, object]]] = {}
+    replies: dict[str, list[Mapping[str, object]]] = {}
+    groups: dict[str, list[Mapping[str, object]]] = {}
+    for rows, target in (
+        (radcheck_rows, checks),
+        (radreply_rows, replies),
+        (radusergroup_rows, groups),
+    ):
+        for row in rows:
+            username = str(row.get("username") or "")
+            if username:
+                target.setdefault(username, []).append(row)
+    usernames = set(checks) | set(replies) | set(groups)
+    return {
+        username: _projection_fingerprint(
+            radcheck_rows=checks.get(username, ()),
+            radreply_rows=replies.get(username, ()),
+            radusergroup_rows=groups.get(username, ()),
+        )
+        for username in usernames
+    }
+
+
 def _projection_tables(config: dict):
     radcheck = external_radius_table(
         config["radcheck_table"],
@@ -244,8 +456,8 @@ def _projection_tables(config: dict):
 def _write_radius_projection(
     conn,
     config: dict,
-    work,
-    delete_usernames,
+    work: Iterable[RadiusProjectionWorkItem],
+    delete_usernames: Iterable[str],
     *,
     access_groups: dict[str, str],
     access_group_priority: int,
@@ -280,66 +492,19 @@ def _write_radius_projection(
             conn.execute(group_delete)
 
     for item in work:
-        username, cleartext, attrs, _blocked, _status, mode, profile_group = item
-        if mode == "reject":
-            conn.execute(
-                insert(radcheck).values(
-                    username=username,
-                    attribute="Auth-Type",
-                    op=":=",
-                    value="Reject",
-                )
-            )
-            counts["radcheck_written"] += 1
-        else:
-            conn.execute(
-                insert(radcheck).values(
-                    username=username,
-                    attribute=config["password_attribute"],
-                    op=config["password_op"],
-                    value=cleartext,
-                )
-            )
-            counts["radcheck_written"] += 1
-            reply_rows = [
-                {
-                    "username": username,
-                    "attribute": attribute,
-                    "op": op or config["default_reply_op"],
-                    "value": value,
-                }
-                for attribute, op, value in attrs
-            ]
-            if reply_rows:
-                conn.execute(insert(radreply), reply_rows)
-                counts["radreply_written"] += len(reply_rows)
-
-        group_rows: list[dict[str, object]] = []
-        if config["use_group"] and profile_group and mode == "active":
-            group_rows.append(
-                {
-                    "username": username,
-                    "groupname": profile_group,
-                    "priority": config["group_priority"],
-                }
-            )
-        if group_routing_enabled:
-            access_key = (
-                "captive"
-                if mode == "captive"
-                else "suspended"
-                if mode == "reject"
-                else "active"
-            )
-            access_group = access_groups.get(access_key)
-            if access_group:
-                group_rows.append(
-                    {
-                        "username": username,
-                        "groupname": access_group,
-                        "priority": access_group_priority,
-                    }
-                )
+        check_rows, reply_rows, group_rows = _projection_rows_for_item(
+            item,
+            config,
+            access_groups=access_groups,
+            access_group_priority=access_group_priority,
+            group_routing_enabled=group_routing_enabled,
+        )
+        if check_rows:
+            conn.execute(insert(radcheck), check_rows)
+            counts["radcheck_written"] += len(check_rows)
+        if reply_rows:
+            conn.execute(insert(radreply), reply_rows)
+            counts["radreply_written"] += len(reply_rows)
         if group_rows:
             conn.execute(insert(radusergroup), group_rows)
             counts["radusergroup_written"] += len(group_rows)
@@ -351,6 +516,7 @@ def populate(
     only_usernames: set[str] | None = None,
     *,
     source_db=None,
+    include_expected_fingerprints: bool = False,
 ) -> dict[str, object]:
     """Project the authoritative subscriber state to every configured target."""
     stats: dict[str, object] = {
@@ -382,6 +548,8 @@ def populate(
         )
 
         group_routing_enabled = resolve_group_routing_policy(db).enabled
+        simultaneous_use_enabled = simultaneous_use_enforcement_enabled(db)
+        stats["simultaneous_use_enforcement_enabled"] = simultaneous_use_enabled
         access_groups = {
             "active": str(
                 settings_spec.resolve_value(
@@ -424,13 +592,7 @@ def populate(
                     joinedload(Subscription.subscriber).joinedload(Subscriber.reseller),
                 )
                 .where(
-                    Subscription.status.in_(
-                        [
-                            SubscriptionStatus.active,
-                            SubscriptionStatus.blocked,
-                            SubscriptionStatus.suspended,
-                        ]
-                    ),
+                    Subscription.status.in_(ACTIVE_STATUSES | BLOCKED_STATUSES),
                     Subscription.login.isnot(None),
                 )
             )
@@ -546,11 +708,9 @@ def populate(
         # alive, then release it BEFORE the radius writes — holding the read
         # transaction through the write phase trips the app's 120s
         # idle-in-transaction timeout on large fleets.
-        by_login: dict[
-            str,
-            tuple[str, str, list, bool, SubscriptionStatus, str, str | None],
-        ] = {}
+        by_login: dict[str, RadiusProjectionWorkItem] = {}
         preserve_usernames: set[str] = set()
+        unbuildable_usernames: set[str] = set()
         for sub in rows:
             login = cast(str | None, sub.login)
             if not login:
@@ -562,26 +722,6 @@ def populate(
                 or selected_projection.subscription_id != str(sub.id)
             ):
                 continue
-            cred = creds_by_username.get(login)
-            if cred is None:
-                _increment_result_count(stats, "skipped_no_credential")
-                continue
-            if not cred.secret_hash:
-                _increment_result_count(stats, "skipped_no_password")
-                preserve_usernames.add(login)
-                continue
-            try:
-                cleartext = decrypt_credential_with_key(cred.secret_hash, enc_key)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("decrypt failed for %s: %s", login, exc)
-                _increment_result_count(stats, "skipped_decrypt_failed")
-                preserve_usernames.add(login)
-                continue
-            if not cleartext:
-                _increment_result_count(stats, "skipped_no_password")
-                preserve_usernames.add(login)
-                continue
-
             projection = selected_projection.plan
             captive = projection.mode == "captive"
             if (
@@ -589,6 +729,49 @@ def populate(
                 and not captive
             ):
                 _increment_result_count(stats, "captive_ineligible_optins")
+
+            # A hard reject is a complete RADIUS projection in its own right and
+            # does not need a customer password.  Resolve it before credential
+            # lookup/decryption so a missing or unreadable secret can never
+            # preserve an old permissive row for a blocked login.
+            if projection.mode == "reject":
+                by_login[login] = RadiusProjectionWorkItem(
+                    username=login,
+                    cleartext_password="",
+                    check_attrs=(),
+                    reply_attrs=(),
+                    blocked=True,
+                    status=sub.status,
+                    mode=projection.mode,
+                    profile_group=None,
+                )
+                continue
+
+            cred = creds_by_username.get(login)
+            if cred is None:
+                _increment_result_count(stats, "skipped_no_credential")
+                unbuildable_usernames.add(login)
+                preserve_usernames.add(login)
+                continue
+            if not cred.secret_hash:
+                _increment_result_count(stats, "skipped_no_password")
+                unbuildable_usernames.add(login)
+                preserve_usernames.add(login)
+                continue
+            try:
+                cleartext = decrypt_credential_with_key(cred.secret_hash, enc_key)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("decrypt failed for %s: %s", login, exc)
+                _increment_result_count(stats, "skipped_decrypt_failed")
+                unbuildable_usernames.add(login)
+                preserve_usernames.add(login)
+                continue
+            if not cleartext:
+                _increment_result_count(stats, "skipped_no_password")
+                unbuildable_usernames.add(login)
+                preserve_usernames.add(login)
+                continue
+
             sub_blocked = projection.blocked
             eff_ipv4 = sub.ipv4_address
             if not eff_ipv4 or eff_ipv4 == "0.0.0.0":  # nosec B104  # noqa: S104
@@ -626,6 +809,7 @@ def populate(
                 framed_ipv4=eff_ipv4,
                 delegated_ipv6=delegated_ipv6,
                 suspended_list_name=suspended_list_name,
+                simultaneous_use_enabled=simultaneous_use_enabled,
             )
             blocked_flag = projection.blocked
             # Enforcement mode for the radcheck write: active subs and opted-in
@@ -633,14 +817,23 @@ def populate(
             # the radreply Address-List); non-opted blocked subs are hard
             # rejected (Auth-Type := Reject, offline).
             mode = projection.mode
-            by_login[login] = (
-                login,
-                cleartext,
-                attrs,
-                blocked_flag,
-                sub.status,
-                mode,
-                effective_profile.name if effective_profile else None,
+            check_attrs = (
+                _radcheck_policy_attrs(
+                    effective_profile,
+                    simultaneous_use_enabled=simultaneous_use_enabled,
+                )
+                if mode in {"active", "captive"}
+                else []
+            )
+            by_login[login] = RadiusProjectionWorkItem(
+                username=login,
+                cleartext_password=cleartext,
+                check_attrs=tuple(check_attrs),
+                reply_attrs=tuple(attrs),
+                blocked=blocked_flag,
+                status=sub.status,
+                mode=mode,
+                profile_group=effective_profile.name if effective_profile else None,
             )
 
         active_usernames = {sub.login for sub in rows if sub.login}
@@ -656,18 +849,46 @@ def populate(
     # subscription and is deleted (removal), never reinserted.
     scoped = only_usernames is not None
     if only_usernames is not None:
-        work = [w for w in work if w[0] in only_usernames]
+        work = [item for item in work if item.username in only_usernames]
         stats["scoped_targets"] = len(only_usernames)
+        unbuildable_usernames.intersection_update(only_usernames)
+    stats["projected_logins"] = len(work)
+    stats["unbuildable_logins"] = len(unbuildable_usernames)
+    stats["projection_complete"] = not unbuildable_usernames
     stats["radcheck_upserts"] = len(work) * len(projection_targets)
-    stats["radreply_upserts"] = sum(len(w[2]) for w in work) * len(projection_targets)
-    stats["blocked_users_written"] = sum(1 for w in work if w[3])
-    stats["captive_users_written"] = sum(1 for w in work if w[5] == "captive")
-    stats["rejected_users_written"] = sum(1 for w in work if w[5] == "reject")
+    stats["radcheck_policy_upserts"] = sum(
+        len(item.check_attrs) for item in work
+    ) * len(projection_targets)
+    stats["radreply_upserts"] = sum(len(item.reply_attrs) for item in work) * len(
+        projection_targets
+    )
+    stats["blocked_users_written"] = sum(1 for item in work if item.blocked)
+    stats["captive_users_written"] = sum(1 for item in work if item.mode == "captive")
+    stats["rejected_users_written"] = sum(1 for item in work if item.mode == "reject")
+    if include_expected_fingerprints:
+        expected: dict[str, dict[str, str]] = {}
+        for target in projection_targets:
+            target_rows: dict[str, str] = {}
+            for item in work:
+                check_rows, reply_rows, group_rows = _projection_rows_for_item(
+                    item,
+                    target,
+                    access_groups=access_groups,
+                    access_group_priority=access_group_priority,
+                    group_routing_enabled=group_routing_enabled,
+                )
+                target_rows[item.username] = _projection_fingerprint(
+                    radcheck_rows=check_rows,
+                    radreply_rows=reply_rows,
+                    radusergroup_rows=group_rows,
+                )
+            expected[str(target["target_fingerprint"])] = target_rows
+        stats["expected_projection_fingerprints"] = expected
 
     delete_usernames = (
         (set(only_usernames or set()) - preserve_usernames)
         if scoped
-        else {w[0] for w in work}
+        else {item.username for item in work}
     )
     if dry_run:
         stats["target_outcomes"] = [
@@ -680,7 +901,12 @@ def populate(
             for target in projection_targets
         ]
         logger.info("DRY RUN — no writes (orphan cleanup also skipped)")
-        logger.info("done: %s", stats)
+        log_stats = {
+            key: value
+            for key, value in stats.items()
+            if key != "expected_projection_fingerprints"
+        }
+        logger.info("done: %s", log_stats)
         return stats
 
     outcomes: list[dict[str, object]] = []
@@ -724,7 +950,12 @@ def populate(
     if any(not outcome["ok"] for outcome in outcomes):
         raise RadiusProjectionIncomplete(outcomes)
 
-    logger.info("done: %s", stats)
+    log_stats = {
+        key: value
+        for key, value in stats.items()
+        if key != "expected_projection_fingerprints"
+    }
+    logger.info("done: %s", log_stats)
     return stats
 
 
@@ -746,7 +977,15 @@ def reconcile_usernames(
     """
     targets = {u for u in usernames if u}
     if not targets:
-        return {"scoped_targets": 0, "radcheck_upserts": 0, "radreply_upserts": 0}
+        return {
+            "scoped_targets": 0,
+            "projected_logins": 0,
+            "unbuildable_logins": 0,
+            "projection_targets": 0,
+            "projection_complete": True,
+            "radcheck_upserts": 0,
+            "radreply_upserts": 0,
+        }
     return populate(dry_run=dry_run, only_usernames=targets, source_db=source_db)
 
 

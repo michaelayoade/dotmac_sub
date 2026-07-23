@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import nullcontext
 from unittest.mock import MagicMock, patch
 
 
@@ -12,7 +13,10 @@ def _target(url: str):
         "radacct_table": "radacct",
         "radcheck_table": "radcheck",
         "radreply_table": "radreply",
+        "radusergroup_table": "radusergroup",
         "nas_table": "nas",
+        "target_fingerprint": "test-radius",
+        "use_group": False,
     }
 
 
@@ -86,11 +90,22 @@ def test_enforcement_reconciler_reads_db_configured_target(db_session, monkeypat
     with (
         patch("app.db.SessionLocal", return_value=db_session),
         patch(
+            "app.tasks.radius.postgres_session_advisory_lock",
+            return_value=nullcontext(True),
+        ),
+        patch(
             "app.services.external_radius_targets.authoritative_accounting_target",
             return_value=target,
         ),
         patch("psycopg.connect", return_value=connection) as mock_connect,
         patch("app.services.radius_reject.get_reject_networks", return_value={}),
+        patch(
+            "app.services.radius_population.populate",
+            return_value={
+                "unbuildable_logins": 0,
+                "expected_projection_fingerprints": {"test-radius": {}},
+            },
+        ),
     ):
         from app.tasks.radius import run_enforcement_reconciler
 
