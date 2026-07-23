@@ -259,6 +259,36 @@ def test_subscriber_list_embeds_services_billing_and_session_state(
     assert row["last_seen"].endswith("Z")
 
 
+def test_latest_session_projection_returns_one_ranked_row_per_subscription(db_session):
+    subscriber = _subscriber(db_session)
+    subscription = _subscription(db_session, subscriber, _offer(db_session))
+    now = datetime.now(UTC)
+    for index in range(40):
+        db_session.add(
+            RadiusAccountingSession(
+                subscription_id=subscription.id,
+                session_id=f"historical-{index}",
+                status_type=AccountingStatus.stop,
+                session_start=now - timedelta(days=index + 1),
+                last_update_at=now - timedelta(days=index + 1),
+            )
+        )
+    newest = RadiusAccountingSession(
+        subscription_id=subscription.id,
+        session_id="newest",
+        status_type=AccountingStatus.interim,
+        session_start=now - timedelta(minutes=2),
+        last_update_at=now - timedelta(minutes=1),
+    )
+    db_session.add(newest)
+    db_session.commit()
+
+    result = crm_api.latest_session_by_subscriber(db_session, [subscriber.id])
+
+    assert len(result) == 1
+    assert result[subscriber.id].id == newest.id
+
+
 def test_subscriber_list_batches_payload_metadata(db_session, crm_auth):
     offer = _offer(db_session)
     subscribers = []

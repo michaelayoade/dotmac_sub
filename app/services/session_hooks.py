@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from time import monotonic
 from typing import Any
 
 from sqlalchemy import event
@@ -11,6 +12,13 @@ from sqlalchemy.orm.session import SessionTransaction
 logger = logging.getLogger(__name__)
 
 _AFTER_COMMIT_CALLBACKS_KEY = "_after_commit_callbacks"
+_ROOT_TRANSACTION_SPAN_KEY = "_root_transaction_span"
+_TRANSACTION_WARN_SECONDS = 30.0
+
+
+def install_session_hooks() -> None:
+    """Explicit import-time installation hook used by the session factory."""
+    return None
 
 
 def supports_after_commit(session: Any) -> bool:
@@ -88,6 +96,53 @@ def _cleanup_after_transaction_end(
     callbacks_by_tx.pop(id(transaction), None)
     if not callbacks_by_tx:
         _clear_after_commit_callbacks(session)
+
+
+@event.listens_for(Session, "after_begin")
+def _start_root_transaction_span(
+    session: Session,
+    transaction: SessionTransaction,
+    _connection: Any,
+) -> None:
+    if transaction.parent is not None or _ROOT_TRANSACTION_SPAN_KEY in session.info:
+        return
+    request_id = None
+    try:
+        from app.observability import get_request_id
+
+        request_id = get_request_id() or None
+    except Exception:
+        pass
+    session.info[_ROOT_TRANSACTION_SPAN_KEY] = {
+        "started": monotonic(),
+        "request_id": request_id,
+    }
+
+
+@event.listens_for(Session, "after_transaction_end")
+def _finish_root_transaction_span(
+    session: Session,
+    transaction: SessionTransaction,
+) -> None:
+    if transaction.parent is not None:
+        return
+    span = session.info.pop(_ROOT_TRANSACTION_SPAN_KEY, None)
+    if not isinstance(span, dict):
+        return
+    started = span.get("started")
+    if not isinstance(started, (int, float)):
+        return
+    duration = max(0.0, monotonic() - float(started))
+    if duration < _TRANSACTION_WARN_SECONDS:
+        return
+    logger.warning(
+        "database_transaction_span_slow",
+        extra={
+            "duration_seconds": round(duration, 3),
+            "request_id": span.get("request_id"),
+            "session_id": id(session),
+        },
+    )
 
 
 @event.listens_for(Session, "after_rollback")

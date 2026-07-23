@@ -5,12 +5,14 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
+from app.db import finish_read_transaction
 from app.models.network_operation import (
     NetworkOperation,
     NetworkOperationStatus,
@@ -423,12 +425,38 @@ def execute_reauthorize(
     return ActionResult(success=auth_ok, message=auth_msg)
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
+class RunningConfigOnt:
+    """Materialized ONT identity safe to use after the read transaction closes."""
+
+    id: UUID
+    serial_number: str
+
+
+@dataclass(frozen=True, slots=True)
+class RunningConfigOlt:
+    """Minimum OLT transport snapshot required by the read-only SSH adapter."""
+
+    id: UUID
+    name: str
+    hostname: str | None
+    mgmt_ip: str | None
+    vendor: str | None
+    model: str | None
+    firmware_version: str | None
+    software_version: str | None
+    ssh_username: str | None
+    ssh_password: str | None
+    ssh_port: int | None
+    rate_limit_ops_per_minute: int | None
+
+
+@dataclass(frozen=True, slots=True)
 class RunningConfigResult:
     """Result of fetching ONT running config from OLT."""
 
-    ont: object | None
-    olt: object | None
+    ont: RunningConfigOnt | None
+    olt: RunningConfigOlt | None
     config_text: str
     error: str | None
     from_cache: bool
@@ -451,8 +479,9 @@ def fetch_olt_running_config(
     from app.services.network.olt_ssh import run_cli_command
     from app.services.network.serial_utils import parse_ont_id_on_olt
 
-    ont = db.get(OntUnit, coerce_uuid(ont_id))
-    if not ont:
+    ont_row = db.get(OntUnit, coerce_uuid(ont_id))
+    if not ont_row:
+        finish_read_transaction(db)
         return RunningConfigResult(
             ont=None,
             olt=None,
@@ -462,16 +491,21 @@ def fetch_olt_running_config(
             fetched_at=None,
         )
 
-    active_assignment = assignments_service.active_assignment_for_ont_id(db, ont.id)
+    active_assignment = assignments_service.active_assignment_for_ont_id(db, ont_row.id)
 
     # Try to get the OLT from the ONT or active assignment
-    olt = None
-    if ont.olt_device:
-        olt = ont.olt_device
+    olt_row = None
+    if ont_row.olt_device:
+        olt_row = ont_row.olt_device
     elif active_assignment and active_assignment.pon_port:
-        olt = active_assignment.pon_port.olt
+        olt_row = active_assignment.pon_port.olt
 
-    if not olt:
+    ont = RunningConfigOnt(
+        id=ont_row.id,
+        serial_number=str(ont_row.serial_number or ""),
+    )
+    if not olt_row:
+        finish_read_transaction(db)
         return RunningConfigResult(
             ont=ont,
             olt=None,
@@ -481,13 +515,32 @@ def fetch_olt_running_config(
             fetched_at=None,
         )
 
-    # Build the ONT-specific command (Huawei style)
+    olt = RunningConfigOlt(
+        id=olt_row.id,
+        name=olt_row.name,
+        hostname=olt_row.hostname,
+        mgmt_ip=olt_row.mgmt_ip,
+        vendor=olt_row.vendor,
+        model=olt_row.model,
+        firmware_version=olt_row.firmware_version,
+        software_version=olt_row.software_version,
+        ssh_username=olt_row.ssh_username,
+        ssh_password=olt_row.ssh_password,
+        ssh_port=olt_row.ssh_port,
+        rate_limit_ops_per_minute=olt_row.rate_limit_ops_per_minute,
+    )
+
+    # Build the ONT-specific command (Huawei style) while relationships are loaded.
     fsp = None
     onu_id = None
     if active_assignment and active_assignment.pon_port:
         pon = active_assignment.pon_port
         fsp = pon.name  # e.g., "0/1/0"
-        onu_id = parse_ont_id_on_olt(getattr(ont, "external_id", None))
+        onu_id = parse_ont_id_on_olt(getattr(ont_row, "external_id", None))
+
+    # The OLT cache and SSH transport are external I/O. Release the database
+    # connection before either can wait on Redis, rate limiting, TCP, or CLI.
+    finish_read_transaction(db)
 
     # Cache key for this ONT's config
     cache_key = f"ont_config:{ont_id}"

@@ -11,6 +11,8 @@ links to its owning detail surface (actions stay on the owners).
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from sqlalchemy.orm import Session
 
 from app.schemas.status_presentation import (
@@ -18,6 +20,7 @@ from app.schemas.status_presentation import (
     StatusPresentation,
     StatusTone,
 )
+from app.services import operational_checks as operational_checks_service
 from app.services import web_network_monitoring
 from app.services.device_operational_status import mismatch_worklist
 from app.services.status_presentation import (
@@ -57,10 +60,30 @@ def _incident_title(incident: object) -> str:
     return "Outage"
 
 
+_POLLER_RESULT_LABELS = {
+    "no_route_to_host": "No route to host",
+    "timeout": "Connection timed out",
+    "authentication_rejected": "Authentication rejected",
+    "connection_refused": "Connection refused",
+    "network_unreachable": "Network unreachable",
+    "transport_error": "RouterOS polling failed",
+}
+
+
+def _parse_datetime(value: object) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
 def noc_queue_data(db: Session) -> dict:
     """Merge the open outage / mismatch / alarm queues into one triage list."""
     items: list[dict] = []
-    outage_count = mismatch_count = alarm_count = 0
+    outage_count = mismatch_count = alarm_count = collector_count = 0
 
     # 1. Open outage incidents
     for incident in outage.list_open_incidents(db):
@@ -128,6 +151,37 @@ def noc_queue_data(db: Session) -> dict:
         )
         alarm_count += 1
 
+    # 4. Exact device-level bandwidth collector failures. These are evidence
+    # gaps, not device/service "down" decisions, so rows state what failed,
+    # customer-data impact, and the next retry instead of rendering a status.
+    poller_snapshot = operational_checks_service.bandwidth_poller_snapshot()
+    for failure in operational_checks_service.bandwidth_device_failures(
+        poller_snapshot
+    ):
+        category = str(failure.get("error_category") or "transport_error")
+        items.append(
+            {
+                "kind": "collector",
+                "id": str(failure.get("device_id") or ""),
+                "title": str(failure.get("name") or failure.get("device_id") or "NAS"),
+                "subtitle": (
+                    f"Live bandwidth collection cannot reach {failure.get('host') or 'the router'}. "
+                    "This does not prove customer service is down."
+                ),
+                "status": None,
+                "result": _POLLER_RESULT_LABELS.get(
+                    category, "RouterOS polling failed"
+                ),
+                "next_attempt_at": _parse_datetime(failure.get("next_attempt_at")),
+                "count": int(failure.get("services_without_live_bandwidth") or 0),
+                "count_label": "services without live bandwidth",
+                "when": _parse_datetime(failure.get("last_attempt_at")),
+                "url": f"/admin/network/nas/{failure.get('device_id')}",
+                "_rank": 0,
+            }
+        )
+        collector_count += 1
+
     # worst tone first, then most recent
     items.sort(key=lambda i: (i["_rank"], -(i["when"].timestamp() if i["when"] else 0)))
 
@@ -138,5 +192,10 @@ def noc_queue_data(db: Session) -> dict:
             "outages": outage_count,
             "mismatches": mismatch_count,
             "alarms": alarm_count,
+            "collectors": collector_count,
         },
+        "operational_checks": operational_checks_service.operational_checks(
+            db,
+            poller_snapshot=poller_snapshot,
+        ),
     }
