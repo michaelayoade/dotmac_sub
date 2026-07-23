@@ -253,10 +253,10 @@ def test_queue_metric_drilldown_filters_match_exact_open_cohorts(db_session):
 
 
 def test_queue_metric_cards_link_to_exact_cohorts():
-    template = Path("templates/admin/inbox/index.html").read_text()
+    template = Path("templates/admin/inbox/_sidebar.html").read_text()
 
-    assert '"href": "/admin/inbox?open_only=true"' in template
-    assert '"href": "/admin/inbox?open_only=true&unassigned=true"' in template
-    assert '"href": "/admin/inbox/reports/outbox-failures"' in template
-    assert '"href": "/admin/inbox?open_only=true&snoozed=true"' in template
-    assert '"href": "/admin/inbox?open_only=true&muted=true"' in template
+    assert 'href="/admin/inbox?open_only=true"' in template
+    assert 'href="/admin/inbox?open_only=true&unassigned=true"' in template
+    assert 'href="/admin/inbox/reports/outbox-failures"' in template
+    assert 'href="/admin/inbox?open_only=true&snoozed=true"' in template
+    assert 'href="/admin/inbox?open_only=true&muted=true"' in template

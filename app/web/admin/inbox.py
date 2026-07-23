@@ -85,6 +85,7 @@ def team_inbox_queue(
     page: int = Query(default=1),
     per_page: int = Query(default=25),
     c: str | None = Query(default=None),
+    conversation_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
     actor_id = _actor_id_from_request(request)
@@ -112,7 +113,7 @@ def team_inbox_queue(
             sort_dir=_query_text(sort_dir),
             page=_query_int(page, default=1) or 1,
             per_page=_query_int(per_page, default=25) or 25,
-            selected_conversation_id=_query_text(c),
+            selected_conversation_id=(_query_text(conversation_id) or _query_text(c)),
             actor_person_id=actor_person_id,
         ),
     )
@@ -145,6 +146,8 @@ def team_inbox_queue(
             "unassigned": projection.unassigned,
             "unread": projection.unread,
             "service_team_options": projection.service_team_options,
+            "agent_options": projection.agent_options,
+            "assignment_counts": projection.assignment_counts,
             "status_options": projection.status_options,
             "channel_options": projection.channel_options,
             "label_options": projection.label_options,
@@ -154,6 +157,7 @@ def team_inbox_queue(
                 if projection.selected is not None
                 else None
             ),
+            "actor_person_id": str(actor_person_id) if actor_person_id else "",
         }
     )
     if projection.selected is not None:
@@ -167,8 +171,11 @@ def team_inbox_queue(
                 "template_options": projection.selected.template_options,
                 "action_eligibility": projection.selected.action_eligibility,
                 "is_unread": projection.selected.is_unread,
+                "priority_options": projection.selected.priority_options,
             }
         )
+    if getattr(request, "headers", {}).get("hx-target") == "inbox-sidebar-content":
+        return templates.TemplateResponse("admin/inbox/_sidebar.html", context)
     return templates.TemplateResponse("admin/inbox/index.html", context)
 
 
@@ -218,6 +225,9 @@ def team_inbox_detail(
             "template_options": projection.template_options,
             "action_eligibility": projection.action_eligibility,
             "is_unread": projection.is_unread,
+            "actor_person_id": str(actor_person_id) if actor_person_id else "",
+            "priority_options": projection.priority_options,
+            "agent_options": team_inbox_projection.list_agent_options(db),
         }
         if projection is not None
         else None
@@ -234,6 +244,40 @@ def team_inbox_detail(
         context.update(view)
         return templates.TemplateResponse("admin/inbox/_conversation.html", context)
     return RedirectResponse(url=f"/admin/inbox?c={conversation_id}", status_code=303)
+
+
+@router.get(
+    "/{conversation_id}/contact",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("support:ticket:read"))],
+)
+def team_inbox_contact_context(
+    conversation_id: UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    projection = team_inbox_projection.get_conversation_projection(
+        db,
+        conversation_id=conversation_id,
+        actor_person_id=_actor_uuid_from_request(request),
+    )
+    if projection is None:
+        return HTMLResponse(
+            '<p class="p-4 text-sm text-slate-500">Contact context unavailable.</p>',
+            status_code=404,
+        )
+    context = _ctx(request, db)
+    context.update(
+        {
+            "timeline": projection.timeline,
+            "subscriber_summary": projection.subscriber_summary,
+            "contact_link_candidates": projection.contact_link_candidates,
+            "conversation_labels": projection.conversation_labels,
+            "label_options": projection.label_options,
+            "agent_options": team_inbox_projection.list_agent_options(db),
+        }
+    )
+    return templates.TemplateResponse("admin/inbox/_contact_drawer.html", context)
 
 
 def _actor_id_from_request(request: Request) -> str | None:
@@ -304,6 +348,8 @@ def team_inbox_reply(
     body_text: str = Form(default=""),
     macro_id: str | None = Form(default=None),
     template_id: str | None = Form(default=None),
+    idempotency_key: str | None = Form(default=None),
+    reply_to_message_id: str | None = Form(default=None),
     db: Session = Depends(get_db),
 ):
     _prepare_mutation(db)
@@ -314,6 +360,8 @@ def team_inbox_reply(
             body_text=body_text,
             macro_id=macro_id,
             template_id=template_id,
+            idempotency_key=_query_text(idempotency_key),
+            reply_to_message_id=_query_text(reply_to_message_id),
             actor_person_id=_actor_id_from_request(request),
         )
     except team_inbox_commands.ConversationNotFoundError:
@@ -334,7 +382,9 @@ def team_inbox_reply(
         conversation_id,
         status="success",
         message=(
-            f"Reply queued from {outcome.sender}."
+            "Reply already submitted."
+            if outcome.replayed
+            else f"Reply queued from {outcome.sender}."
             if outcome.kind == "queued"
             else f"Reply sent from {outcome.sender}."
         ),
@@ -650,6 +700,33 @@ def team_inbox_saved_filter_create(
     )
 
 
+@router.post(
+    "/filters/{filter_id}/delete",
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def team_inbox_saved_filter_delete(
+    filter_id: UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    _prepare_mutation(db)
+    try:
+        team_inbox_commands.delete_filter(
+            db,
+            filter_id=filter_id,
+            actor_person_id=_actor_id_from_request(request),
+        )
+    except team_inbox_commands.InboxCommandError as exc:
+        return RedirectResponse(
+            url=f"/admin/inbox?status=error&message={quote_plus(str(exc))}",
+            status_code=303,
+        )
+    return RedirectResponse(
+        url="/admin/inbox?status=success&message=Saved%20view%20deleted",
+        status_code=303,
+    )
+
+
 @router.get(
     "/reports/outbox-failures",
     response_class=HTMLResponse,
@@ -677,6 +754,7 @@ def team_inbox_bulk_action(
     conversation_ids: list[str] = Form(default=[]),
     action: str = Form(...),
     status_value: str | None = Form(default=None),
+    priority: int | None = Form(default=None),
     label_id: str | None = Form(default=None),
     service_team_id: str | None = Form(default=None),
     assigned_person_id: str | None = Form(default=None),
@@ -690,6 +768,7 @@ def team_inbox_bulk_action(
             conversation_ids=conversation_ids,
             action=action,
             status_value=status_value,
+            priority=priority,
             label_id=label_id,
             service_team_id=service_team_id,
             assigned_person_id=assigned_person_id,

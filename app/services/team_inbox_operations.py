@@ -609,6 +609,55 @@ def bulk_update_status(
     return {"updated": updated, "skipped": skipped, "status": clean_status}
 
 
+def bulk_update_priority(
+    db: Session,
+    *,
+    conversation_ids: Sequence[str | UUID],
+    priority: int | None,
+    actor_person_id: str | UUID | None = None,
+) -> dict[str, object]:
+    if priority is None or not 0 <= int(priority) <= 999:
+        raise InboxOperationError("Priority must be between 0 and 999.")
+    actor_uuid = coerce_uuid(actor_person_id)
+    updated: list[str] = []
+    skipped: list[str] = []
+    for raw_id in conversation_ids:
+        conversation_uuid = coerce_uuid(raw_id)
+        conversation = (
+            db.query(InboxConversation)
+            .filter(InboxConversation.id == conversation_uuid)
+            .with_for_update()
+            .one_or_none()
+            if conversation_uuid is not None
+            else None
+        )
+        if conversation is None or not conversation.is_active:
+            skipped.append(str(raw_id))
+            continue
+        if conversation.priority == int(priority):
+            skipped.append(str(conversation.id))
+            continue
+        metadata = dict(conversation.metadata_ or {})
+        history = metadata.get("priority_history")
+        if not isinstance(history, list):
+            history = []
+        history.append(
+            {
+                "from": conversation.priority,
+                "to": int(priority),
+                "at": _now_iso(),
+                "actor_id": str(actor_uuid) if actor_uuid else None,
+                "source": "team_inbox_bulk_priority",
+            }
+        )
+        metadata["priority_history"] = history[-50:]
+        conversation.priority = int(priority)
+        conversation.metadata_ = metadata
+        updated.append(str(conversation.id))
+    db.flush()
+    return {"updated": updated, "skipped": skipped, "priority": int(priority)}
+
+
 def bulk_apply_label(
     db: Session,
     *,
