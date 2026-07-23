@@ -15796,6 +15796,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "unbuildable active/captive login classification and preservation",
                     "secret-safe exact RADIUS-row projection fingerprint",
                     "walled-garden/reject radreply on blocked/suspended access",
+                    "RADIUS simultaneous-session check/control placement and cutover",
                     "bidirectional desired-versus-observed projection drift",
                 ),
                 depends_on=(
@@ -15803,6 +15804,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "access.radius_state",
                     "access.radius_reject",
                     "access.radius_target_registry",
+                    "control.settings_spec",
                 ),
                 notes=(
                     "Single writer of the FreeRADIUS auth tables across every "
@@ -15816,7 +15818,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "is preserved and reported, never treated as a successful refresh. "
                     "The writer and reconciler consume the same exact, secret-safe "
                     "per-login fingerprint and therefore cannot reinterpret lifecycle "
-                    "statuses or silently ignore attribute drift."
+                    "statuses or silently ignore attribute drift. "
+                    "Simultaneous-Use is projected to radcheck only after the "
+                    "database-owned cutover gate is enabled; radacct remains observed "
+                    "session evidence and never owns credential or service identity."
                 ),
             ),
             SOTService(
