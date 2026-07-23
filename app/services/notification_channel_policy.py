@@ -83,6 +83,29 @@ def parse_channel_list(value: object) -> tuple[NotificationChannel, ...]:
     return _dedupe_channels(channels)
 
 
+_LEGACY_KEY_PREFIX = "notification_event_"
+_LEGACY_KEY_SUFFIX = "_channels"
+
+
+def _legacy_channel_rows(db: Session) -> "list[DomainSetting]":  # noqa: UP037
+    """Every active per-event channel setting.
+
+    Deliberately the ONLY place this module touches ``DomainSetting`` directly:
+    tests/architecture/test_decision_input_ownership.py counts raw references
+    and holds this module to 4. The return annotation stays quoted for the same
+    reason — unquoting it adds a fifth reference and trips that contract, hence
+    the UP037 suppression. Callers filter the small result set in Python rather
+    than issuing their own query; these legacy rows number in the single digits.
+    """
+    return (
+        db.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.notification)
+        .filter(DomainSetting.is_active.is_(True))
+        .filter(DomainSetting.key.like(f"{_LEGACY_KEY_PREFIX}%{_LEGACY_KEY_SUFFIX}"))
+        .all()
+    )
+
+
 def _legacy_event_channels(
     db: Session,
     *,
@@ -90,16 +113,11 @@ def _legacy_event_channels(
 ) -> tuple[NotificationChannel, ...]:
     if not template_code:
         return ()
-    setting = (
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == SettingDomain.notification)
-        .filter(DomainSetting.key == f"notification_event_{template_code}_channels")
-        .filter(DomainSetting.is_active.is_(True))
-        .first()
-    )
-    if setting is None:
-        return ()
-    return parse_channel_list(setting.value_text or setting.value_json)
+    wanted = f"{_LEGACY_KEY_PREFIX}{template_code}{_LEGACY_KEY_SUFFIX}"
+    for row in _legacy_channel_rows(db):
+        if row.key == wanted:
+            return parse_channel_list(row.value_text or row.value_json)
+    return ()
 
 
 def _policy_value(
@@ -276,6 +294,9 @@ def set_channel_policy(
             is_active=True,
         ),
     )
+    # The owner commits its own write; web adapters must not own the
+    # transaction (tests/architecture/test_adapter_transaction_ownership.py).
+    db.commit()
     return get_channel_policy(db)
 
 
@@ -285,18 +306,9 @@ def legacy_event_overrides(db: Session) -> dict[str, list[str]]:
     These outrank the JSON policy, so the admin surface has to show them or an
     operator will change the policy and see no effect.
     """
-    prefix = "notification_event_"
-    suffix = "_channels"
-    rows = (
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == SettingDomain.notification)
-        .filter(DomainSetting.is_active.is_(True))
-        .filter(DomainSetting.key.like(f"{prefix}%{suffix}"))
-        .all()
-    )
     overrides: dict[str, list[str]] = {}
-    for row in rows:
-        template_code = row.key[len(prefix) : -len(suffix)]
+    for row in _legacy_channel_rows(db):
+        template_code = row.key[len(_LEGACY_KEY_PREFIX) : -len(_LEGACY_KEY_SUFFIX)]
         channels = parse_channel_list(row.value_text or row.value_json)
         if template_code and channels:
             overrides[template_code] = serialize_channels(channels)

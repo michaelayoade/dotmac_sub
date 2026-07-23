@@ -163,7 +163,6 @@ async def notification_channel_policy_save(
         web_notification_channels_service.save_channel_policy(db, form)
     except DomainError as exc:
         return _htmx_error_response(str(exc), title="Channel policy not saved")
-    db.commit()
     if request.headers.get("HX-Request"):
         return Response(status_code=204, headers={"HX-Refresh": "true"})
     return RedirectResponse(url="/admin/notifications/channels", status_code=303)
