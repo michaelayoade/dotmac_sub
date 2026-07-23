@@ -57,7 +57,7 @@
             {% for dup in duplicates %}
             <li>
                 <a class="underline" href="/admin/billing/payment-proofs/{{ dup.id }}">{{ dup.id | string | truncate(8, True, '') }}</a>
-                — {{ dup.status.value | title }}, {{ dup.currency }} {{ "{:,.2f}".format(dup.amount) }},
+                &mdash; {{ dup.status.value | title }}, {{ dup.currency }} {{ "{:,.2f}".format(dup.amount) }},
                 submitted {{ dup.created_at | app_datetime('%Y-%m-%d %H:%M', 'unknown') }}
             </li>
             {% endfor %}
@@ -76,10 +76,10 @@
                 {% if proof.verified_amount is not none %}
                 {{ info_row("Verified Amount", proof.currency ~ " " ~ "{:,.2f}".format(proof.verified_amount)) }}
                 {% endif %}
-                {{ info_row("Bank", proof.bank_name or "—") }}
-                {{ info_row("Reference", proof.reference or "—") }}
+                {{ info_row("Bank", proof.bank_name or "&mdash;") }}
+                {{ info_row("Reference", proof.reference or "&mdash;") }}
                 {{ info_row("Transfer Date", proof.paid_at | app_datetime('%Y-%m-%d %H:%M', 'Not stated')) }}
-                {{ info_row("Submitted", proof.created_at | app_datetime('%Y-%m-%d %H:%M', '—')) }}
+                {{ info_row("Submitted", proof.created_at | app_datetime('%Y-%m-%d %H:%M', '&mdash;')) }}
                 {% if proof.payment_id %}
                 {{ info_row("Payment", proof.payment_id) }}
                 {% endif %}
@@ -131,7 +131,10 @@
     {% call card(title="Review Outcome", icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>', color="emerald") %}
         {% call info_grid() %}
             {{ info_row("Outcome", st | title) }}
-            {{ info_row("Reviewed By", proof.verified_by or "—") }}
+            {{ info_row("Reviewed By", reviewer.display_name or "&mdash;") }}
+            {% if reviewer.identity_resolved and reviewer.actor_id %}
+            {{ info_row("Reviewer Actor ID", reviewer.actor_id) }}
+            {% endif %}
             {% if proof.verified_amount is not none %}
             {{ info_row("Verified Amount", proof.currency ~ " " ~ "{:,.2f}".format(proof.verified_amount)) }}
             {% endif %}

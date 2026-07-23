@@ -9,7 +9,9 @@ from fastapi.testclient import TestClient
 from starlette.requests import Request
 
 from app.db import get_db
+from app.models.system_user import SystemUser
 from app.services import payment_proofs as svc
+from app.services import web_billing_payment_proofs as web_payment_proofs
 from app.services.auth_dependencies import require_user_auth
 from app.services.db_session_adapter import db_session_adapter
 from app.services.owner_commands import CommandContext
@@ -39,6 +41,16 @@ def _verify(db_session, proof_id, **kwargs) -> dict[str, object | None]:
         db_session,
         proof_id,
         context=_context("verify"),
+        **kwargs,
+    ).to_dict()
+
+
+def _reject(db_session, proof_id, **kwargs) -> dict[str, object | None]:
+    db_session_adapter.release_read_transaction(db_session)
+    return svc.reject_proof(
+        db_session,
+        proof_id,
+        context=_context("reject"),
         **kwargs,
     ).to_dict()
 
@@ -183,6 +195,27 @@ def _subscriber(db_session, email: str):
     db_session.add(sub)
     db_session.commit()
     return sub
+
+
+def _system_user(
+    db_session,
+    *,
+    display_name: str | None = "Ada Reviewer",
+    first_name: str = "Ada",
+    last_name: str = "Reviewer",
+    email: str | None = None,
+    is_active: bool = True,
+) -> SystemUser:
+    user = SystemUser(
+        first_name=first_name,
+        last_name=last_name,
+        display_name=display_name,
+        email=email or f"reviewer-{uuid.uuid4().hex[:8]}@example.com",
+        is_active=is_active,
+    )
+    db_session.add(user)
+    db_session.commit()
+    return user
 
 
 @pytest.fixture()
@@ -351,6 +384,187 @@ class TestAdminPagesRender:
 
     def _text(self, response) -> str:
         return response.body.decode()
+
+    def test_detail_projection_preserves_uuid_but_resolves_display_name(
+        self, db_session, proof_env
+    ) -> None:
+        reviewer = _system_user(db_session, display_name="Ada Reviewer")
+        _verify(db_session, proof_env["proof"]["id"], verified_by=str(reviewer.id))
+
+        state = web_payment_proofs.detail_data(
+            db_session,
+            proof_id=proof_env["proof"]["id"],
+            can_review=False,
+        )
+
+        assert state is not None
+        assert state["proof"].verified_by == str(reviewer.id)
+        reviewer_projection = state["reviewer"]
+        assert reviewer_projection.actor_id == str(reviewer.id)
+        assert reviewer_projection.display_name == "Ada Reviewer"
+        assert reviewer_projection.display_name != state["proof"].verified_by
+        assert reviewer_projection.identity_resolved is True
+
+    def test_detail_projection_falls_back_to_first_and_last_name(
+        self, db_session, proof_env
+    ) -> None:
+        reviewer = _system_user(
+            db_session,
+            display_name="   ",
+            first_name="Grace",
+            last_name="Hopper",
+        )
+        _verify(db_session, proof_env["proof"]["id"], verified_by=str(reviewer.id))
+
+        state = web_payment_proofs.detail_data(
+            db_session,
+            proof_id=proof_env["proof"]["id"],
+            can_review=False,
+        )
+
+        assert state is not None
+        assert state["reviewer"].display_name == "Grace Hopper"
+        assert state["reviewer"].identity_resolved is True
+
+    def test_detail_projection_falls_back_to_email_when_names_are_blank(
+        self, db_session, proof_env
+    ) -> None:
+        reviewer = _system_user(
+            db_session,
+            display_name=" ",
+            first_name=" ",
+            last_name=" ",
+            email="email-fallback@example.com",
+        )
+        _verify(db_session, proof_env["proof"]["id"], verified_by=str(reviewer.id))
+
+        state = web_payment_proofs.detail_data(
+            db_session,
+            proof_id=proof_env["proof"]["id"],
+            can_review=False,
+        )
+
+        assert state is not None
+        assert state["reviewer"].display_name == "email-fallback@example.com"
+        assert state["reviewer"].identity_resolved is True
+
+    def test_detail_projection_resolves_inactive_staff_for_history(
+        self, db_session, proof_env
+    ) -> None:
+        reviewer = _system_user(
+            db_session,
+            display_name="Former Reviewer",
+            is_active=False,
+        )
+        _verify(db_session, proof_env["proof"]["id"], verified_by=str(reviewer.id))
+
+        state = web_payment_proofs.detail_data(
+            db_session,
+            proof_id=proof_env["proof"]["id"],
+            can_review=False,
+        )
+
+        assert state is not None
+        assert state["reviewer"].display_name == "Former Reviewer"
+        assert state["reviewer"].identity_resolved is True
+
+    def test_detail_projection_uses_raw_non_uuid_actor_safely(
+        self, db_session, proof_env
+    ) -> None:
+        _verify(db_session, proof_env["proof"]["id"], verified_by="legacy-reviewer")
+
+        state = web_payment_proofs.detail_data(
+            db_session,
+            proof_id=proof_env["proof"]["id"],
+            can_review=False,
+        )
+
+        assert state is not None
+        assert state["reviewer"].actor_id == "legacy-reviewer"
+        assert state["reviewer"].display_name == "legacy-reviewer"
+        assert state["reviewer"].identity_resolved is False
+
+    def test_detail_projection_uses_raw_uuid_when_system_user_is_missing(
+        self, db_session, proof_env
+    ) -> None:
+        missing_user_id = str(uuid.uuid4())
+        _verify(db_session, proof_env["proof"]["id"], verified_by=missing_user_id)
+
+        state = web_payment_proofs.detail_data(
+            db_session,
+            proof_id=proof_env["proof"]["id"],
+            can_review=False,
+        )
+
+        assert state is not None
+        assert state["reviewer"].actor_id == missing_user_id
+        assert state["reviewer"].display_name == missing_user_id
+        assert state["reviewer"].identity_resolved is False
+
+    def test_verified_outcome_card_displays_reviewer_name_and_actor_id(
+        self, db_session, proof_env
+    ) -> None:
+        reviewer = _system_user(db_session, display_name="Ada Reviewer")
+        _verify(db_session, proof_env["proof"]["id"], verified_by=str(reviewer.id))
+
+        from app.web.admin.billing_payment_proofs import payment_proofs_detail
+
+        with (
+            patch("app.web.admin.get_current_user", return_value={"id": "admin"}),
+            patch("app.web.admin.get_sidebar_stats", return_value={}),
+        ):
+            detail = payment_proofs_detail(
+                request=self._request(
+                    f"/admin/billing/payment-proofs/{proof_env['proof']['id']}"
+                ),
+                proof_id=uuid.UUID(proof_env["proof"]["id"]),
+                db=db_session,
+                auth={"principal_id": "admin", "roles": ["admin"]},
+            )
+
+        text = self._text(detail)
+        assert detail.status_code == 200
+        assert "Review Outcome" in text
+        assert "Ada Reviewer" in text
+        assert str(reviewer.id) in text
+        assert "Reviewer Actor ID" in text
+
+    def test_rejected_outcome_card_displays_reviewer_name_and_actor_id(
+        self, db_session, proof_env
+    ) -> None:
+        reviewer = _system_user(
+            db_session,
+            display_name=" ",
+            first_name="Linus",
+            last_name="Torvalds",
+        )
+        _reject(
+            db_session,
+            proof_env["proof"]["id"],
+            verified_by=str(reviewer.id),
+            review_notes="Amount does not match statement",
+        )
+
+        from app.web.admin.billing_payment_proofs import payment_proofs_detail
+
+        with (
+            patch("app.web.admin.get_current_user", return_value={"id": "admin"}),
+            patch("app.web.admin.get_sidebar_stats", return_value={}),
+        ):
+            detail = payment_proofs_detail(
+                request=self._request(
+                    f"/admin/billing/payment-proofs/{proof_env['proof']['id']}"
+                ),
+                proof_id=uuid.UUID(proof_env["proof"]["id"]),
+                db=db_session,
+                auth={"principal_id": "admin", "roles": ["admin"]},
+            )
+
+        text = self._text(detail)
+        assert detail.status_code == 200
+        assert "Review Outcome" in text
+        assert "Linus Torvalds" in text
+        assert str(reviewer.id) in text
 
     def test_list_and_detail_pages_render(self, db_session, proof_env) -> None:
         from app.web.admin.billing_payment_proofs import (

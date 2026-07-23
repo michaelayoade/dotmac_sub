@@ -18295,6 +18295,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "payment-proof review action visibility",
                     "payment-proof verify and reject form projection",
                     "payment-proof failed-submission presentation",
+                    "payment-proof reviewer identity display projection",
                 ),
                 depends_on=(
                     "ui.action_form_contracts",

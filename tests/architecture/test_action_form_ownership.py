@@ -49,12 +49,17 @@ def test_payment_proof_projection_delegates_eligibility_to_command_owner() -> No
     web_projection = _read("app/services/web_billing_payment_proofs.py")
     command_owner = _read("app/services/payment_proofs.py")
     route = _read("app/web/admin/billing_payment_proofs.py")
+    template = _read("templates/admin/billing/payment_proof_detail.html")
 
     assert "payment_proofs_service.review_eligibility(" in web_projection
+    assert "class ReviewerIdentityProjection" in web_projection
+    assert "_reviewer_identity(" in web_projection
     assert "class PaymentProofReviewEligibility" in command_owner
     assert "class PaymentProofReviewError" in command_owner
     assert 'has_permission(auth, db, "billing:proof:verify")' in route
     assert "PaymentProofStatus" not in route
+    assert "proof.verified_by" not in template
+    assert "reviewer.display_name" in template
 
 
 def test_checked_in_sources_name_action_form_owner_and_migration() -> None:
