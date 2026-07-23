@@ -33,6 +33,7 @@ PERMANENT_CUSTOMER_LIFECYCLE_TASKS = frozenset(
         "app.tasks.events.dispatch_pending_events",
         "app.tasks.events.retry_failed_events",
         "app.tasks.events.mark_stale_processing_events",
+        "app.tasks.radius.run_enforcement_reconciler",
     }
 )
 

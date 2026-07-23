@@ -27,6 +27,7 @@ REQUIRED_PERMANENT_TASKS = {
     "app.tasks.catalog.expire_subscriptions",
     "app.tasks.notifications.deliver_notification_queue",
     "app.tasks.events.dispatch_pending_events",
+    "app.tasks.radius.run_enforcement_reconciler",
 }
 
 

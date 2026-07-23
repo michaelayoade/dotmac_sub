@@ -150,22 +150,23 @@ def connectivity_shadow_audit() -> dict:
 
 @celery_app.task(name="app.tasks.radius.run_enforcement_reconciler")
 def run_enforcement_reconciler() -> dict[str, int]:
-    """Assert that non-serviceable subscribers are actually unreachable.
+    """Converge local lifecycle state, RADIUS projection, and live sessions.
 
-    Closes the gap between billing-state changes (which only affect the
-    next re-auth) and live PPPoE sessions (incidents 2026-06-11:
-    100009689, 100025880):
+    This is the one periodic recovery loop for account access. Immediate
+    payment/lifecycle events use the same owners; this task repairs a missed
+    event without inventing a second status or walled-garden policy.
 
-    1. Open radacct sessions whose username has no radcheck row and that
+    1. Re-derive blocking parent/account projections from active child service
+       facts when there is no explicit lifecycle override.
+    2. Open radacct sessions whose username has no radcheck row and that
        started >20 min ago -> CoA-kick (the redial is then cleanly
        rejected or walled-gardened by current state).
-    2. Open sessions whose framed IP sits in a dotmac reject pool
+    3. Open sessions whose framed IP sits in a dotmac reject pool
        (blocked/negative/bad_mac/bad_password networks; the not_found
        pool is excluded because legit BNG-local pools overlap it) ->
        CoA-kick so the redial picks up a routable IP.
-    3. Walled-garden drift: subscribers who must carry the suspended
-       address-list but whose radreply lacks it -> enqueue the
-       single-writer refresh.
+    4. Compare canonical per-login projection modes against radcheck/radreply
+       in both directions and request one single-writer refresh for any drift.
 
     Kicks are capped per run so systemic drift degrades to alerts, not a
     mass disconnect.
@@ -184,16 +185,52 @@ def run_enforcement_reconciler() -> dict[str, int]:
     from app.services.radius_reject import get_reject_networks
 
     stats = {
+        "account_projection_candidates": 0,
+        "account_projections_changed": 0,
+        "access_states_changed": 0,
+        "account_projection_errors": 0,
+        "accounting_target_configured": 0,
         "stale_unserviceable_sessions": 0,
         "reject_pool_sessions": 0,
         "kicked": 0,
         "kick_failed": 0,
         "kicks_capped": 0,
         "walled_garden_drift": 0,
+        "missing_radius_auth": 0,
+        "missing_reject": 0,
+        "stale_reject": 0,
+        "missing_captive": 0,
+        "stale_captive": 0,
+        "radius_projection_unconverged": 0,
+        "radius_projection_repair_enqueued": 0,
         "sync_gap_logins": 0,
         "ghosts_closed": 0,
     }
     db = SessionLocal()
+    from app.services.account_status_reconcile import reconcile_cohort
+
+    local = reconcile_cohort(
+        db,
+        dry_run=False,
+        refresh_radius=False,
+        send_coa=False,
+        notify=False,
+    )
+    stats["account_projection_candidates"] = local.candidates
+    stats["account_projections_changed"] = local.changed
+    stats["access_states_changed"] = local.access_states_changed
+    stats["account_projection_errors"] = local.errors
+
+    from app.services.radius_projection_planner import (
+        compare_radius_projection,
+        plan_login_radius_projections,
+    )
+
+    desired_login_projections = plan_login_radius_projections(db)
+    desired_modes = {
+        login: projection.plan.mode
+        for login, projection in desired_login_projections.items()
+    }
     max_kicks = int(
         settings_spec.resolve_value(
             db, SettingDomain.radius, "enforcement_reconciler_max_kicks"
@@ -222,11 +259,20 @@ def run_enforcement_reconciler() -> dict[str, int]:
     if not target:
         db.close()
         logger.error("enforcement reconciler: accounting target not configured")
+        from app.services.observability import record_task_run
+
+        record_task_run(
+            "app.tasks.radius.run_enforcement_reconciler",
+            status="degraded",
+            counters=stats,
+        )
         return stats
+    stats["accounting_target_configured"] = 1
     dsn = str(target["db_url"]).replace("postgresql+psycopg://", "postgresql://", 1)
     radacct = sql.Identifier(*str(target["radacct_table"]).split("."))
     radcheck = sql.Identifier(*str(target["radcheck_table"]).split("."))
     radreply = sql.Identifier(*str(target["radreply_table"]).split("."))
+    radius_refresh_required = bool(local.changed or local.access_states_changed)
 
     # --- collect violations from radacct -------------------------------
     with psycopg.connect(dsn) as rconn, rconn.cursor() as cur:
@@ -289,26 +335,10 @@ def run_enforcement_reconciler() -> dict[str, int]:
         # radcheck row exists and a re-auth restores real service.
         gap_candidates = {row[0] for row in unserviceable}
         if gap_candidates:
-            from sqlalchemy import select
-
-            from app.models.catalog import Subscription, SubscriptionStatus
-            from app.models.subscriber import Subscriber
-            from app.services.subscriber_access_policy import (
-                RADIUS_BLOCKING_SUBSCRIBER_STATUSES,
-            )
-
             entitled = {
                 login
-                for (login,) in db.execute(
-                    select(Subscription.login)
-                    .join(Subscriber, Subscription.subscriber_id == Subscriber.id)
-                    .where(
-                        Subscription.login.in_(gap_candidates),
-                        Subscription.status == SubscriptionStatus.active,
-                        Subscriber.is_active.is_(True),
-                        Subscriber.status.notin_(RADIUS_BLOCKING_SUBSCRIBER_STATUSES),
-                    )
-                ).all()
+                for login in gap_candidates
+                if desired_modes.get(login) in {"active", "captive"}
             }
             if entitled:
                 unserviceable_keys = {(row[1], row[2]) for row in unserviceable}
@@ -325,9 +355,7 @@ def run_enforcement_reconciler() -> dict[str, int]:
                     len(entitled),
                     sorted(entitled)[:5],
                 )
-                from app.tasks.radius_population import refresh_radius_from_subs
-
-                refresh_radius_from_subs.delay()
+                radius_refresh_required = True
 
         ghost_rows: list[tuple[int, str]] = []
         for (
@@ -396,86 +424,76 @@ def run_enforcement_reconciler() -> dict[str, int]:
                 sorted({u for _, u in ghost_rows})[:10],
             )
 
-        # --- walled-garden drift check ---------------------------------
-        from sqlalchemy import select
-
-        from app.models.catalog import Subscription, SubscriptionStatus
-        from app.models.subscriber import Subscriber
-        from app.services.subscriber_access_policy import (
-            RADIUS_BLOCKING_SUBSCRIBER_STATUSES,
-        )
-
-        blocked_subscriber_ids = {
-            sid
-            for (sid,) in db.execute(
-                select(Subscriber.id).where(
-                    Subscriber.status.in_(RADIUS_BLOCKING_SUBSCRIBER_STATUSES)
-                )
-            ).all()
-        }
-        # Mirror radius_population's per-login slot policy: the
-        # ACTIVE sub wins a shared login, so the tag is expected only if
-        # the winner's subscriber is blocked — or if the login has no
-        # active sub at all (then any blocked/suspended sub carries the
-        # tag). Without this, mixed-status logins (e.g. 100025926, active
-        # plan + suspended add-on) false-positive.
-        per_login: dict[str, dict] = {}
-        for login, sub_status, subscriber_id in db.execute(
-            select(
-                Subscription.login,
-                Subscription.status,
-                Subscription.subscriber_id,
-            ).where(
-                Subscription.status.in_(
-                    [
-                        SubscriptionStatus.active,
-                        SubscriptionStatus.blocked,
-                        SubscriptionStatus.suspended,
-                    ]
-                ),
-                Subscription.login.isnot(None),
-            )
-        ).all():
-            info = per_login.setdefault(
-                login, {"has_active": False, "active_blocked": False}
-            )
-            if sub_status == SubscriptionStatus.active:
-                info["has_active"] = True
-                if subscriber_id in blocked_subscriber_ids:
-                    info["active_blocked"] = True
-        expected_wg = {
-            login
-            for login, info in per_login.items()
-            if (info["has_active"] and info["active_blocked"]) or not info["has_active"]
-        }
     finally:
         db.close()
 
-    if expected_wg:
-        with psycopg.connect(dsn) as rconn, rconn.cursor() as cur:
-            cur.execute(
-                sql.SQL(
-                    "SELECT DISTINCT username FROM {} "
-                    "WHERE attribute='Mikrotik-Address-List' AND value=%s"
-                ).format(radreply),
-                (walled_garden_address_list,),
-            )
-            tagged = {r[0] for r in cur.fetchall()}
-            cur.execute(sql.SQL("SELECT DISTINCT username FROM {}").format(radcheck))
-            in_radcheck = {r[0] for r in cur.fetchall()}
-        # only logins that are supposed to be in radcheck can drift
-        drift = (expected_wg & in_radcheck) - tagged
-        stats["walled_garden_drift"] = len(drift)
-        if drift:
-            logger.error(
-                "enforcement reconciler: %d walled-garden users missing the "
-                "suspended tag (sample: %s) — enqueueing refresh",
-                len(drift),
-                sorted(drift)[:5],
-            )
-            from app.tasks.radius_population import refresh_radius_from_subs
+    # --- canonical desired-vs-observed projection ---------------------
+    with psycopg.connect(dsn) as rconn, rconn.cursor() as cur:
+        cur.execute(sql.SQL("SELECT DISTINCT username FROM {}").format(radcheck))
+        in_radcheck = {r[0] for r in cur.fetchall()}
+        cur.execute(
+            sql.SQL(
+                "SELECT DISTINCT username FROM {} "
+                "WHERE lower(attribute)='auth-type' AND lower(value)='reject'"
+            ).format(radcheck)
+        )
+        rejected = {r[0] for r in cur.fetchall()}
+        cur.execute(
+            sql.SQL(
+                "SELECT DISTINCT username FROM {} "
+                "WHERE attribute='Mikrotik-Address-List' AND value=%s"
+            ).format(radreply),
+            (walled_garden_address_list,),
+        )
+        captive_tagged = {r[0] for r in cur.fetchall()}
 
-            refresh_radius_from_subs.delay()
+    drift = compare_radius_projection(
+        desired_login_projections,
+        observed_auth=in_radcheck,
+        observed_reject=rejected,
+        observed_captive=captive_tagged,
+    )
+    stats["missing_radius_auth"] = len(drift.missing_auth)
+    stats["missing_reject"] = len(drift.missing_reject)
+    stats["stale_reject"] = len(drift.stale_reject)
+    stats["missing_captive"] = len(drift.missing_captive)
+    stats["stale_captive"] = len(drift.stale_captive)
+    stats["walled_garden_drift"] = len(drift.missing_captive | drift.stale_captive)
+    stats["radius_projection_unconverged"] = len(drift.usernames)
+    radius_refresh_required = radius_refresh_required or bool(drift.usernames)
+
+    if drift.usernames:
+        logger.error(
+            "access projection unconverged: total=%d missing_auth=%d "
+            "missing_reject=%d stale_reject=%d missing_captive=%d "
+            "stale_captive=%d sample=%s",
+            len(drift.usernames),
+            len(drift.missing_auth),
+            len(drift.missing_reject),
+            len(drift.stale_reject),
+            len(drift.missing_captive),
+            len(drift.stale_captive),
+            sorted(drift.usernames)[:5],
+        )
+
+    if radius_refresh_required:
+        from app.tasks.radius_population import refresh_radius_from_subs
+
+        refresh_radius_from_subs.delay()
+        stats["radius_projection_repair_enqueued"] = 1
+
+    from app.services.observability import record_task_run
+
+    record_task_run(
+        "app.tasks.radius.run_enforcement_reconciler",
+        status=(
+            "degraded"
+            if stats["account_projection_errors"]
+            or stats["radius_projection_unconverged"]
+            else "ok"
+        ),
+        counters=stats,
+    )
 
     logger.info("enforcement reconciler done: %s", stats)
     return stats

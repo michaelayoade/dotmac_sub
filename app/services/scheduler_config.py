@@ -702,14 +702,7 @@ def build_beat_schedule() -> dict:
         # sessions whose user has no radcheck row or sits in a reject pool, and
         # repairs walled-garden radreply drift. It caps kicks per run so systemic
         # drift degrades to alerts rather than a mass disconnect — hence safe to
-        # run by default. Previously defined but never scheduled.
-        enforcement_reconciler_enabled = _effective_bool(
-            session,
-            SettingDomain.usage,
-            "enforcement_reconciler_enabled",
-            "ENFORCEMENT_RECONCILER_ENABLED",
-            True,
-        )
+        # run continuously as a mandatory lifecycle task.
         enforcement_reconciler_interval_seconds = max(
             _effective_int(
                 session,
@@ -724,27 +717,13 @@ def build_beat_schedule() -> dict:
             session,
             name="enforcement_reconciler",
             task_name="app.tasks.radius.run_enforcement_reconciler",
-            enabled=enforcement_reconciler_enabled,
+            enabled=True,
             interval_seconds=enforcement_reconciler_interval_seconds,
         )
-        # Daily status-backstop reconcilers (SP-8): the event path normally
-        # clears these, but the sweeps are the catch-up for lost events.
-        # account_status: auto-repair subscribers stuck `new`/`blocked` while
-        # all subs are active. The all-active filter is a robust guard, pure
-        # service-state, so apply mode is safe.
-        account_status_reconcile_enabled = _effective_bool(
-            session,
-            SettingDomain.billing,
-            "account_status_reconcile_enabled",
-            "ACCOUNT_STATUS_RECONCILE_ENABLED",
-            True,
-        )
-        _sync_scheduled_task(
-            session,
-            name="account_status_reconcile",
-            task_name="app.tasks.enforcement.reconcile_account_status_drift",
-            enabled=account_status_reconcile_enabled,
-            interval_seconds=86400,
+        # Account and external access projections share this recovery loop.
+        # Keep exactly one scheduled owner for access convergence.
+        _retire_scheduled_task(
+            session, "app.tasks.enforcement.reconcile_account_status_drift"
         )
         # stale overdue locks: money-adjacent, so DETECT-only (dry-run) — it
         # WARNs with the candidate count for an operator to clear after review,

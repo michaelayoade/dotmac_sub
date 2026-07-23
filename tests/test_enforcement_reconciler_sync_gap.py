@@ -18,7 +18,13 @@ from app.models.catalog import Subscription, SubscriptionStatus
 
 def _fake_radius_db(unserviceable_rows, open_rows):
     fake_cur = MagicMock()
-    fake_cur.fetchall.side_effect = [unserviceable_rows, open_rows]
+    fake_cur.fetchall.side_effect = [
+        unserviceable_rows,
+        open_rows,
+        [],
+        [],
+        [],
+    ]
     fake_conn = MagicMock()
     fake_conn.__enter__.return_value = fake_conn
     fake_conn.cursor.return_value.__enter__.return_value = fake_cur

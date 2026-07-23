@@ -359,6 +359,19 @@ def test_review_head_changes_with_account_and_billing_inputs(
         )
 
 
+def test_review_head_ignores_derived_access_projection(
+    db_session, subscriber, catalog_offer
+):
+    subscription = _subscription(db_session, subscriber, catalog_offer)
+    before = resolve_subscription_lifecycle(db_session, str(subscription.id))
+
+    subscription.access_state = "active"
+    db_session.flush()
+    after = resolve_subscription_lifecycle(db_session, str(subscription.id))
+
+    assert after.head == before.head
+
+
 def test_review_head_changes_when_pending_plan_change_is_created(
     db_session, subscriber, catalog_offer
 ):
