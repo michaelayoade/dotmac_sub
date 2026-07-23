@@ -48,13 +48,28 @@ invoices and payment-backed credit deterministically, and invokes the payment
 allocation preview/confirmation owner. It never constructs allocation or ledger
 rows itself. Invoice issuance and deposit settlement call the same applicator.
 
-## Eligibility and race policy
+## Eligibility, preview and race policy
 
-A customer may create a deposit only for an active, non-disabled,
-non-cancelled subscriber account, in NGN, inside configured limits, with no
-eligible payable invoice and no pending account-credit deposit. Blocked or
-suspended billing accounts may deposit, but the deposit alone does not restore
-access.
+A customer may create a deposit for an active, non-disabled, non-cancelled
+subscriber account, in NGN, inside configured limits, with no pending
+account-credit deposit. Blocked or suspended billing accounts may deposit, but
+the deposit alone does not restore access.
+
+The owner-generated preview is mandatory before checkout starts. For the exact
+requested amount it reports:
+
+- the requested deposit;
+- every eligible invoice application in deterministic oldest-debt order;
+- the total applied to invoices;
+- the invoice amount still outstanding after application; and
+- the remaining account credit after application.
+
+The preview fingerprint includes the material allocation inputs: account,
+requested amount, currency, current account credit, and the ordered eligible
+invoice set with the balances and ordering facts that affect application.
+Gateway and direct-transfer intent creation must present that reviewed
+fingerprint back to the owner. If the reviewed preview is stale, intent
+creation fails closed and the customer must review the updated preview first.
 
 If an invoice appears after intent creation, confirmed cash is accepted and the
 new credit is immediately applied to eligible invoices. Duplicate callbacks and
@@ -72,10 +87,10 @@ amount; changing that policy requires a new owner contract and preview, not an
 adapter-side net calculation.
 
 Eligible invoices are active `issued`, `partially_paid` or `overdue` invoices
-with a positive balance. Draft, void, written-off and incompatible-currency
-invoices consume nothing. Oldest due debt wins; creation time and ID are stable
-tiebreakers. Partial credit leaves an invoice partially paid. Only a fully paid
-invoice reaches the existing entitlement/access owner.
+with a positive same-currency balance. Draft, void, written-off, inactive, and
+incompatible-currency invoices consume nothing. Oldest due debt wins; creation
+time and ID are stable tiebreakers. Partial credit leaves an invoice partially
+paid. Only a fully paid invoice reaches the existing entitlement/access owner.
 
 ## Refunds, reversals, void and access
 
@@ -117,7 +132,8 @@ deposit intents without exact settlement evidence, duplicate provider
 references and unresolved deposit webhooks. Repair invokes the canonical
 applicator; it never invents payments or infers cash from memo text.
 
-Customer-facing pages say “Deposit Account Credit”, show current credit and
-payable-invoice eligibility, direct customers with payable invoices to the
-ordinary invoice payment flow, and render an unresolved balance as unavailable
-rather than zero.
+Customer-facing pages say “Deposit Account Credit”, show current credit, show
+the live owner-generated allocation preview, and permit checkout even when
+payable invoices exist. Those pages must not compute invoice allocation locally
+or offer customer-controlled allocation behavior. An unresolved balance still
+renders as unavailable rather than zero.

@@ -63,6 +63,7 @@ class CreateDirectTransferIntentCommand:
     created_by: str
     requested_amount: Decimal | int | float | str | None = None
     invoice_id: UUID | None = None
+    expected_preview_fingerprint: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -237,6 +238,14 @@ def _create_direct_transfer_intent(
                 "amount_invalid",
                 "Direct-transfer amount is invalid",
             ) from exc
+        expected_preview_fingerprint = str(
+            command.expected_preview_fingerprint or ""
+        ).strip()
+        if len(expected_preview_fingerprint) != 64:
+            raise _error(
+                "preview_required",
+                "Review the latest account-credit allocation preview before checkout",
+            )
         minimum = _configured_integer(db, _MINIMUM_SETTING)
         maximum = _configured_integer(db, _MAXIMUM_SETTING)
         if maximum < minimum:
@@ -261,6 +270,7 @@ def _create_direct_transfer_intent(
                 idempotency_key=key,
                 channel=topup_intents.TopupIntentChannel.customer_selfcare,
                 created_by=created_by,
+                expected_preview_fingerprint=expected_preview_fingerprint,
                 metadata={
                     "payment_method": "bank_transfer",
                     "payment_flow": "account_credit_deposit",

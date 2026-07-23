@@ -11,6 +11,7 @@ from app.models.billing import BillingAccount, Invoice, InvoiceStatus, TopupInte
 from app.models.idempotency import IdempotencyKey
 from app.models.subscriber import Reseller
 from app.services import gateway_topup_intents as svc
+from app.services.account_credit_deposits import AccountCreditDeposits
 from app.services.db_session_adapter import db_session_adapter
 from app.services.owner_commands import CommandContext
 
@@ -36,8 +37,22 @@ def _context(scope: str, *, idempotency_key: str | None = None) -> CommandContex
     )
 
 
-def _create_deposit(db_session, subscriber) -> svc.GatewayTopupIntentResult:
+def _create_deposit(
+    db_session,
+    subscriber,
+    *,
+    preview_fingerprint: str | None = None,
+) -> svc.GatewayTopupIntentResult:
     account_id = subscriber.id
+    if preview_fingerprint is None:
+        preview_fingerprint = AccountCreditDeposits.preview(
+            db_session,
+            account_id=account_id,
+            amount="5000.00",
+            currency="NGN",
+            minimum="1000.00",
+            maximum="500000.00",
+        ).fingerprint
     command = svc.CreateCustomerGatewayTopupIntentCommand(
         flow=svc.CustomerGatewayTopupFlow.account_credit_deposit,
         account_id=account_id,
@@ -46,6 +61,7 @@ def _create_deposit(db_session, subscriber) -> svc.GatewayTopupIntentResult:
         provider_type="paystack",
         provider_id=None,
         created_by="pytest",
+        expected_preview_fingerprint=preview_fingerprint,
     )
     db_session_adapter.release_read_transaction(db_session)
     return svc.create_customer_gateway_topup_intent(
@@ -108,12 +124,42 @@ def test_customer_deposit_creation_uses_policy_and_replays(
     _patch_policy(monkeypatch)
 
     first = _create_deposit(db_session, subscriber)
-    second = _create_deposit(db_session, subscriber)
+    second = _create_deposit(
+        db_session,
+        subscriber,
+        preview_fingerprint=first.preview_fingerprint,
+    )
 
     assert first.intent_id == second.intent_id
     assert first.preview_fingerprint
     assert second.replayed is True
     assert first.requested_amount == Decimal("5000.00")
+
+
+def test_customer_deposit_creation_requires_reviewed_preview(
+    monkeypatch, db_session, subscriber
+):
+    _patch_policy(monkeypatch)
+
+    command = svc.CreateCustomerGatewayTopupIntentCommand(
+        flow=svc.CustomerGatewayTopupFlow.account_credit_deposit,
+        account_id=subscriber.id,
+        requested_amount="5000.00",
+        reference="gateway-deposit-missing-preview",
+        provider_type="paystack",
+        provider_id=None,
+        created_by="pytest",
+    )
+    db_session_adapter.release_read_transaction(db_session)
+
+    with pytest.raises(svc.GatewayTopupIntentError) as exc_info:
+        svc.create_customer_gateway_topup_intent(
+            db_session,
+            command,
+            context=_context(svc.CREATE_CUSTOMER_SCOPE),
+        )
+
+    assert exc_info.value.code.endswith("preview_required")
 
 
 def test_reseller_creation_locks_canonical_billing_account(monkeypatch, db_session):

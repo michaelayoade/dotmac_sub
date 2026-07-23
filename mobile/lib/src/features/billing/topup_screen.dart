@@ -30,8 +30,12 @@ class TopUpScreen extends ConsumerStatefulWidget {
 
 class _TopUpScreenState extends ConsumerState<TopUpScreen> {
   TopupPage? _page;
+  TopupPreview? _preview;
   Object? _loadError;
+  Object? _previewError;
   bool _loadingPage = true;
+  bool _previewLoading = false;
+  int _previewRequestId = 0;
 
   final _custom = TextEditingController();
   bool _busy = false;
@@ -80,11 +84,14 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
       if (mounted) {
         setState(() {
           _page = page;
+          _preview = null;
+          _previewError = null;
           // Default to the configured online gateway (listed first by the API).
           _selection ??= page.providers.isNotEmpty
               ? 'gw:${page.providers.first.providerType}'
               : 'gw:${page.providerType}';
         });
+        await _refreshPreview();
       }
     } catch (e) {
       if (mounted) setState(() => _loadError = e);
@@ -102,6 +109,51 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
         amount != null &&
         amount >= page.minAmount &&
         amount <= page.maxAmount;
+  }
+
+  Future<TopupPreview?> _refreshPreview() async {
+    final page = _page;
+    final amount = _amount;
+    if (page == null || amount == null || !_amountValid) {
+      if (mounted) {
+        setState(() {
+          _preview = null;
+          _previewError = null;
+          _previewLoading = false;
+        });
+      }
+      return null;
+    }
+
+    final requestId = ++_previewRequestId;
+    if (mounted) {
+      setState(() {
+        _previewLoading = true;
+        _previewError = null;
+      });
+    }
+    try {
+      final preview =
+          await ref.read(billingRepositoryProvider).previewTopup(amount);
+      if (!mounted || requestId != _previewRequestId) {
+        return preview;
+      }
+      setState(() {
+        _preview = preview;
+        _previewLoading = false;
+      });
+      return preview;
+    } catch (e) {
+      if (!mounted || requestId != _previewRequestId) {
+        return null;
+      }
+      setState(() {
+        _preview = null;
+        _previewError = e;
+        _previewLoading = false;
+      });
+      return null;
+    }
   }
 
   Future<void> _submit() async {
@@ -139,10 +191,19 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
 
     setState(() => _busy = true);
     try {
+      final preview = await _refreshPreview();
+      if (!mounted) return;
+      if (preview == null || preview.previewFingerprint.isEmpty) {
+        messenger.showSnackBar(const SnackBar(
+          content: Text('Review the latest allocation preview before checkout.'),
+        ));
+        return;
+      }
       final cardId = _selectedCardId;
       final initiation =
           await ref.read(billingRepositoryProvider).initiateTopup(
                 amount,
+                previewFingerprint: preview.previewFingerprint,
                 provider: cardId == null ? _selectedGateway : null,
                 paymentMethodId: cardId,
                 // One key per attempt makes a saved-card charge safe against a
@@ -289,7 +350,10 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
           autofocus: true,
           keyboardType: TextInputType.number,
           inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-          onChanged: (_) => setState(() {}),
+          onChanged: (_) {
+            setState(() {});
+            _refreshPreview();
+          },
           decoration: InputDecoration(
             labelText: 'Amount',
             prefixText: '${page.currency} ',
@@ -297,6 +361,67 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
                 '${Fmt.money(page.minAmount, page.currency)} – ${Fmt.money(page.maxAmount, page.currency)}',
           ),
         ),
+        if (page.eligibleUnpaidInvoices.isNotEmpty) ...[
+          const SizedBox(height: 16),
+          Card(
+            color: theme.colorScheme.secondaryContainer,
+            child: const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text(
+                'Eligible invoices will be paid first in oldest-debt order. '
+                'Any remainder stays as account credit.',
+              ),
+            ),
+          ),
+        ],
+        if (_previewLoading) ...[
+          const SizedBox(height: 16),
+          const LinearProgressIndicator(),
+        ],
+        if (_preview != null) ...[
+          const SizedBox(height: 16),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Allocation preview', style: theme.textTheme.titleMedium),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Requested deposit: ${Fmt.money(_preview!.requestedDeposit, page.currency)}',
+                  ),
+                  Text(
+                    'Applied to invoices: ${Fmt.money(_preview!.totalAppliedToInvoices, page.currency)}',
+                  ),
+                  Text(
+                    'Invoice amount left: ${Fmt.money(_preview!.totalOutstandingAfterApplication, page.currency)}',
+                  ),
+                  Text(
+                    'Remaining account credit: ${Fmt.money(_preview!.remainingAccountCredit, page.currency)}',
+                  ),
+                  if (_preview!.invoiceApplications.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    for (final item in _preview!.invoiceApplications)
+                      Text(
+                        '${item.invoiceNumber ?? item.invoiceId}: '
+                        '${Fmt.money(item.amountApplied, item.currency)} applied, '
+                        '${Fmt.money(item.outstandingAfterApplication, item.currency)} outstanding',
+                      ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ],
+        if (_previewError != null) ...[
+          const SizedBox(height: 16),
+          Text(
+            'Could not load the latest allocation preview. Try again.',
+            style: theme.textTheme.bodyMedium
+                ?.copyWith(color: theme.colorScheme.error),
+          ),
+        ],
         // --- Pay with: saved card (one-tap), an online gateway, or transfer ---
         const SizedBox(height: 8),
         Text('Pay with', style: theme.textTheme.titleSmall),
