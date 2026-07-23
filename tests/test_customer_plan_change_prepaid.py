@@ -7,7 +7,7 @@ from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from app.models.audit import AuditEvent
 from app.models.billing import (
@@ -1259,6 +1259,143 @@ def test_change_plan_page_does_not_price_catalog_upfront(
     assert page is not None
     assert page["available_offer_change_quotes"] == {}
     assert calls == []  # no upfront per-offer quote computation
+
+
+def test_change_plan_page_surfaces_missing_funding_baseline_without_guessing(
+    db_session, subscriber, monkeypatch
+):
+    from app.services import customer_portal_flow_changes as flow
+    from app.services.prepaid_funding_reconstruction import (
+        PrepaidFundingBaselineMissingError,
+    )
+
+    current_offer = _make_offer(
+        db_session,
+        name="Baseline Review Plan",
+        amount=Decimal("100.00"),
+        plan_family="unlimited",
+    )
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current_offer,
+        next_billing_at=datetime(2026, 6, 1, tzinfo=UTC),
+        start_at=datetime(2026, 5, 1, tzinfo=UTC),
+    )
+    monkeypatch.setattr(
+        flow,
+        "_customer_financial_position",
+        Mock(side_effect=PrepaidFundingBaselineMissingError("baseline missing")),
+    )
+
+    page = flow.get_change_plan_page(
+        db_session,
+        {"account_id": str(subscriber.id)},
+        str(subscription.id),
+    )
+
+    assert page is not None
+    assert page["financial_position_unavailable"] is True
+    assert page["prepaid_funding"] is None
+    assert page["postpaid_receivables"] is None
+    assert page["collection_blocking_balance"] is None
+    assert page["form_contract"]["submittable"] is False
+    assert {item.key for item in page["form_contract"]["unmet_prerequisites"]} == {
+        "financial_position_available"
+    }
+
+
+def test_customer_change_quote_maps_missing_funding_baseline_to_conflict(
+    db_session, monkeypatch
+):
+    from app.services.prepaid_funding_reconstruction import (
+        PrepaidFundingBaselineMissingError,
+    )
+    from app.web.customer import routes
+
+    monkeypatch.setattr(
+        routes,
+        "get_current_customer_from_request",
+        lambda _request, _db: {"account_id": str(uuid4())},
+    )
+    monkeypatch.setattr(
+        routes.customer_portal,
+        "get_plan_change_quote",
+        Mock(side_effect=PrepaidFundingBaselineMissingError("baseline missing")),
+    )
+
+    response = routes.customer_change_plan_quote(
+        Request({"type": "http", "method": "GET", "path": "/", "headers": []}),
+        uuid4(),
+        str(uuid4()),
+        db=db_session,
+    )
+
+    assert response.status_code == 409
+    assert b'"error":"financial_position_unavailable"' in response.body
+
+
+def test_reseller_change_quote_maps_missing_funding_baseline_to_conflict(
+    db_session, monkeypatch
+):
+    from app.services import web_reseller_routes as routes
+    from app.services.prepaid_funding_reconstruction import (
+        PrepaidFundingBaselineMissingError,
+    )
+
+    reseller = Mock(id=uuid4())
+    account = Mock(id=uuid4())
+    monkeypatch.setattr(
+        routes,
+        "_require_reseller_context",
+        lambda _request, _db: {"reseller": reseller},
+    )
+    monkeypatch.setattr(
+        routes.reseller_portal,
+        "owned_account",
+        lambda _db, _reseller_id, _account_id: account,
+    )
+    monkeypatch.setattr(
+        routes.customer_portal_flow_changes,
+        "get_plan_change_quote",
+        Mock(side_effect=PrepaidFundingBaselineMissingError("baseline missing")),
+    )
+
+    response = routes.reseller_service_change_quote(
+        Request({"type": "http", "method": "GET", "path": "/", "headers": []}),
+        db_session,
+        str(account.id),
+        str(uuid4()),
+        str(uuid4()),
+        None,
+    )
+
+    assert response.status_code == 409
+    assert b'"error":"financial_position_unavailable"' in response.body
+
+
+def test_admin_change_quote_maps_missing_funding_baseline_to_conflict(
+    db_session, monkeypatch
+):
+    from app.services.prepaid_funding_reconstruction import (
+        PrepaidFundingBaselineMissingError,
+    )
+    from app.web.admin import catalog as routes
+
+    monkeypatch.setattr(
+        routes.web_catalog_subscription_workflows_service,
+        "change_plan_quote_response",
+        Mock(side_effect=PrepaidFundingBaselineMissingError("baseline missing")),
+    )
+
+    response = routes.subscription_change_plan_quote(
+        str(uuid4()),
+        str(uuid4()),
+        db=db_session,
+    )
+
+    assert response.status_code == 409
+    assert b'"error_code":"financial_position_unavailable"' in response.body
 
 
 def test_get_plan_change_quote_returns_single_quote(

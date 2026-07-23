@@ -9236,6 +9236,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 name="support.ticket_lifecycle",
                 module="app.services.support",
                 owns=(
+                    "support ticket human-readable number allocation",
                     "ticket status vocabulary",
                     "guarded ticket status transitions",
                     "ticket lifecycle timestamps and consequences",

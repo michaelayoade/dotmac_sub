@@ -88,6 +88,36 @@ def test_admin_lifecycle_preview_returns_structured_ineligible_state(
     assert payload["eligibility_reasons"] == ["status_active_not_eligible_for_activate"]
 
 
+def test_admin_lifecycle_preview_maps_missing_funding_to_unavailable(
+    db_session, monkeypatch
+):
+    from app.services import web_catalog_subscription_workflows as workflows
+    from app.services.prepaid_funding_reconstruction import (
+        PrepaidFundingBaselineMissingError,
+    )
+
+    def missing_funding(*_args, **_kwargs):
+        raise PrepaidFundingBaselineMissingError("baseline missing")
+
+    monkeypatch.setattr(
+        workflows,
+        "preview_subscription_command",
+        missing_funding,
+    )
+
+    payload, status_code = preview_lifecycle_command_response(
+        db_session,
+        subscription_id="00000000-0000-0000-0000-000000000001",
+        kind=SubscriptionCommandKind.change_plan,
+        actor_id="operator-1",
+        target_offer_id="00000000-0000-0000-0000-000000000002",
+    )
+
+    assert status_code == 409
+    assert payload["status"] == "unavailable"
+    assert payload["error_code"] == "financial_position_unavailable"
+
+
 def test_subscription_detail_projects_pending_status_schedules(
     db_session, subscriber, catalog_offer
 ):
