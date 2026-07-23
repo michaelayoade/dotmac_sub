@@ -77,6 +77,31 @@ address + 28 pop).
    `region`, and the empty `billing_*`) in a quiesced migration — the last step.
    Dropping before step 2 breaks the consumers.
 
+## NCC location capture
+
+The NCC quarterly Subscriber return aggregates subscribers by **state** and, where
+required, **LGA**. `ncc_subscriber_report.infer_state` resolves each subscriber's
+state in priority order: `subscriber.region`/`billing_region` → `Address.region` →
+city → address text. Once the inline `subscriber.region`/`city`/`address_line1`
+are removed, the canonical `Address` becomes the primary NCC location source.
+
+- **The `Address` schema is already NCC-complete** — `AddressBase`/`AddressCreate`/
+  `AddressUpdate` carry `region` (state), `lga` (NCC Local Government Area), `city`,
+  `postal_code`, and coordinates. No schema change is required.
+- **Authoritative capture** of state + LGA is by reverse-geocoding the verified pin
+  (`geocode_reconciler.reverse` → NCC state + county→LGA, validated via
+  `ncc_location.canonical_lga`), projected onto `Address.region`/`Address.lga`
+  (customer-domain projection of the verified fact; the ledger records the
+  verification, the Address holds the captured value).
+- **Backfill**: the 6,404 materialized addresses carry street text + 1,739 coords,
+  but `region`/`lga` are largely unpopulated (Splynx has no state/LGA column).
+  Populate region+LGA on the coord-bearing addresses by reverse-geocode; text-only
+  rows fall back to report-time inference from `Address` text/city (as today).
+- **Removal cutover**: `infer_state` and `ncc_complaints_report` drop the inline
+  `subscriber.region/city/address_line1/2` reads and rely on `Address.region/city/
+  address_line1/2` (already read as fallbacks). `billing_region/billing_city/
+  billing_address_*` STAY on `Subscriber` and are read unchanged.
+
 ## Tests
 
 - `tests/test_splynx_geo_import.py` — GPS parse/swap-repair, name matching,
