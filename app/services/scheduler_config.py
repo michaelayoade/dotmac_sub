@@ -1764,6 +1764,27 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(outage_reconcile_seconds, 120),
         )
+        # Automated customer outage notification (ADR 0004). Scheduling this is
+        # safe while the decision to enable it is still open: the service is
+        # gated on OUTAGE_AUTO_NOTIFY_ENABLED (off) and defaults to dry-run, so
+        # an enabled beat entry is a no-op until both are flipped. Cadence is
+        # deliberately slower than the reconcile above — the settle window, not
+        # the poll rate, decides how fast a customer hears.
+        outage_auto_notify_seconds = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "outage_auto_notify_interval_seconds",
+            300,
+        )
+        _sync_scheduled_task(
+            session,
+            name="outage_auto_notify",
+            task_name=(
+                "app.tasks.outage_auto_notify.auto_dispatch_outage_notifications"
+            ),
+            enabled=True,
+            interval_seconds=max(outage_auto_notify_seconds, 120),
+        )
         # UISP topology sync: import the wireless/UFiber customer-device
         # relationship layer (radios -> APs, ONUs -> UF-OLTs) into sub's
         # tables. Association churn is faster than the device graph, so it

@@ -257,6 +257,26 @@ class Settings:
     outage_notify_area_min_affected: int = int(
         os.getenv("OUTAGE_NOTIFY_AREA_MIN_AFFECTED", "5")
     )
+    # Automated dispatch (ADR 0004). Independent of the flag above: automation
+    # needs BOTH, so enabling operator dispatch never silently enables the
+    # scheduler. Automation is narrower than a manual send by design.
+    outage_auto_notify_enabled: bool = os.getenv(
+        "OUTAGE_AUTO_NOTIFY_ENABLED", "false"
+    ).lower() in ("true", "1", "yes")
+    # Plan and log what would be sent, without sending. The intended first step
+    # on any new deployment: run it for a few days and read the logs.
+    outage_auto_notify_dry_run: bool = os.getenv(
+        "OUTAGE_AUTO_NOTIFY_DRY_RUN", "true"
+    ).lower() in ("true", "1", "yes")
+    outage_auto_notify_settle_minutes: int = int(
+        os.getenv("OUTAGE_AUTO_NOTIFY_SETTLE_MINUTES", "15")
+    )
+    outage_auto_notify_min_affected: int = int(
+        os.getenv("OUTAGE_AUTO_NOTIFY_MIN_AFFECTED", "5")
+    )
+    outage_auto_notify_max_incidents_per_run: int = int(
+        os.getenv("OUTAGE_AUTO_NOTIFY_MAX_INCIDENTS_PER_RUN", "10")
+    )
 
 
 settings = Settings()
