@@ -36,6 +36,7 @@ from app.services import customer_portal_contacts as customer_portal_contacts_se
 from app.services import customer_portal_flow_payment_methods as customer_cards
 from app.services import customer_portal_notifications as customer_notifications_service
 from app.services import payment_proofs as payment_proofs_service
+from app.services import service_address as service_address_service
 from app.services import web_customer_auth as web_customer_auth_service
 from app.services import web_network_speedtests as web_network_speedtests_service
 from app.services.audit_helpers import log_audit_event
@@ -220,6 +221,7 @@ def _profile_audit_snapshot(subscriber) -> dict[str, object]:
     masked_nin = (
         mask_nin(nin_value) if isinstance(nin_value, str) and nin_value else None
     )
+    parts = service_address_service.address_parts(subscriber)
     return {
         "first_name": subscriber.first_name,
         "last_name": subscriber.last_name,
@@ -230,12 +232,12 @@ def _profile_audit_snapshot(subscriber) -> dict[str, object]:
         "date_of_birth": _profile_value(subscriber.date_of_birth),
         "gender": _profile_value(subscriber.gender),
         "preferred_contact_method": _profile_value(subscriber.preferred_contact_method),
-        "address_line1": subscriber.address_line1,
-        "address_line2": subscriber.address_line2,
-        "city": subscriber.city,
-        "region": subscriber.region,
-        "postal_code": subscriber.postal_code,
-        "country_code": subscriber.country_code,
+        "address_line1": parts.address_line1,
+        "address_line2": parts.address_line2,
+        "city": parts.city,
+        "region": parts.region,
+        "postal_code": parts.postal_code,
+        "country_code": parts.country_code,
         "billing_notifications": bool(metadata.get("billing_notifications", True)),
         "sms_updates": bool(metadata.get("sms_updates", True)),
         "push_notifications": bool(metadata.get("push_notifications", True)),

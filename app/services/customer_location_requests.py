@@ -10,7 +10,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType, AuditEvent
-from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.gis import (
     CustomerLocationChangeRequest,
@@ -25,6 +24,7 @@ from app.schemas.audit import AuditEventCreate
 from app.services import audit as audit_service
 from app.services import geocoding as geocoding_service
 from app.services import gis as gis_service
+from app.services import service_address as service_address_service
 from app.services.customer_context import optional_customer_subscriber_id
 
 logger = logging.getLogger(__name__)
@@ -107,43 +107,9 @@ def _address_label(address: Address | None, subscriber: Subscriber | None) -> st
 
 
 def _resolve_service_address(db: Session, subscriber_id: str) -> Address | None:
-    active_subscription = (
-        db.query(Subscription)
-        .filter(Subscription.subscriber_id == subscriber_id)
-        .filter(Subscription.status == SubscriptionStatus.active)
-        .filter(Subscription.service_address_id.isnot(None))
-        .order_by(Subscription.created_at.desc())
-        .first()
-    )
-    if active_subscription and active_subscription.service_address:
-        return active_subscription.service_address
-
-    address = (
-        db.query(Address)
-        .filter(Address.subscriber_id == subscriber_id)
-        .filter(Address.address_type == AddressType.service)
-        .filter(Address.is_primary.is_(True))
-        .first()
-    )
-    if address:
-        return address
-
-    address = (
-        db.query(Address)
-        .filter(Address.subscriber_id == subscriber_id)
-        .filter(Address.is_primary.is_(True))
-        .order_by(Address.created_at.asc())
-        .first()
-    )
-    if address:
-        return address
-
-    return (
-        db.query(Address)
-        .filter(Address.subscriber_id == subscriber_id)
-        .order_by(Address.created_at.asc())
-        .first()
-    )
+    # Canonical resolution now lives in the owner module; this thin delegate
+    # keeps existing callers stable. See service_address.service_address.
+    return service_address_service.service_address(db, subscriber_id)
 
 
 def _ensure_target_address(
