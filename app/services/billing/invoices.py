@@ -66,6 +66,7 @@ from app.services.common import (
     to_decimal,
     validate_enum,
 )
+from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.invoice_classification import collectible_ar_invoice_filter
@@ -79,6 +80,10 @@ _VOID_IDEMPOTENCY_SCOPE = "invoice_void"
 _WRITE_OFF_IDEMPOTENCY_SCOPE = "invoice_write_off"
 _RECONCILIATION_IDEMPOTENCY_SCOPE = "invoice_closure_reconciliation"
 _IDEMPOTENCY_KEY_RE = re.compile(r"^[A-Za-z0-9._~-]{16,120}$")
+
+
+class InvoiceOwnerError(DomainError):
+    """Transport-neutral failure from an invoice-owner participant."""
 
 
 def _apply_available_account_credit(db: Session, invoice: Invoice) -> None:
@@ -851,6 +856,75 @@ class Invoices(ListResponseMixin):
         )
 
     @staticmethod
+    def void_pristine_draft_for_owner(
+        db: Session,
+        invoice_id: str,
+        *,
+        reason: str,
+        idempotency_key: str,
+    ) -> InvoiceClosureResult:
+        """Stage a pristine draft closure without ending the owner's transaction."""
+        initial = get_by_id(db, Invoice, invoice_id)
+        if initial is None:
+            raise InvoiceOwnerError(
+                code="financial.invoice.invoice_not_found",
+                message="Invoice was not found.",
+            )
+        lock_account(db, str(initial.account_id))
+        invoice = lock_for_update(db, Invoice, coerce_uuid(invoice_id))
+        if invoice is None:
+            raise InvoiceOwnerError(
+                code="financial.invoice.invoice_not_found",
+                message="Invoice was not found.",
+            )
+        try:
+            preview = _build_closure_preview(db, invoice, InvoiceClosureType.void)
+        except HTTPException as exc:
+            raise InvoiceOwnerError(
+                code="financial.invoice.void_rejected",
+                message="Invoice owner rejected the void transition.",
+                details={"reason": str(exc.detail)},
+            ) from exc
+        if (
+            preview.status_before != InvoiceStatus.draft
+            or preview.payments_applied != Decimal("0.00")
+            or preview.credits_applied != Decimal("0.00")
+            or preview.released_allocation_ids
+            or preview.ledger_effects
+        ):
+            raise InvoiceOwnerError(
+                code="financial.invoice.draft_not_pristine",
+                message="Only a pristine draft can use the composed void transition.",
+            )
+        closure = InvoiceClosure(
+            invoice_id=invoice.id,
+            closure_type=InvoiceClosureType.void,
+            origin=InvoiceClosureOrigin.system,
+            amount=preview.closure_amount,
+            receivable_before=preview.receivable_before,
+            receivable_after=preview.receivable_after,
+            payments_applied=preview.payments_applied,
+            credits_applied=preview.credits_applied,
+            currency=preview.currency,
+            reason=reason,
+            preview_fingerprint=preview.fingerprint,
+            idempotency_key=idempotency_key,
+        )
+        db.add(closure)
+        db.flush()
+        invoice.status = InvoiceStatus.void
+        invoice.balance_due = preview.receivable_after
+        invoice.paid_at = None
+        invoice.memo = reason
+        _stage_invoice_closure_audit(db, closure=closure, preview=preview)
+        db.flush()
+        return InvoiceClosureResult(
+            invoice=invoice,
+            closure=closure,
+            preview=preview,
+        )
+
+    @staticmethod
     def write_off_system(
         db: Session,
         invoice_id: str,
@@ -1300,6 +1374,36 @@ class Invoices(ListResponseMixin):
             changed=True,
             event_emitted=announce,
         )
+
+    @staticmethod
+    def issue_draft_for_owner(
+        db: Session,
+        invoice_id: str,
+        *,
+        issued_at: datetime,
+        due_at: datetime | None,
+        reason: str,
+        announce: bool = False,
+        apply_available_credit: bool = True,
+    ) -> InvoiceLifecycleTransitionResult:
+        """Compose draft issuance inside another owner without HTTP coupling."""
+        try:
+            return Invoices.issue_draft_system(
+                db,
+                invoice_id,
+                issued_at=issued_at,
+                due_at=due_at,
+                reason=reason,
+                announce=announce,
+                apply_available_credit=apply_available_credit,
+                commit=False,
+            )
+        except HTTPException as exc:
+            raise InvoiceOwnerError(
+                code="financial.invoice.issue_rejected",
+                message="Invoice owner rejected the issue transition.",
+                details={"reason": str(exc.detail)},
+            ) from exc
 
     @staticmethod
     def announce_issued(
