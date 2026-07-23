@@ -50,8 +50,11 @@ OLT, ONT, NAS, or RADIUS polling.
   subscription after the existing ownership check.
 - Reseller account detail performs its reseller/account scope check before
   building the projection and uses the same macros.
-- Admin Customer 360 renders the same service-health strip before its tabs;
-  it does not maintain an independent connection or change-status summary.
+- Admin Customer 360 renders the same service-health strip before its tabs,
+  narrowed by the projection owner to active services only. Historical,
+  disabled, suspended, and otherwise non-active subscriptions remain available
+  in the Service tab; the template does not filter lifecycle state or maintain
+  an independent connection or change-status summary.
 - Mobile calls `GET /api/v1/me/account-health` and renders the transport schema
   in `app.schemas.portal_account_health`.
 

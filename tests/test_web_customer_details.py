@@ -28,7 +28,12 @@ def _bare_request(path: str = "/admin/customers/person/x/pppoe-password") -> Req
 
 
 from app.models.billing import Invoice, InvoiceStatus
-from app.models.catalog import AccessCredential, ConnectionType, SubscriptionStatus
+from app.models.catalog import (
+    AccessCredential,
+    ConnectionType,
+    Subscription,
+    SubscriptionStatus,
+)
 from app.models.crm_sync_failure import CrmSyncFailure, CrmSyncFailureStatus
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.network import SubscriberAdditionalRoute
@@ -207,6 +212,54 @@ def test_customer_360_renders_canonical_service_health() -> None:
         'service_health_strip(account_health, "/admin/catalog/subscriptions/")'
         in template
     )
+
+
+def test_customer_360_service_health_contains_only_active_services(
+    db_session, subscriber, subscription
+):
+    subscriber.user_type = UserType.customer
+    subscription.status = SubscriptionStatus.active
+    previous_service = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=subscription.offer_id,
+        status=SubscriptionStatus.disabled,
+        billing_mode=subscription.billing_mode,
+    )
+    db_session.add(previous_service)
+    db_session.commit()
+
+    context = build_customer_detail_snapshot(db_session, str(subscriber.id))
+
+    assert [
+        service.subscription_id for service in context["account_health"].services
+    ] == [subscription.id]
+    assert previous_service.id not in {
+        service.subscription_id for service in context["account_health"].services
+    }
+
+
+def test_customer_360_places_contact_and_portal_access_side_by_side() -> None:
+    template = Path("templates/admin/customers/detail.html").read_text(encoding="utf-8")
+
+    assert '<div class="contents">' in template
+    assert (
+        'class="order-3 rounded-2xl border border-slate-200/60 bg-white shadow-sm'
+    ) in template
+    assert (
+        'class="order-4 rounded-2xl border border-slate-200/60 bg-white shadow-sm'
+    ) in template
+    assert "lg:col-span-2" in template
+
+
+def test_customer_dashboard_welcome_card_keeps_content_inset() -> None:
+    template = Path("templates/customer/dashboard/index.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "px-6 py-6 sm:px-8 sm:py-7" in template
+    assert "min-w-0 flex-1" in template
+    assert "break-words text-3xl" in template
+    assert "max-w-2xl leading-relaxed" in template
 
 
 def test_customer_detail_exposes_invoice_status_presentations(db_session, subscriber):
