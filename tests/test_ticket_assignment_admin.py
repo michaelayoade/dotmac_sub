@@ -5,7 +5,6 @@ from __future__ import annotations
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
 
 from app.models.service_team import ServiceTeam, ServiceTeamType
 from app.models.ticket_workflow import TicketAssignmentStrategy
@@ -103,21 +102,25 @@ def _team(db_session, name: str = "Dispatch") -> ServiceTeam:
 
 def test_create_update_and_list_rules_in_engine_order(db_session):
     team = _team(db_session)
+    team_id = team.id
+    db_session.commit()
     low = assignment_admin.create_rule(
         db_session,
         name="Catch-all",
         priority=10,
         strategy=TicketAssignmentStrategy.round_robin.value,
-        match_config={},
-        team_id=team.id,
+        match_config=assignment_admin.TicketAssignmentRuleMatch(),
+        team_id=team_id,
     )
     high = assignment_admin.create_rule(
         db_session,
         name="Urgent Lagos",
         priority=100,
         strategy=TicketAssignmentStrategy.least_loaded.value,
-        match_config={"priorities": ["urgent"], "regions": ["lagos"]},
-        team_id=str(team.id),
+        match_config=assignment_admin.TicketAssignmentRuleMatch(
+            priorities=("urgent",), regions=("lagos",)
+        ),
+        team_id=str(team_id),
         assign_manager=True,
     )
     db_session.commit()
@@ -126,6 +129,7 @@ def test_create_update_and_list_rules_in_engine_order(db_session):
     assert [rule.id for rule in rules] == [high.id, low.id]
     assert high.assign_manager is True
     assert high.match_config == {"priorities": ["urgent"], "regions": ["lagos"]}
+    db_session.commit()
 
     updated = assignment_admin.update_rule(
         db_session,
@@ -133,7 +137,9 @@ def test_create_update_and_list_rules_in_engine_order(db_session):
         name="Catch-all v2",
         priority=5,
         strategy=TicketAssignmentStrategy.least_loaded.value,
-        match_config={"ticket_types": ["incident"]},
+        match_config=assignment_admin.TicketAssignmentRuleMatch(
+            ticket_types=("incident",)
+        ),
         team_id=None,
         assign_manager=False,
         assign_spc=True,
@@ -184,10 +190,10 @@ def test_delete_rule_removes_row(db_session):
     assert assignment_admin.list_rules(db_session) == []
 
 
-def test_get_rule_raises_404_for_missing(db_session):
-    with pytest.raises(HTTPException) as exc:
+def test_get_rule_raises_domain_error_for_missing(db_session):
+    with pytest.raises(assignment_admin.TicketAssignmentRuleError) as exc:
         assignment_admin.get_rule(db_session, str(uuid4()))
-    assert exc.value.status_code == 404
+    assert exc.value.code == "assignment_rule_not_found"
 
 
 def test_list_team_options_only_returns_active_teams(db_session):

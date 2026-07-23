@@ -1,7 +1,8 @@
 """Support-satisfaction (CSAT) rating on resolved/closed tickets."""
 
 import pytest
-from fastapi import HTTPException
+
+from app.services.domain_errors import DomainError
 
 
 def _ticket(db_session, subscriber, status="resolved"):
@@ -40,9 +41,9 @@ class TestTicketCsat:
         from app.services import support as support_service
 
         ticket = _ticket(db_session, subscriber, status="open")
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(DomainError) as exc:
             support_service.Tickets.set_satisfaction(db_session, ticket, rating=4)
-        assert exc.value.status_code == 409
+        assert exc.value.code == "satisfaction_not_eligible"
         assert ticket.csat_rating is None
 
     def test_unrated_ticket_property_is_none(self, db_session, subscriber):

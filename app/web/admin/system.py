@@ -103,6 +103,7 @@ from app.services.brand_theme import (
     is_accessible_semantic_color,
 )
 from app.services.common import coerce_uuid
+from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.financial_import_batch_reversals import (
     PaymentImportBatchReversals,
@@ -4578,6 +4579,7 @@ def ticket_settings_update(
     sla_ticket_type_resolution_hours = form.getlist("sla_ticket_type_resolution_hours")
     errors: list[str] = []
     try:
+        db_session_adapter.release_read_transaction(db)
         support_ticket_settings_service.update_options(
             db,
             statuses=statuses,
@@ -4607,7 +4609,6 @@ def ticket_settings_update(
             url="/admin/system/ticket-settings?saved=1", status_code=303
         )
     except Exception as exc:
-        db.rollback()
         errors.append(str(exc) or "Could not save ticket settings.")
     return templates.TemplateResponse(
         "admin/system/ticket_settings.html",
@@ -4694,22 +4695,19 @@ def ticket_assignment_rule_create(
     is_active: str | None = Form(default=None),
     db: Session = Depends(get_db),
 ):
-    try:
-        support_ticket_settings_service.create_assignment_rule(
-            db,
-            name=name,
-            priority=priority,
-            strategy=strategy,
-            team_id=team_id,
-            ticket_types=_split_form_values(ticket_types),
-            regions=_split_form_values(regions),
-            assignee_person_id=assignee_person_id,
-            assignment_target=assignment_target,
-            is_active=is_active == "1",
-        )
-    except Exception:
-        db.rollback()
-        raise
+    db_session_adapter.release_read_transaction(db)
+    support_ticket_settings_service.create_assignment_rule(
+        db,
+        name=name,
+        priority=priority,
+        strategy=strategy,
+        team_id=team_id,
+        ticket_types=_split_form_values(ticket_types),
+        regions=_split_form_values(regions),
+        assignee_person_id=assignee_person_id,
+        assignment_target=assignment_target,
+        is_active=is_active == "1",
+    )
     return RedirectResponse(
         url="/admin/system/ticket-settings?rule_saved=1", status_code=303
     )
@@ -4721,6 +4719,7 @@ def ticket_assignment_rule_create(
     dependencies=[Depends(require_permission("system:settings:write"))],
 )
 def ticket_assignment_rule_delete(rule_id: str, db: Session = Depends(get_db)):
+    db_session_adapter.release_read_transaction(db)
     support_ticket_settings_service.delete_assignment_rule(db, rule_id)
     return RedirectResponse(
         url="/admin/system/ticket-settings?rule_deleted=1", status_code=303

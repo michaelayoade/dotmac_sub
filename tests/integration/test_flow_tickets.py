@@ -70,10 +70,12 @@ def test_ticket_lifecycle_pull_native_decisions_merge(db_session, subscriber):
     ticket = db_session.query(Ticket).filter(Ticket.number == "30201").one()
     assert ticket.metadata_["crm_ticket_id"] == crm_ticket_id
     assert ticket.subscriber_id == subscriber.id
+    ticket_id = str(ticket.id)
+    db_session.commit()
 
     # 2. Native decisions on the pulled ticket (Sub-owned write posture).
     ticket, token = Tickets.request_resolution_confirmation(
-        db_session, str(ticket.id), actor_id=None
+        db_session, ticket_id, actor_id=None
     )
     assert ticket.status == "pending_confirmation"
     assert ticket.metadata_["resolution_confirmation"]["requested_at"]
