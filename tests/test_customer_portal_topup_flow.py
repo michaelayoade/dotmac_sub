@@ -33,6 +33,7 @@ from app.services.customer_portal_flow_payments import (
     create_invoice_payment_intent,
     create_topup_intent,
     get_topup_page,
+    preview_topup,
     submit_direct_transfer_topup,
     verify_and_record_payment,
     verify_and_record_topup,
@@ -184,7 +185,20 @@ def _create_intent(
         {"account_id": str(subscriber.id), "username": "customer@example.com"},
         amount,
         provider="paystack",
+        preview_fingerprint=preview_topup(
+            db_session,
+            {"account_id": str(subscriber.id), "username": "customer@example.com"},
+            amount,
+        )["preview_fingerprint"],
     )
+
+
+def _preview_fingerprint(db_session, subscriber, amount: str) -> str:
+    return preview_topup(
+        db_session,
+        {"account_id": str(subscriber.id), "username": "customer@example.com"},
+        amount,
+    )["preview_fingerprint"]
 
 
 def test_get_topup_page_includes_limits_and_public_key(
@@ -238,6 +252,66 @@ def test_get_topup_page_uses_configured_preset_amounts_within_limits(
     )
 
     assert page["preset_amounts"] == [3000, 7000]
+
+
+def test_get_topup_page_keeps_deposit_available_with_existing_invoice(
+    monkeypatch, db_session, subscriber
+):
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.payment_gateway_adapter.build_context",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            provider_type="paystack",
+            public_key="pk_test_topup",
+            reference="unused-ref",
+        ),
+    )
+    _patch_topup_settings(monkeypatch)
+    _make_invoice(
+        db_session,
+        subscriber.id,
+        amount="18000.00",
+        invoice_number="INV-TOPUP-PREVIEW",
+    )
+
+    page = get_topup_page(
+        db_session,
+        {"account_id": str(subscriber.id), "username": "customer@example.com"},
+    )
+
+    assert page["deposit_allowed"] is True
+    assert page["eligible_unpaid_total"] == Decimal("18000.00")
+    assert len(page["eligible_unpaid_invoices"]) == 1
+
+
+def test_preview_topup_reports_invoice_application_breakdown(
+    monkeypatch, db_session, subscriber
+):
+    _patch_topup_settings(monkeypatch)
+    invoice = _make_invoice(
+        db_session,
+        subscriber.id,
+        amount="18000.00",
+        invoice_number="INV-TOPUP-BREAKDOWN",
+    )
+
+    preview = preview_topup(
+        db_session,
+        {"account_id": str(subscriber.id), "username": "customer@example.com"},
+        "10000.00",
+    )
+
+    assert preview["total_applied_to_invoices"] == Decimal("10000.00")
+    assert preview["remaining_account_credit"] == Decimal("0.00")
+    assert preview["total_outstanding_after_application"] == Decimal("8000.00")
+    assert preview["invoice_applications"] == [
+        {
+            "invoice_id": str(invoice.id),
+            "invoice_number": invoice.invoice_number,
+            "currency": "NGN",
+            "amount_applied": Decimal("10000.00"),
+            "outstanding_after_application": Decimal("8000.00"),
+        }
+    ]
 
 
 def test_get_topup_page_includes_saved_payment_methods(
@@ -637,6 +711,7 @@ def test_create_topup_intent_records_selected_payment_method(
         "5000.00",
         provider="paystack",
         payment_method_id=str(card.id),
+        preview_fingerprint=_preview_fingerprint(db_session, subscriber, "5000.00"),
     )
 
     intent = (
@@ -680,6 +755,7 @@ def test_create_topup_intent_initializes_flutterwave_checkout(
         "5000.00",
         provider="flutterwave",
         redirect_url="https://selfcare.test/portal/billing/topup/verify",
+        preview_fingerprint=_preview_fingerprint(db_session, subscriber, "5000.00"),
     )
 
     assert payload["provider_type"] == "flutterwave"

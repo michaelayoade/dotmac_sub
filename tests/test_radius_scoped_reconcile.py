@@ -50,6 +50,11 @@ def _radius_env(monkeypatch, db_session):
     monkeypatch.setattr(
         radius_population, "assert_legacy_target_alignment", lambda _db: []
     )
+    monkeypatch.setattr(
+        radius_population,
+        "simultaneous_use_enforcement_enabled",
+        lambda _db: True,
+    )
     monkeypatch.setenv("CREDENTIAL_ENCRYPTION_KEY", Fernet.generate_key().decode())
     # The owner opens its own SessionLocal(); point it at the test session so the
     # fleet-wide projection reads the fixtures instead of the blocked real DB.
@@ -248,6 +253,11 @@ def test_scoped_reconcile_fans_out_to_every_configured_target(
     monkeypatch.setattr(
         radius_population, "assert_legacy_target_alignment", lambda _db: []
     )
+    monkeypatch.setattr(
+        radius_population,
+        "simultaneous_use_enforcement_enabled",
+        lambda _db: True,
+    )
 
     result = radius_population.reconcile_usernames(
         {a1}, dry_run=False, source_db=db_session
@@ -258,7 +268,16 @@ def test_scoped_reconcile_fans_out_to_every_configured_target(
     for target in targets:
         path = target["db_url"].removeprefix("sqlite:///")
         with sqlite3.connect(path) as conn:
-            assert conn.execute("SELECT username FROM radcheck").fetchall() == [(a1,)]
+            assert conn.execute(
+                "SELECT username, attribute, op, value FROM radcheck ORDER BY rowid"
+            ).fetchall() == [
+                (a1, "Cleartext-Password", ":=", "pw-" + a1),
+                (a1, "Simultaneous-Use", ":=", "1"),
+            ]
+            assert conn.execute(
+                "SELECT COUNT(*) FROM radreply "
+                "WHERE lower(attribute) = 'simultaneous-use'"
+            ).fetchone() == (0,)
 
 
 def test_partial_target_failure_is_reported_and_raises(

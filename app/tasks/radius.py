@@ -167,8 +167,9 @@ def _run_enforcement_reconciler() -> dict[str, int]:
        (blocked/negative/bad_mac/bad_password networks; the not_found
        pool is excluded because legit BNG-local pools overlap it) ->
        CoA-kick so the redial picks up a routable IP.
-    4. Compare canonical per-login projection modes against radcheck/radreply
-       in both directions and request one single-writer refresh for any drift.
+    4. Compare canonical per-login projection modes and, after its explicit
+       cutover, simultaneous-session check placement against radcheck/radreply
+       in both directions; request one single-writer refresh for any drift.
 
     Disconnect attempts are capped per run so transport failure or systemic
     drift degrades to alerts, not an unbounded retry or mass disconnect.
@@ -208,6 +209,9 @@ def _run_enforcement_reconciler() -> dict[str, int]:
         "stale_captive": 0,
         "radius_attribute_drift": 0,
         "radius_unbuildable_logins": 0,
+        "missing_concurrency_check": 0,
+        "stale_concurrency_check": 0,
+        "misplaced_concurrency_reply": 0,
         "radius_projection_unconverged": 0,
         "radius_projection_repair_enqueued": 0,
         "sync_gap_logins": 0,
@@ -233,6 +237,9 @@ def _run_enforcement_reconciler() -> dict[str, int]:
     from app.services.radius_population import (
         populate as preview_radius_projection,
     )
+    from app.services.radius_population import (
+        simultaneous_use_enforcement_enabled,
+    )
     from app.services.radius_projection_planner import (
         compare_radius_projection,
         plan_login_radius_projections,
@@ -257,6 +264,7 @@ def _run_enforcement_reconciler() -> dict[str, int]:
     )
     if not isinstance(expected_projection_fingerprints, dict):
         expected_projection_fingerprints = {}
+    enforce_simultaneous_use = simultaneous_use_enforcement_enabled(db)
     max_kicks = int(
         settings_spec.resolve_value(
             db, SettingDomain.radius, "enforcement_reconciler_max_kicks"
@@ -578,6 +586,24 @@ def _run_enforcement_reconciler() -> dict[str, int]:
             desired_login_projections,
             "expected-fingerprint-unavailable",
         )
+    simultaneous_use_check = (
+        {
+            str(row["username"])
+            for row in observed_check_rows
+            if str(row["attribute"]).lower() == "simultaneous-use"
+        }
+        if enforce_simultaneous_use
+        else set()
+    )
+    simultaneous_use_reply = (
+        {
+            str(row["username"])
+            for row in observed_reply_rows
+            if str(row["attribute"]).lower() == "simultaneous-use"
+        }
+        if enforce_simultaneous_use
+        else set()
+    )
 
     drift = compare_radius_projection(
         desired_login_projections,
@@ -586,6 +612,9 @@ def _run_enforcement_reconciler() -> dict[str, int]:
         observed_captive=captive_tagged,
         desired_fingerprints=target_expected,
         observed_fingerprints=observed_fingerprints,
+        enforce_simultaneous_use=enforce_simultaneous_use,
+        observed_simultaneous_use_check=simultaneous_use_check,
+        observed_simultaneous_use_reply=simultaneous_use_reply,
     )
     stats["missing_radius_auth"] = len(drift.missing_auth)
     stats["stale_radius_auth"] = len(drift.stale_auth)
@@ -594,6 +623,9 @@ def _run_enforcement_reconciler() -> dict[str, int]:
     stats["missing_captive"] = len(drift.missing_captive)
     stats["stale_captive"] = len(drift.stale_captive)
     stats["radius_attribute_drift"] = len(drift.attribute_drift)
+    stats["missing_concurrency_check"] = len(drift.missing_concurrency_check)
+    stats["stale_concurrency_check"] = len(drift.stale_concurrency_check)
+    stats["misplaced_concurrency_reply"] = len(drift.misplaced_concurrency_reply)
     stats["walled_garden_drift"] = len(drift.missing_captive | drift.stale_captive)
     stats["radius_projection_unconverged"] = len(drift.usernames)
     radius_refresh_required = radius_refresh_required or bool(drift.usernames)
@@ -602,7 +634,9 @@ def _run_enforcement_reconciler() -> dict[str, int]:
         logger.error(
             "access projection unconverged: total=%d missing_auth=%d stale_auth=%d "
             "missing_reject=%d stale_reject=%d missing_captive=%d "
-            "stale_captive=%d attribute_drift=%d sample=%s",
+            "stale_captive=%d missing_concurrency_check=%d "
+            "stale_concurrency_check=%d misplaced_concurrency_reply=%d "
+            "attribute_drift=%d sample=%s",
             len(drift.usernames),
             len(drift.missing_auth),
             len(drift.stale_auth),
@@ -610,6 +644,9 @@ def _run_enforcement_reconciler() -> dict[str, int]:
             len(drift.stale_reject),
             len(drift.missing_captive),
             len(drift.stale_captive),
+            len(drift.missing_concurrency_check),
+            len(drift.stale_concurrency_check),
+            len(drift.misplaced_concurrency_reply),
             len(drift.attribute_drift),
             sorted(drift.usernames)[:5],
         )

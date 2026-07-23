@@ -346,6 +346,8 @@ class PrepaidServiceRenewedOutcome:
 class FundingChangeRenewalDisposition(enum.StrEnum):
     no_due_service = "no_due_service"
     payable_invoice_remaining = "payable_invoice_remaining"
+    draft_invoice_settled = "draft_invoice_settled"
+    draft_invoice_pending = "draft_invoice_pending"
     funded = "funded"
     unfunded = "unfunded"
     already_covered = "already_covered"
@@ -384,6 +386,8 @@ class FundingChangeRenewalResult:
     renewals: tuple[PrepaidServiceRenewedOutcome, ...] = ()
     non_cash_granted: int = 0
     treatment_blocked: int = 0
+    draft_invoices_settled: int = 0
+    draft_invoices_pending: int = 0
 
 
 def evaluate_prepaid_service_after_settlement(
@@ -901,6 +905,40 @@ def apply_due_prepaid_service_after_funding_change(
     evidence = evidence_ref.strip()
     if not evidence:
         raise ValueError("evidence_ref is required")
+
+    # Invoice-first invariant: an existing prepaid draft owns the documentary
+    # service-period boundary. Exact verified funding settles that draft; a
+    # shortfall (including NGN 0.50), unbacked credit, overlap, or ambiguity
+    # leaves it unchanged and blocks the parallel invoice-less renewal path.
+    from app.services.prepaid_draft_reconciliation import (
+        stage_prepaid_draft_after_funding_change,
+    )
+
+    draft_result = stage_prepaid_draft_after_funding_change(
+        db,
+        account_id=account_id,
+        currency=currency,
+        effective_at=evaluated_at,
+    )
+    if draft_result.drafts_found:
+        settled = draft_result.drafts_settled
+        pending = draft_result.drafts_blocked
+        return FundingChangeRenewalResult(
+            account_id=account_id,
+            scanned=draft_result.drafts_found,
+            funded=settled,
+            unfunded=pending,
+            already_covered=0,
+            missing_price=0,
+            currency_mismatch=0,
+            disposition=(
+                FundingChangeRenewalDisposition.draft_invoice_settled
+                if settled
+                else FundingChangeRenewalDisposition.draft_invoice_pending
+            ),
+            draft_invoices_settled=settled,
+            draft_invoices_pending=pending,
+        )
 
     due_subscriptions = list(
         db.scalars(

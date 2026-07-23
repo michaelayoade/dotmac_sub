@@ -18,6 +18,7 @@ from app.models.domain_settings import DomainSetting, SettingDomain, SettingValu
 from app.models.event_store import EventStore
 from app.services import direct_transfer_intents as svc
 from app.services import topup_intents
+from app.services.account_credit_deposits import AccountCreditDeposits
 from app.services.db_session_adapter import db_session_adapter
 from app.services.owner_commands import CommandContext
 
@@ -79,12 +80,23 @@ def _create(
     amount: str | None = None,
     invoice_id: UUID | None = None,
     idempotency_key: str | None = None,
+    preview_fingerprint: str | None = None,
 ) -> svc.DirectTransferIntentResult:
+    if preview_fingerprint is None and invoice_id is None and amount is not None:
+        preview_fingerprint = AccountCreditDeposits.preview(
+            db_session,
+            account_id=account_id,
+            amount=amount,
+            currency="NGN",
+            minimum="1000.00",
+            maximum="500000.00",
+        ).fingerprint
     command = svc.CreateDirectTransferIntentCommand(
         account_id=account_id,
         created_by="pytest",
         requested_amount=amount,
         invoice_id=invoice_id,
+        expected_preview_fingerprint=preview_fingerprint,
     )
     db_session_adapter.release_read_transaction(db_session)
     return svc.create_direct_transfer_intent(
@@ -176,6 +188,7 @@ def test_deposit_direct_transfer_idempotency_replays_without_second_event(
         account_id=subscriber.id,
         amount="5000.00",
         idempotency_key="same-deposit-create-key",
+        preview_fingerprint=first.preview_fingerprint,
     )
 
     assert second.intent_id == first.intent_id
@@ -186,6 +199,31 @@ def test_deposit_direct_transfer_idempotency_replays_without_second_event(
         .filter(EventStore.event_type == "topup_intent.direct_transfer_created")
         .count()
         == 1
+    )
+
+
+def test_deposit_direct_transfer_requires_reviewed_preview(
+    db_session, subscriber, monkeypatch
+):
+    _patch_policy(monkeypatch)
+
+    command = svc.CreateDirectTransferIntentCommand(
+        account_id=subscriber.id,
+        created_by="pytest",
+        requested_amount="5000.00",
+    )
+    db_session_adapter.release_read_transaction(db_session)
+
+    with pytest.raises(svc.DirectTransferIntentError) as exc_info:
+        svc.create_direct_transfer_intent(
+            db_session,
+            command,
+            context=_context(),
+        )
+
+    assert (
+        exc_info.value.code
+        == "financial.direct_transfer_intent_commands.preview_required"
     )
 
 

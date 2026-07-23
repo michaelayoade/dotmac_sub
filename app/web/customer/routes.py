@@ -2297,6 +2297,7 @@ def customer_create_topup_intent(
             amount_value,
             provider=payload.get("provider"),
             payment_method_id=payload.get("payment_method_id"),
+            preview_fingerprint=payload.get("preview_fingerprint"),
             redirect_url=str(request.url_for("customer_verify_topup")),
             idempotency_key=idempotency_key,
         )
@@ -2310,6 +2311,26 @@ def customer_create_topup_intent(
         )
         return JSONResponse({"detail": PAYMENT_START_ERROR_MESSAGE}, status_code=400)
 
+    return JSONResponse(content=jsonable_encoder(result))
+
+
+@router.post("/billing/topup/preview")
+def customer_preview_topup(
+    request: Request,
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Return the server-owned Deposit Account Credit allocation preview."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+    amount_value = payload.get("amount")
+    if amount_value is None:
+        return JSONResponse({"detail": "amount is required"}, status_code=400)
+    try:
+        result = customer_portal.preview_topup(db, customer, amount_value)
+    except (ValueError, HTTPException) as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
     return JSONResponse(content=jsonable_encoder(result))
 
 

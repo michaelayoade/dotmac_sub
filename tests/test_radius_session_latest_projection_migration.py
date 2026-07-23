@@ -8,6 +8,9 @@ from alembic.script import ScriptDirectory
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATION = ROOT / "alembic/versions/408_radius_session_latest_projection.py"
+VALIDATION_MIGRATION = (
+    ROOT / "alembic/versions/410_validate_radius_session_latest_index.py"
+)
 
 
 def _module():
@@ -28,13 +31,21 @@ def test_radius_session_projection_remains_in_the_single_migration_chain() -> No
 
     assert module.revision == "408_radius_session_latest_projection"
     assert module.down_revision == "407_retire_parallel_radius_refresh"
-    assert script.get_heads() == ["409_tr069_operation_lifecycle"]
+    assert script.get_heads() == ["411_uisp_olt_config_pack_exemption"]
 
 
 def test_radius_session_projection_uses_nonblocking_postgres_ddl() -> None:
     source = MIGRATION.read_text(encoding="utf-8")
 
-    assert "CREATE INDEX CONCURRENTLY IF NOT EXISTS" in source
-    assert "DROP INDEX CONCURRENTLY IF EXISTS" in source
+    assert "ensure_postgres_index(bind, op.execute)" in source
+    assert "CREATE INDEX CONCURRENTLY IF NOT EXISTS" not in source
     assert "autocommit_block()" in source
-    assert "COALESCE(last_update_at, session_start, created_at)" in source
+
+
+def test_forward_revision_validates_databases_already_stamped_408() -> None:
+    source = VALIDATION_MIGRATION.read_text(encoding="utf-8")
+
+    assert 'revision = "410_validate_radius_session_latest_index"' in source
+    assert 'down_revision = "409_tr069_operation_lifecycle"' in source
+    assert "ensure_postgres_index(bind, op.execute)" in source
+    assert "autocommit_block()" in source

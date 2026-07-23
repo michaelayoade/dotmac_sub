@@ -206,6 +206,8 @@ do not hand-edit these rows.
 | `financial.prepaid_enforcement_state` | prepaid low-balance timer state | `authoritative_record` | resolved prepaid enforcement transition ← `financial.prepaid_enforcement`<br>canonical prepaid enforcement timers ← `financial.prepaid_enforcement_state` | `participant` | `complete` | billing operations | `docs/FINANCIAL_ACCESS_ENFORCEMENT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_prepaid_enforcement_state_owner.py`<br>`tests/architecture/test_prepaid_enforcement_state_boundary.py`<br>`tests/test_prepaid_balance_sweep.py`<br>`tests/test_account_lifecycle.py` |
 | `financial.prepaid_enforcement_state` | prepaid deactivation timer state | `authoritative_record` | resolved prepaid enforcement transition ← `financial.prepaid_enforcement`<br>canonical prepaid enforcement timers ← `financial.prepaid_enforcement_state` | `participant` | `complete` | billing operations | `docs/FINANCIAL_ACCESS_ENFORCEMENT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_prepaid_enforcement_state_owner.py`<br>`tests/architecture/test_prepaid_enforcement_state_boundary.py`<br>`tests/test_prepaid_balance_sweep.py`<br>`tests/test_account_lifecycle.py` |
 | `financial.prepaid_enforcement_state` | funded and terminal prepaid timer cleanup | `command_writer` | resolved prepaid enforcement transition ← `financial.prepaid_enforcement`<br>resolved account lifecycle transition ← `access.subscription_lifecycle`<br>canonical prepaid enforcement timers ← `financial.prepaid_enforcement_state` | `participant` | `complete` | billing operations | `docs/FINANCIAL_ACCESS_ENFORCEMENT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_prepaid_enforcement_state_owner.py`<br>`tests/architecture/test_prepaid_enforcement_state_boundary.py`<br>`tests/test_prepaid_balance_sweep.py`<br>`tests/test_account_lifecycle.py` |
+| `financial.prepaid_draft_reconciliation` | stranded prepaid draft classification | `resolver` | canonical prepaid draft invoice ← `financial.invoices`<br>canonical payment-backed account credit ← `financial.account_credit_applications`<br>canonical funded service entitlement ← `financial.prepaid_service_renewals`<br>canonical direct-renewal debit ← `financial.prepaid_service_renewals` | `owner_managed` | `cut_over` | billing operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/FINANCIAL_ACCESS_ENFORCEMENT.md`<br>`docs/designs/PREPAID_DRAFT_RECONCILIATION.md`<br>`tests/test_prepaid_draft_reconciliation.py`<br>`tests/test_prepaid_service_renewals.py`<br>`tests/architecture/test_prepaid_draft_reconciliation_ownership.py` |
+| `financial.prepaid_draft_reconciliation` | stranded prepaid draft invoice reconciliation | `reconciler` | reviewed reconciliation command ← `financial.prepaid_draft_reconciliation`<br>canonical prepaid draft invoice ← `financial.invoices`<br>canonical payment-backed account credit ← `financial.account_credit_applications`<br>canonical funded service entitlement ← `financial.prepaid_service_renewals`<br>canonical direct-renewal debit ← `financial.prepaid_service_renewals`<br>invoice and payment participant protocols ← `financial.invoices` | `owner_managed` | `cut_over` | billing operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/FINANCIAL_ACCESS_ENFORCEMENT.md`<br>`docs/designs/PREPAID_DRAFT_RECONCILIATION.md`<br>`tests/test_prepaid_draft_reconciliation.py`<br>`tests/test_prepaid_service_renewals.py`<br>`tests/architecture/test_prepaid_draft_reconciliation_ownership.py` |
 | `financial.access_resolution` | billable service classification | `policy` | canonical subscriber account state ← `customer.accounts`<br>canonical subscription lifecycle state ← `access.subscription_lifecycle`<br>canonical billing profile ← `financial.billing_profile` | `read_only` | `complete` | billing and network access | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/audits/BILLING_SOT_AUDIT_2026-07-12.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_access_resolution.py`<br>`tests/test_customer_service_state.py`<br>`tests/test_prepaid_threshold_resolver.py`<br>`tests/architecture/test_access_resolution_boundary.py` |
 | `financial.access_resolution` | RADIUS access decision | `policy` | canonical subscriber account state ← `customer.accounts`<br>canonical subscription lifecycle state ← `access.subscription_lifecycle`<br>canonical access restriction intent ← `access.walled_garden_policy` | `read_only` | `complete` | billing and network access | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/audits/BILLING_SOT_AUDIT_2026-07-12.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_access_resolution.py`<br>`tests/test_customer_service_state.py`<br>`tests/test_prepaid_threshold_resolver.py`<br>`tests/architecture/test_access_resolution_boundary.py` |
 | `financial.access_resolution` | financial suspension/restoration eligibility | `policy` | canonical subscriber account state ← `customer.accounts`<br>canonical subscription lifecycle state ← `access.subscription_lifecycle`<br>canonical billing profile ← `financial.billing_profile`<br>currency-bound customer financial position ← `customer.financial_position`<br>canonical prepaid threshold ← `financial.prepaid_threshold` | `read_only` | `complete` | billing and network access | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/audits/BILLING_SOT_AUDIT_2026-07-12.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_access_resolution.py`<br>`tests/test_customer_service_state.py`<br>`tests/test_prepaid_threshold_resolver.py`<br>`tests/architecture/test_access_resolution_boundary.py` |
@@ -3369,6 +3371,15 @@ Network access:
    `access.radius_target_registry`. Blocked/suspended users get a walled-garden
    `radreply` rather than row deletion, so suspension takes effect at the BNG
    without losing the captive pay-page treatment.
+   It also owns the placement of per-login concurrency policy:
+   `Simultaneous-Use` is a FreeRADIUS check/control attribute in `radcheck`, not
+   a NAS reply attribute in `radreply`. The database setting
+   `radius.simultaneous_use_enforcement_enabled` is the cutover gate and
+   defaults off until stale `radacct` ghosts and genuine shared credentials
+   have been reviewed. Once enabled, the permanent drift detector identifies
+   missing/stale check rows and misplaced reply rows and requests this same
+   writer to rebuild them. `radacct` is observed session evidence only; it does
+   not own the customer, service, credential, or concurrency decision.
 8. `access.session_enforcement`: applies CoA/disconnect outcomes.
 
 Rule: billing, FUP, and admin actions resolve the desired access outcome once,
@@ -3384,8 +3395,9 @@ suppress downstream CoA. The closed boundary is pinned by
 
 RADIUS schema names and target capabilities are configuration owned by each
 `ConnectorConfig`; access-group names, priorities, address-list names, and
-enforcement reconciler thresholds are database settings. Code defaults are
-bootstrap values only, not parallel runtime policy.
+enforcement reconciler thresholds and the simultaneous-session cutover gate are
+database settings. Code defaults are bootstrap values only, not parallel
+runtime policy.
 
 Service intent:
 

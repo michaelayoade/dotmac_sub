@@ -238,7 +238,7 @@ def test_topup_initiate_403_for_non_subscriber():
 
     with pytest.raises(HTTPException) as exc:
         me_api.my_topup_initiate(
-            TopupInitiateRequest(amount=5000),
+            TopupInitiateRequest(amount=5000, preview_fingerprint="x" * 64),
             db=None,
             principal=_system_user_principal(),
         )
@@ -277,7 +277,7 @@ def test_topup_initiate_translates_value_error(monkeypatch):
     monkeypatch.setattr(me_api.customer_payments, "create_topup_intent", _boom)
     with pytest.raises(HTTPException) as exc:
         me_api.my_topup_initiate(
-            TopupInitiateRequest(amount=1),
+            TopupInitiateRequest(amount=1, preview_fingerprint="x" * 64),
             db=None,
             principal=_subscriber_principal(),
         )
@@ -308,6 +308,7 @@ def test_topup_initiate_400_with_friendly_saved_card_charge_error(monkeypatch):
                 amount=Decimal("5000"),
                 payment_method_id=uuid.uuid4(),
                 idempotency_key="idem-1",
+                preview_fingerprint="x" * 64,
             ),
             db=None,
             principal=_subscriber_principal(),
