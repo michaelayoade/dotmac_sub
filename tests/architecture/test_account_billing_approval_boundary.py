@@ -3,6 +3,12 @@
 from pathlib import Path
 
 from app.services.scheduler import PERMANENT_CUSTOMER_LIFECYCLE_TASKS
+from app.services.task_reliability import (
+    TASK_RELIABILITY_CONTRACTS,
+    FailureVisibility,
+    Idempotency,
+    RetryPolicy,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -36,6 +42,16 @@ def test_drift_reconciler_is_permanent_and_not_flag_gated() -> None:
     task_index = scheduler.index(f'task_name="{task_name}"')
     block = scheduler[task_index - 200 : task_index + 200]
     assert "enabled=True" in block
+
+
+def test_drift_reconciler_retries_by_guarded_per_item_beat_pass() -> None:
+    contract = TASK_RELIABILITY_CONTRACTS[
+        "app.tasks.enforcement.reconcile_billing_approval_drift"
+    ]
+
+    assert contract.retry_policy is RetryPolicy.BEAT_RERUN
+    assert contract.idempotency is Idempotency.PER_ITEM_GUARDED
+    assert contract.failure_visibility is FailureVisibility.LOG_ONLY
 
 
 def test_billing_approval_owner_is_the_only_explicit_runtime_field_writer() -> None:
