@@ -99,4 +99,3 @@ old executable path or replay ambiguous ACS work. Keep producers stopped,
 preserve the operation/job evidence, and perform a reviewed fix-forward. Treat
 every running, pending, or unverified command as potentially delivered until
 current device state proves otherwise.
-
