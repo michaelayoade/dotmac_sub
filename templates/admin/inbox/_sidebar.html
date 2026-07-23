@@ -1,0 +1,225 @@
+{% from "components/ui/triage.html" import conversation_list_item %}
+{% from "components/ui/list_macros.html" import list_pagination %}
+
+<div class="flex min-h-0 flex-1 flex-col" data-inbox-sidebar-content>
+    <header class="border-b border-slate-200 px-3 py-3 dark:border-slate-800">
+        <div class="flex items-center gap-2">
+            <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-amber-400 to-orange-600 text-white shadow-sm" aria-hidden="true">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h8m-8 4h5m8-2a9 9 0 11-4.5-7.8L21 3v5h-5"/>
+                </svg>
+            </div>
+            <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-2">
+                    <h1 class="truncate font-display text-base font-semibold text-slate-950 dark:text-white">Inbox</h1>
+                    <span class="inline-flex min-w-5 items-center justify-center rounded-lg bg-amber-100 px-1.5 py-0.5 text-[11px] font-bold tabular-nums text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">{{ operator_unread_count }}</span>
+                </div>
+                <p class="flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400" aria-live="polite">
+                    <span class="h-2 w-2 rounded-full" :class="realtimeConnected ? 'bg-emerald-500' : 'bg-slate-400'"></span>
+                    <span x-text="realtimeConnected ? 'Live updates' : 'Offline · polling'">Offline · polling</span>
+                </p>
+            </div>
+            <button type="button" @click="openNewConversation()" class="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-amber-500 text-white hover:bg-amber-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:ring-offset-2" aria-label="Start new conversation" title="New conversation">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+            </button>
+            <button type="button" @click="toggleSound()" class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800" :aria-pressed="soundEnabled.toString()" :title="soundEnabled ? 'Turn notification sound off' : 'Turn notification sound on'">
+                <svg x-show="soundEnabled" class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5L6 9H3v6h3l5 4V5zm4.5 4.5a4 4 0 010 5m2.5-8a8 8 0 010 11"/></svg>
+                <svg x-show="!soundEnabled" x-cloak class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5L6 9H3v6h3l5 4V5zm5 5l4 4m0-4l-4 4"/></svg>
+            </button>
+            <a href="/admin/settings" class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800" aria-label="Inbox settings" title="Settings">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.3 2.8l.5 1.7a7.8 7.8 0 012.4 0l.5-1.7 2.1.9-.8 1.6a8 8 0 011.7 1.7l1.6-.8.9 2.1-1.7.5a7.8 7.8 0 010 2.4l1.7.5-.9 2.1-1.6-.8a8 8 0 01-1.7 1.7l.8 1.6-2.1.9-.5-1.7a7.8 7.8 0 01-2.4 0l-.5 1.7-2.1-.9.8-1.6A8 8 0 017.3 13l-1.6.8-.9-2.1 1.7-.5a7.8 7.8 0 010-2.4l-1.7-.5.9-2.1 1.6.8A8 8 0 019 5.3l-.8-1.6 2.1-.9zM12 9a3 3 0 100 6 3 3 0 000-6z"/></svg>
+            </a>
+        </div>
+    </header>
+
+    <nav class="grid grid-cols-4 gap-px border-b border-slate-200 bg-slate-200 text-center dark:border-slate-800 dark:bg-slate-800" aria-label="Inbox summary filters">
+        <a href="/admin/inbox?open_only=true" hx-get="/admin/inbox?open_only=true{% if selected %}&conversation_id={{ selected.id }}{% endif %}" hx-target="#inbox-sidebar-content" hx-push-url="true" class="bg-white px-1 py-2 hover:bg-amber-50 dark:bg-slate-900 dark:hover:bg-slate-800"><strong class="block text-sm tabular-nums text-slate-900 dark:text-white">{{ queue_metrics.total_open }}</strong><span class="text-[9px] font-semibold uppercase text-slate-400">Open</span></a>
+        <a href="/admin/inbox?needs_response=true" hx-get="/admin/inbox?needs_response=true{% if selected %}&conversation_id={{ selected.id }}{% endif %}" hx-target="#inbox-sidebar-content" hx-push-url="true" class="bg-white px-1 py-2 hover:bg-amber-50 dark:bg-slate-900 dark:hover:bg-slate-800"><strong class="block text-sm tabular-nums text-amber-700 dark:text-amber-300">{{ queue_metrics.needs_response }}</strong><span class="text-[9px] font-semibold uppercase text-slate-400">Unreplied</span></a>
+        <a href="/admin/inbox?open_only=true&unassigned=true" hx-get="/admin/inbox?open_only=true&unassigned=true{% if selected %}&conversation_id={{ selected.id }}{% endif %}" hx-target="#inbox-sidebar-content" hx-push-url="true" class="bg-white px-1 py-2 hover:bg-amber-50 dark:bg-slate-900 dark:hover:bg-slate-800"><strong class="block text-sm tabular-nums text-slate-900 dark:text-white">{{ queue_metrics.unassigned_open }}</strong><span class="text-[9px] font-semibold uppercase text-slate-400">Unassigned</span></a>
+        <a href="/admin/inbox/reports/outbox-failures" class="bg-white px-1 py-2 hover:bg-rose-50 dark:bg-slate-900 dark:hover:bg-slate-800"><strong class="block text-sm tabular-nums {% if queue_metrics.failed_outbound %}text-rose-600{% else %}text-slate-900 dark:text-white{% endif %}">{{ queue_metrics.failed_outbound }}</strong><span class="text-[9px] font-semibold uppercase text-slate-400">Failed</span></a>
+    </nav>
+    <nav class="flex min-h-10 items-center gap-4 border-b border-slate-200 px-3 text-[11px] dark:border-slate-800" aria-label="Secondary inbox filters">
+        <a href="/admin/inbox?unread=true" class="font-medium text-slate-500 hover:text-amber-700">Unread <strong>{{ operator_unread_count }}</strong></a>
+        <a href="/admin/inbox?open_only=true&snoozed=true" class="font-medium text-slate-500 hover:text-amber-700">Snoozed <strong>{{ queue_metrics.snoozed_open }}</strong></a>
+        <a href="/admin/inbox?open_only=true&muted=true" class="font-medium text-slate-500 hover:text-amber-700">Muted <strong>{{ queue_metrics.muted_open }}</strong></a>
+    </nav>
+
+    <form id="inbox-filter-form" method="get" action="/admin/inbox"
+          hx-get="/admin/inbox" hx-target="#inbox-sidebar-content" hx-swap="innerHTML" hx-push-url="true"
+          class="border-b border-slate-200 p-3 dark:border-slate-800"
+          @submit="filterRequestStarted()">
+        {% if selected %}<input type="hidden" name="conversation_id" value="{{ selected.id }}">{% endif %}
+        <label class="relative block">
+            <span class="sr-only">Search conversations</span>
+            <svg class="pointer-events-none absolute left-3 top-3 h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z"/></svg>
+            <input type="search" name="search" value="{{ search }}" placeholder="Search name, subject or message"
+                   @input.debounce.300ms="$el.form.requestSubmit()"
+                   class="h-10 w-full rounded-lg border-slate-300 pl-9 pr-3 text-sm focus:border-amber-500 focus:ring-amber-500 dark:border-slate-700 dark:bg-slate-950 dark:text-white">
+        </label>
+
+        <button type="button" @click="filtersOpen = !filtersOpen; persistFilters()"
+                class="mt-2 flex min-h-10 w-full items-center justify-between rounded-lg px-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 dark:text-slate-200 dark:hover:bg-slate-800"
+                :aria-expanded="filtersOpen.toString()" aria-controls="inbox-stats-filters">
+            <span>Inbox Stats &amp; Filters</span>
+            <svg class="h-4 w-4 transition-transform" :class="filtersOpen && 'rotate-180'" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        </button>
+
+        <div id="inbox-stats-filters" x-show="filtersOpen" x-collapse x-cloak class="space-y-3 pt-2">
+            <fieldset>
+                <legend class="mb-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-400">Status</legend>
+                <div class="grid grid-cols-2 gap-1">
+                    {% for item in [
+                        ('All', '', count),
+                        ('Open', 'open', queue_metrics.total_open),
+                        ('Pending', 'pending', ''),
+                        ('Done', 'resolved', '')
+                    ] %}
+                    <button type="submit" name="status" value="{{ item[1] }}"
+                            class="flex min-h-10 items-center justify-between rounded-lg border px-2.5 text-xs font-semibold {% if status == item[1] and not open_only %}border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-200{% else %}border-slate-200 text-slate-600 hover:border-amber-200 hover:bg-amber-50/60 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800{% endif %}">
+                        <span>{{ item[0] }}</span><span class="tabular-nums">{{ item[2] }}</span>
+                    </button>
+                    {% endfor %}
+                    <button type="button" @click="showDemoNotice('Sent-to-ticket filtering')" class="flex min-h-10 items-center justify-between rounded-lg border border-dashed border-slate-300 px-2.5 text-xs font-semibold text-slate-500 dark:border-slate-700 dark:text-slate-400" title="Awaiting ticket-link query API">
+                        <span>Sent to ticket</span><span aria-hidden="true">—</span>
+                    </button>
+                </div>
+            </fieldset>
+
+            <fieldset>
+                <legend class="mb-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-400">Assignment</legend>
+                <div class="space-y-0.5">
+                    {% for item in [
+                        ('All', '', assignment_counts.all),
+                        ('Assigned to me', actor_person_id, assignment_counts.assigned_to_me),
+                        ('Unassigned', 'unassigned', assignment_counts.unassigned),
+                        ('Unreplied', 'unreplied', assignment_counts.unreplied),
+                        ('Needs attention', 'attention', assignment_counts.needs_attention)
+                    ] %}
+                    <button type="button"
+                            @click="applyAssignmentFilter('{{ item[1] }}')"
+                            class="flex min-h-10 w-full items-center justify-between rounded-lg px-2.5 text-xs font-medium text-slate-600 hover:bg-amber-50 hover:text-amber-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-amber-200">
+                        <span>{{ item[0] }}</span><span class="tabular-nums text-slate-400">{{ item[2] }}</span>
+                    </button>
+                    {% endfor %}
+                    <button type="button" @click="applyTeamFilter()" class="flex min-h-10 w-full items-center justify-between rounded-lg px-2.5 text-xs font-medium text-slate-600 hover:bg-amber-50 dark:text-slate-300 dark:hover:bg-slate-800">
+                        <span>My team</span><span class="tabular-nums text-slate-400">{{ assignment_counts.my_team }}</span>
+                    </button>
+                    <button type="button" @click="showDemoNotice('AI handling filter')" class="flex min-h-10 w-full items-center justify-between rounded-lg px-2.5 text-xs font-medium text-slate-600 hover:bg-amber-50 dark:text-slate-300 dark:hover:bg-slate-800">
+                        <span>AI handling</span><span class="tabular-nums text-slate-400">{{ assignment_counts.ai_handling }}</span>
+                    </button>
+                </div>
+            </fieldset>
+
+            <div class="grid grid-cols-2 gap-2">
+                <label class="text-[11px] font-medium text-slate-600 dark:text-slate-300">Channel
+                    <select name="channel_type" @change="$el.form.requestSubmit()" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-950 dark:text-white">
+                        <option value="">All accounts</option>
+                        {% for option in channel_options %}<option value="{{ option }}" {% if option == channel_type %}selected{% endif %}>{{ option | replace('_',' ') | title }}</option>{% endfor %}
+                    </select>
+                </label>
+                <label class="text-[11px] font-medium text-slate-600 dark:text-slate-300">Team
+                    <select name="service_team_id" @change="$el.form.requestSubmit()" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-950 dark:text-white">
+                        <option value="">All teams</option>
+                        {% for team in service_team_options %}<option value="{{ team.id }}" {% if team.id|string == service_team_id %}selected{% endif %}>{{ team.name }}</option>{% endfor %}
+                    </select>
+                </label>
+            </div>
+
+            <div>
+                <button type="button" @click="byAgentOpen = !byAgentOpen" class="flex min-h-10 w-full items-center justify-between rounded-lg border border-slate-200 px-2.5 text-xs font-semibold text-slate-600 dark:border-slate-700 dark:text-slate-300" :aria-expanded="byAgentOpen.toString()">
+                    <span>By agent</span><svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                </button>
+                <div x-show="byAgentOpen" x-cloak class="mt-2 grid grid-cols-2 gap-2">
+                    <select name="assigned_person_id" class="col-span-2 h-10 rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-950 dark:text-white">
+                        <option value="">Choose agent</option>
+                        {% for agent in agent_options %}<option value="{{ agent.id }}" {% if agent.id|string == assigned_person_id %}selected{% endif %}>{{ agent.name }}</option>{% endfor %}
+                    </select>
+                    <label class="text-[11px] text-slate-500">From<input type="date" data-demo-field class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-950"></label>
+                    <label class="text-[11px] text-slate-500">To<input type="date" data-demo-field class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-950"></label>
+                    <button type="submit" class="col-span-2 min-h-10 rounded-lg bg-amber-500 px-3 text-xs font-semibold text-white hover:bg-amber-600">Apply agent</button>
+                </div>
+            </div>
+
+            <div class="flex flex-wrap gap-2">
+                <label class="inline-flex min-h-10 items-center gap-2 rounded-lg border border-slate-200 px-2.5 text-xs text-slate-600 dark:border-slate-700 dark:text-slate-300"><input type="checkbox" name="needs_response" value="true" {% if needs_response %}checked{% endif %} @change="$el.form.requestSubmit()" class="rounded border-slate-300 text-amber-500 focus:ring-amber-500">Needs reply</label>
+                <label class="inline-flex min-h-10 items-center gap-2 rounded-lg border border-slate-200 px-2.5 text-xs text-slate-600 dark:border-slate-700 dark:text-slate-300"><input type="checkbox" name="unread" value="true" {% if unread %}checked{% endif %} @change="$el.form.requestSubmit()" class="rounded border-slate-300 text-amber-500 focus:ring-amber-500">Unread</label>
+                <a href="/admin/inbox" class="inline-flex min-h-10 items-center rounded-lg px-2.5 text-xs font-semibold text-slate-500 hover:text-amber-700">Clear</a>
+            </div>
+
+            <div class="border-t border-slate-200 pt-2 dark:border-slate-800">
+                <div class="flex items-center justify-between">
+                    <span class="text-[10px] font-bold uppercase tracking-wide text-slate-400">Saved views</span>
+                    <button type="button" @click="savedViewOpen = !savedViewOpen" class="min-h-10 px-2 text-xs font-semibold text-amber-700 dark:text-amber-300">Save current</button>
+                </div>
+                <div x-show="savedViewOpen" x-cloak class="mb-2 flex gap-2">
+                    <input type="text" x-model="savedViewName" placeholder="View name" class="h-10 min-w-0 flex-1 rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-950">
+                    <button type="button" @click="saveCurrentView()" class="min-h-10 rounded-lg bg-slate-900 px-3 text-xs font-semibold text-white dark:bg-white dark:text-slate-900">Save</button>
+                </div>
+                <div class="flex flex-wrap gap-1.5">
+                    {% for view in saved_filters %}
+                    <span class="inline-flex min-h-10 items-center overflow-hidden rounded-lg bg-slate-100 dark:bg-slate-800">
+                        <button type="button" @click='applySavedView({{ view.filter_payload | tojson }})' class="min-h-10 px-2.5 text-xs font-medium text-slate-700 hover:bg-amber-50 dark:text-slate-200 dark:hover:bg-slate-700">{{ view.name }}</button>
+                        {% if view.owner_person_id == actor_person_id %}
+                        <form method="post" action="/admin/inbox/filters/{{ view.id }}/delete" class="contents" onsubmit="return confirm('Delete this saved view?')">
+                            <button type="submit" class="min-h-10 border-l border-slate-200 px-2 text-xs text-slate-400 hover:bg-rose-50 hover:text-rose-600 dark:border-slate-700" aria-label="Delete saved view {{ view.name }}">✕</button>
+                        </form>
+                        {% endif %}
+                    </span>
+                    {% else %}
+                    <span class="text-xs text-slate-400">No saved views yet.</span>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </form>
+
+    <form id="inbox-bulk-form" method="post" action="/admin/inbox/bulk" class="contents">
+        <div x-show="selectedIds.length" x-cloak class="border-b border-amber-200 bg-amber-50 p-2.5 dark:border-amber-800 dark:bg-amber-950/30">
+            <div class="mb-2 flex items-center justify-between">
+                <p class="text-xs font-semibold text-amber-900 dark:text-amber-100"><span x-text="selectedIds.length"></span> selected</p>
+                <button type="button" @click="clearSelection()" class="min-h-10 px-2 text-xs font-semibold text-amber-800 dark:text-amber-200">Clear</button>
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+                <select name="action" x-model="bulkAction" class="h-10 rounded-lg border-amber-300 text-xs dark:border-amber-700 dark:bg-slate-950">
+                    <option value="status">Change status</option>
+                    <option value="priority">Change priority</option>
+                    <option value="label">Apply label</option>
+                    <option value="escalate">Assign</option>
+                </select>
+                <select x-show="bulkAction === 'status'" name="status_value" class="h-10 rounded-lg border-amber-300 text-xs dark:border-amber-700 dark:bg-slate-950">
+                    {% for option in status_options %}<option value="{{ option }}">{{ option | title }}</option>{% endfor %}
+                </select>
+                <select x-show="bulkAction === 'label'" name="label_id" class="h-10 rounded-lg border-amber-300 text-xs dark:border-amber-700 dark:bg-slate-950">
+                    {% for label in label_options %}<option value="{{ label.id }}">{{ label.name }}</option>{% endfor %}
+                </select>
+                <select x-show="bulkAction === 'priority'" name="priority" class="h-10 rounded-lg border-amber-300 text-xs dark:border-amber-700 dark:bg-slate-950">
+                    <option value="100">None</option><option value="75">Low</option><option value="50">Medium</option><option value="25">High</option><option value="0">Urgent</option>
+                </select>
+                <select x-show="bulkAction === 'escalate'" name="service_team_id" class="h-10 rounded-lg border-amber-300 text-xs dark:border-amber-700 dark:bg-slate-950">
+                    {% for team in service_team_options %}<option value="{{ team.id }}">{{ team.name }}</option>{% endfor %}
+                </select>
+                <button type="submit" class="col-span-2 min-h-10 rounded-lg bg-amber-500 px-3 text-xs font-semibold text-white hover:bg-amber-600">Apply bulk action</button>
+            </div>
+        </div>
+
+        <div class="flex-1 overflow-y-auto overscroll-contain" data-conversation-list aria-label="Conversations">
+            {% if rows %}
+                {% for row in rows %}{{ conversation_list_item(row, active_id=(selected.id if selected else ""), agent_options=agent_options) }}{% endfor %}
+            {% else %}
+                <div class="px-6 py-14 text-center">
+                    <div class="mx-auto flex h-11 w-11 items-center justify-center rounded-lg bg-slate-100 text-slate-400 dark:bg-slate-800">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h8m-8 4h5m8-2a9 9 0 11-4.5-7.8L21 3v5h-5"/></svg>
+                    </div>
+                    <p class="mt-3 text-sm font-semibold text-slate-700 dark:text-slate-200">No matching conversations</p>
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Try clearing a filter or searching another identifier.</p>
+                </div>
+            {% endif %}
+        </div>
+    </form>
+
+    {% if rows %}
+    <div class="border-t border-slate-200 px-3 py-2 dark:border-slate-800">
+        {{ list_pagination(list_query, page_meta, '/admin/inbox', entity='conversations') }}
+    </div>
+    {% endif %}
+</div>

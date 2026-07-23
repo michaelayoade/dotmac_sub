@@ -1,0 +1,101 @@
+<div x-show="newConversationOpen" x-cloak class="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/55 p-4" @click.self="closeOverlays()" role="presentation">
+    <section x-ref="newConversationDialog" x-trap.noscroll.inert="newConversationOpen" role="dialog" aria-modal="true" aria-labelledby="new-conversation-title" class="flex max-h-[calc(100vh-2rem)] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900">
+        <header class="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+            <div>
+                <h2 id="new-conversation-title" class="font-display text-lg font-semibold text-slate-950 dark:text-white">New conversation</h2>
+                <p class="text-xs text-slate-500">Demo state — ready to map to the start-conversation API.</p>
+            </div>
+            <button type="button" @click="newConversationOpen = false" class="inline-flex h-10 w-10 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 dark:hover:bg-slate-800" aria-label="Close new conversation">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+        </header>
+        <form @submit.prevent="submitDemoConversation()" class="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
+            <div class="grid gap-4 sm:grid-cols-2">
+                <label class="text-xs font-semibold text-slate-700 dark:text-slate-200">Channel
+                    <select x-model="newConversation.channel" class="mt-1 h-11 w-full rounded-lg border-slate-300 text-sm focus:border-amber-500 focus:ring-amber-500 dark:border-slate-700 dark:bg-slate-950">
+                        <option value="email">Email</option><option value="whatsapp">WhatsApp</option><option value="sms">SMS</option><option value="telegram">Telegram</option><option value="webchat">Webchat</option>
+                    </select>
+                </label>
+                <label class="text-xs font-semibold text-slate-700 dark:text-slate-200">Sending inbox
+                    <select x-model="newConversation.inbox" class="mt-1 h-11 w-full rounded-lg border-slate-300 text-sm focus:border-amber-500 focus:ring-amber-500 dark:border-slate-700 dark:bg-slate-950">
+                        <option value="support">Dotmac Support</option><option value="billing">Billing Helpdesk</option>
+                    </select>
+                </label>
+            </div>
+            <label class="block text-xs font-semibold text-slate-700 dark:text-slate-200">Contact or recipient
+                <input x-model.trim="newConversation.recipient" required placeholder="Name, email address or phone number" class="mt-1 h-11 w-full rounded-lg border-slate-300 text-sm focus:border-amber-500 focus:ring-amber-500 dark:border-slate-700 dark:bg-slate-950">
+            </label>
+            <template x-if="newConversation.channel === 'email'">
+                <div class="space-y-4">
+                    <label class="block text-xs font-semibold text-slate-700 dark:text-slate-200">Subject<input x-model.trim="newConversation.subject" required class="mt-1 h-11 w-full rounded-lg border-slate-300 text-sm focus:border-amber-500 focus:ring-amber-500 dark:border-slate-700 dark:bg-slate-950"></label>
+                    <div class="grid gap-4 sm:grid-cols-2">
+                        <label class="text-xs font-semibold text-slate-700 dark:text-slate-200">CC<input x-model.trim="newConversation.cc" type="email" class="mt-1 h-11 w-full rounded-lg border-slate-300 text-sm dark:border-slate-700 dark:bg-slate-950"></label>
+                        <label class="text-xs font-semibold text-slate-700 dark:text-slate-200">BCC<input x-model.trim="newConversation.bcc" type="email" class="mt-1 h-11 w-full rounded-lg border-slate-300 text-sm dark:border-slate-700 dark:bg-slate-950"></label>
+                    </div>
+                </div>
+            </template>
+            <template x-if="newConversation.channel === 'whatsapp'">
+                <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-3 dark:border-emerald-800 dark:bg-emerald-950/20">
+                    <label class="block text-xs font-semibold text-emerald-900 dark:text-emerald-200">Approved template
+                        <select x-model="newConversation.template" required class="mt-1 h-11 w-full rounded-lg border-emerald-300 bg-white text-sm dark:border-emerald-700 dark:bg-slate-950">
+                            <option value="">Choose approved template</option><option value="service_update">Service update</option><option value="support_followup">Support follow-up</option>
+                        </select>
+                    </label>
+                    <p class="mt-2 text-xs text-emerald-700 dark:text-emerald-300">Template parameters will appear here when the provider API is mapped.</p>
+                </div>
+            </template>
+            <label class="block text-xs font-semibold text-slate-700 dark:text-slate-200">Message
+                <textarea x-model.trim="newConversation.body" required rows="6" class="mt-1 w-full rounded-lg border-slate-300 text-sm focus:border-amber-500 focus:ring-amber-500 dark:border-slate-700 dark:bg-slate-950"></textarea>
+            </label>
+            <label class="flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 px-3 text-sm font-medium text-slate-600 hover:border-amber-400 hover:bg-amber-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
+                <input type="file" multiple class="sr-only" @change="stageNewConversationFiles($event)">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v14m-7-7h14"/></svg> Add attachments
+            </label>
+            <div x-show="newConversation.files.length" class="flex flex-wrap gap-2">
+                <template x-for="file in newConversation.files" :key="file.name"><span class="rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs text-slate-600 dark:bg-slate-800 dark:text-slate-300" x-text="file.name"></span></template>
+            </div>
+            <p x-show="newConversation.error" x-text="newConversation.error" class="text-sm font-medium text-rose-600" role="alert"></p>
+            <div class="flex justify-end gap-2 border-t border-slate-200 pt-4 dark:border-slate-800">
+                <button type="button" @click="newConversationOpen = false" class="min-h-11 rounded-lg border border-slate-300 px-4 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200">Cancel</button>
+                <button type="submit" class="min-h-11 rounded-lg bg-gradient-to-r from-amber-500 to-orange-600 px-5 text-sm font-semibold text-white hover:from-amber-600 hover:to-orange-700">Create conversation</button>
+            </div>
+        </form>
+    </section>
+</div>
+
+<div x-show="ticketPanelOpen" x-cloak class="fixed inset-0 z-[55] bg-slate-950/40" @click.self="ticketPanelOpen = false">
+    <section x-trap.noscroll="ticketPanelOpen" role="dialog" aria-modal="true" aria-labelledby="ticket-panel-title" class="absolute inset-y-0 right-0 flex w-[min(100vw,480px)] flex-col bg-white shadow-2xl dark:bg-slate-900">
+        <header class="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+            <div><h2 id="ticket-panel-title" class="font-display text-base font-semibold text-slate-950 dark:text-white">Create support ticket</h2><p class="text-xs text-slate-500">Conversation remains visible behind this panel.</p></div>
+            <button type="button" @click="ticketPanelOpen = false" class="inline-flex h-10 w-10 items-center justify-center rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800" aria-label="Close ticket panel">✕</button>
+        </header>
+        <form @submit.prevent="submitDemoTicket()" class="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
+            <div class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/20 dark:text-amber-200">Preview form. The support-ticket create API will replace this demo adapter.</div>
+            <label class="block text-xs font-semibold">Title<input x-model.trim="ticketDraft.title" required class="mt-1 h-11 w-full rounded-lg border-slate-300 dark:border-slate-700 dark:bg-slate-950"></label>
+            <label class="block text-xs font-semibold">Priority<select x-model="ticketDraft.priority" class="mt-1 h-11 w-full rounded-lg border-slate-300 dark:border-slate-700 dark:bg-slate-950"><option>Low</option><option>Medium</option><option>High</option><option>Urgent</option></select></label>
+            <label class="block text-xs font-semibold">Description<textarea x-model.trim="ticketDraft.description" rows="8" required class="mt-1 w-full rounded-lg border-slate-300 dark:border-slate-700 dark:bg-slate-950"></textarea></label>
+            <button type="submit" class="min-h-11 w-full rounded-lg bg-amber-500 px-4 text-sm font-semibold text-white hover:bg-amber-600">Create demo ticket</button>
+        </form>
+    </section>
+</div>
+
+<div x-show="commandPaletteOpen" x-cloak class="fixed inset-0 z-[65] flex items-start justify-center bg-slate-950/55 p-4 pt-[12vh]" @click.self="commandPaletteOpen = false">
+    <section x-trap.noscroll="commandPaletteOpen" role="dialog" aria-modal="true" aria-labelledby="command-palette-title" class="w-full max-w-xl overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900">
+        <h2 id="command-palette-title" class="sr-only">Inbox command palette</h2>
+        <label class="flex items-center gap-3 border-b border-slate-200 px-4 dark:border-slate-800"><span aria-hidden="true">⌘</span><input x-ref="commandSearch" x-model="commandQuery" placeholder="Search inbox commands…" class="h-14 w-full border-0 bg-transparent text-sm focus:ring-0 dark:text-white"></label>
+        <div class="max-h-80 overflow-y-auto p-2">
+            <template x-for="command in filteredCommands()" :key="command.id">
+                <button type="button" @click="runCommand(command.id)" class="flex min-h-11 w-full items-center justify-between rounded-lg px-3 text-left text-sm font-medium text-slate-700 hover:bg-amber-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 dark:text-slate-200 dark:hover:bg-slate-800"><span x-text="command.label"></span><kbd class="text-xs text-slate-400" x-text="command.shortcut"></kbd></button>
+            </template>
+        </div>
+    </section>
+</div>
+
+<div x-show="shortcutHelpOpen" x-cloak class="fixed inset-0 z-[65] flex items-center justify-center bg-slate-950/55 p-4" @click.self="shortcutHelpOpen = false">
+    <section x-trap.noscroll="shortcutHelpOpen" role="dialog" aria-modal="true" aria-labelledby="shortcut-help-title" class="w-full max-w-md rounded-xl border border-slate-200 bg-white p-5 shadow-2xl dark:border-slate-700 dark:bg-slate-900">
+        <div class="flex items-center justify-between"><h2 id="shortcut-help-title" class="font-display text-lg font-semibold">Keyboard shortcuts</h2><button type="button" @click="shortcutHelpOpen = false" class="h-10 w-10 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800" aria-label="Close shortcut help">✕</button></div>
+        <dl class="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-3 text-sm">
+            <dt><kbd>r</kbd></dt><dd>Focus reply composer</dd><dt><kbd>e</kbd></dt><dd>Resolve conversation</dd><dt><kbd>j / k</kbd></dt><dd>Next / previous conversation</dd><dt><kbd>Ctrl/⌘ K</kbd></dt><dd>Command palette</dd><dt><kbd>?</kbd></dt><dd>Show this help</dd><dt><kbd>Esc</kbd></dt><dd>Close current overlay</dd>
+        </dl>
+    </section>
+</div>

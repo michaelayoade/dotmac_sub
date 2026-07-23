@@ -7,9 +7,17 @@ from dataclasses import dataclass
 from enum import StrEnum
 from uuid import UUID
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.models.team_inbox import InboxChannelType, InboxConversationStatus
+from app.models.service_team import ServiceTeamMember
+from app.models.system_user import SystemUser
+from app.models.team_inbox import (
+    InboxChannelType,
+    InboxConversation,
+    InboxConversationStatus,
+    InboxConversationTeam,
+)
 from app.services import (
     subscriber_summary,
     team_inbox_contact_links,
@@ -110,6 +118,21 @@ class InboxActionEligibility:
 
 
 @dataclass(frozen=True, slots=True)
+class InboxPriorityOption:
+    value: int
+    label: str
+
+
+INBOX_PRIORITY_OPTIONS = (
+    InboxPriorityOption(value=100, label="None"),
+    InboxPriorityOption(value=75, label="Low"),
+    InboxPriorityOption(value=50, label="Medium"),
+    InboxPriorityOption(value=25, label="High"),
+    InboxPriorityOption(value=0, label="Urgent"),
+)
+
+
+@dataclass(frozen=True, slots=True)
 class InboxConversationProjection:
     timeline: team_inbox_read.InboxConversationTimeline
     subscriber_summary: Mapping[str, object] | None
@@ -120,12 +143,31 @@ class InboxConversationProjection:
     template_options: tuple[team_inbox_operations.MessageTemplateOption, ...]
     action_eligibility: InboxActionEligibility
     is_unread: bool
+    priority_options: tuple[InboxPriorityOption, ...]
 
 
 @dataclass(frozen=True, slots=True)
 class InboxServiceTeamOption:
     id: UUID
     name: str
+
+
+@dataclass(frozen=True, slots=True)
+class InboxAgentOption:
+    id: UUID
+    name: str
+    initials: str
+
+
+@dataclass(frozen=True, slots=True)
+class InboxAssignmentCounts:
+    all: int
+    assigned_to_me: int
+    my_team: int
+    ai_handling: int
+    unassigned: int
+    unreplied: int
+    needs_attention: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,6 +191,8 @@ class InboxQueueProjection:
     unassigned: bool
     unread: bool
     service_team_options: tuple[InboxServiceTeamOption, ...]
+    agent_options: tuple[InboxAgentOption, ...]
+    assignment_counts: InboxAssignmentCounts
     status_options: tuple[str, ...]
     channel_options: tuple[str, ...]
     label_options: tuple[team_inbox_operations.LabelOption, ...]
@@ -165,6 +209,94 @@ def _uuid(value: object) -> UUID | None:
         return UUID(candidate)
     except (TypeError, ValueError, AttributeError):
         return None
+
+
+def _initials(first_name: str, last_name: str, display_name: str | None) -> str:
+    words = (display_name or f"{first_name} {last_name}").split()
+    return "".join(word[0] for word in words[:2] if word).upper() or "AG"
+
+
+def list_agent_options(db: Session) -> tuple[InboxAgentOption, ...]:
+    rows = (
+        db.query(SystemUser)
+        .join(ServiceTeamMember, ServiceTeamMember.person_id == SystemUser.id)
+        .filter(SystemUser.is_active.is_(True))
+        .filter(ServiceTeamMember.is_active.is_(True))
+        .distinct()
+        .order_by(SystemUser.first_name.asc(), SystemUser.last_name.asc())
+        .all()
+    )
+    return tuple(
+        InboxAgentOption(
+            id=row.id,
+            name=(
+                row.display_name
+                or f"{row.first_name} {row.last_name}".strip()
+                or row.email
+            ),
+            initials=_initials(row.first_name, row.last_name, row.display_name),
+        )
+        for row in rows
+    )
+
+
+def _assignment_counts(
+    db: Session,
+    *,
+    actor_person_id: UUID | None,
+    queue_metrics: team_inbox_operations.InboxQueueMetrics,
+) -> InboxAssignmentCounts:
+    all_count = team_inbox_read.list_conversations(db, limit=1).count
+    assigned_to_me = (
+        team_inbox_read.list_conversations(
+            db,
+            assigned_person_id=actor_person_id,
+            limit=1,
+        ).count
+        if actor_person_id is not None
+        else 0
+    )
+    my_team = 0
+    if actor_person_id is not None:
+        team_ids = [
+            row[0]
+            for row in db.query(ServiceTeamMember.team_id)
+            .filter(ServiceTeamMember.person_id == actor_person_id)
+            .filter(ServiceTeamMember.is_active.is_(True))
+            .all()
+        ]
+        if team_ids:
+            my_team = int(
+                db.query(func.count(func.distinct(InboxConversation.id)))
+                .join(
+                    InboxConversationTeam,
+                    InboxConversationTeam.conversation_id == InboxConversation.id,
+                )
+                .filter(InboxConversation.is_active.is_(True))
+                .filter(
+                    InboxConversation.status != InboxConversationStatus.resolved.value
+                )
+                .filter(InboxConversationTeam.is_active.is_(True))
+                .filter(InboxConversationTeam.service_team_id.in_(team_ids))
+                .scalar()
+                or 0
+            )
+    ai_handling = int(
+        db.query(func.count(InboxConversation.id))
+        .filter(InboxConversation.is_active.is_(True))
+        .filter(InboxConversation.metadata_["ai_handling"].as_boolean().is_(True))
+        .scalar()
+        or 0
+    )
+    return InboxAssignmentCounts(
+        all=all_count,
+        assigned_to_me=assigned_to_me,
+        my_team=my_team,
+        ai_handling=ai_handling,
+        unassigned=queue_metrics.unassigned_open,
+        unreplied=queue_metrics.needs_response,
+        needs_attention=queue_metrics.needs_response,
+    )
 
 
 def _candidate_terms(
@@ -256,6 +388,7 @@ def get_conversation_projection(
             if actor_person_id is not None
             else False
         ),
+        priority_options=INBOX_PRIORITY_OPTIONS,
     )
 
 
@@ -368,6 +501,7 @@ def build_queue_projection(
     list_query = requested_query.with_page(page_meta.page)
     if list_query.page != requested_query.page:
         result = fetch(list_query)
+    selected_id = _uuid(request.selected_conversation_id)
     canonical_url = None
     if request_needs_canonicalization(
         list_query,
@@ -394,8 +528,9 @@ def build_queue_projection(
         per_page=raw_per_page,
     ):
         canonical_url = list_query.url("/admin/inbox")
+        if selected_id is not None:
+            canonical_url = f"{canonical_url}&conversation_id={selected_id}"
 
-    selected_id = _uuid(request.selected_conversation_id)
     selected = (
         get_conversation_projection(
             db,
@@ -406,9 +541,10 @@ def build_queue_projection(
         else None
     )
     service_teams = team_inbox_metrics.active_service_team_options(db)
+    queue_metrics = team_inbox_operations.queue_metrics(db)
     return InboxQueueProjection(
         rows=tuple(result.items),
-        queue_metrics=team_inbox_operations.queue_metrics(db),
+        queue_metrics=queue_metrics,
         operator_unread_count=(
             team_inbox_read_state.unread_conversation_count(
                 db, person_id=request.actor_person_id
@@ -433,6 +569,12 @@ def build_queue_projection(
         unread=unread,
         service_team_options=tuple(
             InboxServiceTeamOption(id=team.id, name=team.name) for team in service_teams
+        ),
+        agent_options=list_agent_options(db),
+        assignment_counts=_assignment_counts(
+            db,
+            actor_person_id=request.actor_person_id,
+            queue_metrics=queue_metrics,
         ),
         status_options=tuple(item.value for item in InboxConversationStatus),
         channel_options=tuple(item.value for item in InboxChannelType),
