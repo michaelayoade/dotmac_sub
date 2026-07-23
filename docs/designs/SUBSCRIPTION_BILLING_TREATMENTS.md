@@ -24,6 +24,10 @@ customer self-service upgrades, downgrades, and cross-family migrations. A
 support/admin workflow may assign a genuinely free product under its separate
 eligibility policy; account-specific concessions use this treatment owner.
 
+`Subscriber.billing_enabled` is only account activation admission. Revoking it
+is an explicit account lifecycle command that disables billing, access, and
+non-terminal services. It cannot be used to keep active service unbilled.
+
 ## Authoritative records
 
 An arrangement records the subscription, account, authorized offer, treatment,

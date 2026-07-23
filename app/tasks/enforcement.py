@@ -21,6 +21,11 @@ def cleanup_subscription_block_sessions(
     )
 
 
+@celery_app.task(name="app.tasks.enforcement.reconcile_billing_approval_drift")
+def reconcile_billing_approval_drift() -> dict[str, int]:
+    return enforcement_scheduled.reconcile_billing_approval_drift()
+
+
 @celery_app.task(name="app.tasks.enforcement.detect_stale_overdue_locks")
 def detect_stale_overdue_locks() -> dict[str, int]:
     """Dry-run detector for stale ``overdue`` enforcement locks - accounts held

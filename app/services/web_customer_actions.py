@@ -53,6 +53,11 @@ from app.services import notification as notification_service
 from app.services import radius as radius_service
 from app.services import subscriber as subscriber_service
 from app.services import web_customer_lists as web_customer_lists_service
+from app.services.account_billing_approval import (
+    BILLING_APPROVAL_WRITE_SCOPE,
+    ChangeAccountBillingApprovalCommand,
+    change_account_billing_approval,
+)
 from app.services.account_lifecycle import compute_account_status, derive_account_status
 from app.services.branding_config import get_brand
 from app.services.bulk_actions import (
@@ -73,6 +78,7 @@ from app.services.customer_notification_policy import (
     quiet_hours_send_at,
     resolve_notification_category,
 )
+from app.services.db_session_adapter import db_session_adapter
 from app.services.integrations import whatsapp_capability
 from app.services.notification_template_conditions import (
     NotificationTemplateConditionError,
@@ -80,6 +86,7 @@ from app.services.notification_template_conditions import (
     normalize_conditions,
 )
 from app.services.notification_template_renderer import render_template_text
+from app.services.owner_commands import CommandContext
 from app.services.radius_access_state import (
     derive_access_state,
     set_subscription_access_state,
@@ -103,6 +110,35 @@ WHATSAPP_VARIABLE_CUSTOMER_FIELDS = {
 
 _DOUBLE_BRACE_PLACEHOLDER_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}")
 _SINGLE_BRACE_PLACEHOLDER_RE = re.compile(r"(?<!\{)\{\s*([a-zA-Z0-9_]+)\s*\}(?!\})")
+
+
+def _apply_billing_approval_command(
+    db: Session,
+    *,
+    account_id: UUID,
+    approved: bool,
+    actor_id: str | None,
+    reason: str,
+):
+    """Leave adapter reads, then submit one lifecycle-owned approval command."""
+    db_session_adapter.release_read_transaction(db)
+    command_id = uuid4()
+    context = CommandContext(
+        command_id=command_id,
+        correlation_id=command_id,
+        actor=f"user:{actor_id}" if actor_id else "service:admin_customer_profile",
+        scope=BILLING_APPROVAL_WRITE_SCOPE,
+        reason=reason,
+        idempotency_key=f"billing-approval:{account_id}:{approved}:{command_id}",
+    )
+    return change_account_billing_approval(
+        db,
+        ChangeAccountBillingApprovalCommand(
+            context=context,
+            account_id=account_id,
+            approved=approved,
+        ),
+    )
 
 
 def parse_json_object(value: str | None, field: str) -> dict | None:
@@ -799,7 +835,10 @@ def _normalize_bulk_updates(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def bulk_update_customers_from_payload(
-    db: Session, payload: dict[str, Any]
+    db: Session,
+    payload: dict[str, Any],
+    *,
+    actor_id: str | None = None,
 ) -> dict[str, object]:
     resolved = resolve_bulk_customer_scope(db, payload)
     if not resolved.customers:
@@ -827,6 +866,7 @@ def bulk_update_customers_from_payload(
         customers=resolved.customers,
         updates=updates,
         scope=resolved.scope,
+        actor_id=actor_id,
     )
     errors = result["errors"]
     if isinstance(errors, list):
@@ -849,6 +889,7 @@ def bulk_update_customers(
     customers: list[Subscriber],
     updates: dict[str, Any],
     scope: str,
+    actor_id: str | None = None,
 ) -> dict[str, object]:
     updated_count = 0
     updated_ids: list[str] = []
@@ -856,8 +897,18 @@ def bulk_update_customers(
 
     for subscriber in customers:
         try:
+            requested_billing_approval = updates.get("billing_enabled")
+            if requested_billing_approval is not None:
+                _apply_billing_approval_command(
+                    db,
+                    account_id=subscriber.id,
+                    approved=bool(requested_billing_approval),
+                    actor_id=actor_id,
+                    reason=f"Bulk customer billing approval update ({scope})",
+                )
+
             account_state = updates.get("account_state")
-            if account_state:
+            if account_state and requested_billing_approval is not False:
                 is_active = account_state == "active"
                 _apply_subscriber_activation_state(
                     db,
@@ -870,8 +921,6 @@ def bulk_update_customers(
                 subscriber.preferred_contact_method = updates[
                     "preferred_contact_method"
                 ]
-            if "billing_enabled" in updates:
-                subscriber.billing_enabled = bool(updates["billing_enabled"])
             if "billing_day" in updates:
                 subscriber.billing_day = updates["billing_day"]
             if "payment_due_days" in updates:
@@ -883,12 +932,13 @@ def bulk_update_customers(
             if "notes" in updates:
                 subscriber.notes = updates["notes"]
 
+            db.commit()
             updated_count += 1
             updated_ids.append(str(subscriber.id))
         except Exception as exc:
+            db.rollback()
             errors.append({"id": str(subscriber.id), "error": str(exc)})
 
-    db.commit()
     return {
         "success": True,
         "scope": scope,
@@ -2094,6 +2144,7 @@ def update_person_customer(
     tax_rate_id: str | None,
     payment_method: str | None,
     metadata_json: dict | None,
+    actor_id: str | None = None,
 ):
     raw_status = str(status or "").strip().lower()
     should_block_subscriptions = raw_status == "blocked"
@@ -2105,6 +2156,30 @@ def update_person_customer(
     normalized_status, active = _normalize_status_for_customer_edit(
         status, is_active=active
     )
+    billing_payload = _billing_override_payload(
+        billing_enabled_override=billing_enabled_override,
+        billing_day=billing_day,
+        payment_due_days=payment_due_days,
+        grace_period_days=grace_period_days,
+        min_balance=min_balance,
+        captive_redirect_enabled=captive_redirect_enabled,
+        tax_rate_id=tax_rate_id,
+        payment_method=payment_method,
+    )
+    requested_billing_approval = billing_payload.pop("billing_enabled", None)
+    if requested_billing_approval is True:
+        _apply_billing_approval_command(
+            db,
+            account_id=before.id,
+            approved=True,
+            actor_id=actor_id,
+            reason="Administrator approved account billing and service",
+        )
+    elif requested_billing_approval is False:
+        # Revocation owns the resulting account state. Do not let the generic
+        # profile form submit a contradictory active-state write first.
+        normalized_status = None
+        active = None
     data: dict[str, Any] = {
         "first_name": _require_text(first_name, "First name", max_length=80),
         "last_name": _require_text(last_name, "Last name", max_length=80),
@@ -2136,23 +2211,20 @@ def update_person_customer(
         data["metadata_"] = metadata_payload
     if bool((before.metadata_ or {}).get("nin_verified")) and data["nin"] != before.nin:
         data["nin"] = before.nin
-    data.update(
-        _billing_override_payload(
-            billing_enabled_override=billing_enabled_override,
-            billing_day=billing_day,
-            payment_due_days=payment_due_days,
-            grace_period_days=grace_period_days,
-            min_balance=min_balance,
-            captive_redirect_enabled=captive_redirect_enabled,
-            tax_rate_id=tax_rate_id,
-            payment_method=payment_method,
-        )
-    )
+    data.update(billing_payload)
     subscriber_service.subscribers.update(
         db=db,
         subscriber_id=customer_id,
         payload=SubscriberUpdate.model_validate(data),
     )
+    if requested_billing_approval is False:
+        _apply_billing_approval_command(
+            db,
+            account_id=before.id,
+            approved=False,
+            actor_id=actor_id,
+            reason="Administrator revoked account billing and service approval",
+        )
     if should_block_subscriptions:
         _suspend_customer_subscriptions(db, customer_id)
     after = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
@@ -2198,9 +2270,29 @@ def update_business_customer(
     captive_redirect_enabled: str | None,
     tax_rate_id: str | None,
     payment_method: str | None,
+    actor_id: str | None = None,
 ):
     before = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
     company_name = _require_text(name, "Business name", max_length=120)
+    billing_payload = _billing_override_payload(
+        billing_enabled_override=billing_enabled_override,
+        billing_day=billing_day,
+        payment_due_days=payment_due_days,
+        grace_period_days=grace_period_days,
+        min_balance=min_balance,
+        captive_redirect_enabled=captive_redirect_enabled,
+        tax_rate_id=tax_rate_id,
+        payment_method=payment_method,
+    )
+    requested_billing_approval = billing_payload.pop("billing_enabled", None)
+    if requested_billing_approval is True:
+        _apply_billing_approval_command(
+            db,
+            account_id=before.id,
+            approved=True,
+            actor_id=actor_id,
+            reason="Administrator approved account billing and service",
+        )
     payload = SubscriberUpdate.model_validate(
         {
             "company_name": company_name,
@@ -2211,16 +2303,7 @@ def update_business_customer(
             "website": _normalize_optional(website),
             "notes": _normalize_optional(org_notes),
             "category": SubscriberCategory.business.value,
-            **_billing_override_payload(
-                billing_enabled_override=billing_enabled_override,
-                billing_day=billing_day,
-                payment_due_days=payment_due_days,
-                grace_period_days=grace_period_days,
-                min_balance=min_balance,
-                captive_redirect_enabled=captive_redirect_enabled,
-                tax_rate_id=tax_rate_id,
-                payment_method=payment_method,
-            ),
+            **billing_payload,
         }
     )
     subscriber_service.subscribers.update(
@@ -2228,6 +2311,14 @@ def update_business_customer(
         subscriber_id=customer_id,
         payload=payload,
     )
+    if requested_billing_approval is False:
+        _apply_billing_approval_command(
+            db,
+            account_id=before.id,
+            approved=False,
+            actor_id=actor_id,
+            reason="Administrator revoked account billing and service approval",
+        )
     after = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
     if org_account_start_date:
         subscriber = db.get(Subscriber, customer_id)

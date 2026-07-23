@@ -63,3 +63,13 @@ def test_row_to_entry_interval_still_works():
     # interval schedule is a timedelta or anchored crontab, never None
     assert body["schedule"] is not None
     assert "expires" in body["options"]
+
+
+def test_row_to_entry_rejects_event_driven_transport():
+    task = _row(
+        task_name="app.tasks.radius_population.refresh_radius_from_subs",
+        schedule_type=ScheduleType.interval,
+        interval_seconds=900,
+    )
+
+    assert scheduler_config._scheduled_row_to_entry(task) is None

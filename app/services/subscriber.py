@@ -507,6 +507,10 @@ class Subscribers(ListResponseMixin):
         data = _normalize_subscriber_identity_fields(payload.model_dump())
         data = _apply_validated_lga(data, transport_errors=False)
         requested_status = data.pop("status", SubscriberStatus.active)
+        if not bool(data.get("billing_enabled", True)):
+            # Approval is an admission fact. An unapproved account may be
+            # prepared, but it cannot begin in an active lifecycle state.
+            requested_status = SubscriberStatus.new
         data.pop("is_active", None)
         category = data.pop("category", None)
         data.pop("organization_id", None)
@@ -608,6 +612,17 @@ class Subscribers(ListResponseMixin):
             )
             requested_status = data.pop("status", None)
             requested_is_active = data.pop("is_active", None)
+            requested_billing_approval = data.pop("billing_enabled", None)
+            if requested_billing_approval is not None and bool(
+                requested_billing_approval
+            ) != bool(subscriber.billing_enabled):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Billing approval is a lifecycle command; use the "
+                        "billing-approval endpoint."
+                    ),
+                )
             category = data.pop("category", None)
             data.pop("organization_id", None)
             for key, value in data.items():
@@ -1000,6 +1015,17 @@ class Subscribers(ListResponseMixin):
         updated_fields = list(data.keys())
         requested_status = data.pop("status", None)
         requested_is_active = data.pop("is_active", None)
+        requested_billing_approval = data.pop("billing_enabled", None)
+        if requested_billing_approval is not None and bool(
+            requested_billing_approval
+        ) != bool(subscriber.billing_enabled):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Billing approval is a lifecycle command; use the "
+                    "billing-approval endpoint."
+                ),
+            )
         category = data.pop("category", None)
         data.pop("organization_id", None)
         requested_billing_mode = data.get("billing_mode")

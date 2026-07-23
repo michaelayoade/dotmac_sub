@@ -11,7 +11,8 @@ logger = logging.getLogger(__name__)
 
 
 # Single-flight advisory-lock key for the RADIUS populate sweep. Two overlapping
-# refreshes (event-enqueued + the 15-min safety net) used to interleave their
+# refreshes (event-enqueued + reconciler-requested, or duplicate delivery) used
+# to interleave their
 # per-user DELETE+INSERT and orphan-cleanup, leaving a transient window where a
 # live user had no radcheck row (access-reject → session drop). This serializes
 # them: a second run that can't take the lock skips rather than fighting.

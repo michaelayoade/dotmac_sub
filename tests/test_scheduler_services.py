@@ -143,6 +143,26 @@ class TestScheduledTasksCreate:
             is None
         )
 
+    def test_rejects_periodic_event_driven_transport_task(self, db_session):
+        with pytest.raises(HTTPException) as exc_info:
+            scheduler_service.scheduled_tasks.create(
+                db_session,
+                ScheduledTaskCreate(
+                    name="parallel-radius-refresh",
+                    task_name=("app.tasks.radius_population.refresh_radius_from_subs"),
+                    interval_seconds=900,
+                ),
+            )
+
+        assert exc_info.value.status_code == 409
+        assert "cannot be scheduled independently" in exc_info.value.detail
+        assert (
+            db_session.query(ScheduledTask)
+            .filter_by(name="parallel-radius-refresh")
+            .one_or_none()
+            is None
+        )
+
 
 class TestScheduledTasksGet:
     """Tests for ScheduledTasks.get."""
@@ -338,6 +358,29 @@ class TestScheduledTasksUpdate:
         db_session.refresh(task)
         assert task.enabled is True
         assert task.task_name == "app.tasks.billing.run_invoice_cycle"
+
+    def test_rejects_renaming_enabled_row_to_event_transport(self, db_session):
+        task = scheduler_service.scheduled_tasks.create(
+            db_session,
+            ScheduledTaskCreate(
+                name="ordinary-periodic-task",
+                task_name="app.tasks.ordinary.run",
+                interval_seconds=900,
+            ),
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            scheduler_service.scheduled_tasks.update(
+                db_session,
+                str(task.id),
+                ScheduledTaskUpdate(
+                    task_name=("app.tasks.radius_population.refresh_radius_from_subs")
+                ),
+            )
+
+        assert exc_info.value.status_code == 409
+        db_session.refresh(task)
+        assert task.task_name == "app.tasks.ordinary.run"
 
 
 class TestScheduledTasksDelete:

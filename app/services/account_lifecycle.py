@@ -126,6 +126,22 @@ def is_terminal_status(status: SubscriptionStatus | None) -> bool:
     return status in _TERMINAL
 
 
+def _require_billing_approval(
+    db: Session,
+    *,
+    subscriber_id: str,
+) -> Subscriber:
+    """Fail closed before any transition that would provide active service."""
+    subscriber = db.get(Subscriber, subscriber_id)
+    if subscriber is None:
+        raise ValueError(f"Subscriber {subscriber_id} not found")
+    if not subscriber.billing_enabled:
+        raise ValueError(
+            "Account billing approval is required before service activation"
+        )
+    return subscriber
+
+
 def set_account_lifecycle_override(
     db: Session,
     subscriber_id: str,
@@ -190,6 +206,7 @@ def apply_requested_account_status(
             db, subscriber_id, reason=reason, source=source
         )
     if status == SubscriberStatus.active:
+        _require_billing_approval(db, subscriber_id=subscriber_id)
         has_subscription = (
             db.scalars(
                 select(Subscription.id)
@@ -445,6 +462,11 @@ def restore_subscription(
         )
         return False
 
+    _require_billing_approval(
+        db,
+        subscriber_id=str(subscription.subscriber_id),
+    )
+
     resolved_count, remaining = resolve_locks_for_trigger(
         db,
         subscription,
@@ -594,6 +616,11 @@ def activate_subscription(
         raise ValueError(
             f"Cannot activate subscription in status {subscription.status.value}"
         )
+
+    _require_billing_approval(
+        db,
+        subscriber_id=str(subscription.subscriber_id),
+    )
 
     # Sales-created service contracts are gated by the canonical provisioning
     # result.  Billing settlement may fund the pending Subscription, but it may
@@ -822,6 +849,7 @@ def disable_subscription(
     reason: str,
     source: str,
     emit: bool = True,
+    preserve_locks: bool = False,
 ) -> bool:
     """Pause billing and access while preserving service assignments.
 
@@ -840,7 +868,9 @@ def disable_subscription(
             f"Cannot disable subscription already in {subscription.status.value}"
         )
 
-    resolved_count = resolve_all_locks(db, subscription, "disabled")
+    resolved_count = (
+        0 if preserve_locks else resolve_all_locks(db, subscription, "disabled")
+    )
     previous_status = subscription.status
     subscription.status = SubscriptionStatus.disabled
     db.flush()
@@ -886,6 +916,39 @@ def enable_subscription(
     if subscription is None:
         raise ValueError(f"Subscription {subscription_id} not found")
     if subscription.status != SubscriptionStatus.disabled:
+        return False
+    _require_billing_approval(
+        db,
+        subscriber_id=str(subscription.subscriber_id),
+    )
+    active_locks = get_active_locks(db, subscription_id=str(subscription.id))
+    if active_locks:
+        subscription.status = SubscriptionStatus.suspended
+        db.flush()
+        compute_account_status(db, str(subscription.subscriber_id))
+        if emit:
+            emit_event(
+                db,
+                EventType.subscription_suspended,
+                {
+                    "subscription_id": str(subscription.id),
+                    "reason": "active_enforcement_lock",
+                    "source": source,
+                    "from_status": SubscriptionStatus.disabled.value,
+                    "to_status": SubscriptionStatus.suspended.value,
+                    "offer_name": (
+                        subscription.offer.name if subscription.offer else None
+                    ),
+                },
+                subscription_id=subscription.id,
+                account_id=subscription.subscriber_id,
+            )
+        logger.info(
+            "Subscription %s remains suspended after enable request because "
+            "%d enforcement locks are active",
+            subscription_id,
+            len(active_locks),
+        )
         return False
     if reactivation_blocked_by_active_login(db, subscription):
         compute_account_status(db, str(subscription.subscriber_id))
@@ -1017,11 +1080,14 @@ def transition_account_status(
     reason: str,
     source: str,
     emit: bool = True,
+    preserve_locks: bool = False,
 ) -> SubscriberStatus:
     """Apply an account-level command and align all owned subscription facts."""
     subscriber = db.get(Subscriber, subscriber_id)
     if subscriber is None:
         raise ValueError(f"Subscriber {subscriber_id} not found")
+    if target_status == SubscriberStatus.active:
+        _require_billing_approval(db, subscriber_id=subscriber_id)
     subscriptions = list(
         db.scalars(
             select(Subscription).where(Subscription.subscriber_id == subscriber.id)
@@ -1073,6 +1139,7 @@ def transition_account_status(
                     reason=reason,
                     source=source,
                     emit=emit,
+                    preserve_locks=preserve_locks,
                 )
     elif target_status == SubscriberStatus.canceled:
         for subscription in subscriptions:

@@ -17278,6 +17278,18 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "POST /api/v1/subscribers/{subscriber_id}/billing-approval": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:subscriber_id!"
+   ],
+   "request": "a367b836636a",
+   "responses": {
+    "200": "d2e38101f42a",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "POST /api/v1/subscribers/{subscriber_id}/verify-nin": {
    "params": [
     "header:authorization",
@@ -19407,6 +19419,8 @@
   "StatusIcon": "a2f487075407",
   "StatusPresentation": "849b7d3979d4",
   "StatusTone": "97e30697e883",
+  "SubscriberBillingApprovalRead": "dc5c9860df3d",
+  "SubscriberBillingApprovalUpdate": "ab4ee6d39406",
   "SubscriberCategory": "31a6680cced1",
   "SubscriberChannelRead": "b9e64d360038",
   "SubscriberContactCreate": "05942c71dfeb",
@@ -19421,7 +19435,7 @@
   "SubscriberRoleCreate": "14354d9a4521",
   "SubscriberRoleRead": "ce3c778333ed",
   "SubscriberRoleUpdate": "fb77a484b0b4",
-  "SubscriberStatus": "457a9495ef4c",
+  "SubscriberStatus": "04f90e59577f",
   "SubscriberSyncRead": "58184c709835",
   "SubscriberUpdate": "c91ae8100670",
   "SubscriptionAddOnCreate": "254584caf81b",
@@ -19431,7 +19445,7 @@
   "SubscriptionCreate": "dd2fcd35ad82",
   "SubscriptionDefaultsResponse": "3e153d9f51b0",
   "SubscriptionRead": "4217aba4c23f",
-  "SubscriptionStatus": "408b453376eb",
+  "SubscriptionStatus": "55da6209c756",
   "SubscriptionUpdate": "4f329c8bf079",
   "SuppressionCreate": "875f5ad57243",
   "SuppressionReason": "e3c4e28c7028",

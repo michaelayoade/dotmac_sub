@@ -268,6 +268,15 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.enforcement.cleanup_subscription_block_sessions": _c(
         "enforcement", SWEEP, IDEMP, HEALTH
     ),
+    "app.tasks.enforcement.reconcile_billing_approval_drift": _c(
+        "enforcement",
+        SWEEP,
+        PER_ITEM,
+        LOG,
+        "Permanent drift sweep; each account is locked and recomputed by the "
+        "billing-approval owner, failures are isolated, and the next beat pass "
+        "reselects any remaining active/unapproved account.",
+    ),
     "app.tasks.enforcement.detect_stale_overdue_locks": _c(
         "enforcement", SWEEP, IDEMP, STATUS, "Dry-run detector; writes nothing."
     ),

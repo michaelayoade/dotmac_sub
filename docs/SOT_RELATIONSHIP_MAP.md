@@ -139,6 +139,8 @@ do not hand-edit these rows.
 
 | Service | Concern | Role | Authoritative inputs | Transaction | Migration | Steward | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| `customer.billing_approval` | atomic account billing-approval and lifecycle transition | `application_coordinator` | account billing-approval command evidence ← `customer.billing_approval`<br>canonical account billing-approval fact ← `customer.billing_approval`<br>canonical account lifecycle state ← `access.subscription_lifecycle`<br>canonical subscription lifecycle state ← `access.subscription_lifecycle` | `coordinator_managed` | `complete` | customer and billing operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/FINANCIAL_ACCESS_ENFORCEMENT.md`<br>`docs/adr/0003-permanent-customer-financial-lifecycle.md`<br>`tests/test_account_billing_approval.py`<br>`tests/architecture/test_account_billing_approval_boundary.py` |
+| `customer.billing_approval` | account billing-approval drift reconciliation | `application_coordinator` | account billing-approval command evidence ← `customer.billing_approval`<br>canonical account billing-approval fact ← `customer.billing_approval`<br>canonical account lifecycle state ← `access.subscription_lifecycle`<br>canonical subscription lifecycle state ← `access.subscription_lifecycle`<br>effective subscription billing treatment ← `financial.subscription_billing_treatments` | `coordinator_managed` | `complete` | customer and billing operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/FINANCIAL_ACCESS_ENFORCEMENT.md`<br>`docs/adr/0003-permanent-customer-financial-lifecycle.md`<br>`tests/test_account_billing_approval.py`<br>`tests/architecture/test_account_billing_approval_boundary.py` |
 | `customer.name_repairs` | evidence-bound legacy Subscriber name repair | `command_writer` | approved customer-name repair manifest ← `customer.name_repairs`<br>canonical legacy Subscriber name state ← `customer.accounts`<br>immutable CRM overwrite audit evidence ← `observability.audit_log`<br>canonical Party identity binding ← `party.registry` | `owner_managed` | `complete` | customer operations | `docs/PARTY_CUSTOMER_LIFECYCLE.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_restore_crm_placeholder_identity.py`<br>`tests/architecture/test_crm_customer_boundary.py` |
 | `customer.financial_position` | distinct invoice-receivable and prepaid-funding summaries | `resolver` | reviewed prepaid opening position ← `financial.prepaid_funding_reconstruction`<br>canonical payment and refund documents ← `financial.payments`<br>canonical collectible invoice documents ← `financial.invoices`<br>canonical paid prepaid consumption documents ← `financial.invoices`<br>canonical renewal debit evidence ← `financial.ledger`<br>canonical credit and adjustment evidence ← `financial.ledger` | `read_only` | `complete` | finance operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/FINANCIAL_ACCESS_ENFORCEMENT.md`<br>`tests/test_customer_financial_ledger.py`<br>`tests/architecture/test_prepaid_funding_reconstruction_ownership.py` |
 | `customer.financial_position` | customer-visible financial position | `resolver` | reviewed prepaid opening position ← `financial.prepaid_funding_reconstruction`<br>canonical payment and refund documents ← `financial.payments`<br>canonical collectible invoice documents ← `financial.invoices`<br>canonical paid prepaid consumption documents ← `financial.invoices`<br>canonical renewal debit evidence ← `financial.ledger`<br>canonical credit and adjustment evidence ← `financial.ledger` | `read_only` | `complete` | finance operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/FINANCIAL_ACCESS_ENFORCEMENT.md`<br>`tests/test_customer_financial_ledger.py`<br>`tests/architecture/test_prepaid_funding_reconstruction_ownership.py` |
@@ -3206,7 +3208,10 @@ fields, seeds, specs, and direct consumers must not recreate a parallel writer.
 The customer-financial lifecycle is not a registered capability: its invoice,
 renewal, collections, restoration, notification, event, and recovery owners are
 permanent under ADR 0003. `Subscriber.billing_enabled` remains an account
-approval fact. Registered capability gates cover optional transports and
+activation-admission fact owned by `customer.billing_approval`; revocation
+disables non-terminal service through `access.subscription_lifecycle` and may
+not leave active unbilled service. Registered capability gates cover optional
+transports and
 integrations such as RADIUS/session operations, usage/FUP emission, CRM/native
 transition work, and GIS/network workers. Numeric intervals, thresholds,
 profile IDs, account lists, and other tuning values remain in `settings_spec`.
@@ -3291,13 +3296,16 @@ build failure. The effective-state projection reads roles and grants only.
 
 Scheduler:
 
-1. `scheduler.registry`: owns effective task registration, cadence, and toggle
-   synchronization.
-2. `scheduler.operations`: owns `ScheduledTask` CRUD and manual enqueue.
+1. `scheduler.registry`: owns effective task registration, cadence, toggle
+   synchronization, and exclusion of event-driven transports from periodic
+   registration.
+2. `scheduler.operations`: owns `ScheduledTask` CRUD, event-driven transport
+   schedule rejection, and manual enqueue.
 3. `scheduler.worker_control`: owns worker restart targets/actions.
 
 Rule: task cadence and enablement flow through scheduler config and the feature
-control plane. Task bodies execute work and report status.
+control plane. Event-driven transports remain requestable but cannot become
+independent periodic repair owners. Task bodies execute work and report status.
 The effective-state projection reads `ScheduledTask` state and run timestamps;
 it never changes cadence, enablement, or dispatch state.
 
@@ -3336,8 +3344,10 @@ map it to RADIUS state once, and let enforcement apply the network-side change.
 No module outside `access.radius_projection` writes `radcheck`, `radreply`, or
 `radusergroup`;
 event-time and per-user callers request a projection (full sweep or a scoped
-reconcile) or enqueue `refresh_radius_from_subs`. Target failures are reported
-per target and suppress downstream CoA. The closed boundary is pinned by
+reconcile) or enqueue `refresh_radius_from_subs`. The permanent account-access
+reconciler is the only periodic drift detector; the full refresh transport is
+never independently scheduled. Target failures are reported per target and
+suppress downstream CoA. The closed boundary is pinned by
 `tests/architecture/test_radius_projection_ownership.py`.
 
 RADIUS schema names and target capabilities are configuration owned by each

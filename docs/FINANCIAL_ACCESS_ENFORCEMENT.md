@@ -141,7 +141,10 @@ The planner and executor consume the same decision in this order:
 1. Repair obsolete prepaid timers and reason-scoped locks that no longer belong
    to a prepaid or collectible service. This repair consumes no funding.
 2. Reject unsafe billing profiles, mixed modes, inactive/canceled accounts, or
-   accounts without billing approval with a typed outcome.
+   accounts without billing approval with a typed outcome. Billing approval is
+   activation admission, not a runtime bypass: revocation disables the account
+   and its non-terminal services through `customer.billing_approval` and
+   `access.subscription_lifecycle`.
 3. Exclude signed-quarantine or missing-baseline accounts from money action.
 4. Protect `unresolved_projection` coverage and `renewal_terms_unresolved`
    contract evidence from adverse action.
@@ -182,6 +185,15 @@ reason-scoped and most-restrictive-wins. Clearing prepaid never clears fraud,
 FUP, admin, overdue, customer-hold, or system locks. A stale prepaid lock on a
 non-prepaid service is removed without consulting a prepaid balance. A lock on
 a terminal service is resolved without activating that service.
+
+`Subscriber.billing_enabled=false` must never coexist indefinitely with active
+service. The permanent billing-approval reconciler treats that join as drift.
+When every active subscription has an effective complimentary or sponsored
+billing treatment it repairs the redundant approval fact to true; otherwise it
+disables the account and every non-terminal subscription. Re-approval restores
+only when the current administrative disable was created by the billing-
+approval owner, so it cannot lift fraud, collections, customer-hold, or
+unrelated administrative decisions.
 
 Lifecycle state, lock, audit, and durable event rows commit or roll back
 together. Delivery begins only after commit. A rollback therefore cannot send
@@ -225,6 +237,9 @@ and cannot be disabled. It performs one sequence:
 The task is a recovery adapter. Payment, renewal, dunning, administrative, and
 service-lifecycle commands still invoke the lifecycle owner in their own
 transactions so ordinary access changes do not wait for the periodic pass.
+`refresh_radius_from_subs` is an event- and reconciler-requested projection
+transport, not a second periodic recovery loop. Scheduler settings, environment
+flags, and stale `ScheduledTask` rows cannot register it independently.
 
 ## Timing
 

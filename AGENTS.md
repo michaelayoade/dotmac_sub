@@ -91,10 +91,15 @@ poetry run ruff format --check app tests scripts alembic
 poetry run mypy app --ignore-missing-imports --no-incremental
 poetry run lint-imports
 poetry run bandit -r app -c pyproject.toml -q
-poetry run pytest tests/architecture -q -n 4
-poetry run pytest tests/ --ignore=tests/integration --ignore=tests/e2e -q
-poetry run pytest tests/integration -v --tb=short -o "addopts="
+make test-architecture
+make test
+make test-integration
 ```
+
+`make test` is the canonical parallel non-integration suite used by CI. It uses
+all detected workers by default; set `UNIT_TEST_WORKERS=4` (or another explicit
+limit) when local CPU or memory is constrained. Set `UNIT_TEST_WORKERS=0` for
+serial execution only when isolating worker-order or shared-state failures.
 
 Also run migration and browser/mobile checks when the changed behavior reaches
 those surfaces. Report any skipped or failed check explicitly.
