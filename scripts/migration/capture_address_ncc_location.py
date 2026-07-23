@@ -19,11 +19,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
+from pathlib import Path
 
-from app.db import SessionLocal
-from app.models.subscriber import Address
-from app.services import geocode_reconciler as reconciler
-from app.services import ncc_location
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from app.db import SessionLocal  # noqa: E402
+from app.models.subscriber import Address  # noqa: E402
+from app.services import geocode_reconciler as reconciler  # noqa: E402
+from app.services import ncc_location  # noqa: E402
 
 
 def main() -> int:

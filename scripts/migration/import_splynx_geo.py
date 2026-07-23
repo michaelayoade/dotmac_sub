@@ -72,6 +72,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--password", default=os.getenv("SPLYNX_DB_PASSWORD", ""))
     parser.add_argument("--database", default=os.getenv("SPLYNX_DB_NAME", "splynx"))
     parser.add_argument(
+        "--sites-json",
+        type=Path,
+        help="Read network_sites from a JSON file instead of Splynx "
+        "(list of {id,title,gps}); pre-filtered to deleted=0 and non-empty gps. "
+        "Use with --customers-json for the file method (no DB connection).",
+    )
+    parser.add_argument(
+        "--customers-json",
+        type=Path,
+        help="Read customers from a JSON file instead of Splynx "
+        "(list of {id,street_1,city,zip_code,gps}).",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Report matches and would-be writes; do not touch the Sub DB.",
@@ -115,6 +128,50 @@ def splynx_connect(args: argparse.Namespace) -> pymysql.connections.Connection:
         cursorclass=DictCursor,
         read_default_group="",
     )
+
+
+class _FileCursor:
+    """Minimal pymysql-cursor stand-in serving pre-extracted JSON rows.
+
+    Routes by the table named in the SQL so the resolvers stay unchanged.
+    """
+
+    def __init__(self, sites: list[dict], customers: list[dict]) -> None:
+        self._sites = sites
+        self._customers = customers
+        self._rows: list[dict] = []
+
+    def __enter__(self) -> _FileCursor:
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
+    def execute(self, sql: str, *args: object) -> None:
+        lowered = sql.lower()
+        if "network_sites" in lowered:
+            self._rows = self._sites
+        elif "customers" in lowered:
+            self._rows = self._customers
+        else:
+            self._rows = []
+
+    def fetchall(self) -> list[dict]:
+        return list(self._rows)
+
+
+class FileSplynx:
+    """Splynx source backed by JSON files (the file method, no DB)."""
+
+    def __init__(self, sites: list[dict], customers: list[dict]) -> None:
+        self._sites = sites
+        self._customers = customers
+
+    def cursor(self) -> _FileCursor:
+        return _FileCursor(self._sites, self._customers)
+
+    def close(self) -> None:
+        return None
 
 
 def _write_csv(path: Path, rows: list[dict], header: list[str]) -> None:
@@ -436,7 +493,14 @@ def resolve_subscriber_coordinates(splynx, db) -> tuple[dict, list[dict], list[d
 
 def main() -> int:
     args = parse_args()
-    splynx = splynx_connect(args)
+    if args.sites_json or args.customers_json:
+        if not (args.sites_json and args.customers_json):
+            raise SystemExit("--sites-json and --customers-json must be used together")
+        sites = json.loads(args.sites_json.read_text())
+        customers = json.loads(args.customers_json.read_text())
+        splynx: object = FileSplynx(sites, customers)
+    else:
+        splynx = splynx_connect(args)
     db = SessionLocal()
     summary: dict[str, object] = {"dry_run": args.dry_run}
     all_review: list[dict] = []
