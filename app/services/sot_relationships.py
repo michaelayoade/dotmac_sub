@@ -1702,6 +1702,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "eligible invoice selection for evidenced account credit",
                     "deterministic payment-credit source selection",
                     "oldest-payable-debt application orchestration",
+                    "exact invoice payment-backed funding preview",
+                    "all-or-nothing exact invoice credit application",
                     "invoice-void release of exact account-credit allocations",
                     "account-credit application invariant monitoring",
                 ),
@@ -5344,6 +5346,244 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "then commit the request, exact financial evidence, and "
                     "subscription together. Bulk changes remain next-cycle only "
                     "until they have per-subscription previews."
+                ),
+            ),
+            SOTService(
+                name="financial.prepaid_draft_reconciliation",
+                module="app.services.prepaid_draft_reconciliation",
+                owns=(
+                    "stranded prepaid draft classification",
+                    "stranded prepaid draft invoice reconciliation",
+                ),
+                depends_on=(
+                    "financial.account_credit_applications",
+                    "financial.invoices",
+                    "financial.payments",
+                    "financial.prepaid_service_renewals",
+                    "observability.audit_log",
+                ),
+                notes=(
+                    "The read-only classifier distinguishes exact native payment "
+                    "funding, insufficient funding, legacy/unbacked credit, exact "
+                    "direct-renewal overlap, and ambiguity. Confirmation either "
+                    "fully settles from exact payment-backed credit or voids a "
+                    "duplicate direct-renewal draft at zero economic delta. During "
+                    "cutover, the funding-change owner invokes the same flush-only "
+                    "classification/action participant before any invoice-less "
+                    "renewal; every existing draft blocks that parallel path."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="stranded prepaid draft classification",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical prepaid draft invoice",
+                                "canonical payment-backed account credit",
+                                "canonical funded service entitlement",
+                                "canonical direct-renewal debit",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="stranded prepaid draft invoice reconciliation",
+                            role=OwnerRole.RECONCILER,
+                            input_names=(
+                                "reviewed reconciliation command",
+                                "canonical prepaid draft invoice",
+                                "canonical payment-backed account credit",
+                                "canonical funded service entitlement",
+                                "canonical direct-renewal debit",
+                                "invoice and payment participant protocols",
+                            ),
+                            canonical_writer="financial.prepaid_draft_reconciliation",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="reviewed reconciliation command",
+                            owner="financial.prepaid_draft_reconciliation",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed invoice identity, exact preview fingerprint, "
+                                "effective timestamp, actor, reason, command, "
+                                "correlation, and idempotency evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical prepaid draft invoice",
+                            owner="financial.invoices",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked active non-proforma draft, exact positive "
+                                "subscription line, period, currency, totals, and "
+                                "existing settlement evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical payment-backed account credit",
+                            owner="financial.account_credit_applications",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "exact active succeeded settlement capacity, current "
+                                "account-credit projection, source payments, and "
+                                "shortfall"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical funded service entitlement",
+                            owner="financial.prepaid_service_renewals",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active entitlement account, subscription, exact "
+                                "period, funding amount, currency, and source link"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical direct-renewal debit",
+                            owner="financial.prepaid_service_renewals",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "unreversed prepaid-service-renewal adjustment and "
+                                "linked active ledger debit"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="invoice and payment participant protocols",
+                            owner="financial.invoices",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "flush-only invoice issue/void and exact "
+                                "payment-allocation confirmation protocols"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "Reviewed confirmation enters execute_owner_command once "
+                            "on a transaction-free session and commits or rolls back "
+                            "the invoice lifecycle, exact payment applications, audit, "
+                            "and idempotency evidence together. The funding-change "
+                            "cutover caller uses the same required flush-only "
+                            "participant inside its existing owner transaction."
+                        ),
+                        locking=(
+                            "Lock account first, then invoice, then re-read payment, "
+                            "entitlement, adjustment, and allocation evidence. A "
+                            "multiple-draft account is not automatically repaired."
+                        ),
+                        idempotency=(
+                            "A caller-supplied key is reserved per invoice; invoice "
+                            "metadata and participant idempotency keys replay the same "
+                            "paid or void result and reject changed evidence."
+                        ),
+                        retries=(
+                            "Retry transient database failures with the same key and "
+                            "preview only after state is unchanged. Stale, short, "
+                            "unbacked, overlapping, or ambiguous evidence requires a "
+                            "fresh preview or manual review."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "financial.prepaid_draft_reconciliation.invoice_not_found",
+                            "financial.prepaid_draft_reconciliation.missing_idempotency_key",
+                            "financial.prepaid_draft_reconciliation.idempotency_conflict",
+                            "financial.prepaid_draft_reconciliation.stale_preview",
+                            "financial.prepaid_draft_reconciliation.not_actionable",
+                            "financial.prepaid_draft_reconciliation.participant_rejected",
+                            "financial.prepaid_draft_reconciliation.incomplete_repair",
+                            "financial.prepaid_draft_reconciliation.invalid_command_context",
+                            "financial.prepaid_draft_reconciliation.command_contract_violation",
+                            "financial.prepaid_draft_reconciliation.nested_owner_command",
+                            "financial.prepaid_draft_reconciliation.active_caller_transaction",
+                            "financial.prepaid_draft_reconciliation.nested_transaction_completion",
+                        ),
+                        mapping_owner="billing reconciliation CLI and funding-change adapters",
+                        retryable_codes=(),
+                        fail_closed_on=(
+                            "any funding shortfall including NGN 0.50",
+                            "legacy or unbacked account credit",
+                            "multiple drafts or positive lines",
+                            "partial or ambiguous entitlement overlap",
+                            "stale preview or changed payment capacity",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("prepaid_draft.reconciled",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Additive payload fields are permitted; invoice, action, "
+                            "source disposition, final status, amount, currency, and "
+                            "preview fingerprint retain their meaning."
+                        ),
+                        replay=(
+                            "The event records the committed reconciliation outcome. "
+                            "Consumers may replay consequences but never re-decide or "
+                            "rewrite invoice, payment, or entitlement state."
+                        ),
+                    ),
+                    projections=(
+                        ProjectionContract(
+                            name="stranded prepaid draft classification",
+                            input_names=(
+                                "canonical prepaid draft invoice",
+                                "canonical payment-backed account credit",
+                                "canonical funded service entitlement",
+                                "canonical direct-renewal debit",
+                            ),
+                            writer="financial.prepaid_draft_reconciliation",
+                            freshness="computed from the current database snapshot",
+                            stale_behavior=(
+                                "Confirmation rejects a changed fingerprint and requires "
+                                "a fresh preview."
+                            ),
+                            drift_signal=(
+                                "An active prepaid draft classified as exact-payment "
+                                "fundable, already renewed, legacy-unbacked, insufficient, "
+                                "or manual review remains visible in the cohort."
+                            ),
+                            rebuild_operation=(
+                                "preview_prepaid_draft_cohort deterministically "
+                                "reclassifies the bounded or complete active cohort."
+                            ),
+                            repair_owner="financial.prepaid_draft_reconciliation",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.CUT_OVER,
+                        old_owner=(
+                            "billing.reconcile_unposted issue-then-return helper and "
+                            "invoice-less funding-change renewal when a draft exists"
+                        ),
+                        new_owner="financial.prepaid_draft_reconciliation",
+                        verification=(
+                            "Exact-funding, fifty-kobo shortfall, unbacked credit, "
+                            "direct-renewal overlap, stale preview, replay, funding-"
+                            "change, and architecture tests."
+                        ),
+                        cutover_gate=(
+                            "Funding-change handling checks the authoritative draft "
+                            "before direct renewal; the reviewed CLI defaults to dry-run."
+                        ),
+                        fallback_retirement=(
+                            "Remove the compatibility issue-then-return helper after "
+                            "all remaining callers use the classifier and the backlog "
+                            "has been reviewed."
+                        ),
+                    ),
+                    steward="billing operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
+                        "docs/designs/PREPAID_DRAFT_RECONCILIATION.md",
+                    ),
+                    test_refs=(
+                        "tests/test_prepaid_draft_reconciliation.py",
+                        "tests/test_prepaid_service_renewals.py",
+                        "tests/architecture/test_prepaid_draft_reconciliation_ownership.py",
+                    ),
                 ),
             ),
             SOTService(
