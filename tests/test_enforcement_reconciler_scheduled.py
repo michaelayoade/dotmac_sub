@@ -5,6 +5,7 @@ from __future__ import annotations
 from tests.test_scheduled_tasks_registered import _declared_scheduled_task_names
 
 TASK = "app.tasks.radius.run_enforcement_reconciler"
+RADIUS_REFRESH_TASK = "app.tasks.radius_population.refresh_radius_from_subs"
 
 
 def test_enforcement_reconciler_is_declared_in_scheduler() -> None:
@@ -27,3 +28,7 @@ def test_enforcement_reconciler_is_permanent() -> None:
     from app.services.scheduler import PERMANENT_CUSTOMER_LIFECYCLE_TASKS
 
     assert TASK in PERMANENT_CUSTOMER_LIFECYCLE_TASKS
+
+
+def test_radius_refresh_transport_is_not_scheduled_independently() -> None:
+    assert RADIUS_REFRESH_TASK not in _declared_scheduled_task_names()

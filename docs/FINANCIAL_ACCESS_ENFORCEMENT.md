@@ -237,6 +237,9 @@ and cannot be disabled. It performs one sequence:
 The task is a recovery adapter. Payment, renewal, dunning, administrative, and
 service-lifecycle commands still invoke the lifecycle owner in their own
 transactions so ordinary access changes do not wait for the periodic pass.
+`refresh_radius_from_subs` is an event- and reconciler-requested projection
+transport, not a second periodic recovery loop. Scheduler settings, environment
+flags, and stale `ScheduledTask` rows cannot register it independently.
 
 ## Timing
 

@@ -21,3 +21,14 @@ def test_account_projection_has_one_periodic_owner() -> None:
 
     assert "reconcile_account_status_drift" not in task_source
     assert "reconcile_account_status_drift" not in reliability
+
+
+def test_radius_projection_refresh_is_not_a_parallel_periodic_owner() -> None:
+    scheduler = (ROOT / "app/services/scheduler_config.py").read_text()
+    operations = (ROOT / "app/services/scheduler.py").read_text()
+
+    assert '"radius_refresh_safety_net_enabled"' not in scheduler
+    assert '"RADIUS_REFRESH_SAFETY_NET_ENABLED"' not in scheduler
+    assert 'schedule["radius_refresh_safety_net"]' not in scheduler
+    assert '"app.tasks.radius_population.refresh_radius_from_subs"' in operations
+    assert "EVENT_DRIVEN_TRANSPORT_TASKS" in operations

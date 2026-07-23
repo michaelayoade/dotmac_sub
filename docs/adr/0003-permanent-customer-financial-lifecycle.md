@@ -34,6 +34,9 @@ event enable/disable controls are not part of this authority boundary.
   notification delivery, and event dispatch/retry remain scheduled owner work.
 - Scheduled-task cadence and the shared enforcement time-of-day window remain
   configurable. Core lifecycle tasks cannot be disabled, renamed, or deleted.
+- The permanent account-access reconciler is the only periodic access-repair
+  loop. `refresh_radius_from_subs` remains an event- and reconciler-requested
+  projection transport; it cannot be independently scheduled or flag-gated.
 - Enforcement runs every calendar day. Only
   `collections.enforcement_window_start` and
   `collections.enforcement_window_end` constrain its local execution time.
@@ -67,11 +70,13 @@ owners and transport outcomes; they do not decide whether the domain exists.
 
 ## Migration and cutover
 
-Migration 398 deletes the retired settings instead of preserving tombstones and
-re-enables the permanent scheduled-task rows. The registry, settings UI, module
-manager, task adapters, notification handlers, and enforcement planner no longer
-read those settings. Historical readiness rows remain evidence only and do not
-gate runtime decisions.
+Migration 398 deletes the retired financial settings instead of preserving
+tombstones and re-enables the permanent scheduled-task rows. Migration 405
+deletes the parallel RADIUS refresh controls and disables stale independent
+refresh schedules. The registry, settings UI, module manager, task adapters,
+notification handlers, and enforcement planner no longer read those settings.
+Historical readiness rows remain evidence only and do not gate runtime
+decisions.
 
 The `customer.billing_approval` coordinator replaces generic profile, API, and
 bulk writers of `Subscriber.billing_enabled`. Its permanent reconciler repairs
@@ -102,14 +107,17 @@ idempotency contracts; they do not change money ownership.
 - Behavior tests prove stale disabled rows cannot suppress owner work.
 - Scheduler tests reject disable, rename, and delete operations for permanent
   lifecycle tasks.
+- Access-repair tests prove the permanent reconciler is the only periodic owner
+  and stale or newly requested independent RADIUS refresh schedules cannot run.
 - Enforcement tests prove weekends and holidays are ordinary days and only the
   shared time-of-day window defers consequences.
 - Lifecycle tests prove rollback emits no external consequence, and enforcement
   handler tests prove incomplete projections remain durable retry work.
 - Account quarantine, shields, grace, funding, coverage, payment, renewal,
   suspension, restoration, notification, and idempotency suites remain green.
-- Alembic has one head and migration 398 removes the retired rows while enabling
-  the canonical tasks.
+- Alembic has one head; migration 398 removes the retired financial rows while
+  enabling the canonical tasks, and migration 405 retires the parallel RADIUS
+  refresh controls and schedule.
 
 ## Rollback or forward-fix
 

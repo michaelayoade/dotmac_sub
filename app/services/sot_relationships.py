@@ -13828,6 +13828,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "effective scheduled-task registration",
                     "permanent customer-financial lifecycle task registration",
                     "mandatory account-access reconciliation registration",
+                    "event-driven transport exclusion from periodic registration",
                     "optional capability task synchronization",
                     "Celery runtime schedule config",
                 ),
@@ -13839,6 +13840,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "ScheduledTask cadence management",
                     "permanent lifecycle task mutation protection",
+                    "event-driven transport schedule rejection",
                     "manual task enqueue operations",
                 ),
                 depends_on=("scheduler.registry",),
@@ -13854,7 +13856,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         rule=(
             "Core customer-financial lifecycle tasks are always registered and cannot "
             "be disabled, renamed, or deleted. Optional capability scheduling composes "
-            "through the feature control plane; task bodies remain thin adapters."
+            "through the feature control plane. Event-driven transports remain "
+            "requestable but cannot register as independent periodic repair owners; "
+            "task bodies remain thin adapters."
         ),
     ),
     DomainSOT(
@@ -14240,9 +14244,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "Single writer of the FreeRADIUS auth tables across every "
                     "configured runtime target. Event-time and per-user callers "
                     "request a full or scoped projection; they do not write auth "
-                    "tables directly. The writer and reconciler consume the same "
-                    "per-login plan and therefore cannot reinterpret lifecycle "
-                    "statuses independently."
+                    "tables directly. The permanent account-access reconciler is the "
+                    "only periodic drift detector and requests the full writer only "
+                    "when drift exists; the writer is never independently scheduled. "
+                    "The writer and reconciler consume the same per-login plan and "
+                    "therefore cannot reinterpret lifecycle statuses independently."
                 ),
             ),
             SOTService(

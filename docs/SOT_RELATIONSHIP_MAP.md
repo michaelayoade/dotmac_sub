@@ -3236,13 +3236,16 @@ build failure. The effective-state projection reads roles and grants only.
 
 Scheduler:
 
-1. `scheduler.registry`: owns effective task registration, cadence, and toggle
-   synchronization.
-2. `scheduler.operations`: owns `ScheduledTask` CRUD and manual enqueue.
+1. `scheduler.registry`: owns effective task registration, cadence, toggle
+   synchronization, and exclusion of event-driven transports from periodic
+   registration.
+2. `scheduler.operations`: owns `ScheduledTask` CRUD, event-driven transport
+   schedule rejection, and manual enqueue.
 3. `scheduler.worker_control`: owns worker restart targets/actions.
 
 Rule: task cadence and enablement flow through scheduler config and the feature
-control plane. Task bodies execute work and report status.
+control plane. Event-driven transports remain requestable but cannot become
+independent periodic repair owners. Task bodies execute work and report status.
 The effective-state projection reads `ScheduledTask` state and run timestamps;
 it never changes cadence, enablement, or dispatch state.
 
@@ -3281,8 +3284,10 @@ map it to RADIUS state once, and let enforcement apply the network-side change.
 No module outside `access.radius_projection` writes `radcheck`, `radreply`, or
 `radusergroup`;
 event-time and per-user callers request a projection (full sweep or a scoped
-reconcile) or enqueue `refresh_radius_from_subs`. Target failures are reported
-per target and suppress downstream CoA. The closed boundary is pinned by
+reconcile) or enqueue `refresh_radius_from_subs`. The permanent account-access
+reconciler is the only periodic drift detector; the full refresh transport is
+never independently scheduled. Target failures are reported per target and
+suppress downstream CoA. The closed boundary is pinned by
 `tests/architecture/test_radius_projection_ownership.py`.
 
 RADIUS schema names and target capabilities are configuration owned by each

@@ -641,6 +641,31 @@ class TestBuildBeatSchedule:
         assert row.enabled is True
         assert row.interval_seconds == 900
 
+    def test_retires_parallel_radius_refresh_schedule(self, db_session, monkeypatch):
+        refresh_task = "app.tasks.radius_population.refresh_radius_from_subs"
+        stale_row = ScheduledTask(
+            name="radius_refresh_safety_net",
+            task_name=refresh_task,
+            schedule_type=ScheduleType.interval,
+            interval_seconds=900,
+            enabled=True,
+        )
+        db_session.add(stale_row)
+        db_session.commit()
+        monkeypatch.setattr(db_session, "close", lambda: None)
+
+        with patch.object(scheduler_config, "SessionLocal", return_value=db_session):
+            with patch.object(
+                scheduler_config.integration_service,
+                "list_interval_jobs",
+                return_value=[],
+            ):
+                schedule = scheduler_config.build_beat_schedule()
+
+        db_session.refresh(stale_row)
+        assert stale_row.enabled is False
+        assert all(entry["task"] != refresh_task for entry in schedule.values())
+
     def test_registers_configured_event_outbox_dispatch(self, db_session, monkeypatch):
         from app.services.domain_settings import scheduler_settings
 
