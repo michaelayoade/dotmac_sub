@@ -28,7 +28,7 @@ from app.services.integrations.connectors.lead_capture_http import (
 )
 from app.services.integrations.connectors.payment_gateway import PaymentGatewayRunner
 from app.services.integrations.connectors.whatsapp_runtime import WhatsAppRuntimeRunner
-from app.services.integrations.manifest import ConnectorManifest
+from app.services.integrations.manifest import ConnectorManifest, ConnectorRuntimeType
 from app.services.integrations.registry import require_connector_definition
 from app.services.integrations.runtime import (
     ConnectorRunner,
@@ -43,6 +43,17 @@ from app.services.secrets import resolve_secret
 
 class RuntimeExecutionError(RuntimeError):
     """Raised before dispatch when a pinned runtime contract is invalid."""
+
+
+class RuntimeTierUnavailableError(RuntimeExecutionError):
+    """Raised when a declared runtime tier has no executor in this deployment.
+
+    Distinct from a misconfigured installation: the manifest is valid and the
+    installation may be correctly configured, but the tier it declares is not
+    executable here. Callers must fail closed rather than substitute another
+    tier — silently running an isolated connector in-process would defeat the
+    isolation the tier exists to provide (ADR 0004).
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +77,60 @@ def default_runner_registry() -> RunnerRegistry:
     return registry
 
 
+ExternalRunnerFactory = Callable[[ConnectorManifest], ConnectorRunner]
+
+
+def _external_runner_unavailable(manifest: ConnectorManifest) -> ConnectorRunner:
+    """Default `external_oci` factory until the OCI supervisor lands.
+
+    Phase 3 of ADR 0004 replaces this with a real runner. Until then an
+    external connector is registrable and installable but not executable, and
+    says so precisely instead of degrading to in-process execution.
+    """
+
+    raise RuntimeTierUnavailableError(
+        f"connector {manifest.key!r} declares the {manifest.runtime.type.value} "
+        "runtime, which has no executor in this deployment"
+    )
+
+
+_EXTERNAL_RUNNER_FACTORY: ExternalRunnerFactory = _external_runner_unavailable
+
+
+def resolve_runner(
+    manifest: ConnectorManifest,
+    *,
+    registry: RunnerRegistry | None = None,
+    external_factory: ExternalRunnerFactory | None = None,
+) -> ConnectorRunner:
+    """Select a runner from the manifest's declared runtime tier.
+
+    Resolution is driven by `manifest.runtime.type` rather than the connector
+    key, so a connector cannot inherit an executor that its declared trust tier
+    does not entitle it to.
+    """
+
+    tier = manifest.runtime.type
+    if tier is ConnectorRuntimeType.catalogue_only:
+        raise RuntimeExecutionError(
+            f"connector {manifest.key!r} is catalogue-only and names no executable code"
+        )
+    if tier in {
+        ConnectorRuntimeType.builtin_worker,
+        ConnectorRuntimeType.legacy_adapter,
+    }:
+        try:
+            return (registry or default_runner_registry()).resolve(manifest.key)
+        except LookupError as exc:
+            raise RuntimeTierUnavailableError(
+                f"connector {manifest.key!r} declares the {tier.value} runtime "
+                "but no runner is registered for it in this process"
+            ) from exc
+    if tier is ConnectorRuntimeType.external_oci:
+        return (external_factory or _EXTERNAL_RUNNER_FACTORY)(manifest)
+    raise RuntimeExecutionError(f"unsupported connector runtime tier: {tier.value}")
+
+
 def build_execution_context(
     db: Session,
     *,
@@ -73,6 +138,7 @@ def build_execution_context(
     allow_disabled: bool = False,
     runner_registry: RunnerRegistry | None = None,
     runner_override: ConnectorRunner | None = None,
+    external_runner_factory: ExternalRunnerFactory | None = None,
     secret_resolver: Callable[[str | None], str | None] = resolve_secret,
 ) -> RuntimeExecutionContext:
     binding = db.get(IntegrationCapabilityBinding, capability_binding_id)
@@ -108,8 +174,10 @@ def build_execution_context(
         if not resolved:
             raise RuntimeExecutionError(f"secret binding could not be resolved: {name}")
         material[str(name)] = str(resolved)
-    runner = runner_override or (runner_registry or default_runner_registry()).resolve(
-        installation.connector_key
+    runner = runner_override or resolve_runner(
+        manifest,
+        registry=runner_registry,
+        external_factory=external_runner_factory,
     )
     return RuntimeExecutionContext(
         binding=binding,
