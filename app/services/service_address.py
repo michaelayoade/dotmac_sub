@@ -92,6 +92,7 @@ class AddressParts(NamedTuple):
     address_line2: str | None
     city: str | None
     region: str | None
+    lga: str | None
     postal_code: str | None
     country_code: str | None
 
@@ -111,6 +112,7 @@ def address_parts(subscriber: Subscriber) -> AddressParts:
         address_line2=getattr(source, "address_line2", None),
         city=getattr(source, "city", None),
         region=getattr(source, "region", None),
+        lga=getattr(source, "lga", None),
         postal_code=getattr(source, "postal_code", None),
         country_code=getattr(source, "country_code", None),
     )
