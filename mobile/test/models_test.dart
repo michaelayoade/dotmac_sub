@@ -15,6 +15,7 @@ import 'package:dotmac_portal/src/models/plan_change.dart';
 import 'package:dotmac_portal/src/models/session.dart';
 import 'package:dotmac_portal/src/models/subscription.dart';
 import 'package:dotmac_portal/src/models/ticket.dart';
+import 'package:dotmac_portal/src/models/topup.dart';
 import 'package:dotmac_portal/src/models/usage.dart';
 
 void main() {
@@ -565,6 +566,61 @@ void main() {
       expect(zero.inCredit, isFalse);
       expect(zero.owes, isFalse);
     });
+  });
+
+  group('Topup', () {
+    test(
+      'TopupPage keeps payable-invoice visibility while deposit stays allowed',
+      () {
+        final page = TopupPage.fromJson({
+          'provider_type': 'paystack',
+          'currency': 'NGN',
+          'min_amount': 1000,
+          'max_amount': 500000,
+          'deposit_allowed': true,
+          'eligible_unpaid_total': '18000.00',
+          'eligible_unpaid_invoices': [
+            {'invoice_id': 'inv-1', 'invoice_number': 'INV-1'}
+          ],
+        });
+        expect(page.depositAllowed, isTrue);
+        expect(page.eligibleUnpaidTotal, 18000.0);
+        expect(page.eligibleUnpaidInvoices.single['invoice_number'], 'INV-1');
+      },
+    );
+
+    test(
+      'TopupPreview parses invoice application breakdown and fingerprint',
+      () {
+        final preview = TopupPreview.fromJson({
+          'account_id': 'acct-1',
+          'currency': 'NGN',
+          'current_account_credit': '0.00',
+          'requested_deposit': '10000.00',
+          'eligible_invoice_count': 1,
+          'invoice_applications': [
+            {
+              'invoice_id': 'inv-1',
+              'invoice_number': 'INV-1',
+              'currency': 'NGN',
+              'amount_applied': '10000.00',
+              'outstanding_after_application': '8000.00',
+            }
+          ],
+          'total_applied_to_invoices': '10000.00',
+          'total_outstanding_after_application': '8000.00',
+          'remaining_account_credit': '0.00',
+          'projected_available_credit': '0.00',
+          'allocation_policy': 'credit_only',
+          'credit_application_policy': 'pay_eligible_invoices',
+          'policy_version': 1,
+          'preview_fingerprint': List.filled(64, 'd').join(),
+        });
+        expect(preview.eligibleInvoiceCount, 1);
+        expect(preview.invoiceApplications.single.amountApplied, 10000.0);
+        expect(preview.previewFingerprint, hasLength(64));
+      },
+    );
   });
 
   group('Add-ons', () {

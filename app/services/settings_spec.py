@@ -1342,6 +1342,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.radius,
+        key="simultaneous_use_enforcement_enabled",
+        env_var="RADIUS_SIMULTANEOUS_USE_ENFORCEMENT_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=False,
+        label="Enforce Per-Login RADIUS Session Limit",
+    ),
+    SettingSpec(
+        domain=SettingDomain.radius,
         key="active_group_name",
         env_var="RADIUS_ACTIVE_GROUP_NAME",
         value_type=SettingValueType.string,

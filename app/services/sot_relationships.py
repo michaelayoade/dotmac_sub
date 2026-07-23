@@ -2547,7 +2547,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "observability.audit_log",
                 ),
                 notes=(
-                    "A deposit first records the whole confirmed receipt as "
+                    "A deposit preview may include current eligible invoices and "
+                    "the exact oldest-debt application before any checkout starts. "
+                    "The deposit first records the whole confirmed receipt as "
                     "unallocated account credit, grants no service duration, and "
                     "then asks the canonical applicator to settle eligible debt. "
                     "Only after that application completes does its chained event "
@@ -2642,7 +2644,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             kind=AuthorityKind.CONTROL_INPUT,
                             source=(
                                 "typed purpose, allocation/application policy, version, "
-                                "supported currency, amount bounds, and pending-intent rule"
+                                "supported currency, amount bounds, reviewed-preview rule, "
+                                "and pending-intent rule"
                             ),
                         ),
                         AuthorityInput(
@@ -2651,7 +2654,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             kind=AuthorityKind.CONTROL_INPUT,
                             source=(
                                 "typed coordinator-admitted account, amount, provider, "
-                                "reference, expiry, channel, actor, and idempotency evidence"
+                                "reference, expiry, channel, actor, reviewed preview "
+                                "fingerprint, and idempotency evidence"
                             ),
                         ),
                         AuthorityInput(
@@ -2712,8 +2716,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         locking=(
                             "Intent creation and settlement lock the subscriber account "
-                            "first; settlement then locks the exact intent before composing "
-                            "payment and oldest-debt application owners."
+                            "first; preview and creation share that account-scoped "
+                            "invoice-order snapshot; settlement then locks the exact "
+                            "intent before composing payment and oldest-debt application "
+                            "owners."
                         ),
                         idempotency=(
                             "Intent creation uses one account/purpose/key identity. Settlement "
@@ -2733,7 +2739,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "deposit_currency_unsupported",
                             "deposit_amount_below_minimum",
                             "deposit_amount_above_maximum",
-                            "deposit_payable_invoices_exist",
+                            "deposit_preview_stale",
                             "deposit_intent_already_pending",
                             "deposit_idempotency_invalid",
                             "deposit_idempotency_conflict",
@@ -2758,8 +2764,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         retryable_codes=(),
                         fail_closed_on=(
-                            "inactive or missing account, incompatible payable debt, or invalid "
-                            "amount/currency policy",
+                            "inactive or missing account, stale reviewed preview, pending "
+                            "deposit intent, or invalid amount/currency policy",
                             "missing, untyped, wrong-provider, wrong-amount, wrong-currency, or "
                             "uncorrelated intent/receipt evidence",
                             "conflicting provider transaction or incomplete completed-payment link",
@@ -15796,6 +15802,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "unbuildable active/captive login classification and preservation",
                     "secret-safe exact RADIUS-row projection fingerprint",
                     "walled-garden/reject radreply on blocked/suspended access",
+                    "RADIUS simultaneous-session check/control placement and cutover",
                     "bidirectional desired-versus-observed projection drift",
                 ),
                 depends_on=(
@@ -15803,6 +15810,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "access.radius_state",
                     "access.radius_reject",
                     "access.radius_target_registry",
+                    "control.settings_spec",
                 ),
                 notes=(
                     "Single writer of the FreeRADIUS auth tables across every "
@@ -15816,7 +15824,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "is preserved and reported, never treated as a successful refresh. "
                     "The writer and reconciler consume the same exact, secret-safe "
                     "per-login fingerprint and therefore cannot reinterpret lifecycle "
-                    "statuses or silently ignore attribute drift."
+                    "statuses or silently ignore attribute drift. "
+                    "Simultaneous-Use is projected to radcheck only after the "
+                    "database-owned cutover gate is enabled; radacct remains observed "
+                    "session evidence and never owns credential or service identity."
                 ),
             ),
             SOTService(

@@ -4,9 +4,12 @@ import ipaddress
 import types
 
 from app.models.catalog import SubscriptionStatus
+from app.models.domain_settings import SettingDomain
 from app.models.subscriber import SubscriberCategory, SubscriberStatus, UserType
+from app.services import settings_spec
 from app.services.radius_population import (
     _captive_redirect_allowed,
+    _radcheck_policy_attrs,
     _radreply_attrs,
 )
 from app.services.subscriber_access_policy import RADIUS_BLOCKING_SUBSCRIBER_STATUSES
@@ -30,6 +33,63 @@ def _sub(ipv4="10.0.0.5", status=SubscriptionStatus.active):
 
 def _routes(attrs):
     return [a for a in attrs if a[0] == "Framed-Route"]
+
+
+class TestSimultaneousUsePlacement:
+    def test_cutover_setting_is_registered_and_defaults_off(self):
+        spec = settings_spec.get_spec(
+            SettingDomain.radius,
+            "simultaneous_use_enforcement_enabled",
+        )
+
+        assert spec is not None
+        assert spec.default is False
+
+    def test_cutover_projects_limit_to_radcheck_not_radreply(self):
+        profile = types.SimpleNamespace(
+            simultaneous_use=1,
+            mikrotik_rate_limit=None,
+            idle_timeout=None,
+        )
+
+        check_attrs = _radcheck_policy_attrs(
+            profile,
+            simultaneous_use_enabled=True,
+        )
+        reply_attrs = _radreply_attrs(
+            _sub(),
+            None,
+            profile,
+            simultaneous_use_enabled=True,
+        )
+
+        assert check_attrs == [("Simultaneous-Use", ":=", "1")]
+        assert not any(attr[0] == "Simultaneous-Use" for attr in reply_attrs)
+
+    def test_profile_limit_is_preserved_in_radcheck(self):
+        profile = types.SimpleNamespace(simultaneous_use=3)
+
+        assert _radcheck_policy_attrs(
+            profile,
+            simultaneous_use_enabled=True,
+        ) == [("Simultaneous-Use", ":=", "3")]
+
+    def test_pre_cutover_retains_legacy_reply_without_enforcing_check(self):
+        reply_attrs = _radreply_attrs(
+            _sub(),
+            None,
+            None,
+            simultaneous_use_enabled=False,
+        )
+
+        assert (
+            _radcheck_policy_attrs(
+                None,
+                simultaneous_use_enabled=False,
+            )
+            == []
+        )
+        assert ("Simultaneous-Use", ":=", "1") in reply_attrs
 
 
 class TestRadreplyAdditionalRoutes:

@@ -81,6 +81,36 @@ _DIRECT_TRANSFER_LABEL = "Direct bank transfer"
 _DEFAULT_TOPUP_PRESET_AMOUNTS = (1000, 2000, 5000, 10000, 20000, 50000)
 
 
+def _serialize_deposit_preview(preview) -> dict[str, object]:
+    return {
+        "account_id": str(preview.account_id),
+        "currency": preview.currency,
+        "current_account_credit": preview.current_account_credit,
+        "requested_deposit": preview.requested_deposit,
+        "eligible_invoice_count": preview.eligible_invoice_count,
+        "invoice_applications": [
+            {
+                "invoice_id": str(item.invoice_id),
+                "invoice_number": item.invoice_number,
+                "currency": item.currency,
+                "amount_applied": item.amount_applied,
+                "outstanding_after_application": item.outstanding_after_application,
+            }
+            for item in preview.invoice_applications
+        ],
+        "total_applied_to_invoices": preview.total_applied_to_invoices,
+        "total_outstanding_after_application": (
+            preview.total_outstanding_after_application
+        ),
+        "remaining_account_credit": preview.remaining_account_credit,
+        "projected_available_credit": preview.projected_available_credit,
+        "allocation_policy": preview.allocation_policy,
+        "credit_application_policy": preview.credit_application_policy,
+        "policy_version": preview.policy_version,
+        "preview_fingerprint": preview.fingerprint,
+    }
+
+
 def _provider_uuid(db: Session, provider_type: str) -> uuid.UUID | None:
     """Resolve the PaymentProvider row id for a gateway type.
 
@@ -1272,7 +1302,7 @@ def get_topup_page(
                 Decimal("0.00"),
             )
         ),
-        "deposit_allowed": not payable_invoices,
+        "deposit_allowed": True,
         "min_amount": min_amount_value,
         "max_amount": max_amount_value,
         "preset_amounts": _resolve_topup_presets(
@@ -1306,6 +1336,24 @@ def get_topup_page(
         context["provider_public_key"] = None
 
     return context
+
+
+def preview_topup(
+    db: Session,
+    customer: dict,
+    amount: Decimal | int | float | str,
+) -> dict[str, object]:
+    account_id = _customer_account_uuid(db, customer)
+    min_amount_value, max_amount_value = _resolve_topup_limits(db)
+    preview = AccountCreditDeposits.preview(
+        db,
+        account_id=account_id,
+        amount=amount,
+        currency="NGN",
+        minimum=min_amount_value,
+        maximum=max_amount_value,
+    )
+    return _serialize_deposit_preview(preview)
 
 
 def get_payment_methods_page(
@@ -1407,6 +1455,7 @@ def create_topup_intent(
     *,
     provider: str | None = None,
     payment_method_id: str | None = None,
+    preview_fingerprint: str | None = None,
     redirect_url: str | None = None,
     idempotency_key: str | None = None,
 ) -> dict:
@@ -1423,6 +1472,7 @@ def create_topup_intent(
             db,
             customer,
             requested_amount,
+            preview_fingerprint=preview_fingerprint,
             idempotency_key=idempotency_key,
         )
 
@@ -1483,6 +1533,7 @@ def create_topup_intent(
             selected_payment_method.id if selected_payment_method is not None else None
         ),
         created_by=created_by,
+        expected_preview_fingerprint=preview_fingerprint,
     )
     db_session_adapter.release_read_transaction(db)
     intent_result = gateway_topup_intents.create_customer_gateway_topup_intent(
@@ -1578,6 +1629,7 @@ def create_direct_transfer_topup_intent(
     customer: dict,
     amount: Decimal | int | float | str,
     *,
+    preview_fingerprint: str | None = None,
     invoice_id: str | None = None,
     idempotency_key: str | None = None,
 ) -> dict:
@@ -1592,6 +1644,7 @@ def create_direct_transfer_topup_intent(
         created_by=created_by,
         requested_amount=amount if invoice_id is None else None,
         invoice_id=uuid.UUID(invoice_id) if invoice_id else None,
+        expected_preview_fingerprint=preview_fingerprint,
     )
     context = CommandContext.system(
         actor=f"customer:{created_by}",
@@ -1784,6 +1837,7 @@ __all__ = [
     "get_direct_transfer_topup_page",
     "get_payment_page",
     "get_topup_page",
+    "preview_topup",
     "submit_direct_transfer_topup",
     "verify_and_record_payment",
     "verify_and_record_topup",

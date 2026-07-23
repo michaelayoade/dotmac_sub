@@ -43,6 +43,8 @@ from app.schemas.billing import (
     TopupInitiateRequest,
     TopupInitiateResponse,
     TopupPageResponse,
+    TopupPreviewRequest,
+    TopupPreviewResponse,
     TopupVerifyRequest,
     TopupVerifyResponse,
 )
@@ -741,6 +743,21 @@ def my_topup_page(
     )
 
 
+@router.post("/topup/preview", response_model=TopupPreviewResponse)
+def my_topup_preview(
+    payload: TopupPreviewRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Preview a Deposit Account Credit allocation for the caller's amount."""
+    customer = _customer(db, principal)
+    try:
+        preview = customer_payments.preview_topup(db, customer, payload.amount)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return TopupPreviewResponse.model_validate(preview)
+
+
 @router.post("/topup/initiate", response_model=TopupInitiateResponse)
 def my_topup_initiate(
     payload: TopupInitiateRequest,
@@ -758,6 +775,7 @@ def my_topup_initiate(
             payment_method_id=(
                 str(payload.payment_method_id) if payload.payment_method_id else None
             ),
+            preview_fingerprint=payload.preview_fingerprint,
             idempotency_key=payload.idempotency_key,
         )
     except ValueError as exc:

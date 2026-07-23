@@ -3368,6 +3368,15 @@ Network access:
    `access.radius_target_registry`. Blocked/suspended users get a walled-garden
    `radreply` rather than row deletion, so suspension takes effect at the BNG
    without losing the captive pay-page treatment.
+   It also owns the placement of per-login concurrency policy:
+   `Simultaneous-Use` is a FreeRADIUS check/control attribute in `radcheck`, not
+   a NAS reply attribute in `radreply`. The database setting
+   `radius.simultaneous_use_enforcement_enabled` is the cutover gate and
+   defaults off until stale `radacct` ghosts and genuine shared credentials
+   have been reviewed. Once enabled, the permanent drift detector identifies
+   missing/stale check rows and misplaced reply rows and requests this same
+   writer to rebuild them. `radacct` is observed session evidence only; it does
+   not own the customer, service, credential, or concurrency decision.
 8. `access.session_enforcement`: applies CoA/disconnect outcomes.
 
 Rule: billing, FUP, and admin actions resolve the desired access outcome once,
@@ -3383,8 +3392,9 @@ suppress downstream CoA. The closed boundary is pinned by
 
 RADIUS schema names and target capabilities are configuration owned by each
 `ConnectorConfig`; access-group names, priorities, address-list names, and
-enforcement reconciler thresholds are database settings. Code defaults are
-bootstrap values only, not parallel runtime policy.
+enforcement reconciler thresholds and the simultaneous-session cutover gate are
+database settings. Code defaults are bootstrap values only, not parallel
+runtime policy.
 
 Service intent:
 
