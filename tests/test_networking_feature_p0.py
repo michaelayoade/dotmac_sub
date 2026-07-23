@@ -85,7 +85,7 @@ from app.schemas.network import (
     PonPortCreate,
 )
 from app.schemas.network_monitoring import NetworkDeviceCreate
-from app.schemas.tr069 import Tr069CpeDeviceCreate, Tr069JobCreate
+from app.schemas.tr069 import Tr069CpeDeviceCreate
 from app.services import backup_alerts as backup_alerts_service
 from app.services import nas as nas_service
 from app.services import network as network_service
@@ -1261,15 +1261,15 @@ def test_tr069_dashboard_data_filters_and_stats(db_session, acs_server):
             last_inform_at=datetime.now(UTC) - timedelta(days=3),
         ),
     )
-    tr069_service.jobs.create(
-        db_session,
-        Tr069JobCreate(
+    db_session.add(
+        Tr069Job(
             device_id=device_seen.id,
-            name="Reboot Device",
+            name="Historical Failed Command",
             command="reboot",
             status=Tr069JobStatus.failed,
-        ),
+        )
     )
+    db_session.commit()
 
     data = web_network_tr069_service.tr069_dashboard_data(
         db_session,
@@ -1284,9 +1284,7 @@ def test_tr069_dashboard_data_filters_and_stats(db_session, acs_server):
     assert data["stats"]["jobs_failed"] >= 1
 
 
-def test_tr069_queue_device_job_creates_and_executes(
-    db_session, acs_server, monkeypatch
-):
+def test_tr069_queue_device_job_admits_durable_operation(db_session, acs_server):
     device = tr069_service.cpe_devices.create(
         db_session,
         Tr069CpeDeviceCreate(
@@ -1298,24 +1296,18 @@ def test_tr069_queue_device_job_creates_and_executes(
         ),
     )
     device.genieacs_device_id = "112233-ONT-TEST-TR069-003"
+    device_id = device.id
     db_session.commit()
-    db_session.refresh(device)
-
-    def _fake_execute(db, job_id: str):
-        job = db.get(Tr069Job, job_id)
-        job.status = Tr069JobStatus.succeeded
-        db.commit()
-        db.refresh(job)
-        return job
-
-    monkeypatch.setattr(tr069_service.jobs, "execute", _fake_execute)
-    job = web_network_tr069_service.queue_device_job(
+    outcome = web_network_tr069_service.queue_device_job(
         db_session,
-        tr069_device_id=str(device.id),
+        tr069_device_id=str(device_id),
         action="refresh",
     )
-    assert job.command == "refreshObject"
-    assert job.status == Tr069JobStatus.succeeded
+    assert outcome.command.value == "refreshObject"
+    assert outcome.status == Tr069JobStatus.queued
+    job = db_session.get(Tr069Job, outcome.job_id)
+    assert job is not None
+    assert job.network_operation_id == outcome.operation_id
 
 
 def test_tr069_dashboard_data_decodes_huawei_hex_serial_for_display(

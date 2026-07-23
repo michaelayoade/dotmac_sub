@@ -17,11 +17,11 @@ from app.models.tr069 import (
     Tr069AcsServer,
     Tr069CpeDevice,
     Tr069Event,
-    Tr069Job,
     Tr069Session,
 )
-from app.schemas.tr069 import Tr069AcsServerCreate, Tr069JobCreate
+from app.schemas.tr069 import Tr069AcsServerCreate
 from app.services.events.types import EventType
+from app.services.network.tr069_job_commands import Tr069CommandError
 from app.web.brand_globals import _app_datetime_filter
 
 # ---------------------------------------------------------------------------
@@ -44,87 +44,7 @@ class TestTr069EventTypes:
 
 
 # ---------------------------------------------------------------------------
-# 2. Job retry model columns
-# ---------------------------------------------------------------------------
-
-
-class TestJobRetryModel:
-    def test_job_has_retry_count(self, db_session) -> None:
-        from app.services.tr069 import acs_servers, jobs
-
-        server = acs_servers.create(
-            db_session,
-            Tr069AcsServerCreate(
-                name="Retry Test ACS",
-                base_url="http://genieacs:7557",
-                cwmp_url="http://acs/cwmp",
-                cwmp_username="u",
-                cwmp_password="p",
-                connection_request_username="cu",
-                connection_request_password="cp",
-            ),
-        )
-        device = Tr069CpeDevice(
-            acs_server_id=server.id,
-            serial_number="RETRY-001",
-            is_active=True,
-        )
-        db_session.add(device)
-        db_session.commit()
-        db_session.refresh(device)
-
-        job = jobs.create(
-            db_session,
-            Tr069JobCreate(
-                device_id=device.id,
-                name="Test Retry",
-                command="reboot",
-            ),
-        )
-        assert job.retry_count == 0
-        assert job.max_retries == 3
-
-    def test_retry_count_increments(self, db_session) -> None:
-        from app.services.tr069 import acs_servers
-
-        server = acs_servers.create(
-            db_session,
-            Tr069AcsServerCreate(
-                name="Retry Inc ACS",
-                base_url="http://genieacs:7557",
-                cwmp_url="http://acs/cwmp",
-                cwmp_username="u",
-                cwmp_password="p",
-                connection_request_username="cu",
-                connection_request_password="cp",
-            ),
-        )
-        device = Tr069CpeDevice(
-            acs_server_id=server.id,
-            serial_number="RETRY-002",
-            is_active=True,
-        )
-        db_session.add(device)
-        db_session.commit()
-
-        job = Tr069Job(
-            device_id=device.id,
-            name="Test",
-            command="reboot",
-            retry_count=0,
-            max_retries=3,
-        )
-        db_session.add(job)
-        db_session.commit()
-
-        job.retry_count += 1
-        db_session.commit()
-        db_session.refresh(job)
-        assert job.retry_count == 1
-
-
-# ---------------------------------------------------------------------------
-# 3. Inform webhook endpoint
+# 2. Inform webhook endpoint
 # ---------------------------------------------------------------------------
 
 
@@ -1119,18 +1039,20 @@ class TestAutoLinkOnts:
             is_active=True,
         )
         db_session.add(device)
+        db_session.flush()
+        device_id = device.id
         db_session.commit()
 
-        with pytest.raises(ValueError, match="not registered in GenieACS"):
+        with pytest.raises(Tr069CommandError, match="not registered in GenieACS"):
             web_network_tr069_service.create_firmware_download_job(
                 db_session,
-                tr069_device_id=str(device.id),
+                tr069_device_id=str(device_id),
                 firmware_url="https://example.test/fw.bin",
             )
-        with pytest.raises(ValueError, match="not registered in GenieACS"):
+        with pytest.raises(Tr069CommandError, match="not registered in GenieACS"):
             web_network_tr069_service.create_nat_port_forward_job(
                 db_session,
-                tr069_device_id=str(device.id),
+                tr069_device_id=str(device_id),
                 external_port=8080,
                 internal_ip="192.168.1.10",
                 internal_port=80,
@@ -1309,9 +1231,12 @@ class TestCeleryTaskRegistration:
         assert sync_all_acs_devices.name == "app.tasks.tr069.sync_all_acs_devices"
 
     def test_execute_jobs_task_importable(self) -> None:
-        from app.tasks.tr069 import execute_pending_jobs
+        from app.tasks.tr069 import reconcile_command_outcomes
 
-        assert execute_pending_jobs.name == "app.tasks.tr069.execute_pending_jobs"
+        assert (
+            reconcile_command_outcomes.name
+            == "app.tasks.tr069.reconcile_command_outcomes"
+        )
 
     def test_apply_acs_config_task_importable(self) -> None:
         from app.tasks.tr069 import apply_acs_config
@@ -1332,7 +1257,7 @@ class TestCeleryTaskRegistration:
         from app.tasks import __all__ as all_tasks
 
         assert "tr069_sync_all_acs_devices" in all_tasks
-        assert "tr069_execute_pending_jobs" in all_tasks
+        assert "tr069_reconcile_command_outcomes" in all_tasks
         assert "tr069_apply_acs_config" in all_tasks
         assert "tr069_check_device_health" in all_tasks
         assert "cleanup_tr069_records" in all_tasks

@@ -226,6 +226,9 @@ do not hand-edit these rows.
 | `network.device_projection` | unified cross-type device row (OLT/core/ONT/CPE) | `projection_writer` | canonical device identity ← `network.identity`<br>monitoring inventory observations ← `network.monitoring_inventory` | `owner_managed` | `native` | network operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_owner_commands.py`<br>`tests/test_device_projection_reconcile.py`<br>`tests/test_device_projection_task.py`<br>`tests/architecture/test_owner_command_boundary.py` |
 | `network.device_projection` | projected operational status and freshness | `projection_writer` | resolved operational device state ← `network.device_state`<br>monitoring inventory observations ← `network.monitoring_inventory` | `owner_managed` | `native` | network operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_owner_commands.py`<br>`tests/test_device_projection_reconcile.py`<br>`tests/test_device_projection_task.py`<br>`tests/architecture/test_owner_command_boundary.py` |
 | `network.device_projection` | device projection orphan pruning | `reconciler` | canonical device identity ← `network.identity` | `owner_managed` | `native` | network operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_owner_commands.py`<br>`tests/test_device_projection_reconcile.py`<br>`tests/test_device_projection_task.py`<br>`tests/architecture/test_owner_command_boundary.py` |
+| `network.tr069_commands` | TR-069 command admission coordination | `application_coordinator` | authenticated TR-069 command evidence ← `auth.permission_gate`<br>canonical TR-069 device and ACS binding ← `network.identity`<br>TR-069 command admission capability ← `control.feature_registry`<br>canonical network operation lifecycle ← `network.operation_ledger`<br>durable network command dispatch ← `network.operation_dispatch` | `coordinator_managed` | `complete` | network operations | `docs/designs/TR069_COMMAND_LIFECYCLE.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/CODING_STANDARD.md`<br>`tests/test_tr069_job_commands.py`<br>`tests/architecture/test_tr069_job_lifecycle_boundary.py` |
+| `network.tr069_commands` | TR-069 command execution coordination | `application_coordinator` | canonical TR-069 device and ACS binding ← `network.identity`<br>canonical network operation lifecycle ← `network.operation_ledger`<br>durable network command dispatch ← `network.operation_dispatch` | `coordinator_managed` | `complete` | network operations | `docs/designs/TR069_COMMAND_LIFECYCLE.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/CODING_STANDARD.md`<br>`tests/test_tr069_job_commands.py`<br>`tests/architecture/test_tr069_job_lifecycle_boundary.py` |
+| `network.tr069_commands` | TR-069 command outcome coordination | `application_coordinator` | canonical network operation lifecycle ← `network.operation_ledger`<br>durable network command dispatch ← `network.operation_dispatch`<br>normalized GenieACS command observation ← `external:genieacs` | `coordinator_managed` | `complete` | network operations | `docs/designs/TR069_COMMAND_LIFECYCLE.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/CODING_STANDARD.md`<br>`tests/test_tr069_job_commands.py`<br>`tests/architecture/test_tr069_job_lifecycle_boundary.py` |
 | `sessions.radius_resolution` | customer online-now resolution | `resolver` | active RADIUS session projection ← `sessions.radius_reconciliation` | `read_only` | `native` | network operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/DASHBOARD_OVERVIEW_PAGE_CONTRACT.md`<br>`tests/test_network_sot_services.py`<br>`tests/test_sot_relationships.py` |
 | `sessions.radius_resolution` | primary NAS session resolution | `resolver` | active RADIUS session projection ← `sessions.radius_reconciliation`<br>network identity registry ← `network.identity` | `read_only` | `native` | network operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/DASHBOARD_OVERVIEW_PAGE_CONTRACT.md`<br>`tests/test_network_sot_services.py`<br>`tests/test_sot_relationships.py` |
 | `operations.sla_escalation` | operational SLA event policy lifecycle | `authoritative_record` | validated SLA policy command ← `operations.sla_escalation_commands`<br>current operational SLA records ← `operations.sla_escalation` | `participant` | `complete` | operations platform | `docs/ARCHITECTURE.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_operational_escalation.py`<br>`tests/test_operational_sla_policy_ui.py`<br>`tests/architecture/test_operational_sla_policy_ownership.py` |
@@ -2782,19 +2785,32 @@ writers are retired; historical rows remain readable evidence.
    is observation polling owned by `network.ont_runtime_status`, not an
    operation-backed command. Firmware verification/readback continuations retain
    their own state machines and are not parallel command-origination paths.
-45. `network.ont_provisioning_commands`: owns acceptance and duplicate handling
+45. `network.tr069_commands`: owns typed TR-069 CPE command admission,
+   execution claims, and outcome classification. Admission atomically commits
+   the operation, encrypted execution payload, redacted operator projection,
+   lifecycle event, and typed dispatch. The optional
+   `network.tr069_command_admission` capability affects only new work;
+   dispatch and reconciliation are permanent responsibilities. GenieACS task
+   responses are observations: acceptance becomes pending, a recorded fault
+   becomes failed, absence after acceptance becomes succeeded, and any
+   ambiguous or interrupted delivery becomes `unverified`. Bulk actions fan
+   out through this same owner. The old CRUD/execute service, bulk Celery
+   envelope, execution flag alias, and runtime legacy adoption path are
+   removed; migration `408` terminalizes all pre-cutover executable rows and
+   clears their payloads.
+46. `network.ont_provisioning_commands`: owns acceptance and duplicate handling
    for ONT authorization, baseline repair, and bootstrap verification commands.
    It commits each operation and typed dispatch atomically. Admin, API, and bulk
    callers receive operation/dispatch identifiers and never publish the device
    task themselves.
-46. `network.ont_provisioning_execution`: owns the tracked authorization,
+47. `network.ont_provisioning_execution`: owns the tracked authorization,
    baseline-repair, DB-only baseline preview, bootstrap retry, parent rollup,
    and bulk-item transitions.
    Celery workers claim an existing dispatch and delegate execution here; they
    do not create operations or decide a parallel retry policy. Delayed bootstrap
    attempts are separate immutable dispatch rows on the same child operation,
    while Inform-driven completion uses the same parent projection.
-47. `network.ip_pool_utilization` (`app/services/ip_pool_utilization_snapshot.py`):
+48. `network.ip_pool_utilization` (`app/services/ip_pool_utilization_snapshot.py`):
    owns IP-pool utilization reads — the daily utilization snapshots and the
    live per-pool used/total counts consumed by the network report. The live
    count (assignment-join basis) is deliberately distinct from the snapshot's

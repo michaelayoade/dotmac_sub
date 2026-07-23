@@ -29,7 +29,7 @@ def test_task_extra_includes_request_context():
 
 def test_task_signal_handlers_emit_structured_logs(caplog):
     task = SimpleNamespace(
-        name="app.tasks.tr069.execute_pending_jobs",
+        name="app.tasks.tr069.reconcile_command_outcomes",
         request=SimpleNamespace(
             root_id="root-2",
             parent_id=None,

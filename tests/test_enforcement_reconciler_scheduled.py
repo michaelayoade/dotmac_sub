@@ -25,9 +25,9 @@ def test_enforcement_reconciler_has_reliability_contract() -> None:
 
 
 def test_enforcement_reconciler_is_permanent() -> None:
-    from app.services.scheduler import PERMANENT_CUSTOMER_LIFECYCLE_TASKS
+    from app.services.scheduler import PERMANENT_LIFECYCLE_TASKS
 
-    assert TASK in PERMANENT_CUSTOMER_LIFECYCLE_TASKS
+    assert TASK in PERMANENT_LIFECYCLE_TASKS
 
 
 def test_radius_refresh_transport_is_not_scheduled_independently() -> None:

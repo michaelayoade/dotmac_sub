@@ -34,7 +34,7 @@ commit 1 app/tasks/topology_lldp.py
 commit 1 app/tasks/topology_outage.py
 commit 1 app/tasks/topology_ufiber_link.py
 commit 1 app/tasks/topology_uisp.py
-commit 7 app/tasks/tr069.py
+commit 4 app/tasks/tr069.py
 commit 7 app/tasks/uisp_control.py
 commit 1 app/tasks/uisp_ip_backfill.py
 commit 1 app/tasks/unmatched_radio.py
@@ -90,7 +90,7 @@ rollback 2 app/tasks/topology_lldp.py
 rollback 2 app/tasks/topology_outage.py
 rollback 2 app/tasks/topology_ufiber_link.py
 rollback 3 app/tasks/topology_uisp.py
-rollback 11 app/tasks/tr069.py
+rollback 9 app/tasks/tr069.py
 rollback 3 app/tasks/uisp_control.py
 rollback 4 app/tasks/uisp_ip_backfill.py
 rollback 1 app/tasks/unmatched_radio.py

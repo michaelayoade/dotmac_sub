@@ -19,13 +19,13 @@ SessionLocal = db_session_adapter.create_session
 
 TR069_TASK_QUEUE_NAMES = {
     "app.tasks.tr069.sync_all_acs_devices",
-    "app.tasks.tr069.execute_pending_jobs",
+    "app.tasks.tr069.reconcile_command_outcomes",
     "app.tasks.tr069.check_device_health",
     "app.tasks.tr069.refresh_ont_runtime_data",
     "app.tasks.tr069.cleanup_tr069_records",
     "app.tasks.tr069.cleanup_stale_genieacs_tasks",
     "app.tasks.tr069.scrape_genieacs_metrics",
-    "app.tasks.tr069.execute_bulk_action",
+    "app.tasks.tr069.execute_network_operation_job",
     "app.tasks.tr069.wait_for_ont_bootstrap",
     "app.tasks.tr069.apply_saved_ont_service_config",
     "app.tasks.tr069.apply_acs_config",
@@ -2040,26 +2040,20 @@ def build_beat_schedule() -> dict:
             interval_seconds=tr069_sync_interval,
         )
 
-        # TR-069 job execution - executes queued jobs and retries failed
-        tr069_jobs_enabled = _effective_bool(
-            session,
-            SettingDomain.network,
-            "tr069_job_execution_enabled",
-            "TR069_JOB_EXECUTION_ENABLED",
-            True,
-        )
+        # Permanent lifecycle drainage: adopted commands must reach a terminal
+        # state even when new command admission is disabled.
         tr069_jobs_interval = _resolve_int(
             session,
             SettingDomain.network,
-            "tr069_job_execution_interval_seconds",
+            "tr069_command_reconciliation_interval_seconds",
             60,  # 1 minute
         )
         tr069_jobs_interval = max(tr069_jobs_interval, 30)  # Min: 30 seconds
         _sync_scheduled_task(
             session,
-            name="tr069_job_executor",
-            task_name="app.tasks.tr069.execute_pending_jobs",
-            enabled=tr069_jobs_enabled,
+            name="tr069_command_reconciler",
+            task_name="app.tasks.tr069.reconcile_command_outcomes",
+            enabled=True,
             interval_seconds=tr069_jobs_interval,
         )
 

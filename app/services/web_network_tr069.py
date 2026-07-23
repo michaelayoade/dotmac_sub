@@ -5,7 +5,9 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from ipaddress import IPv4Address
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
@@ -13,13 +15,12 @@ from starlette.requests import Request
 
 from app.config import settings
 from app.models.network import CPEDevice, OntAssignment, OntUnit
-from app.models.tr069 import Tr069CpeDevice, Tr069Job, Tr069JobStatus
+from app.models.tr069 import Tr069CpeDevice, Tr069JobStatus
 from app.schemas.network import OntUnitCreate
 from app.schemas.tr069 import (
     Tr069AcsServerCreate,
     Tr069AcsServerUpdate,
     Tr069CpeDeviceUpdate,
-    Tr069JobCreate,
 )
 from app.services import network as network_service
 from app.services import tr069 as tr069_service
@@ -31,7 +32,19 @@ from app.services.genieacs_client import (
 )
 from app.services.network import cpe as cpe_service
 from app.services.network._common import decode_huawei_hex_serial
-from app.services.tr069_web_audit import log_tr069_audit_event
+from app.services.network.tr069_job_commands import (
+    Tr069AdmissionOutcome,
+    Tr069CommandKind,
+    Tr069CommandRequest,
+    Tr069Download,
+    Tr069ParameterValue,
+    request_tr069_command,
+)
+from app.services.owner_commands import CommandContext
+from app.services.tr069_web_audit import (
+    actor_id_from_request,
+    log_tr069_audit_event,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +63,12 @@ class JobAction:
     payload: dict | None = None
 
 
+@dataclass(frozen=True)
+class Tr069BulkAdmissionOutcome:
+    accepted: tuple[Tr069AdmissionOutcome, ...]
+    rejected: tuple[tuple[str, str], ...]
+
+
 _JOB_ACTIONS: dict[str, JobAction] = {
     "refresh": JobAction(
         label="Refresh Parameters",
@@ -59,6 +78,51 @@ _JOB_ACTIONS: dict[str, JobAction] = {
     "reboot": JobAction(label="Reboot Device", command="reboot"),
     "factory_reset": JobAction(label="Factory Reset", command="factoryReset"),
 }
+
+
+def _tr069_command_context(
+    *,
+    request: Request | None,
+    device_id: str,
+    action: str,
+) -> CommandContext:
+    actor_id = actor_id_from_request(request)
+    return CommandContext.system(
+        actor=f"admin:{actor_id}" if actor_id else "admin:unknown",
+        scope=f"network:tr069:{device_id}",
+        reason=f"TR-069 admin action: {action}",
+        command_id=uuid4(),
+    )
+
+
+def _admit_tr069_command(
+    db: Session,
+    *,
+    request: Request | None,
+    device_id: str,
+    name: str,
+    kind: Tr069CommandKind,
+    object_name: str | None = None,
+    parameter_values: tuple[Tr069ParameterValue, ...] = (),
+    download: Tr069Download | None = None,
+) -> Tr069AdmissionOutcome:
+    parsed_device_id = coerce_uuid(device_id)
+    return request_tr069_command(
+        db,
+        Tr069CommandRequest(
+            context=_tr069_command_context(
+                request=request,
+                device_id=str(parsed_device_id),
+                action=kind.value,
+            ),
+            device_id=parsed_device_id,
+            name=name,
+            kind=kind,
+            object_name=object_name,
+            parameter_values=parameter_values,
+            download=download,
+        ),
+    )
 
 
 # Config push actions use setParameterValues - need parameter values at runtime
@@ -553,31 +617,30 @@ def _device_registered_in_acs(device: Tr069CpeDevice) -> bool:
     return bool(str(getattr(device, "genieacs_device_id", "") or "").strip())
 
 
-def _require_registered_device(device: Tr069CpeDevice) -> None:
-    if not _device_registered_in_acs(device):
-        raise ValueError(
-            "This TR-069 row is expected locally but has not registered in GenieACS yet."
-        )
-
-
-def queue_device_job(db: Session, *, tr069_device_id: str, action: str):
+def queue_device_job(
+    db: Session,
+    *,
+    tr069_device_id: str,
+    action: str,
+    request: Request | None = None,
+) -> Tr069AdmissionOutcome:
     selected = _JOB_ACTIONS.get(action)
     if selected is None:
         raise ValueError("Unsupported TR-069 action.")
-
-    device = db.get(Tr069CpeDevice, coerce_uuid(tr069_device_id))
-    if not device:
-        raise ValueError("TR-069 device not found")
-    _require_registered_device(device)
-
-    payload = Tr069JobCreate(
-        device_id=coerce_uuid(tr069_device_id),
-        name=selected.label,
-        command=selected.command,
-        payload=selected.payload,
+    kind = Tr069CommandKind(selected.command)
+    object_name = (
+        str((selected.payload or {}).get("objectName") or "")
+        if kind is Tr069CommandKind.refresh_object
+        else None
     )
-    job = tr069_service.jobs.create(db=db, payload=payload)
-    return tr069_service.jobs.execute(db=db, job_id=str(job.id))
+    return _admit_tr069_command(
+        db,
+        request=request,
+        device_id=tr069_device_id,
+        name=selected.label,
+        kind=kind,
+        object_name=object_name,
+    )
 
 
 def link_tr069_device_to_cpe(
@@ -854,7 +917,17 @@ def tr069_dashboard_data(
                 1 for item in jobs if item.status == Tr069JobStatus.failed
             ),
             "jobs_pending": sum(
-                1 for item in jobs if item.status == Tr069JobStatus.pending
+                1
+                for item in jobs
+                if item.status
+                in {
+                    Tr069JobStatus.queued,
+                    Tr069JobStatus.running,
+                    Tr069JobStatus.pending,
+                }
+            ),
+            "jobs_unverified": sum(
+                1 for item in jobs if item.status == Tr069JobStatus.unverified
             ),
         },
         "filters": {
@@ -970,7 +1043,7 @@ def create_config_push_job(
     action_key: str,
     value: str,
     request: Request | None = None,
-) -> Tr069Job:
+) -> Tr069AdmissionOutcome:
     """Create a config push job (setParameterValues) for a TR-069 device.
 
     Args:
@@ -986,39 +1059,34 @@ def create_config_push_job(
     if config_action is None:
         raise ValueError(f"Unknown config action: {action_key}")
 
-    device = db.get(Tr069CpeDevice, coerce_uuid(tr069_device_id))
-    if not device:
-        raise ValueError("TR-069 device not found")
-    _require_registered_device(device)
-
     # Build parameter values - try TR-181 path first, fallback to TR-098
     # Device. paths are TR-181, InternetGatewayDevice. paths are TR-098
     parameter_path = config_action.parameters[0]  # Primary path
-    parameter_value = value
+    parameter_value: str | bool = value
+    parameter_type = "xsd:string"
 
     # Handle boolean toggle actions
-    if action_key == "wifi_enable":
-        parameter_value = "true"
-    elif action_key == "wifi_disable":
-        parameter_value = "false"
-    elif action_key == "dhcp_enable":
-        parameter_value = "true"
-    elif action_key == "dhcp_disable":
-        parameter_value = "false"
+    if action_key in {"wifi_enable", "dhcp_enable"}:
+        parameter_value = True
+        parameter_type = "xsd:boolean"
+    elif action_key in {"wifi_disable", "dhcp_disable"}:
+        parameter_value = False
+        parameter_type = "xsd:boolean"
 
-    # Create job with setParameterValues command
-    payload = Tr069JobCreate(
-        device_id=coerce_uuid(tr069_device_id),
+    outcome = _admit_tr069_command(
+        db,
+        request=request,
+        device_id=tr069_device_id,
         name=config_action.label,
-        command="setParameterValues",
-        payload={
-            "parameterValues": [[parameter_path, parameter_value, "xsd:string"]],
-        },
+        kind=Tr069CommandKind.set_parameter_values,
+        parameter_values=(
+            Tr069ParameterValue(
+                path=parameter_path,
+                value=parameter_value,
+                value_type=parameter_type,
+            ),
+        ),
     )
-    job = tr069_service.jobs.create(db=db, payload=payload)
-
-    # Execute immediately
-    executed = tr069_service.jobs.execute(db=db, job_id=str(job.id))
     log_tr069_audit_event(
         db,
         request=request,
@@ -1027,10 +1095,11 @@ def create_config_push_job(
         entity_id=tr069_device_id,
         metadata={
             "config_action": action_key,
-            "job_id": str(executed.id),
+            "job_id": str(outcome.job_id),
+            "operation_id": str(outcome.operation_id),
         },
     )
-    return executed
+    return outcome
 
 
 def create_firmware_download_job(
@@ -1040,7 +1109,7 @@ def create_firmware_download_job(
     firmware_url: str,
     filename: str | None = None,
     request: Request | None = None,
-) -> Tr069Job:
+) -> Tr069AdmissionOutcome:
     """Create a firmware download job for a TR-069 device.
 
     Args:
@@ -1052,32 +1121,20 @@ def create_firmware_download_job(
     Returns:
         Created job
     """
-    device = db.get(Tr069CpeDevice, coerce_uuid(tr069_device_id))
-    if not device:
-        raise ValueError("TR-069 device not found")
-    _require_registered_device(device)
-
     if not firmware_url or not firmware_url.strip():
         raise ValueError("Firmware URL is required")
 
-    # Build download task payload
-    task_payload: dict[str, object] = {
-        "fileType": "1 Firmware Upgrade Image",
-        "url": firmware_url.strip(),
-    }
-    if filename and filename.strip():
-        task_payload["filename"] = filename.strip()
-
-    payload = Tr069JobCreate(
-        device_id=coerce_uuid(tr069_device_id),
+    outcome = _admit_tr069_command(
+        db,
+        request=request,
+        device_id=tr069_device_id,
         name="Firmware Update",
-        command="download",
-        payload=task_payload,
+        kind=Tr069CommandKind.download,
+        download=Tr069Download(
+            url=firmware_url.strip(),
+            filename=filename.strip() if filename and filename.strip() else None,
+        ),
     )
-    job = tr069_service.jobs.create(db=db, payload=payload)
-
-    # Execute immediately
-    executed = tr069_service.jobs.execute(db=db, job_id=str(job.id))
     log_tr069_audit_event(
         db,
         request=request,
@@ -1085,12 +1142,13 @@ def create_firmware_download_job(
         entity_type="tr069_device",
         entity_id=tr069_device_id,
         metadata={
-            "firmware_url": firmware_url,
             "filename": filename,
-            "job_id": str(executed.id),
+            "firmware_url": "[redacted]",
+            "job_id": str(outcome.job_id),
+            "operation_id": str(outcome.operation_id),
         },
     )
-    return executed
+    return outcome
 
 
 def queue_bulk_action(
@@ -1099,72 +1157,115 @@ def queue_bulk_action(
     action: str | None = None,
     params: dict | None = None,
     request: Request | None = None,
-) -> str:
-    """Queue a bulk action for multiple TR-069 devices.
+) -> Tr069BulkAdmissionOutcome:
+    """Admit each bulk action through the durable lifecycle owner.
 
     Args:
         device_ids: List of TR-069 device UUIDs
         action: Action to execute (refresh, reboot, factory_reset, config_push, firmware)
         params: Additional parameters for certain actions
 
-    Returns:
-        Celery task ID
+    Each device is its own atomic operation. The returned result makes partial
+    admission explicit instead of hiding it behind a non-durable Celery
+    envelope.
     """
     if action is None:
         raise ValueError("No action selected")
     if not device_ids:
         raise ValueError("No devices selected for bulk action")
 
-    registered_ids = [
-        str(row.id)
-        for row in db.query(Tr069CpeDevice)
-        .filter(
-            Tr069CpeDevice.id.in_([coerce_uuid(device_id) for device_id in device_ids])
-        )
-        .filter(Tr069CpeDevice.genieacs_device_id.isnot(None))
-        .all()
-    ]
-
     valid_actions = {"refresh", "reboot", "factory_reset", "config_push", "firmware"}
     if action not in valid_actions:
         raise ValueError(f"Invalid bulk action: {action}")
 
-    if not registered_ids:
-        raise ValueError("No selected devices are registered in GenieACS yet")
+    accepted: list[Tr069AdmissionOutcome] = []
+    rejected: list[tuple[str, str]] = []
+    action_params = params or {}
+    for device_id in device_ids:
+        try:
+            if action in _JOB_ACTIONS:
+                accepted.append(
+                    queue_device_job(
+                        db,
+                        tr069_device_id=device_id,
+                        action=action,
+                        request=request,
+                    )
+                )
+            elif action == "config_push":
+                parameter_path = str(action_params.get("parameter_path") or "").strip()
+                if not parameter_path:
+                    raise ValueError("config_push requires parameter_path")
+                accepted.append(
+                    _admit_tr069_command(
+                        db,
+                        request=request,
+                        device_id=device_id,
+                        name="Config Push",
+                        kind=Tr069CommandKind.set_parameter_values,
+                        parameter_values=(
+                            Tr069ParameterValue(
+                                path=parameter_path,
+                                value=str(action_params.get("parameter_value") or ""),
+                                value_type="xsd:string",
+                            ),
+                        ),
+                    )
+                )
+            else:
+                firmware_url = str(action_params.get("firmware_url") or "").strip()
+                if not firmware_url:
+                    raise ValueError("firmware requires firmware_url")
+                accepted.append(
+                    _admit_tr069_command(
+                        db,
+                        request=request,
+                        device_id=device_id,
+                        name="Firmware Update",
+                        kind=Tr069CommandKind.download,
+                        download=Tr069Download(
+                            url=firmware_url,
+                            filename=(
+                                str(action_params.get("filename") or "").strip() or None
+                            ),
+                        ),
+                    )
+                )
+        except Exception as exc:  # noqa: BLE001
+            rejected.append((device_id, str(exc)))
 
-    from app.services.queue_adapter import enqueue_task
-    from app.tasks.tr069 import execute_bulk_action
+    if not accepted:
+        details = rejected[0][1] if rejected else "No commands were accepted"
+        raise ValueError(details)
 
-    task = enqueue_task(
-        execute_bulk_action,
-        args=[registered_ids, action, params or {}],
-        correlation_id=f"tr069_bulk:{action}:{len(registered_ids)}",
-        source="web_network_tr069",
+    outcome = Tr069BulkAdmissionOutcome(
+        accepted=tuple(accepted),
+        rejected=tuple(rejected),
     )
     logger.info(
-        "tr069_bulk_action_queued",
+        "tr069_bulk_action_admitted",
         extra={
             "event": "tr069_bulk_action",
             "action": action,
-            "device_count": len(registered_ids),
-            "task_id": str(task.task_id or ""),
-            "correlation_id": f"tr069_bulk:{action}:{len(registered_ids)}",
+            "accepted_count": len(outcome.accepted),
+            "rejected_count": len(outcome.rejected),
         },
     )
-    task_id = str(task.task_id or "")
     log_tr069_audit_event(
         db,
         request=request,
         action="bulk_action",
         entity_type="tr069_devices",
-        entity_id=task_id,
+        entity_id=outcome.accepted[0].operation_id,
         metadata={
             "action": action,
             "device_count": len(device_ids),
-            "task_id": task_id,
+            "accepted_count": len(outcome.accepted),
+            "rejected_count": len(outcome.rejected),
+            "operation_ids": [str(item.operation_id) for item in outcome.accepted],
         },
     )
-    return task_id
+    return outcome
 
 
 def create_nat_port_forward_job(
@@ -1177,7 +1278,7 @@ def create_nat_port_forward_job(
     protocol: str,
     description: str | None = None,
     request: Request | None = None,
-) -> Tr069Job:
+) -> Tr069AdmissionOutcome:
     """Create a NAT port forwarding rule on a TR-069 device.
 
     Args:
@@ -1192,11 +1293,6 @@ def create_nat_port_forward_job(
     Returns:
         Created job
     """
-    device = db.get(Tr069CpeDevice, coerce_uuid(tr069_device_id))
-    if not device:
-        raise ValueError("TR-069 device not found")
-    _require_registered_device(device)
-
     # Validate inputs
     if not (1 <= external_port <= 65535):
         raise ValueError("External port must be between 1 and 65535")
@@ -1207,22 +1303,16 @@ def create_nat_port_forward_job(
     if protocol_upper not in {"TCP", "UDP", "TCP/UDP"}:
         raise ValueError("Protocol must be TCP, UDP, or TCP/UDP")
 
-    # Validate IP format (basic check)
-    ip_parts = internal_ip.split(".")
-    if len(ip_parts) != 4:
-        raise ValueError("Invalid internal IP address format")
-    for part in ip_parts:
-        try:
-            num = int(part)
-            if not (0 <= num <= 255):
-                raise ValueError("Invalid internal IP address format")
-        except ValueError:
-            raise ValueError("Invalid internal IP address format")
+    try:
+        normalized_internal_ip = str(IPv4Address(internal_ip))
+    except ValueError as exc:
+        raise ValueError("Invalid internal IP address format") from exc
 
     # Build port mapping parameters using TR-181 paths
     # GenieACS uses addObject to create new instances
     rule_description = (
-        description or f"Port {external_port} to {internal_ip}:{internal_port}"
+        description
+        or f"Port {external_port} to {normalized_internal_ip}:{internal_port}"
     )
 
     # First, we need to add an object, then set its values
@@ -1240,27 +1330,43 @@ def create_nat_port_forward_job(
 
     # Use setParameterValues with a new instance indicator
     # GenieACS handles addObject internally when setting on non-existent instance
-    parameter_values: list[list[object]] = [
-        ["Device.NAT.PortMapping.*.Enable", True, "xsd:boolean"],
-        ["Device.NAT.PortMapping.*.Protocol", protocol_upper, "xsd:string"],
-        ["Device.NAT.PortMapping.*.ExternalPort", external_port, "xsd:unsignedInt"],
-        ["Device.NAT.PortMapping.*.InternalClient", internal_ip, "xsd:string"],
-        ["Device.NAT.PortMapping.*.InternalPort", internal_port, "xsd:unsignedInt"],
-        ["Device.NAT.PortMapping.*.Description", rule_description, "xsd:string"],
-    ]
-
-    payload = Tr069JobCreate(
-        device_id=coerce_uuid(tr069_device_id),
-        name=f"NAT Forward: {external_port} → {internal_ip}:{internal_port}",
-        command="setParameterValues",
-        payload={
-            "parameterValues": parameter_values,
-        },
+    parameter_values = (
+        Tr069ParameterValue("Device.NAT.PortMapping.*.Enable", True, "xsd:boolean"),
+        Tr069ParameterValue(
+            "Device.NAT.PortMapping.*.Protocol", protocol_upper, "xsd:string"
+        ),
+        Tr069ParameterValue(
+            "Device.NAT.PortMapping.*.ExternalPort",
+            external_port,
+            "xsd:unsignedInt",
+        ),
+        Tr069ParameterValue(
+            "Device.NAT.PortMapping.*.InternalClient",
+            normalized_internal_ip,
+            "xsd:string",
+        ),
+        Tr069ParameterValue(
+            "Device.NAT.PortMapping.*.InternalPort",
+            internal_port,
+            "xsd:unsignedInt",
+        ),
+        Tr069ParameterValue(
+            "Device.NAT.PortMapping.*.Description",
+            rule_description,
+            "xsd:string",
+        ),
     )
-    job = tr069_service.jobs.create(db=db, payload=payload)
 
-    # Execute immediately
-    executed = tr069_service.jobs.execute(db=db, job_id=str(job.id))
+    outcome = _admit_tr069_command(
+        db,
+        request=request,
+        device_id=tr069_device_id,
+        name=(
+            f"NAT Forward: {external_port} → {normalized_internal_ip}:{internal_port}"
+        ),
+        kind=Tr069CommandKind.set_parameter_values,
+        parameter_values=parameter_values,
+    )
     log_tr069_audit_event(
         db,
         request=request,
@@ -1269,13 +1375,14 @@ def create_nat_port_forward_job(
         entity_id=tr069_device_id,
         metadata={
             "external_port": external_port,
-            "internal_ip": internal_ip,
+            "internal_ip": normalized_internal_ip,
             "internal_port": internal_port,
             "protocol": protocol_upper,
-            "job_id": str(executed.id),
+            "job_id": str(outcome.job_id),
+            "operation_id": str(outcome.operation_id),
         },
     )
-    return executed
+    return outcome
 
 
 def push_acs_enforcement_preset(

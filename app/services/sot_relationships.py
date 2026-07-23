@@ -7527,6 +7527,261 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="network.tr069_commands",
+                module="app.services.network.tr069_job_commands",
+                owns=(
+                    "TR-069 command admission coordination",
+                    "TR-069 command execution coordination",
+                    "TR-069 command outcome coordination",
+                ),
+                depends_on=(
+                    "auth.permission_gate",
+                    "control.feature_registry",
+                    "network.identity",
+                    "network.operation_ledger",
+                    "network.operation_dispatch",
+                    "events.dispatcher",
+                ),
+                notes=(
+                    "Owns the complete command lifecycle boundary. Adapters submit "
+                    "typed intent; the operation ledger owns lifecycle, the durable "
+                    "dispatch owns broker delivery, GenieACS supplies observations, "
+                    "and tr069_jobs is a read-only operator projection. Disabling "
+                    "admission never stops accepted-work drainage."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="TR-069 command admission coordination",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "authenticated TR-069 command evidence",
+                                "canonical TR-069 device and ACS binding",
+                                "TR-069 command admission capability",
+                                "canonical network operation lifecycle",
+                                "durable network command dispatch",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="TR-069 command execution coordination",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "canonical TR-069 device and ACS binding",
+                                "canonical network operation lifecycle",
+                                "durable network command dispatch",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="TR-069 command outcome coordination",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "canonical network operation lifecycle",
+                                "durable network command dispatch",
+                                "normalized GenieACS command observation",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="authenticated TR-069 command evidence",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "admin authorization plus typed actor, scope, reason, "
+                                "command, correlation, and idempotency context"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical TR-069 device and ACS binding",
+                            owner="network.identity",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked active Tr069CpeDevice identity, GenieACS "
+                                "device id, and active Tr069AcsServer binding"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="TR-069 command admission capability",
+                            owner="control.feature_registry",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="network.tr069_command_admission",
+                        ),
+                        AuthorityInput(
+                            name="canonical network operation lifecycle",
+                            owner="network.operation_ledger",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "cpe_tr069_command NetworkOperation identity and "
+                                "guarded lifecycle state"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="durable network command dispatch",
+                            owner="network.operation_dispatch",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "cpe_tr069_command.v1 outbox row, publication "
+                                "attempts, and worker claim"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="normalized GenieACS command observation",
+                            owner="external:genieacs",
+                            kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                            source=(
+                                "accepted task ids, pending task inventory, faults, "
+                                "and absence after acceptance"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        boundary=(
+                            "Each public admission, execution claim, or observation "
+                            "enters execute_owner_command once on a transaction-free "
+                            "session; the operation, dispatch, encrypted payload, job "
+                            "projection, and event evidence commit atomically."
+                        ),
+                        locking=(
+                            "Admission locks the target device; execution and outcome "
+                            "lock the operation and job projection. Unique active "
+                            "correlation and one-job-per-operation constraints arbitrate "
+                            "concurrent requests."
+                        ),
+                        idempotency=(
+                            "A device, command kind, and encrypted-payload fingerprint "
+                            "return the active operation. Dispatch claims permit one "
+                            "queued-to-running transition and terminal observations do "
+                            "not regress."
+                        ),
+                        retries=(
+                            "Broker publication may retry before worker claim. ACS "
+                            "submission is never automatically replayed; interrupted "
+                            "or ambiguous delivery becomes unverified and requires "
+                            "review of current device state."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "network.tr069_commands.invalid_parameter",
+                            "network.tr069_commands.invalid_parameter_type",
+                            "network.tr069_commands.invalid_parameter_value",
+                            "network.tr069_commands.invalid_download",
+                            "network.tr069_commands.invalid_command",
+                            "network.tr069_commands.invalid_refresh_root",
+                            "network.tr069_commands.admission_disabled",
+                            "network.tr069_commands.device_not_found",
+                            "network.tr069_commands.device_inactive",
+                            "network.tr069_commands.device_not_registered",
+                            "network.tr069_commands.acs_unavailable",
+                            "network.tr069_commands.operation_projection_missing",
+                            "network.tr069_commands.invalid_observation",
+                            "network.tr069_commands.device_command_in_progress",
+                            "network.tr069_commands.device_state_review_required",
+                            "network.tr069_commands.concurrent_admission",
+                            *owner_command_boundary_error_codes(
+                                "network.tr069_commands"
+                            ),
+                        ),
+                        mapping_owner=(
+                            "app.services.web_network_tr069 and "
+                            "app.tasks.tr069 adapters"
+                        ),
+                        retryable_codes=(),
+                        fail_closed_on=(
+                            "disabled admission",
+                            "inactive or unregistered target",
+                            "missing ACS binding",
+                            "operation/projection mismatch",
+                            "ambiguous ACS delivery",
+                            "active caller transaction",
+                            "manifest mismatch",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "tr069_job.accepted",
+                            "tr069_job.completed",
+                            "tr069_job.failed",
+                            "tr069_job.unverified",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Additive payload evolution within version 1; no event "
+                            "contains command values, firmware URLs, or credentials."
+                        ),
+                        replay=(
+                            "The event store retries delivery by event identity; "
+                            "consumers treat job and operation ids as immutable "
+                            "lifecycle evidence."
+                        ),
+                    ),
+                    projections=(
+                        ProjectionContract(
+                            name="tr069_jobs operator lifecycle projection",
+                            input_names=(
+                                "canonical TR-069 device and ACS binding",
+                                "canonical network operation lifecycle",
+                                "durable network command dispatch",
+                                "normalized GenieACS command observation",
+                            ),
+                            writer="network.tr069_commands",
+                            freshness=(
+                                "Admission and normalized observations update the "
+                                "projection in the owning transaction; the permanent "
+                                "resolver checks active ACS tasks every scheduler pass."
+                            ),
+                            stale_behavior=(
+                                "Readers show the last committed state and "
+                                "last_observed_at. Missing or ambiguous confirmation "
+                                "becomes unverified rather than inferred success."
+                            ),
+                            drift_signal=(
+                                "Operation/job status disagreement, an unlinked active "
+                                "job, or an expired running/pending confirmation window."
+                            ),
+                            rebuild_operation=(
+                                "app.tasks.tr069.reconcile_command_outcomes"
+                            ),
+                            repair_owner="network.tr069_commands",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        new_owner="network.tr069_commands",
+                        old_owner=(
+                            "app.services.tr069.JobProjections mutation methods and "
+                            "app.tasks.tr069.execute_bulk_action"
+                        ),
+                        verification=(
+                            "Focused lifecycle and architecture tests prove atomic "
+                            "admission, guarded execution, terminal ambiguity, "
+                            "permanent drainage, secret redaction, and absence of old "
+                            "producers."
+                        ),
+                        cutover_gate=(
+                            "Migration 408 terminalizes every unlinked executable row "
+                            "and moves the old flag value to the admission-only control."
+                        ),
+                        fallback_retirement=(
+                            "Legacy create/update/delete/execute/cancel methods, bulk "
+                            "task, runtime adoption, and old control alias are removed."
+                        ),
+                    ),
+                    steward="network operations",
+                    design_refs=(
+                        "docs/designs/TR069_COMMAND_LIFECYCLE.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/CODING_STANDARD.md",
+                    ),
+                    test_refs=(
+                        "tests/test_tr069_job_commands.py",
+                        "tests/architecture/test_tr069_job_lifecycle_boundary.py",
+                    ),
+                ),
+            ),
+            SOTService(
                 name="network.ont_provisioning_commands",
                 module="app.services.network.ont_provisioning_commands",
                 owns=(
@@ -15137,11 +15392,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         ),
         entrypoints=("app.tasks.*", "app.web.admin.system", "app.main"),
         rule=(
-            "Core customer-financial lifecycle tasks are always registered and cannot "
-            "be disabled, renamed, or deleted. Optional capability scheduling composes "
-            "through the feature control plane. Event-driven transports remain "
-            "requestable but cannot register as independent periodic repair owners; "
-            "task bodies remain thin adapters."
+            "Core lifecycle tasks are always registered and cannot be disabled, "
+            "renamed, or deleted. This includes customer-financial lifecycle work "
+            "and durable command dispatch/drainage after acceptance. Optional "
+            "capability scheduling composes through the feature control plane. "
+            "Event-driven transports remain requestable but cannot register as "
+            "independent periodic repair owners; task bodies remain thin adapters."
         ),
     ),
     DomainSOT(
