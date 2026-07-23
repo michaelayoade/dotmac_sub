@@ -5,7 +5,6 @@ style: exercise the builders against the native managers on db_session."""
 import uuid
 
 import pytest
-from fastapi import HTTPException
 
 from app.models.project import (
     ProjectStatus,
@@ -24,6 +23,7 @@ from app.services.projects import (
     project_tasks,
     projects,
 )
+from app.services.web_projects import ProjectProjectionError
 
 
 def _create_project(db_session, subscriber, **overrides):
@@ -56,6 +56,32 @@ def test_project_list_query_normalizes_sort_filters_and_page_size():
 
 
 class TestListContext:
+    def test_typed_projection_and_admin_context_have_item_parity(
+        self, db_session, subscriber
+    ):
+        project = _create_project(db_session, subscriber, region="Lagos")
+        query = web_projects.ProjectListProjectionQuery(limit=25)
+        projection = web_projects.query_project_list_projection(db_session, query)
+        context = web_projects.build_projects_list_context(
+            db_session,
+            search=None,
+            status=None,
+            project_type=None,
+            priority=None,
+            region=None,
+            filters=None,
+            order_by="created_at",
+            order_dir="desc",
+            page=1,
+            per_page=25,
+        )
+
+        assert [row.id for row in projection.items] == [project.id]
+        assert [row.id for row in context["projects"]] == [
+            row.id for row in projection.items
+        ]
+        assert context["has_next_page"] is projection.has_next
+
     def test_list_context_shape(self, db_session, subscriber):
         project = _create_project(db_session, subscriber, region="Abuja")
         context = web_projects.build_projects_list_context(
@@ -122,7 +148,7 @@ class TestListContext:
         assert [row.region for row in context["projects"]] == ["Lagos"]
 
     def test_invalid_filters_payload_is_http_400(self, db_session):
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(ProjectProjectionError) as exc_info:
             web_projects.build_projects_list_context(
                 db_session,
                 search=None,
@@ -136,7 +162,7 @@ class TestListContext:
                 page=1,
                 per_page=25,
             )
-        assert exc_info.value.status_code == 400
+        assert exc_info.value.code == "ui.project_list_projection.invalid_filter"
 
     def test_csv_export_includes_default_columns(self, db_session, subscriber):
         _create_project(db_session, subscriber, name="CSV project")
@@ -174,9 +200,9 @@ class TestReferenceResolution:
         assert should_redirect is bool(project.number)
 
     def test_unknown_reference_is_404(self, db_session):
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(ProjectProjectionError) as exc_info:
             web_projects.resolve_project_reference(db_session, str(uuid.uuid4()))
-        assert exc_info.value.status_code == 404
+        assert exc_info.value.code == "ui.project_list_projection.not_found"
 
 
 class TestFormHandlers:
@@ -210,7 +236,7 @@ class TestFormHandlers:
         )
         assert updated.status == "active"
 
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(ProjectProjectionError) as exc_info:
             web_projects.quick_update_project(
                 db_session,
                 request=None,
@@ -219,7 +245,7 @@ class TestFormHandlers:
                 field="name",
                 value="nope",
             )
-        assert exc_info.value.status_code == 400
+        assert exc_info.value.code == "ui.project_list_projection.invalid_filter"
 
     def test_comment_edit_requires_author(self, db_session, subscriber):
         project = _create_project(db_session, subscriber)
@@ -231,7 +257,7 @@ class TestFormHandlers:
             actor_id=author_id,
             body="First note",
         )
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(ProjectProjectionError) as exc_info:
             web_projects.update_project_comment_from_form(
                 db_session,
                 request=None,
@@ -240,7 +266,7 @@ class TestFormHandlers:
                 actor_id=str(uuid.uuid4()),
                 body="Hijack",
             )
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.code == "ui.project_list_projection.unauthorized"
         updated = web_projects.update_project_comment_from_form(
             db_session,
             request=None,
@@ -310,7 +336,7 @@ class TestTasksContext:
         assert updated.completed_at is not None
 
     def test_assigned_to_me_requires_actor(self, db_session):
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(ProjectProjectionError) as exc_info:
             web_projects.build_tasks_list_context(
                 db_session,
                 project_id=None,
@@ -322,7 +348,7 @@ class TestTasksContext:
                 page=1,
                 per_page=25,
             )
-        assert exc_info.value.status_code == 400
+        assert exc_info.value.code == "ui.project_list_projection.invalid_filter"
 
     def test_task_detail_lists_dependencies(self, db_session, subscriber):
         template = web_projects.create_template_from_form(
@@ -435,11 +461,11 @@ class TestTemplateEditor:
         task = web_projects.create_template_task_from_form(
             db_session, template_id=str(template_a.id), title="Only in A"
         )
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(ProjectProjectionError) as exc_info:
             web_projects.get_template_task_checked(
                 db_session, template_id=str(template_b.id), task_id=str(task.id)
             )
-        assert exc_info.value.status_code == 404
+        assert exc_info.value.code == "ui.project_list_projection.not_found"
 
 
 class TestFilterSchemas:

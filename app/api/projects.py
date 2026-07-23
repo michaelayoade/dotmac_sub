@@ -10,7 +10,11 @@ Same paths and payloads as the CRM router; sub conventions applied:
   future native time-cost capability while work logs remain CRM-owned.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from collections.abc import Callable, Coroutine
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
@@ -27,9 +31,46 @@ from app.schemas.project import (
 from app.services import project_filters
 from app.services import projects as projects_service
 from app.services.auth_dependencies import require_permission
+from app.services.domain_errors import DomainError
 from app.services.dynamic_filters import FilterValidationError
+from app.services.web_projects import (
+    ProjectListProjectionQuery,
+    query_project_list_projection,
+)
 
-router = APIRouter()
+
+def _project_error_status(exc: DomainError) -> int:
+    if exc.code.endswith(".not_found"):
+        return status.HTTP_404_NOT_FOUND
+    if exc.code.endswith(".unauthorized"):
+        return status.HTTP_403_FORBIDDEN
+    if exc.code.endswith(
+        (".stale_state", ".relationship_conflict", ".idempotency_conflict")
+    ):
+        return status.HTTP_409_CONFLICT
+    return status.HTTP_400_BAD_REQUEST
+
+
+class ProjectDomainRoute(APIRoute):
+    """Map transport-neutral Projects errors at the API adapter boundary."""
+
+    def get_route_handler(
+        self,
+    ) -> Callable[[Request], Coroutine[Any, Any, Response]]:
+        original = super().get_route_handler()
+
+        async def handler(request: Request) -> Response:
+            try:
+                return await original(request)
+            except DomainError as exc:
+                raise HTTPException(
+                    status_code=_project_error_status(exc), detail=exc.message
+                ) from exc
+
+        return handler
+
+
+router = APIRouter(route_class=ProjectDomainRoute)
 
 
 @router.post(
@@ -66,29 +107,24 @@ def list_projects(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    try:
-        filter_clause = project_filters.build_project_filter_clause(filters)
-    except FilterValidationError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    args = (
-        subscriber_id,
-        status,
-        project_type,
-        priority,
-        owner_person_id,
-        manager_person_id,
-        project_manager_person_id,
-        assistant_manager_person_id,
-        is_active,
-        order_by,
-        order_dir,
-        limit,
-        offset,
-    )
-    if filter_clause is None:
-        return projects_service.projects.list_response(db, *args)
-    return projects_service.projects.list_response(
-        db, *args, filter_clause=filter_clause
+    return query_project_list_projection(
+        db,
+        ProjectListProjectionQuery(
+            subscriber_id=subscriber_id,
+            status=status,
+            project_type=project_type,
+            priority=priority,
+            owner_person_id=owner_person_id,
+            manager_person_id=manager_person_id,
+            project_manager_person_id=project_manager_person_id,
+            assistant_manager_person_id=assistant_manager_person_id,
+            is_active=is_active,
+            filters=filters,
+            order_by=order_by,
+            order_dir=order_dir,
+            limit=limit,
+            offset=offset,
+        ),
     )
 
 

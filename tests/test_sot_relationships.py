@@ -703,8 +703,10 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "runtime.db_sessions",
     )
     assert sot_relationships.dependencies_for("operations.project_lifecycle") == (
+        "auth.permission_gate",
         "events.dispatcher",
         "communications.staff_notifications",
+        "operations.work_order_commands",
     )
     assert sot_relationships.dependencies_for("operations.work_order_commands") == (
         "customer.identity_scope",
@@ -1074,7 +1076,7 @@ def test_domain_sot_relationships_resolve_owning_service_by_concern():
     assert cadence_owner.module == "app.services.catalog.subscriptions"
 
     project_service = sot_relationships.owning_service_for(
-        "native project field and status mutations"
+        "Project and ProjectTask identity and lifecycle"
     )
 
     assert project_service is not None
