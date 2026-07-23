@@ -19,11 +19,13 @@ TR-143 is genuinely asynchronous. The CPE runs the transfer on its own schedule
 and reports completion on a later inform — there is no synchronous result to
 wait for inside a request. So this module splits the operation:
 
-    arm_link_speed_test()      -> refresh the object, then request the test
-    harvest_link_speed_test()  -> read the completed result and persist it
+    prepare_diagnostic_object()  -> enumerate the object's children (a read)
+    build_arm_action()           -> the applier action that requests the run
+    harvest_link_speed_test()    -> read the completed result
 
-A caller (task, admin action) drives the two halves. Nothing here blocks on the
-device.
+A caller (task, admin action) drives the sequence and hands the arm action to
+reconcile.applier.apply_plan. Nothing here writes to the ACS, and nothing here
+blocks on the device.
 """
 
 from __future__ import annotations
@@ -32,6 +34,8 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
+
+from app.services.network.reconcile.actions import AcsArmDiagnostic
 
 logger = logging.getLogger(__name__)
 
@@ -47,18 +51,16 @@ TERMINAL_ERROR_PREFIX = "Error_"
 DEFAULT_ARM_TIMEOUT_SEC = 300
 
 
-class AcsClient(Protocol):
-    """The slice of the ACS client this module needs.
+class AcsReader(Protocol):
+    """The read slice of the ACS client this module needs.
 
-    Declared structurally so tests can substitute a fake without importing the
-    GenieACS client, and so this module never grows its own transport.
+    Reads only. Every ACS *write* goes through reconcile/applier.py — the
+    ownership contract in tests/architecture/test_huawei_control_plane_writes.py
+    exists so device mutations converge on one audited path, and a diagnostic
+    that wrote to the NBI directly would be a second, unaudited one.
     """
 
     def refresh_object(self, device_id: str, path: str, *, timeout_sec: int) -> Any: ...
-
-    def set_parameter_values(
-        self, device_id: str, params: dict[str, Any], *, timeout_sec: int
-    ) -> Any: ...
 
     def get_parameter_values(
         self, device_id: str, paths: list[str]
@@ -138,44 +140,55 @@ def _paths(tree: dict[str, str], direction: str) -> dict[str, str]:
     }
 
 
-def arm_link_speed_test(
-    client: AcsClient,
+def build_arm_action(
     device_id: str,
     tree: dict[str, str],
     *,
     direction: str = "download",
     target_url: str,
-    timeout_sec: int = DEFAULT_ARM_TIMEOUT_SEC,
-) -> str:
-    """Request a TR-143 run. Returns the diagnostics object path.
+) -> AcsArmDiagnostic:
+    """The applier action that requests a TR-143 run.
 
-    The refresh is not optional: the production ACS holds these objects as
-    ``{"_object": true, "_writable": true}`` with no children, so a
-    setParameterValues issued without enumerating them first has nothing to
-    write to.
-
-    This returns as soon as the request is accepted. The device runs the
-    transfer on its own schedule; call ``harvest_link_speed_test`` after it
-    informs.
+    Writing is not this module's job. It composes the parameter set and hands
+    back an action for ``reconcile.applier.apply_plan`` to execute, so the
+    diagnostic is audited alongside every other device write.
     """
     paths = _paths(tree, direction)
     if not paths:
         raise ValueError(f"No TR-143 {direction} paths in this parameter tree")
 
-    state_path = paths["state"]
-    object_path = state_path.rsplit(".", 1)[0]
-
-    client.refresh_object(device_id, object_path, timeout_sec=timeout_sec)
-    url_key = "url"
-    client.set_parameter_values(
-        device_id,
-        {paths[url_key]: target_url, state_path: STATE_REQUESTED},
-        timeout_sec=timeout_sec,
+    return AcsArmDiagnostic(
+        device_id=device_id,
+        params={paths["url"]: target_url, paths["state"]: STATE_REQUESTED},
+        label=f"tr143.{direction}",
     )
+
+
+def prepare_diagnostic_object(
+    client: AcsReader,
+    device_id: str,
+    tree: dict[str, str],
+    *,
+    direction: str = "download",
+    timeout_sec: int = DEFAULT_ARM_TIMEOUT_SEC,
+) -> str:
+    """Enumerate the diagnostics object's children. Returns its path.
+
+    Not optional, and it must precede the arm action: the production ACS holds
+    these objects as ``{"_object": true, "_writable": true}`` with no children,
+    so a setParameterValues issued first has nothing to write to. This is a
+    read/refresh, not a mutation.
+    """
+    paths = _paths(tree, direction)
+    if not paths:
+        raise ValueError(f"No TR-143 {direction} paths in this parameter tree")
+
+    object_path = paths["state"].rsplit(".", 1)[0]
+    client.refresh_object(device_id, object_path, timeout_sec=timeout_sec)
     logger.info(
-        "tr143_armed",
+        "tr143_object_refreshed",
         extra={
-            "event": "tr143_armed",
+            "event": "tr143_object_refreshed",
             "device_id": device_id,
             "direction": direction,
             "object_path": object_path,
@@ -185,7 +198,7 @@ def arm_link_speed_test(
 
 
 def harvest_link_speed_test(
-    client: AcsClient,
+    client: AcsReader,
     device_id: str,
     tree: dict[str, str],
     *,

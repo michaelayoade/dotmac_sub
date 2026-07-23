@@ -25,9 +25,6 @@ class _FakeAcs:
     def refresh_object(self, device_id, path, *, timeout_sec):
         self.refreshed.append((device_id, path))
 
-    def set_parameter_values(self, device_id, params, *, timeout_sec):
-        self.written.append(params)
-
     def get_parameter_values(self, device_id, paths):
         return {path: self.values.get(path) for path in paths}
 
@@ -93,37 +90,47 @@ def test_an_unmeasurable_run_reports_zero_not_a_slow_link(byte_count, bom, eom):
 # ---------------------------------------------------------------------------
 
 
-def test_arming_refreshes_the_object_before_writing_to_it():
+def test_the_object_is_refreshed_before_it_can_be_armed():
     """The production ACS holds these objects with no enumerated children."""
 
     acs = _FakeAcs()
 
-    path = lst.arm_link_speed_test(
-        acs, "dev-1", TR098, target_url="http://speedtest.dotmac.ng/10mb"
-    )
+    path = lst.prepare_diagnostic_object(acs, "dev-1", TR098)
 
     assert acs.refreshed == [("dev-1", "DownloadDiagnostics")]
     assert path == "DownloadDiagnostics"
-    # And the refresh happened before the set, not after.
-    assert acs.written[0]["DownloadDiagnostics.DiagnosticsState"] == lst.STATE_REQUESTED
 
 
-def test_arming_sets_the_target_url_and_requests_the_run():
-    acs = _FakeAcs()
+def test_the_arm_is_an_applier_action_not_a_direct_write():
+    """ACS writes converge on reconcile/applier.py; see the architecture guard."""
 
-    lst.arm_link_speed_test(
-        acs, "dev-1", TR098, target_url="http://speedtest.dotmac.ng/10mb"
+    action = lst.build_arm_action(
+        "dev-1", TR098, target_url="http://speedtest.dotmac.ng/10mb"
     )
 
-    written = acs.written[0]
-    assert written["DownloadDiagnostics.DownloadURL"] == (
+    assert action.device_id == "dev-1"
+    assert action.surface == "acs"
+    assert action.label == "tr143.download"
+    assert action.params["DownloadDiagnostics.DownloadURL"] == (
         "http://speedtest.dotmac.ng/10mb"
     )
+    assert action.params["DownloadDiagnostics.DiagnosticsState"] == lst.STATE_REQUESTED
 
 
-def test_arming_a_tree_without_tr143_is_rejected():
+def test_this_module_never_writes_to_the_acs_itself():
+    from pathlib import Path
+
+    source = Path("app/services/network/link_speed_test.py").read_text()
+
+    assert "set_parameter_values" not in source
+
+
+def test_a_tree_without_tr143_is_rejected():
     with pytest.raises(ValueError, match="No TR-143"):
-        lst.arm_link_speed_test(_FakeAcs(), "dev-1", {}, target_url="http://x/")
+        lst.build_arm_action("dev-1", {}, target_url="http://x/")
+
+    with pytest.raises(ValueError, match="No TR-143"):
+        lst.prepare_diagnostic_object(_FakeAcs(), "dev-1", {})
 
 
 # ---------------------------------------------------------------------------
