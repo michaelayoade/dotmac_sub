@@ -20,7 +20,7 @@ def _module():
     return module
 
 
-def test_radius_session_projection_advances_the_single_migration_head() -> None:
+def test_radius_session_projection_remains_in_the_single_migration_chain() -> None:
     module = _module()
     config = Config(str(ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(ROOT / "alembic"))
@@ -28,7 +28,7 @@ def test_radius_session_projection_advances_the_single_migration_head() -> None:
 
     assert module.revision == "408_radius_session_latest_projection"
     assert module.down_revision == "407_retire_parallel_radius_refresh"
-    assert script.get_heads() == ["408_radius_session_latest_projection"]
+    assert script.get_heads() == ["409_tr069_operation_lifecycle"]
 
 
 def test_radius_session_projection_uses_nonblocking_postgres_ddl() -> None:

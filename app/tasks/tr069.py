@@ -1,16 +1,16 @@
 """Celery tasks for TR-069 background operations.
 
-Handles periodic device sync from GenieACS, queued job execution with retry,
-device health monitoring, and session/job retention cleanup.
+Handles periodic device sync from GenieACS, durable command delivery and
+observation reconciliation, device health monitoring, and record retention.
 """
 
 from __future__ import annotations
 
 import logging
-import random
 from datetime import UTC, datetime, timedelta
 from time import monotonic
 from typing import Any
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from billiard.exceptions import SoftTimeLimitExceeded
 from sqlalchemy import select
@@ -31,7 +31,6 @@ from app.services.network_operation_dispatch import managed_network_operation_di
 from app.services.task_idempotency import idempotent_task
 
 logger = logging.getLogger(__name__)
-_retry_jitter_random = random.SystemRandom()
 
 SessionLocal = db_session_adapter.create_session
 _SYNC_TASK_NAME = "app.tasks.tr069.sync_all_acs_devices"
@@ -422,140 +421,428 @@ def apply_acs_config(
         db.close()
 
 
-@celery_app.task(name="app.tasks.tr069.execute_pending_jobs")
-def execute_pending_jobs() -> dict[str, int]:
-    """Execute queued TR-069 jobs and retry failed jobs with backoff.
+def _tr069_command_context(operation_id: UUID, phase: str):
+    from app.services.owner_commands import CommandContext
 
-    Picks up jobs in 'queued' status and executes them via GenieACS.
-    Also retries 'failed' jobs that haven't exceeded max_retries, using
-    exponential backoff (1m, 5m, 15m).
+    command_id = uuid5(
+        NAMESPACE_URL,
+        f"dotmac:tr069-command:{operation_id}:{phase}",
+    )
+    return CommandContext.system(
+        actor="celery:tr069_job_lifecycle",
+        scope=f"network:tr069:{operation_id}",
+        reason=f"durable TR-069 command {phase}",
+        command_id=command_id,
+        idempotency_key=f"tr069:{operation_id}:{phase}",
+    )
 
-    Returns:
-        Stats: {executed, succeeded, pending, failed, retried, skipped}.
-    """
-    logger.info("Starting TR-069 job execution")
-    db = db_session_adapter.create_session()
+
+class _Tr069SubmissionBlocked(RuntimeError):
+    """The ACS preflight proved no new command was submitted."""
+
+
+def _submit_tr069_plan(plan):
+    """Submit a typed execution plan and return normalized delivery evidence."""
+    from app.services.genieacs_client import GenieACSError, create_genieacs_client
+    from app.services.network.tr069_job_commands import Tr069CommandKind
+
+    client = create_genieacs_client(plan.server_url)
     try:
-        from app.services.events import emit_event
-        from app.services.events.types import EventType
-        from app.services.tr069 import Jobs
+        pending_tasks = client.get_pending_tasks(plan.genieacs_device_id)
+    except GenieACSError as exc:
+        raise _Tr069SubmissionBlocked(
+            "GenieACS pending-work preflight was unavailable."
+        ) from exc
+    if pending_tasks:
+        raise _Tr069SubmissionBlocked(
+            "GenieACS already has pending work for the target device."
+        )
+    results: list[dict[str, Any]] = []
+    if plan.kind is Tr069CommandKind.refresh_object:
+        for object_name in plan.object_names:
+            results.append(
+                client.create_task(
+                    plan.genieacs_device_id,
+                    {
+                        "name": plan.kind.value,
+                        "objectName": object_name.rstrip("."),
+                    },
+                    dedupe_pending=False,
+                    enforce_safety=False,
+                )
+            )
+    elif plan.kind is Tr069CommandKind.set_parameter_values:
+        results.append(
+            client.create_task(
+                plan.genieacs_device_id,
+                {
+                    "name": plan.kind.value,
+                    "parameterValues": [
+                        [item.path, item.value, item.value_type]
+                        for item in plan.parameter_values
+                    ],
+                },
+                dedupe_pending=False,
+                enforce_safety=False,
+            )
+        )
+    elif plan.kind is Tr069CommandKind.download and plan.download is not None:
+        task: dict[str, object] = {
+            "name": plan.kind.value,
+            "fileType": plan.download.file_type,
+            "url": plan.download.url,
+        }
+        if plan.download.filename:
+            task["filename"] = plan.download.filename
+        results.append(
+            client.create_task(
+                plan.genieacs_device_id,
+                task,
+                dedupe_pending=False,
+                enforce_safety=False,
+            )
+        )
+    else:
+        results.append(
+            client.create_task(
+                plan.genieacs_device_id,
+                {"name": plan.kind.value},
+                dedupe_pending=False,
+                enforce_safety=False,
+            )
+        )
 
-        now = datetime.now(UTC)
-        executed = 0
-        succeeded = 0
-        pending = 0
-        failed = 0
-        retried = 0
-        skipped = 0
+    task_ids = tuple(
+        str(item.get("_id") or "").strip()
+        for item in results
+        if str(item.get("_id") or "").strip()
+    )
+    faults = [item.get("fault") for item in results if item.get("fault")]
+    connection_errors = [
+        str(item.get("connectionRequestError") or "").strip()
+        for item in results
+        if str(item.get("connectionRequestError") or "").strip()
+    ]
+    return task_ids, faults, connection_errors
 
-        # 1. Execute queued jobs
-        queued_jobs = list(
-            db.scalars(
-                select(Tr069Job)
-                .where(Tr069Job.status == Tr069JobStatus.queued)
-                .order_by(Tr069Job.created_at.asc())
+
+@celery_app.task(name="app.tasks.tr069.execute_network_operation_job")
+@managed_network_operation_dispatch("app.tasks.tr069.execute_network_operation_job")
+def execute_network_operation_job(
+    operation_id: str,
+    job_id: str,
+    *,
+    _network_dispatch_id: str | None = None,
+) -> dict[str, object]:
+    """Execute one dispatch-claimed TR-069 command without automatic replay."""
+    from app.services.network.tr069_job_commands import (
+        Tr069DeliveryObservation,
+        Tr069DeliveryState,
+        claim_tr069_command_execution,
+        record_tr069_command_observation,
+    )
+
+    parsed_operation_id = UUID(operation_id)
+    parsed_job_id = UUID(job_id)
+    if not _network_dispatch_id:
+        raise RuntimeError("TR-069 execution requires a durable dispatch claim")
+
+    with db_session_adapter.owner_command_session() as db:
+        claim = claim_tr069_command_execution(
+            db,
+            operation_id=parsed_operation_id,
+            job_id=parsed_job_id,
+            context=_tr069_command_context(parsed_operation_id, "claim"),
+        )
+    if not claim.executable or claim.plan is None:
+        return {
+            "job_id": job_id,
+            "operation_id": operation_id,
+            "executed": False,
+            "status": claim.status.value,
+            "reason": claim.reason,
+        }
+
+    state = Tr069DeliveryState.unverified
+    reason: str | None = None
+    task_ids: tuple[str, ...] = ()
+    try:
+        task_ids, faults, connection_errors = _submit_tr069_plan(claim.plan)
+        if faults:
+            state = Tr069DeliveryState.failed
+            reason = "GenieACS rejected the TR-069 command with a task fault."
+        elif task_ids:
+            state = Tr069DeliveryState.waiting
+            reason = (
+                "GenieACS accepted the command but the immediate connection "
+                "request failed; waiting for the next device Inform."
+                if connection_errors
+                else "GenieACS accepted the command; waiting for task completion."
+            )
+        else:
+            reason = (
+                "GenieACS returned no durable task identifier; delivery cannot "
+                "be verified."
+            )
+    except _Tr069SubmissionBlocked as exc:
+        state = Tr069DeliveryState.failed
+        reason = (
+            "ACS pending-work preflight blocked submission; review ACS work and "
+            "availability before submitting a new command."
+        )
+        logger.info(
+            "tr069_command_submission_blocked",
+            extra={
+                "event": "tr069_command_submission_blocked",
+                "job_id": job_id,
+                "operation_id": operation_id,
+                "error_type": type(exc).__name__,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        # A provider timeout can happen after remote acceptance. Never replay a
+        # destructive command from this ambiguous point.
+        reason = (
+            "ACS submission ended without confirmable delivery; review current "
+            "device state before retrying."
+        )
+        logger.warning(
+            "tr069_command_delivery_unverified",
+            extra={
+                "event": "tr069_command_delivery_unverified",
+                "job_id": job_id,
+                "operation_id": operation_id,
+                "error_type": type(exc).__name__,
+            },
+        )
+
+    phase = f"observe:{state.value}:{','.join(task_ids) or 'none'}"
+    with db_session_adapter.owner_command_session() as db:
+        outcome = record_tr069_command_observation(
+            db,
+            Tr069DeliveryObservation(
+                context=_tr069_command_context(parsed_operation_id, phase),
+                job_id=parsed_job_id,
+                operation_id=parsed_operation_id,
+                state=state,
+                external_task_ids=task_ids,
+                reason=reason,
+            ),
+        )
+    return {
+        "job_id": job_id,
+        "operation_id": operation_id,
+        "executed": True,
+        "status": outcome.status.value,
+        "external_task_count": len(task_ids),
+    }
+
+
+@celery_app.task(name="app.tasks.tr069.reconcile_command_outcomes")
+def reconcile_command_outcomes() -> dict[str, int]:
+    """Resolve accepted ACS tasks and interrupted execution claims.
+
+    New commands are delivered only through ``network.operation_dispatch``.
+    This permanent reconciler never replays failed or ambiguous commands.
+    """
+    from app.models.domain_settings import SettingDomain
+    from app.services.genieacs_client import GenieACSError, create_genieacs_client
+    from app.services.network.tr069_job_commands import (
+        Tr069DeliveryObservation,
+        Tr069DeliveryState,
+        record_tr069_command_observation,
+    )
+    from app.services.settings_spec import resolve_value
+
+    with db_session_adapter.read_session() as db:
+        raw_timeout = resolve_value(
+            db,
+            SettingDomain.network,
+            "tr069_pending_resolution_timeout_seconds",
+        )
+        try:
+            timeout_seconds = max(300, int(str(raw_timeout or 3600)))
+        except (TypeError, ValueError):
+            timeout_seconds = 3600
+
+    with db_session_adapter.read_session() as db:
+        pending_rows = tuple(
+            db.execute(
+                select(
+                    Tr069Job.id,
+                    Tr069Job.network_operation_id,
+                    Tr069Job.external_task_ids,
+                    Tr069Job.status,
+                    Tr069Job.started_at,
+                    Tr069Job.submitted_at,
+                    Tr069Job.last_observed_at,
+                    Tr069Job.created_at,
+                    Tr069CpeDevice.genieacs_device_id,
+                    Tr069CpeDevice.last_inform_at,
+                    Tr069AcsServer.base_url,
+                )
+                .join(Tr069CpeDevice, Tr069CpeDevice.id == Tr069Job.device_id)
+                .join(Tr069AcsServer, Tr069AcsServer.id == Tr069CpeDevice.acs_server_id)
+                .where(
+                    Tr069Job.network_operation_id.is_not(None),
+                    Tr069Job.status.in_(
+                        (Tr069JobStatus.running, Tr069JobStatus.pending)
+                    ),
+                )
+                .order_by(Tr069Job.started_at.asc())
                 .limit(50)
             ).all()
         )
-        for job in queued_jobs:
-            try:
-                result = Jobs.execute(db, str(job.id))
-                executed += 1
-                if result.status == Tr069JobStatus.succeeded:
-                    succeeded += 1
-                    _emit_job_event(
-                        db, emit_event, EventType.tr069_job_completed, result
-                    )
-                elif result.status == Tr069JobStatus.pending:
-                    pending += 1
-                else:
-                    failed += 1
-                    _emit_job_event(db, emit_event, EventType.tr069_job_failed, result)
-            except Exception as e:
-                logger.error("Failed to execute job %s: %s", job.id, e)
-                failed += 1
 
-        # 2. Retry failed jobs with exponential backoff + jitter
-        # Base backoff: 1min, 5min, 15min, capped at 60min
-        # Jitter: ±10% to prevent thundering herd when many devices reconnect
-        backoff_minutes = [1, 5, 15, 30, 60]
-        failed_jobs = list(
-            db.scalars(
-                select(Tr069Job)
-                .where(
-                    Tr069Job.status == Tr069JobStatus.failed,
-                    Tr069Job.retry_count < Tr069Job.max_retries,
-                )
-                .order_by(Tr069Job.completed_at.asc())
-                .limit(20)
-            ).all()
+    pending = succeeded = failed = unverified = errors = 0
+    now = datetime.now(UTC)
+    for (
+        pending_job_id,
+        pending_operation_id,
+        raw_task_ids,
+        current_status,
+        started_at,
+        submitted_at,
+        last_observed_at,
+        created_at,
+        genieacs_device_id,
+        device_last_inform_at,
+        server_url,
+    ) in pending_rows:
+        task_ids = tuple(str(item) for item in (raw_task_ids or []) if str(item))
+        state = Tr069DeliveryState.waiting
+        reason = "GenieACS task remains pending."
+        observed_since = started_at or last_observed_at or created_at
+        if observed_since and observed_since.tzinfo is None:
+            observed_since = observed_since.replace(tzinfo=UTC)
+        stale = (
+            observed_since is not None
+            and (now - observed_since).total_seconds() >= timeout_seconds
         )
-        for job in failed_jobs:
-            backoff_idx = min(job.retry_count, len(backoff_minutes) - 1)
-            base_backoff_seconds = backoff_minutes[backoff_idx] * 60
-            # Add ±10% jitter to prevent synchronized retries
-            jitter = _retry_jitter_random.uniform(-0.1, 0.1) * base_backoff_seconds
-            backoff = timedelta(seconds=base_backoff_seconds + jitter)
-            if job.completed_at and (now - job.completed_at) < backoff:
-                skipped += 1
+        if current_status == Tr069JobStatus.running:
+            if not stale:
+                pending += 1
                 continue
-            try:
-                job.retry_count += 1
-                db.commit()
-                result = Jobs.execute(db, str(job.id))
-                retried += 1
-                if result.status == Tr069JobStatus.succeeded:
-                    succeeded += 1
-                    _emit_job_event(
-                        db, emit_event, EventType.tr069_job_completed, result
-                    )
-                elif result.status == Tr069JobStatus.pending:
-                    pending += 1
+            state = Tr069DeliveryState.unverified
+            reason = (
+                "TR-069 worker stopped after claiming delivery without recording "
+                "ACS evidence; review current device state before retrying."
+            )
+        try:
+            if state is Tr069DeliveryState.unverified:
+                pass
+            elif not task_ids:
+                state = Tr069DeliveryState.unverified
+                reason = "Accepted TR-069 command has no external task identity."
+            else:
+                client = create_genieacs_client(str(server_url))
+                acs_device_id = str(genieacs_device_id or "")
+                pending_ids = {
+                    str(item.get("_id") or "")
+                    for item in client.get_pending_tasks(acs_device_id)
+                }
+                fault_ids = {
+                    str(item.get("_id") or "")
+                    for item in client.list_faults(acs_device_id)
+                }
+                if fault_ids.intersection(task_ids):
+                    state = Tr069DeliveryState.failed
+                    reason = "GenieACS reported a fault for the accepted command."
+                elif pending_ids.intersection(task_ids):
+                    if stale:
+                        cancel_errors = 0
+                        for task_id in task_ids:
+                            try:
+                                client.delete_task(task_id)
+                            except GenieACSError:
+                                cancel_errors += 1
+                        state = Tr069DeliveryState.unverified
+                        reason = (
+                            "TR-069 command exceeded its confirmation window; "
+                            f"ACS cancellation had {cancel_errors} error(s). Review "
+                            "current device state before retrying."
+                        )
                 else:
-                    failed += 1
-            except Exception as e:
-                logger.error("Failed to retry job %s: %s", job.id, e)
+                    confirmation_after = submitted_at or started_at
+                    if (
+                        confirmation_after is not None
+                        and confirmation_after.tzinfo is None
+                    ):
+                        confirmation_after = confirmation_after.replace(tzinfo=UTC)
+                    fresh_inform = device_last_inform_at
+                    if fresh_inform is not None and fresh_inform.tzinfo is None:
+                        fresh_inform = fresh_inform.replace(tzinfo=UTC)
+                    if (
+                        fresh_inform is not None
+                        and confirmation_after is not None
+                        and fresh_inform > confirmation_after
+                    ):
+                        state = Tr069DeliveryState.succeeded
+                        reason = (
+                            "GenieACS task is absent without fault and the device "
+                            "informed after task acceptance."
+                        )
+                    elif stale:
+                        state = Tr069DeliveryState.unverified
+                        reason = (
+                            "GenieACS task disappeared without fault or a fresh "
+                            "device Inform; review current state before retrying."
+                        )
+                    else:
+                        reason = (
+                            "GenieACS task is absent without fault; waiting for a "
+                            "device Inform newer than task acceptance."
+                        )
+        except GenieACSError as exc:
+            errors += 1
+            logger.warning(
+                "tr069_pending_observation_failed",
+                extra={
+                    "event": "tr069_pending_observation_failed",
+                    "job_id": str(pending_job_id),
+                    "error_type": type(exc).__name__,
+                },
+            )
+            if not stale:
+                continue
+            state = Tr069DeliveryState.unverified
+            reason = (
+                "ACS observations remained unavailable beyond the confirmation "
+                "window; review current device state before retrying."
+            )
 
-        # 3. Cancel stale running jobs (stuck > 10 minutes)
-        stale_cutoff = now - timedelta(minutes=10)
-        stale_jobs = list(
-            db.scalars(
-                select(Tr069Job).where(
-                    Tr069Job.status == Tr069JobStatus.running,
-                    Tr069Job.started_at < stale_cutoff,
-                )
-            ).all()
-        )
-        for job in stale_jobs:
-            job.status = Tr069JobStatus.failed
-            job.error = "Timed out after 10 minutes"
-            job.completed_at = now
-            logger.warning("Marked stale TR-069 job %s as failed (timeout)", job.id)
-        if stale_jobs:
-            db.commit()
+        parsed_operation_id = UUID(str(pending_operation_id))
+        with db_session_adapter.owner_command_session() as db:
+            outcome = record_tr069_command_observation(
+                db,
+                Tr069DeliveryObservation(
+                    context=_tr069_command_context(
+                        parsed_operation_id,
+                        f"resolve:{state.value}",
+                    ),
+                    job_id=UUID(str(pending_job_id)),
+                    operation_id=parsed_operation_id,
+                    state=state,
+                    external_task_ids=task_ids,
+                    reason=reason,
+                ),
+            )
+        if outcome.status is Tr069JobStatus.pending:
+            pending += 1
+        elif outcome.status is Tr069JobStatus.succeeded:
+            succeeded += 1
+        elif outcome.status is Tr069JobStatus.failed:
+            failed += 1
+        elif outcome.status is Tr069JobStatus.unverified:
+            unverified += 1
 
-        logger.info(
-            "TR-069 job execution: %d executed, %d succeeded, %d pending, %d failed, %d retried, %d skipped",
-            executed,
-            succeeded,
-            pending,
-            failed,
-            retried,
-            skipped,
-        )
-        return {
-            "executed": executed,
-            "succeeded": succeeded,
-            "pending": pending,
-            "failed": failed,
-            "retried": retried,
-            "skipped": skipped,
-        }
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        db.close()
+    return {
+        "pending": pending,
+        "succeeded": succeeded,
+        "failed": failed,
+        "unverified": unverified,
+        "errors": errors,
+    }
 
 
 @celery_app.task(name="app.tasks.tr069.check_device_health")
@@ -629,20 +916,19 @@ def check_device_health() -> dict[str, int]:
 
 @celery_app.task(name="app.tasks.tr069.cleanup_tr069_records")
 def cleanup_tr069_records() -> dict[str, int]:
-    """Clean up old TR-069 sessions and completed jobs.
+    """Clean up old TR-069 session observations.
 
-    Deletes sessions older than 30 days and completed/failed jobs older
-    than 90 days.
+    Command jobs are immutable lifecycle evidence linked to the operation
+    ledger and are never deleted by retention cleanup.
 
     Returns:
-        Stats: {sessions_cleaned, jobs_cleaned}.
+        Stats: {sessions_cleaned}.
     """
     logger.info("Starting TR-069 record cleanup")
     db = db_session_adapter.create_session()
     try:
         now = datetime.now(UTC)
         session_cutoff = now - timedelta(days=30)
-        job_cutoff = now - timedelta(days=90)
 
         # Clean old sessions
         old_sessions = list(
@@ -654,220 +940,19 @@ def cleanup_tr069_records() -> dict[str, int]:
             db.delete(session)
         sessions_cleaned = len(old_sessions)
 
-        # Clean old completed/failed/canceled jobs
-        old_jobs = list(
-            db.scalars(
-                select(Tr069Job).where(
-                    Tr069Job.created_at < job_cutoff,
-                    Tr069Job.status.in_(
-                        [
-                            Tr069JobStatus.succeeded,
-                            Tr069JobStatus.failed,
-                            Tr069JobStatus.canceled,
-                        ]
-                    ),
-                )
-            ).all()
-        )
-        for job in old_jobs:
-            db.delete(job)
-        jobs_cleaned = len(old_jobs)
-
-        if sessions_cleaned or jobs_cleaned:
+        if sessions_cleaned:
             db.commit()
 
         logger.info(
-            "TR-069 cleanup: %d sessions removed, %d jobs removed",
+            "TR-069 cleanup: %d sessions removed; command history retained",
             sessions_cleaned,
-            jobs_cleaned,
         )
-        return {"sessions_cleaned": sessions_cleaned, "jobs_cleaned": jobs_cleaned}
+        return {"sessions_cleaned": sessions_cleaned}
     except Exception:
         db.rollback()
         raise
     finally:
         db.close()
-
-
-def _emit_job_event(db, emit_event, event_type, job: Tr069Job) -> None:
-    """Emit a TR-069 job event (helper)."""
-    try:
-        emit_event(
-            db,
-            event_type,
-            {
-                "job_id": str(job.id),
-                "device_id": str(job.device_id),
-                "command": job.command,
-                "status": job.status.value,
-                "error": job.error,
-            },
-            actor="system",
-        )
-    except Exception as e:
-        logger.warning("Failed to emit TR-069 job event: %s", e)
-
-
-@celery_app.task(name="app.tasks.tr069.execute_bulk_action")
-@idempotent_task(
-    key_func=lambda device_ids, action, params=None: (
-        f"{action}:{','.join(sorted(device_ids[:5]))}:{len(device_ids)}"
-    )
-)
-def execute_bulk_action(
-    device_ids: list[str],
-    action: str,
-    params: dict | None = None,
-) -> dict[str, int]:
-    """Execute an action on multiple TR-069 devices.
-
-    Args:
-        device_ids: List of Tr069CpeDevice UUIDs.
-        action: Action name (refresh, reboot, factory_reset, config_push, firmware).
-        params: Additional parameters for the action.
-
-    Returns:
-        Statistics dict with processed/errors/skipped counts.
-    """
-    from app.services.common import coerce_uuid
-    from app.services.tr069 import Jobs
-
-    logger.info("Starting bulk TR-069 %s for %d device(s)", action, len(device_ids))
-    db = db_session_adapter.create_session()
-    processed = 0
-    errors = 0
-    skipped = 0
-    params = params or {}
-
-    try:
-        for device_id_str in device_ids:
-            try:
-                device_id = coerce_uuid(device_id_str)
-                device = db.get(Tr069CpeDevice, device_id)
-                if not device:
-                    logger.warning(
-                        "TR-069 device %s not found, skipping", device_id_str
-                    )
-                    skipped += 1
-                    continue
-
-                # Build and execute job based on action type
-                job = _create_bulk_job(db, device_id, action, params)
-                if job is None:
-                    skipped += 1
-                    continue
-
-                result = Jobs.execute(db, str(job.id))
-                if result.status == Tr069JobStatus.succeeded:
-                    processed += 1
-                else:
-                    logger.warning(
-                        "Bulk %s failed for TR-069 device %s: %s",
-                        action,
-                        device_id_str,
-                        result.error,
-                    )
-                    errors += 1
-            except Exception as exc:
-                logger.error(
-                    "Bulk %s error for TR-069 device %s: %s", action, device_id_str, exc
-                )
-                errors += 1
-
-        db.commit()
-    except Exception as exc:
-        logger.error("Bulk TR-069 action %s failed: %s", action, exc)
-        db.rollback()
-        raise
-    finally:
-        db.close()
-
-    stats = {"processed": processed, "errors": errors, "skipped": skipped}
-    logger.info("Bulk TR-069 %s complete: %s", action, stats)
-    return stats
-
-
-def _create_bulk_job(db, device_id, action: str, params: dict) -> Tr069Job | None:
-    """Create a TR-069 job for a bulk action."""
-    from uuid import UUID
-
-    from app.schemas.tr069 import Tr069JobCreate
-    from app.services.tr069 import Jobs
-
-    # Map action to job definition
-    job_definitions: dict[str, dict] = {
-        "refresh": {
-            "name": "Refresh Parameters",
-            "command": "refreshObject",
-            "payload": {"objectName": "InternetGatewayDevice."},
-        },
-        "reboot": {
-            "name": "Reboot Device",
-            "command": "reboot",
-            "payload": None,
-        },
-        "factory_reset": {
-            "name": "Factory Reset",
-            "command": "factoryReset",
-            "payload": None,
-        },
-    }
-
-    if action in job_definitions:
-        defn = job_definitions[action]
-        payload = Tr069JobCreate(
-            device_id=device_id
-            if isinstance(device_id, UUID)
-            else UUID(str(device_id)),
-            name=defn["name"],
-            command=defn["command"],
-            payload=defn["payload"],
-        )
-        return Jobs.create(db, payload)
-
-    if action == "config_push":
-        # Config push requires parameter path and value in params
-        parameter_path = params.get("parameter_path")
-        parameter_value = params.get("parameter_value")
-        if not parameter_path:
-            logger.warning("config_push requires parameter_path")
-            return None
-        payload = Tr069JobCreate(
-            device_id=device_id
-            if isinstance(device_id, UUID)
-            else UUID(str(device_id)),
-            name="Config Push",
-            command="setParameterValues",
-            payload={
-                "parameterValues": [[parameter_path, parameter_value, "xsd:string"]],
-            },
-        )
-        return Jobs.create(db, payload)
-
-    if action == "firmware":
-        # Firmware update requires URL in params
-        firmware_url = params.get("firmware_url")
-        if not firmware_url:
-            logger.warning("firmware requires firmware_url")
-            return None
-        task_payload: dict = {
-            "fileType": "1 Firmware Upgrade Image",
-            "url": firmware_url,
-        }
-        if params.get("filename"):
-            task_payload["filename"] = params["filename"]
-        payload = Tr069JobCreate(
-            device_id=device_id
-            if isinstance(device_id, UUID)
-            else UUID(str(device_id)),
-            name="Firmware Update",
-            command="download",
-            payload=task_payload,
-        )
-        return Jobs.create(db, payload)
-
-    logger.warning("Unknown bulk action: %s", action)
-    return None
 
 
 @celery_app.task(name="app.tasks.tr069.refresh_ont_runtime_data")

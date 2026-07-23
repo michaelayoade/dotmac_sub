@@ -98,11 +98,11 @@ def test_record_celery_task_success_skips_non_money_result(monkeypatch):
     )
 
     observability.record_celery_task_success(
-        "app.tasks.tr069.execute_pending_jobs",
+        "app.tasks.tr069.reconcile_command_outcomes",
         result={"processed": 7},
     )
 
-    assert calls == [("success", "app.tasks.tr069.execute_pending_jobs")]
+    assert calls == [("success", "app.tasks.tr069.reconcile_command_outcomes")]
 
 
 def test_record_celery_task_failure_records_money_job_error(monkeypatch):
