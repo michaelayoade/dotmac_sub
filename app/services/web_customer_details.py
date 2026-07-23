@@ -1319,8 +1319,10 @@ def _build_access_endpoint_projection(
             "access_kind": summary.access_kind,
             "pon_port_label": summary.pon_port_label,
             "ont_serial": summary.ont_serial,
+            "radio_label": summary.radio_label,
             "basestation_name": summary.basestation_name,
             "gap": summary.gap,
+            "endpoint_complete": summary.endpoint_complete,
         },
         trace.to_dict(),
     )

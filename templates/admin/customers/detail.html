@@ -1771,8 +1771,14 @@
                                     <p class="text-xs text-slate-500 dark:text-slate-400">Serving Endpoint</p>
                                     <p class="font-medium text-slate-900 dark:text-white">{{ card.access_endpoint.endpoint_display }}</p>
                                     <p class="text-xs {% if card.access_endpoint.endpoint_source == 'live_session' %}text-emerald-600 dark:text-emerald-400{% else %}text-slate-500 dark:text-slate-400{% endif %}">
-                                        {% if card.access_endpoint.endpoint_source == 'live_session' %}Live session{% else %}Provisioned{% endif %}
+                                        {% if card.access_endpoint.endpoint_source == 'live_session' %}Live session
+                                        {% elif card.access_endpoint.endpoint_source == 'ont_assignment' %}ONT assignment
+                                        {% elif card.access_endpoint.endpoint_source == 'uisp_observation' %}UISP observation
+                                        {% else %}Provisioned NAS{% endif %}
                                     </p>
+                                    {% if card.access_endpoint.endpoint_complete is false %}
+                                    <p class="text-xs text-amber-600 dark:text-amber-400">Partial{% if card.access_endpoint.gap %} &mdash; {{ card.access_endpoint.gap }}{% endif %}</p>
+                                    {% endif %}
                                 </div>
                                 {% elif card.access_endpoint and card.access_endpoint.endpoint_source == 'unresolved' %}
                                 <div>

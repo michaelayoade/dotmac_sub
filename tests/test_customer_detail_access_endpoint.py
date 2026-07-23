@@ -55,7 +55,9 @@ def test_endpoint_projection_reports_serving_endpoint(monkeypatch):
 
     assert endpoint["endpoint_display"] == "Gudu OLT (0/1/3)"
     assert endpoint["pon_port_label"] == "0/1/3"
-    assert endpoint["endpoint_source"] == "provisioning"
+    # Fibre resolves from the ONT assignment, not the NAS-arm live/provisioned flag.
+    assert endpoint["endpoint_source"] == "ont_assignment"
+    assert endpoint["endpoint_complete"] is True
     assert [node["kind"] for node in trace["nodes"]] == [
         "ont",
         "pon_port",

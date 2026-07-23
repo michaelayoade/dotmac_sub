@@ -18,6 +18,7 @@ from app.models.network_monitoring import NetworkDevice
 from app.models.radius_active_session import RadiusActiveSession
 from app.services.common import coerce_uuid
 from app.services.fiber_topology import localize_fiber_fault, trace_fiber_subscription
+from app.services.network._common import decode_huawei_hex_serial
 from app.services.network.fiber_physical_continuity import (
     resolve_subscription_core_continuity,
 )
@@ -50,13 +51,23 @@ class AccessPathSummary:
     ont_id: object | None = None
     ont_serial: str | None = None
     radio_id: object | None = None
-    radio_name: str | None = None
+    radio_label: str | None = None
     # Composed here, never in a template, so admin/portal/API render one string.
     endpoint_display: str | None = None
-    # Whether the endpoint reflects where the customer is attached right now
-    # ("live_session"), where provisioning intends them to be ("provisioning"),
-    # or that Sub cannot prove either ("unresolved").
+    # Which record this endpoint came from, named rather than implied. Using a
+    # single live-vs-provisioned flag misreports the fibre and wireless arms:
+    # CustomerPath.live_session is specific to the NAS arm, so a perfectly
+    # current OLT endpoint would be chipped "provisioned" and read as stale.
+    #   live_session      - NAS arm, resolved from a live RADIUS session
+    #   provisioning      - NAS arm, resolved from the provisioning NAS
+    #   ont_assignment    - fibre arm, resolved from the ONT assignment record
+    #   uisp_observation  - wireless arm, resolved from the UISP relationship
+    #   unresolved        - Sub cannot prove any of them
     endpoint_source: str = "unresolved"
+    # False when the path resolved a device but still carries a gap. Kept apart
+    # from endpoint_source so provenance and completeness stop contradicting
+    # each other on the same card.
+    endpoint_complete: bool = True
 
 
 @dataclass(frozen=True)
@@ -98,13 +109,35 @@ class SubscriberTopologyTrace:
         return bool(self.nodes) and not self.breaks
 
     def to_dict(self) -> dict[str, object]:
+        """JSON-safe by construction.
+
+        asdict() preserves UUIDs and datetimes, which json.dumps rejects, so
+        every id is stringified and every timestamp isoformatted here rather
+        than left for each consumer to discover the hard way.
+        """
+
         return {
             "subscription_id": str(self.subscription_id),
             "subscriber_id": str(self.subscriber_id)
             if self.subscriber_id is not None
             else None,
             "access_kind": self.access_kind,
-            "nodes": [asdict(node) for node in self.nodes],
+            "nodes": [
+                {
+                    "kind": node.kind,
+                    "label": node.label,
+                    "asset_id": str(node.asset_id)
+                    if node.asset_id is not None
+                    else None,
+                    "state": node.state,
+                    "observed_at": node.observed_at.isoformat()
+                    if node.observed_at
+                    else None,
+                    "source": node.source,
+                    "detail": node.detail,
+                }
+                for node in self.nodes
+            ],
             "breaks": [asdict(gap) for gap in self.breaks],
             "complete": self.complete,
             "evaluated_at": self.evaluated_at.isoformat(),
@@ -624,9 +657,44 @@ def _pon_port_label(pon_port: Any | None) -> str | None:
     return str(port_number) if port_number is not None else None
 
 
+def _ont_label(ont: Any | None) -> str | None:
+    """Match how the rest of the UI prints an ONT serial.
+
+    Huawei vendor serials are stored hex-encoded. Printing the raw column here
+    would show the same ONT under two different strings on one page.
+    """
+
+    if ont is None:
+        return None
+    for attribute in ("vendor_serial_number", "serial_number"):
+        raw = str(getattr(ont, attribute, "") or "").strip()
+        if raw:
+            return decode_huawei_hex_serial(raw) or raw
+    return None
+
+
+def _radio_label(radio: Any | None) -> str | None:
+    """CPEDevice has no name column; identify it by serial, model or UISP id."""
+
+    if radio is None:
+        return None
+    for attribute in ("serial_number", "model", "uisp_device_id", "mac_address"):
+        value = str(getattr(radio, attribute, "") or "").strip()
+        if value:
+            return value
+    return None
+
+
 def _endpoint_source(path: CustomerPath) -> str:
+    kind = path.access_device_kind
     if path.access_device is None and path.node is None:
         return "unresolved"
+    if kind == "olt":
+        return "ont_assignment"
+    if kind == "ap":
+        return "uisp_observation"
+    if kind == "nas":
+        return "live_session" if path.live_session else "provisioning"
     return "live_session" if path.live_session else "provisioning"
 
 
@@ -692,11 +760,12 @@ def summarize_customer_path(
         pon_port_id=getattr(path.pon_port, "id", None),
         pon_port_label=_pon_port_label(path.pon_port),
         ont_id=getattr(path.ont, "id", None),
-        ont_serial=getattr(path.ont, "serial_number", None),
+        ont_serial=_ont_label(path.ont),
         radio_id=getattr(path.radio, "id", None),
-        radio_name=getattr(path.radio, "name", None),
+        radio_label=_radio_label(path.radio),
         endpoint_display=_endpoint_display(path),
         endpoint_source=_endpoint_source(path),
+        endpoint_complete=path.gap is None,
     )
 
 
@@ -723,7 +792,7 @@ def _trace_nodes_for_path(path: CustomerPath) -> list[TopologyTraceNode]:
         nodes.append(
             TopologyTraceNode(
                 kind="ont",
-                label=str(getattr(path.ont, "serial_number", "ONT")),
+                label=_ont_label(path.ont) or "ONT",
                 asset_id=getattr(path.ont, "id", None),
                 state=state,
                 observed_at=observed_at,
@@ -740,7 +809,7 @@ def _trace_nodes_for_path(path: CustomerPath) -> list[TopologyTraceNode]:
         nodes.append(
             TopologyTraceNode(
                 kind="radio",
-                label=str(getattr(path.radio, "name", "CPE radio")),
+                label=_radio_label(path.radio) or "CPE radio",
                 asset_id=getattr(path.radio, "id", None),
                 source="network.cpe",
             )

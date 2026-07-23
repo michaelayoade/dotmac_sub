@@ -7,10 +7,13 @@ customer page fell back to the static provisioning NAS site.
 
 from __future__ import annotations
 
+import json
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from app.models.network import CPEDevice
+from app.services.network._common import decode_huawei_hex_serial
 from app.services.network.access_path import (
     resolve_subscription_topology_trace,
     summarize_customer_path,
@@ -27,11 +30,23 @@ class _Asset:
     serial_number: str | None = None
     port_number: int | None = None
     model: str | None = None
+    vendor_serial_number: str | None = None
     olt_status: str | None = None
     olt_status_seen_at: datetime | None = None
     last_seen_at: datetime | None = None
     onu_rx_signal_dbm: float | None = None
     olt_rx_signal_dbm: float | None = None
+
+
+@dataclass
+class _Cpe:
+    """Shaped like the real CPEDevice: notably, it has no `name` column."""
+
+    id: uuid.UUID
+    serial_number: str | None = None
+    model: str | None = None
+    uisp_device_id: str | None = None
+    mac_address: str | None = None
 
 
 @dataclass
@@ -86,13 +101,35 @@ def test_wireless_endpoint_display_names_ap_and_basestation():
         access_device_kind="ap",
         node=_Asset(id=uuid.uuid4(), name="D-LUGBE-3"),
         basestation=_Asset(id=uuid.uuid4(), name="Lugbe BTS"),
-        radio=_Asset(id=uuid.uuid4(), name="CPE-1"),
+        radio=_Cpe(id=uuid.uuid4(), serial_number="CPE-SN-1"),
     )
 
     summary = summarize_customer_path(_subscription(), path)
 
     assert summary.endpoint_display == "D-LUGBE-3 (Lugbe BTS)"
-    assert summary.radio_name == "CPE-1"
+    assert summary.radio_label == "CPE-SN-1"
+
+
+def test_radio_is_labelled_without_a_name_column():
+    """CPEDevice has no `name`. A stub carrying one hid this for a whole slice."""
+
+    assert not hasattr(CPEDevice, "name")
+
+    by_model = CustomerPath(
+        access_device_kind="ap",
+        node=_Asset(id=uuid.uuid4(), name="AP"),
+        radio=_Cpe(id=uuid.uuid4(), model="LiteBeam 5AC"),
+    )
+    by_uisp = CustomerPath(
+        access_device_kind="ap",
+        node=_Asset(id=uuid.uuid4(), name="AP"),
+        radio=_Cpe(id=uuid.uuid4(), uisp_device_id="uisp-42"),
+    )
+
+    assert summarize_customer_path(_subscription(), by_model).radio_label == (
+        "LiteBeam 5AC"
+    )
+    assert summarize_customer_path(_subscription(), by_uisp).radio_label == "uisp-42"
 
 
 def test_wireless_endpoint_does_not_repeat_identical_node_and_basestation():
@@ -106,14 +143,63 @@ def test_wireless_endpoint_does_not_repeat_identical_node_and_basestation():
     assert summarize_customer_path(_subscription(), path).endpoint_display == "D-KARU-1"
 
 
-def test_endpoint_source_distinguishes_live_from_provisioned():
-    """selfcare-vs-UISP escalations come from not knowing which one is shown."""
+def test_endpoint_source_names_the_record_it_came_from():
+    """live_session is NAS-arm-specific, so it must not label the other arms."""
 
-    provisioned = summarize_customer_path(_subscription(), _fiber_path())
-    live = summarize_customer_path(_subscription(), _fiber_path(live_session=True))
+    fibre = summarize_customer_path(_subscription(), _fiber_path())
+    wireless = summarize_customer_path(
+        _subscription(),
+        CustomerPath(
+            access_device=_Asset(id=uuid.uuid4(), name="AP"), access_device_kind="ap"
+        ),
+    )
+    nas_live = summarize_customer_path(
+        _subscription(),
+        CustomerPath(
+            access_device=_Asset(id=uuid.uuid4(), name="BNG"),
+            access_device_kind="nas",
+            live_session=True,
+        ),
+    )
+    nas_provisioned = summarize_customer_path(
+        _subscription(),
+        CustomerPath(
+            access_device=_Asset(id=uuid.uuid4(), name="BNG"), access_device_kind="nas"
+        ),
+    )
 
-    assert provisioned.endpoint_source == "provisioning"
-    assert live.endpoint_source == "live_session"
+    assert fibre.endpoint_source == "ont_assignment"
+    assert wireless.endpoint_source == "uisp_observation"
+    assert nas_live.endpoint_source == "live_session"
+    assert nas_provisioned.endpoint_source == "provisioning"
+
+
+def test_endpoint_completeness_is_separate_from_provenance():
+    """A resolved device with a gap must not read as a clean resolution."""
+
+    clean = summarize_customer_path(_subscription(), _fiber_path())
+    partial = summarize_customer_path(
+        _subscription(), _fiber_path(gap="splitter_unmapped")
+    )
+
+    assert clean.endpoint_complete is True
+    assert partial.endpoint_complete is False
+    # Provenance still holds — Sub knows where it is, just not the whole path.
+    assert partial.endpoint_source == "ont_assignment"
+
+
+def test_ont_serial_is_decoded_like_the_rest_of_the_page():
+    path = _fiber_path(
+        ont=_Asset(
+            id=uuid.uuid4(),
+            serial_number="RAW1",
+            vendor_serial_number="48575443ABCDEF01",
+        )
+    )
+
+    summary = summarize_customer_path(_subscription(), path)
+
+    assert summary.ont_serial == decode_huawei_hex_serial("48575443ABCDEF01")
 
 
 def test_unresolved_path_reports_unresolved_not_blank():
@@ -243,3 +329,25 @@ def test_trace_serializes_for_api_and_template_consumers(
     assert payload["schema_version"] == 1
     assert payload["access_kind"] == "olt"
     assert [node["kind"] for node in payload["nodes"]][:3] == ["ont", "pon_port", "olt"]
+
+
+def test_trace_payload_is_actually_json_serializable(
+    monkeypatch, db_session, subscription
+):
+    """asdict() keeps UUIDs and datetimes; json.dumps rejects both."""
+
+    path = _fiber_path(
+        ont=_Asset(
+            id=uuid.uuid4(),
+            serial_number="UBNT1",
+            olt_status="online",
+            olt_status_seen_at=datetime(2026, 7, 23, 9, 0, tzinfo=UTC),
+        ),
+        upstream_chain=[_Asset(id=uuid.uuid4(), name="BNG")],
+    )
+
+    payload = _trace_for(path, monkeypatch, db_session, subscription).to_dict()
+
+    encoded = json.loads(json.dumps(payload))
+    assert isinstance(encoded["nodes"][0]["asset_id"], str)
+    assert encoded["nodes"][0]["observed_at"] == "2026-07-23T09:00:00+00:00"
