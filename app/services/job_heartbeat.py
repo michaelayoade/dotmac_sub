@@ -24,6 +24,8 @@ _RESULT_KEY_PREFIX = "job:heartbeat:result:"
 _TTL_SECONDS = int(30 * 24 * 3600)  # 30 days; freshness is judged by age, not TTL
 _redis_client: Any = None
 
+PAYMENT_RECONCILIATION_TASK = "app.tasks.payment_reconciliation.reconcile_topups"
+
 # Scheduled money jobs whose LAST-RUN result (status + returned counts) we surface
 # in billing-health. Only these are instrumented — not every celery task.
 MONEY_JOB_TASKS = (
@@ -31,6 +33,7 @@ MONEY_JOB_TASKS = (
     "app.tasks.billing.run_billing_notifications",
     "app.tasks.collections.run_billing_enforcement",
     "app.tasks.collections.run_bundle_reconcile",
+    PAYMENT_RECONCILIATION_TASK,
 )
 
 

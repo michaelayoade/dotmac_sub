@@ -6592,6 +6592,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "stranded top-up reconciliation",
                     "scheduled top-up reconciliation execution",
                     "verified provider settlement then allocation orchestration",
+                    "top-up reconciliation backlog projection",
                 ),
                 depends_on=(
                     "control.settings_spec",
@@ -6640,6 +6641,14 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "canonical account-credit deposit protocol",
                                 "canonical provider-event settlement protocol",
                                 "canonical top-up completion protocol",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="top-up reconciliation backlog projection",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical top-up reconciliation policy",
+                                "canonical pending top-up intent",
                             ),
                         ),
                     ),
@@ -6766,6 +6775,36 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "active caller transaction or manifest mismatch",
                         ),
                     ),
+                    projections=(
+                        ProjectionContract(
+                            name="top-up reconciliation backlog projection",
+                            input_names=(
+                                "canonical top-up reconciliation policy",
+                                "canonical pending top-up intent",
+                            ),
+                            writer="financial.payment_reconciliation",
+                            freshness=(
+                                "Recomputed on read at an explicit observation time "
+                                "from pending intent creation times and the effective "
+                                "stale and maximum-age policy."
+                            ),
+                            stale_behavior=(
+                                "Separates currently eligible intents from intents "
+                                "outside the automatic repair window; it never treats "
+                                "absence of a successful runner heartbeat as an empty "
+                                "backlog."
+                            ),
+                            drift_signal=(
+                                "Pending intent counts disagree with the bounded "
+                                "eligible and outside-window partition."
+                            ),
+                            rebuild_operation=(
+                                "Re-run topup_reconciliation_backlog from canonical "
+                                "pending intents and effective reconciliation policy."
+                            ),
+                            repair_owner="financial.payment_reconciliation",
+                        ),
+                    ),
                     migration=MigrationContract(
                         state=AuthorityMigrationState.COMPLETE,
                         old_owner=(
@@ -6794,6 +6833,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     design_refs=(
                         "docs/SOT_RELATIONSHIP_MAP.md",
                         "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
+                        "docs/runbooks/PAYSTACK_AUTOMATIC_POSTING.md",
                     ),
                     test_refs=(
                         "tests/test_payment_webhook_settlement.py",
@@ -19446,6 +19486,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "question-driven operational evidence projection",
                     "operational retry and next-action projection",
+                    "payment automation operational evidence projection",
                 ),
                 depends_on=(
                     "ui.projection_contracts",
@@ -19454,6 +19495,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "integration.registry",
                     "integration.installations",
                     "control.feature_registry",
+                    "financial.payment_provider_events",
+                    "financial.payment_reconciliation",
+                    "financial.topup_intents",
                 ),
                 notes=(
                     "Keeps administrative expectation, last observation, evidence "
@@ -19481,6 +19525,17 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "scheduler expectation",
                                 "integration capability binding facts",
                                 "native quote cutover controls",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="payment automation operational evidence projection",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "bounded collector and task observations",
+                                "scheduler expectation",
+                                "integration capability binding facts",
+                                "canonical payment-provider observations",
+                                "canonical top-up reconciliation backlog",
                             ),
                         ),
                     ),
@@ -19516,6 +19571,25 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             source=(
                                 "effective quotes.native_read and "
                                 "quotes.native_write controls"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical payment-provider observations",
+                            owner="financial.payment_provider_events",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "persisted Paystack webhook receipt observations with "
+                                "provider event time and verified-signature ingress "
+                                "provenance"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical top-up reconciliation backlog",
+                            owner="financial.payment_reconciliation",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "bounded eligible and outside-window pending-intent "
+                                "projection at the operational observation time"
                             ),
                         ),
                     ),
@@ -19564,6 +19638,38 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             ),
                             repair_owner="ui.operational_evidence_projection",
                         ),
+                        ProjectionContract(
+                            name="payment automation operational evidence projection",
+                            input_names=(
+                                "bounded collector and task observations",
+                                "scheduler expectation",
+                                "integration capability binding facts",
+                                "canonical payment-provider observations",
+                                "canonical top-up reconciliation backlog",
+                            ),
+                            writer="ui.operational_evidence_projection",
+                            freshness=(
+                                "Recomputed on read from the latest signed-webhook "
+                                "receipt time, runner heartbeat and result, effective "
+                                "schedule, binding state, and current backlog."
+                            ),
+                            stale_behavior=(
+                                "Reports missing delivery evidence, runner rejection "
+                                "counts, and outside-window backlog separately; it "
+                                "never infers that provider payment did not occur."
+                            ),
+                            drift_signal=(
+                                "A stale eligible backlog without recent webhook or "
+                                "successful reconciliation evidence, a partial runner "
+                                "result, or a disabled capability or schedule."
+                            ),
+                            rebuild_operation=(
+                                "Recompute the Paystack operational check from "
+                                "canonical provider-event, reconciliation, scheduler, "
+                                "binding, and heartbeat inputs."
+                            ),
+                            repair_owner="ui.operational_evidence_projection",
+                        ),
                     ),
                     migration=MigrationContract(
                         state=AuthorityMigrationState.COMPLETE,
@@ -19590,6 +19696,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         "docs/designs/OPERATIONAL_EVIDENCE_AND_RETRY.md",
                         "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
                         "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/runbooks/PAYSTACK_AUTOMATIC_POSTING.md",
                     ),
                     test_refs=(
                         "tests/test_operational_evidence_followup.py",

@@ -1398,6 +1398,44 @@ def test_verify_and_record_topup_returns_allocation_breakdown_and_credit_added(
     assert invoice.balance_due == Decimal("0.00")
 
 
+def test_verify_and_record_topup_preserves_paystack_gross_and_fee(
+    monkeypatch, db_session, subscriber
+):
+    _patch_topup_settings(monkeypatch)
+    intent = _create_intent(
+        monkeypatch,
+        db_session,
+        subscriber,
+        amount="5000.00",
+        reference="ref-topup-gross-fee",
+    )
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.payment_gateway_adapter.verify",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            provider_type="paystack",
+            amount=Decimal("5090.00"),
+            provider_fee=Decimal("90.00"),
+            currency="NGN",
+            external_id="ext-topup-gross-fee",
+            memo_prefix="Paystack",
+            metadata={"topup_intent_id": intent["intent_id"]},
+        ),
+    )
+    monkeypatch.setattr("app.services.events.emit_event", lambda *args, **kwargs: None)
+
+    result = verify_and_record_topup(
+        db_session,
+        {"account_id": str(subscriber.id)},
+        "ref-topup-gross-fee",
+        provider="paystack",
+    )
+
+    assert result["amount"] == Decimal("5090.00")
+    assert result["amount_credited"] == Decimal("5000.00")
+    assert result["payment"].provider_fee == Decimal("90.00")
+    assert result["payment"].settlement.amount == Decimal("5000.00")
+
+
 def test_verify_preserves_pre_migration_intent_policy(
     monkeypatch, db_session, subscriber
 ):

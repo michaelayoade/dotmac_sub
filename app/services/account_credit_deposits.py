@@ -592,15 +592,16 @@ class AccountCreditDeposits:
         _account(db, intent.account_id)
         amount = round_money(to_decimal(command.amount))
         provider_fee = round_money(to_decimal(command.provider_fee))
-        if amount != round_money(intent.requested_amount):
-            raise DepositEligibilityError(
-                "deposit_amount_mismatch",
-                "Provider amount did not match the authorized deposit amount",
-            )
         if provider_fee < Decimal("0.00") or provider_fee > amount:
             raise DepositEligibilityError(
                 "deposit_provider_fee_invalid",
                 "Provider fee must be between zero and the confirmed amount",
+            )
+        credited_amount = round_money(amount - provider_fee)
+        if credited_amount != round_money(intent.requested_amount):
+            raise DepositEligibilityError(
+                "deposit_amount_mismatch",
+                "Provider net amount did not match the authorized deposit amount",
             )
         currency = command.currency.strip().upper()
         if currency != intent.currency:
@@ -667,8 +668,11 @@ class AccountCreditDeposits:
             if (
                 existing.account_id != intent.account_id
                 or round_money(existing.amount) != amount
+                or round_money(existing.provider_fee) != provider_fee
                 or existing.currency != currency
                 or existing.status != PaymentStatus.succeeded
+                or existing.settlement is None
+                or round_money(existing.settlement.amount) != credited_amount
             ):
                 raise DepositEligibilityError(
                     "deposit_provider_reference_conflict",
@@ -676,6 +680,24 @@ class AccountCreditDeposits:
                 )
             payment = existing
             already_recorded = True
+        elif intent.provider_id is not None:
+            creation = Payments.stage_verified_provider_settlement(
+                db,
+                account_id=intent.account_id,
+                provider_id=intent.provider_id,
+                external_id=external_transaction_id,
+                gross_amount=amount,
+                provider_fee=provider_fee,
+                net_amount=credited_amount,
+                currency=currency,
+                memo=(
+                    f"{provider_type.replace('_', ' ').title()} "
+                    "Deposit Account Credit "
+                    f"ref: {intent.reference}"
+                ),
+            )
+            payment = creation.payment
+            already_recorded = creation.idempotent_replay
         else:
             creation = Payments.create_account_credit_deposit(
                 db,

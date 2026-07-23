@@ -431,6 +431,12 @@ def _installation_evidence(
 
 
 def build_installed_integrations_data(db: Session) -> dict[str, object]:
+    paystack_operational_check = operational_checks_service.paystack_payment_check(
+        db
+    ).to_dict()
+    crm_operational_check = operational_checks_service.crm_operational_check(
+        db
+    ).to_dict()
     installed = (
         db.query(IntegrationInstallation)
         .filter(
@@ -554,9 +560,12 @@ def build_installed_integrations_data(db: Session) -> dict[str, object]:
                 )
             ),
         },
-        "crm_operational_check": operational_checks_service.crm_operational_check(
-            db
-        ).to_dict(),
+        "integration_operational_checks": [
+            paystack_operational_check,
+            crm_operational_check,
+        ],
+        "paystack_operational_check": paystack_operational_check,
+        "crm_operational_check": crm_operational_check,
     }
 
 

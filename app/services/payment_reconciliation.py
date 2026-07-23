@@ -16,7 +16,7 @@ from decimal import Decimal, InvalidOperation
 from enum import Enum
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.billing import Payment, PaymentProviderType, PaymentStatus, TopupIntent
@@ -155,6 +155,18 @@ class TopupReconciliationSummary:
             "expired": self.expired,
             "errors": self.errors,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class TopupReconciliationBacklog:
+    """Read-only projection of pending intents against reconciliation policy."""
+
+    pending: int
+    eligible: int
+    outside_window: int
+    oldest_pending_at: datetime | None
+    stale_before: datetime
+    oldest_eligible_at: datetime
 
 
 def _error(
@@ -636,6 +648,56 @@ def _reconciliation_candidates(
             reference=row.reference,
         )
         for row in rows
+    )
+
+
+def topup_reconciliation_backlog(
+    db: Session,
+    *,
+    observed_at: datetime,
+) -> TopupReconciliationBacklog:
+    """Project pending gateway intents without deciding a money consequence."""
+
+    observed_at = _as_utc(observed_at)
+    stale_minutes = _resolve_reconciliation_int_setting(
+        db,
+        "topup_reconciliation_stale_minutes",
+    )
+    max_age_days = _resolve_reconciliation_int_setting(
+        db,
+        "topup_reconciliation_max_age_days",
+    )
+    stale_before = observed_at - timedelta(minutes=stale_minutes)
+    oldest_eligible_at = observed_at - timedelta(days=max_age_days)
+    supported_values = tuple(item.value for item in SUPPORTED_PROVIDER_TYPES)
+    base = (
+        TopupIntent.status == TopupIntentStatus.pending.value,
+        TopupIntent.completed_payment_id.is_(None),
+        TopupIntent.provider_type.in_(supported_values),
+    )
+    pending, oldest_pending_at = db.execute(
+        select(func.count(TopupIntent.id), func.min(TopupIntent.created_at)).where(
+            *base
+        )
+    ).one()
+    eligible = db.scalar(
+        select(func.count(TopupIntent.id))
+        .where(*base)
+        .where(TopupIntent.created_at < stale_before)
+        .where(TopupIntent.created_at > oldest_eligible_at)
+    )
+    outside_window = db.scalar(
+        select(func.count(TopupIntent.id))
+        .where(*base)
+        .where(TopupIntent.created_at <= oldest_eligible_at)
+    )
+    return TopupReconciliationBacklog(
+        pending=int(pending or 0),
+        eligible=int(eligible or 0),
+        outside_window=int(outside_window or 0),
+        oldest_pending_at=oldest_pending_at,
+        stale_before=stale_before,
+        oldest_eligible_at=oldest_eligible_at,
     )
 
 
