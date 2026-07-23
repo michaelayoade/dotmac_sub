@@ -33,6 +33,7 @@ verified against the working tree on 2026-07-23.
 | **G12** | Shift handover and close-out reports are manual | Low | S | G3 |
 | **G13** | Credentials pasted into chat (security) | High | S* | G6 |
 | **G14** | Bandwidth/utilization not surfaced for "slow browsing" | Low | S | G2 |
+| **G15** | No portal self-service assurance (online state, usage, speed test) | High | M | G2 |
 
 Suggested order: **G1 → G2 → G3 → G4 → G5/G6 → G7/G8 → G9/G10/G11 → G12/G14**.
 
@@ -343,6 +344,34 @@ identical to the agent.
 verdict so plan-limit cases resolve without a NOC round trip.
 
 ---
+
+---
+
+## G15 — No portal self-service assurance
+
+**Evidence:** every "slow browsing" thread (16 messages) is a NOC round trip that ends in
+"the link is fine, they are pulling in mbps" — a claim the customer cannot verify and the
+agent cannot show. Also "the customer wants to confirm their link is good before making
+payment" (twice), which is a pure assurance question with no fault behind it.
+
+**Already exists:** `app/services/customer_portal_bandwidth.py` (live bandwidth SSE per
+subscription), `app/services/usage.py` + `usage_summary.py`,
+`app/services/network/tr069_paths.py` (ping + traceroute mapped for TR-181 and TR-098).
+
+**Missing:** TR-143 download/upload diagnostics paths, a portal surface combining online
+state + throughput + plan rate + tests, and result persistence.
+
+**Fix:** two labelled measurements — an authoritative **link test** (TR-143 from the
+ONT/router) and an indicative **device test** (browser, over WiFi). The delta between them
+is the diagnosis: link at plan rate + device poor = customer WiFi, resolved with no ticket
+and no engineer. Shipping the browser test alone would misattribute WiFi faults to the
+network and likely increase disputes.
+
+Design in `docs/designs/NETWORK_SUPPORT_DIAGNOSTICS.md` §8b, including rate-limit and
+saturated-PON guardrails.
+
+**Consequence:** G14 is absorbed — utilization becomes customer-visible assurance rather
+than an admin-only field.
 
 ## Cross-cutting notes
 

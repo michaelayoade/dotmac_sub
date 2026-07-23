@@ -106,7 +106,51 @@ When `CustomerPath.gap` is set, `endpoint_display` is `None` and `endpoint_sourc
 `"unresolved"`, with `gap` carried through. **"Cannot resolve" becomes a first-class
 diagnostic answer**, not a blank field — the current blank is what sends the agent to chat.
 
-### 4.3 Presentation
+### 4.3 Subscriber topology trace
+
+A single endpoint string answers "where is this customer?" but not "where does it break?".
+Since the trace already resolves end to end, render it as a chain.
+
+**Scope: active path only — ONT → PON port → OLT → upstream → NAS/BNG.** Passive plant
+(splitter, FDH, drop) is deliberately excluded from the support view.
+
+Rationale for the exclusion: passive assets have no observable live state. A splitter
+cannot be "up" or "down" from Sub's perspective, so including it adds width to the diagram
+without adding diagnostic value to a "why is this customer offline/slow" question. Passive
+plant matters to the fibre/field team and stays in the existing fibre-plant view, which is
+the right owner for it. Keeping the two views separate is what stops the support diagram
+from becoming an everything-diagram nobody reads.
+
+**Source — assembly, not new resolution.** `resolve_fiber_end_to_end_path` already returns
+`FiberEndToEndPath.hops`, each tagged with a `domain`:
+
+| domain | kinds | in support view |
+|---|---|---|
+| `passive_fiber` | splitter, FDH, drop | **excluded** |
+| `physical_core` | core continuity hops | excluded (collapsed into "upstream") |
+| `forwarding` | `access_network_device` (OLT), `network_device`, `nas` | **included** |
+
+So the trace is `hops` filtered to `domain == "forwarding"`, prefixed with the ONT and PON
+port taken from `CustomerPath.ont` / `CustomerPath.pon_port`.
+
+**Wireless arm** is the same shape with different nodes: CPE radio → AP → node →
+base station → NAS, from `CustomerPath.radio` / `.node` / `.basestation`.
+
+**Rendering.** A linear chain, each element carrying:
+
+- label (`ONT UBNT58508c30`, `0/1/3`, `Gudu OLT`, `Abuja BNG`)
+- state chip — `up` / `down` / `degraded` / `unknown`, each with `observed_at` and source
+- the relevant G2 finding, inline, when a stage produced one
+
+`FiberEndToEndPath.gaps` render **as breaks in the chain** at their `after_asset_id`, with
+the gap `code` and message. A trace that stops at the OLT with a gap is a far more useful
+support answer than a blank field, and it is exactly the "I can't find where this customer
+is connected" case made legible.
+
+The chain is read-only and derives from `deep=False` data. It never triggers a device probe
+on render.
+
+### 4.4 Presentation
 
 `_build_network_access_cards` consumes the summary and replaces `pop_site_name` with the
 endpoint fields. The template renders `endpoint_display` plus a provenance chip
@@ -269,6 +313,69 @@ One commit per slice, integrated into a single PR:
 6. `docs: network support gap list and diagnostics design` — this doc + the gap list
 
 ---
+
+## 8b. Portal self-service assurance (G15 — separate slice)
+
+Not in this PR. Designed here because it shares the diagnosis service and changes what G14
+should become.
+
+**Premise:** "slow browsing" is 16 messages in a 12-day sample, and almost every one is a
+NOC round trip that ends in "the link is fine, they are pulling in mbps". If the customer
+can see, themselves, that they are online, what they are pulling, and what the link
+measures, most of those never reach a human.
+
+### The measurement trap
+
+A browser-based speed test measures **the customer's device over their WiFi**, not the
+access link. Shipping only that will make good links look bad, because consumer WiFi is
+the bottleneck far more often than the PON is — and it hands the customer a number to argue
+with. Done naively, this *increases* disputes.
+
+The fix is to measure in **two places and label them distinctly**:
+
+| Test | Measures | Mechanism | Authority |
+|---|---|---|---|
+| **Link speed** | ONT/router ↔ network | TR-143 `DownloadDiagnostics` / `UploadDiagnostics` via ACS | authoritative for "is Dotmac delivering?" |
+| **This device** | customer device ↔ server, over WiFi | browser | indicative only |
+
+**The delta between them is the diagnosis.** Link test at plan rate + device test poor =
+customer-side WiFi, resolved without an engineer and without a ticket. That single
+comparison is the highest-value part of this feature, and neither test alone provides it.
+
+### What exists
+
+- `app/services/customer_portal_bandwidth.py` — live bandwidth SSE per subscription.
+- `app/services/usage.py`, `usage_summary.py`, `app/models/usage.py` — usage aggregation.
+- `app/services/network/tr069_paths.py` — ping and traceroute already mapped for both
+  TR-181 and TR-098 device trees, via `tr069_parameter_adapter`.
+
+### What is missing
+
+- **TR-143 paths.** `tr069_paths.py` has `diag.ping.*` and `diag.traceroute.*` but no
+  download/upload diagnostics. Adding `diag.download.*` / `diag.upload.*` follows the
+  existing two-tree mapping pattern exactly.
+- A portal surface combining online state, current/recent throughput, plan rate, and the
+  two tests.
+- Result persistence, so support sees the customer's own test history instead of asking
+  them to run it again while on the phone.
+
+### Guardrails
+
+1. TR-143 is a real transfer over the customer's link — rate-limit per subscription and
+   refuse to run it against a PON already flagged saturated. A speed test that degrades the
+   neighbours is worse than no speed test.
+2. Not all CPE implement TR-143. Absence must render as "link test unavailable for your
+   equipment", never as a failure or a zero.
+3. Show the plan rate next to the result, so "you are getting what you pay for" is legible
+   without arithmetic — and so `plan_bandwidth_exhausted` (G2 stage 8) explains itself.
+4. Results are observations. They are stored as evidence with `observed_at`, never fed back
+   as authority into plan or access state.
+
+### Consequence for G14
+
+G14 stops being "surface utilization in admin" and becomes "self-service assurance in
+portal, with admin reading the same data". The customer-facing half is the part that
+actually reduces channel traffic.
 
 ## 9. Non-goals
 
