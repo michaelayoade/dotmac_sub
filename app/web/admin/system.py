@@ -5048,6 +5048,56 @@ def config_tax_page(request: Request, db: Session = Depends(get_db)):
     )
 
 
+# --- Automated outage notification (ADR 0004) ---
+@router.get("/config/outage-notifications", response_class=HTMLResponse)
+def config_outage_auto_notify_page(request: Request, db: Session = Depends(get_db)):
+    data = web_system_config_service.get_outage_auto_notify_context(db)
+    return templates.TemplateResponse(
+        "admin/system/config/outage_notifications.html",
+        _config_context(
+            request,
+            db,
+            {"active_page": "config-outage-notifications", **data},
+        ),
+    )
+
+
+@router.post(
+    "/config/outage-notifications",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def config_outage_auto_notify_save(request: Request, db: Session = Depends(get_db)):
+    form = parse_form_data_sync(request)
+    before = dict(
+        web_system_config_service.get_outage_auto_notify_context(db)[
+            "outage_auto_notify"
+        ]
+    )
+    web_system_config_service.save_outage_auto_notify(db, form)
+    after = dict(
+        web_system_config_service.get_outage_auto_notify_context(db)[
+            "outage_auto_notify"
+        ]
+    )
+    changes = _diff_audit_snapshots(before, after)
+    if changes:
+        # Arming or disarming customer outage notification is an operational
+        # decision worth an audit trail of its own.
+        log_audit_event(
+            db=db,
+            request=request,
+            action="update",
+            entity_type="outage_auto_notify_config",
+            entity_id="outage_auto_notify",
+            actor_id=_system_actor_id(request),
+            metadata={"changes": changes},
+        )
+    return RedirectResponse(
+        url="/admin/system/config/outage-notifications", status_code=303
+    )
+
+
 # --- 8.16 Billing Reminders ---
 @router.get("/config/reminders", response_class=HTMLResponse)
 def config_reminders_page(request: Request, db: Session = Depends(get_db)):

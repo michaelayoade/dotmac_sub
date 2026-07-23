@@ -337,3 +337,77 @@ def test_task_does_not_own_the_transaction():
     source = inspect.getsource(task_module)
     assert "db.commit()" not in source
     assert "db.rollback()" not in source
+
+
+# --- consolidated admin config ----------------------------------------------
+
+
+def test_config_groups_enable_with_the_settings_it_governs():
+    from app.services import web_system_config
+
+    assert web_system_config.OUTAGE_AUTO_NOTIFY_KEYS[0] == "outage_auto_notify_enabled"
+    assert set(web_system_config.OUTAGE_AUTO_NOTIFY_KEYS) == set(_GATE_KEYS)
+
+
+def test_config_reports_the_three_operating_states(db_session):
+    from app.services import web_system_config
+
+    def _state(enabled, dry_run):
+        web_system_config.save_outage_auto_notify(
+            db_session,
+            {
+                "outage_auto_notify_enabled": enabled,
+                "outage_auto_notify_dry_run": dry_run,
+                "outage_auto_notify_settle_minutes": "15",
+                "outage_auto_notify_min_affected": "5",
+                "outage_auto_notify_max_incidents_per_run": "10",
+                "outage_auto_notify_interval_seconds": "300",
+            },
+        )
+        return web_system_config.get_outage_auto_notify_context(db_session)[
+            "outage_auto_notify_state"
+        ]
+
+    assert _state("false", "true") == "Disabled"
+    assert _state("true", "true") == "Dry run"
+    assert _state("true", "false") == "Live"
+
+
+def test_unchecked_enable_box_disarms_rather_than_persisting(db_session):
+    """An absent checkbox must read as false, not 'leave as-is'."""
+    from app.services import web_system_config
+
+    base = {
+        "outage_auto_notify_settle_minutes": "15",
+        "outage_auto_notify_min_affected": "5",
+        "outage_auto_notify_max_incidents_per_run": "10",
+        "outage_auto_notify_interval_seconds": "300",
+    }
+    web_system_config.save_outage_auto_notify(
+        db_session, {**base, "outage_auto_notify_enabled": "true"}
+    )
+    # Second save omits the checkbox entirely, as a browser would.
+    web_system_config.save_outage_auto_notify(db_session, dict(base))
+
+    context = web_system_config.get_outage_auto_notify_context(db_session)
+    assert context["outage_auto_notify"]["outage_auto_notify_enabled"] is False
+    assert context["outage_auto_notify_state"] == "Disabled"
+
+
+def test_config_rejects_an_out_of_bounds_interval(db_session):
+    import pytest as _pytest
+
+    from app.services import web_system_config
+
+    with _pytest.raises(ValueError):
+        web_system_config.save_outage_auto_notify(
+            db_session,
+            {
+                "outage_auto_notify_enabled": "false",
+                "outage_auto_notify_dry_run": "true",
+                "outage_auto_notify_settle_minutes": "15",
+                "outage_auto_notify_min_affected": "5",
+                "outage_auto_notify_max_incidents_per_run": "10",
+                "outage_auto_notify_interval_seconds": "5",
+            },
+        )
