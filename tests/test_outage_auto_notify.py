@@ -62,6 +62,32 @@ class _Session:
         self.rollbacks += 1
 
 
+#: Threshold defaults these tests assert against.
+_TEST_SETTLE_MINUTES = 15
+_TEST_MIN_AFFECTED = 5
+
+
+@pytest.fixture(autouse=True)
+def pinned_thresholds(monkeypatch):
+    """Pin the threshold gates for every test in this module.
+
+    They resolve from the settings registry now, which the stub session cannot
+    serve. These tests exercise the eligibility and dispatch logic; that the
+    numbers come from registered settings is asserted separately below.
+    """
+    from datetime import timedelta as _td
+
+    monkeypatch.setattr(
+        outage_auto_notify,
+        "_settle_period",
+        lambda _s: _td(minutes=_TEST_SETTLE_MINUTES),
+    )
+    monkeypatch.setattr(
+        outage_auto_notify, "_min_affected", lambda _s: _TEST_MIN_AFFECTED
+    )
+    monkeypatch.setattr(outage_auto_notify, "_max_incidents_per_run", lambda _s: 10)
+
+
 @pytest.fixture
 def enabled(monkeypatch):
     monkeypatch.setattr(outage_auto_notify, "_auto_enabled", lambda _s: True)
@@ -69,7 +95,7 @@ def enabled(monkeypatch):
 
 
 def _eligible(rows, monkeypatch, **overrides):
-    """Run eligibility with the real gates, only the query stubbed."""
+    """Run eligibility with pinned thresholds; only the query is stubbed."""
     for name, value in overrides.items():
         monkeypatch.setattr(outage_auto_notify, name, lambda _s, v=value: v)
     return outage_auto_notify.eligible_incidents(_Session(rows), now=NOW)
