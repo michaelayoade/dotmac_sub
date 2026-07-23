@@ -322,7 +322,9 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
           : 'Pay ${Fmt.money(_amount!, page.currency)} by transfer';
     }
     final verb = _selectedCardId == null ? 'Top up' : 'Pay';
-    return _amount == null ? verb : '$verb ${Fmt.money(_amount!, page.currency)}';
+    return _amount == null
+        ? verb
+        : '$verb ${Fmt.money(_amount!, page.currency)}';
   }
 
   Widget _methodTile({
@@ -389,8 +391,7 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
           decoration: InputDecoration(
             labelText: 'Amount',
             prefixText: '${page.currency} ',
-            helperText:
-                '${Fmt.money(page.minAmount, page.currency)} - '
+            helperText: '${Fmt.money(page.minAmount, page.currency)} - '
                 '${Fmt.money(page.maxAmount, page.currency)}',
           ),
         ),
@@ -471,8 +472,7 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
           _methodTile(
             value: 'card:${c.id}',
             icon: Icons.credit_card,
-            title:
-                c.label ?? '${c.brand ?? 'Card'} .... ${c.last4 ?? ''}',
+            title: c.label ?? '${c.brand ?? 'Card'} .... ${c.last4 ?? ''}',
             subtitle: (c.expiresMonth != null && c.expiresYear != null)
                 ? 'Expires '
                     '${c.expiresMonth!.toString().padLeft(2, '0')}/${c.expiresYear}'

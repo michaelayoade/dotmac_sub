@@ -192,21 +192,18 @@ class TopupPreview {
         requestedDeposit: asDouble(json['requested_deposit']),
         eligibleInvoiceCount:
             (json['eligible_invoice_count'] as num?)?.toInt() ?? 0,
-        invoiceApplications:
-            (json['invoice_applications'] as List? ?? const [])
-                .cast<Map<String, dynamic>>()
-                .map(TopupPreviewInvoiceApplication.fromJson)
-                .toList(),
+        invoiceApplications: (json['invoice_applications'] as List? ?? const [])
+            .cast<Map<String, dynamic>>()
+            .map(TopupPreviewInvoiceApplication.fromJson)
+            .toList(),
         totalAppliedToInvoices: asDouble(json['total_applied_to_invoices']),
         totalOutstandingAfterApplication:
             asDouble(json['total_outstanding_after_application']),
         remainingAccountCredit: asDouble(json['remaining_account_credit']),
         projectedAvailableCredit: asDouble(json['projected_available_credit']),
-        allocationPolicy:
-            json['allocation_policy'] as String? ?? 'credit_only',
-        creditApplicationPolicy:
-            json['credit_application_policy'] as String? ??
-                'pay_eligible_invoices',
+        allocationPolicy: json['allocation_policy'] as String? ?? 'credit_only',
+        creditApplicationPolicy: json['credit_application_policy'] as String? ??
+            'pay_eligible_invoices',
         policyVersion: (json['policy_version'] as num?)?.toInt() ?? 1,
         previewFingerprint: json['preview_fingerprint'] as String? ?? '',
       );
