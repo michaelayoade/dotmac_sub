@@ -46,7 +46,7 @@ from app.services.radius_address_lists import (
     DEFAULT_SUSPENDED_ADDRESS_LIST,
     suspended_address_list,
 )
-from app.services.radius_projection_planner import plan_radius_projection
+from app.services.radius_projection_planner import plan_login_radius_projections
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -442,6 +442,7 @@ def populate(
         logger.info(
             "considering %d active/blocked subscriptions with a login", len(rows)
         )
+        login_projections = plan_login_radius_projections(db, rows)
 
         # Pre-fetch all AccessCredentials keyed by username
         creds_by_username: dict[str, AccessCredential] = {
@@ -555,6 +556,12 @@ def populate(
             if not login:
                 _increment_result_count(stats, "skipped_no_credential")
                 continue
+            selected_projection = login_projections.get(login)
+            if (
+                selected_projection is None
+                or selected_projection.subscription_id != str(sub.id)
+            ):
+                continue
             cred = creds_by_username.get(login)
             if cred is None:
                 _increment_result_count(stats, "skipped_no_credential")
@@ -575,29 +582,13 @@ def populate(
                 preserve_usernames.add(login)
                 continue
 
-            from app.models.enforcement_lock import AccessRestrictionMode
-            from app.services.walled_garden_policy import (
-                resolve_subscription_restriction,
-            )
-
-            restriction = resolve_subscription_restriction(
-                db,
-                sub,
-                account=sub.subscriber,
-            )
-            captive = bool(
-                restriction
-                and restriction.effective_mode == AccessRestrictionMode.captive
-            )
+            projection = selected_projection.plan
+            captive = projection.mode == "captive"
             if (
                 getattr(sub.subscriber, "captive_redirect_enabled", False)
                 and not captive
             ):
                 _increment_result_count(stats, "captive_ineligible_optins")
-            projection = plan_radius_projection(
-                sub,
-                restriction_mode=(restriction.effective_mode if restriction else None),
-            )
             sub_blocked = projection.blocked
             eff_ipv4 = sub.ipv4_address
             if not eff_ipv4 or eff_ipv4 == "0.0.0.0":  # nosec B104  # noqa: S104
@@ -642,12 +633,6 @@ def populate(
             # the radreply Address-List); non-opted blocked subs are hard
             # rejected (Auth-Type := Reject, offline).
             mode = projection.mode
-            # Duplicate logins (migration duplicates): the ACTIVE sub wins the
-            # slot — subscriber-level block still dominates via sub_blocked,
-            # so a blocked customer stays enforced either way.
-            existing = by_login.get(login)
-            if existing is not None and existing[4] == SubscriptionStatus.active:
-                continue
             by_login[login] = (
                 login,
                 cleartext,

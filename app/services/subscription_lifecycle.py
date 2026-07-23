@@ -1191,11 +1191,9 @@ def _subscription_head(
             _head_datetime(subscription.end_at),
             _head_datetime(subscription.next_billing_at),
             _head_datetime(subscription.canceled_at),
-            _head_datetime(subscription.updated_at),
             _enum_value(getattr(subscriber, "status", None))
             or "missing-account-status",
             str(bool(subscriber and getattr(subscriber, "is_active", False))),
-            _head_datetime(getattr(subscriber, "updated_at", None)),
             _enum_value(getattr(offer, "status", None)) or "missing-offer-status",
             str(bool(offer and offer.is_active)),
             _enum_value(getattr(offer, "billing_mode", None))

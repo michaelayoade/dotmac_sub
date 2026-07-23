@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 
-from app.models.catalog import AccessState
+from sqlalchemy import select
+from sqlalchemy.orm import Session, joinedload
+
+from app.models.catalog import AccessState, Subscription, SubscriptionStatus
 from app.models.enforcement_lock import AccessRestrictionMode
+from app.models.subscriber import Subscriber
 from app.services.access_resolution import (
     CustomerBillingAccessState,
     resolve_customer_access,
@@ -34,6 +39,37 @@ class RadiusProjectionPlan:
     billing_access_state: CustomerBillingAccessState
 
 
+@dataclass(frozen=True)
+class LoginRadiusProjection:
+    """Canonical desired RADIUS mode for one physical login slot."""
+
+    login: str
+    subscription_id: str
+    subscription_status: SubscriptionStatus
+    plan: RadiusProjectionPlan
+
+
+@dataclass(frozen=True)
+class RadiusProjectionDrift:
+    """Bidirectional difference between desired and observed RADIUS state."""
+
+    missing_auth: frozenset[str]
+    missing_reject: frozenset[str]
+    stale_reject: frozenset[str]
+    missing_captive: frozenset[str]
+    stale_captive: frozenset[str]
+
+    @property
+    def usernames(self) -> frozenset[str]:
+        return frozenset().union(
+            self.missing_auth,
+            self.missing_reject,
+            self.stale_reject,
+            self.missing_captive,
+            self.stale_captive,
+        )
+
+
 def plan_radius_projection(
     subscription,
     *,
@@ -55,4 +91,109 @@ def plan_radius_projection(
         captive=mode == "captive",
         block_reason=state.access_block_reason,
         billing_access_state=state,
+    )
+
+
+def _prefer_login_candidate(
+    current: LoginRadiusProjection | None,
+    candidate: LoginRadiusProjection,
+) -> LoginRadiusProjection:
+    """Choose one deterministic owner for a login shared by multiple services."""
+    if current is None:
+        return candidate
+    current_active = current.subscription_status == SubscriptionStatus.active
+    candidate_active = candidate.subscription_status == SubscriptionStatus.active
+    if candidate_active != current_active:
+        return candidate if candidate_active else current
+    return candidate if candidate.subscription_id < current.subscription_id else current
+
+
+def plan_login_radius_projections(
+    db: Session,
+    subscriptions: Iterable[Subscription] | None = None,
+) -> dict[str, LoginRadiusProjection]:
+    """Resolve the exact per-login access modes consumed by projection and audit.
+
+    This is the shared comparator boundary.  RADIUS writers and drift checks
+    must not independently reinterpret subscriber or subscription statuses.
+    """
+    if subscriptions is None:
+        subscriptions = (
+            db.execute(
+                select(Subscription)
+                .options(
+                    joinedload(Subscription.subscriber).joinedload(Subscriber.reseller)
+                )
+                .where(
+                    Subscription.status.in_(
+                        {
+                            SubscriptionStatus.active,
+                            SubscriptionStatus.blocked,
+                            SubscriptionStatus.suspended,
+                        }
+                    ),
+                    Subscription.login.isnot(None),
+                )
+            )
+            .unique()
+            .scalars()
+            .all()
+        )
+
+    selected: dict[str, LoginRadiusProjection] = {}
+    from app.services.walled_garden_policy import resolve_subscription_restriction
+
+    for subscription in subscriptions:
+        login = str(subscription.login or "").strip()
+        if not login:
+            continue
+        restriction = resolve_subscription_restriction(
+            db,
+            subscription,
+            account=subscription.subscriber,
+        )
+        candidate = LoginRadiusProjection(
+            login=login,
+            subscription_id=str(subscription.id),
+            subscription_status=subscription.status,
+            plan=plan_radius_projection(
+                subscription,
+                restriction_mode=(
+                    restriction.effective_mode if restriction is not None else None
+                ),
+            ),
+        )
+        selected[login] = _prefer_login_candidate(selected.get(login), candidate)
+    return selected
+
+
+def compare_radius_projection(
+    desired: dict[str, LoginRadiusProjection],
+    *,
+    observed_auth: set[str],
+    observed_reject: set[str],
+    observed_captive: set[str],
+) -> RadiusProjectionDrift:
+    """Compare external rows with the exact plans consumed by the writer."""
+    desired_auth = {
+        login
+        for login, projection in desired.items()
+        if projection.plan.mode in {"active", "captive", "reject"}
+    }
+    desired_reject = {
+        login
+        for login, projection in desired.items()
+        if projection.plan.mode == "reject"
+    }
+    desired_captive = {
+        login
+        for login, projection in desired.items()
+        if projection.plan.mode == "captive"
+    }
+    return RadiusProjectionDrift(
+        missing_auth=frozenset(desired_auth - observed_auth),
+        missing_reject=frozenset(desired_reject - observed_reject),
+        stale_reject=frozenset(observed_reject - desired_reject),
+        missing_captive=frozenset(desired_captive - observed_captive),
+        stale_captive=frozenset(observed_captive - desired_captive),
     )

@@ -1,26 +1,14 @@
-"""Reconcile safe subscriber projection drift against subscription state.
+"""Reconcile subscriber/access projections from canonical lifecycle facts.
 
-A subscriber whose ``status='blocked'`` while ALL of its subscriptions are
-``active`` is denormalization drift: ``compute_account_status`` derives the
-account from its subscriptions, so for this cohort the subscriptions are the
-authority and the account flag is simply stale. Until it is corrected the
-subscriber is walled-gardened at the BNG regardless of the active subscription —
-``radius_population._radreply_attrs`` keys the suspended Mikrotik-Address-List on
-``Subscriber.status == blocked`` directly (radius_population.py:104).
+``Subscriber.status`` and ``Subscription.access_state`` are projections owned by
+``access.subscription_lifecycle``.  A parent without an explicit lifecycle
+override cannot remain in a RADIUS-blocking status while any child service is
+active: ``derive_account_status`` deliberately gives an active service priority
+and preserves ``delinquent`` only as the permissive dunning state.
 
-This module re-derives the account status from its subscriptions and then
-refreshes RADIUS + CoA, reusing the proven batch shape of
-``billing/unwall_paid_accounts.py`` (dry-run/apply, notification suppression,
-ONE full RADIUS rebuild, CoA afterwards) — but WITHOUT its paid-balance gate.
-The cohort here is defined by subscription state, not money, so a balance gate
-would wrongly hold back accounts that are unambiguously mis-flagged.
-
-SCOPE: only ``new`` or ``blocked`` subscribers whose subscriptions are ALL
-active are auto-reconciled. An active subscription is authoritative evidence
-that onboarding completed, so ``new`` is the same safe projection-drift class
-as a stale ``blocked`` parent. Mixed-status accounts are deliberately excluded.
-
-No ledger / money writes; pure service-state correction.
+This module is the bounded recovery adapter for a missed transition event.  It
+invokes the same lifecycle owner used in-line by payment, renewal, dunning and
+admin commands; it does not introduce a second access policy or write money.
 """
 
 from __future__ import annotations
@@ -32,7 +20,7 @@ from dataclasses import dataclass, field
 from importlib import import_module
 from typing import cast
 
-from sqlalchemy import case, func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription, SubscriptionStatus
@@ -42,7 +30,9 @@ from app.services.notification_suppression import suppress_notifications
 
 logger = logging.getLogger(__name__)
 
-_SAFE_PRIOR_STATUSES = frozenset({SubscriberStatus.new, SubscriberStatus.blocked})
+_PERMISSIVE_ACTIVE_PARENT_STATUSES = frozenset(
+    {SubscriberStatus.active, SubscriberStatus.delinquent}
+)
 
 
 @dataclass
@@ -51,6 +41,7 @@ class DriftResult:
     prior_status: str
     new_status: str | None = None
     changed: bool = False
+    access_states_changed: int = 0
     error: str | None = None
 
 
@@ -58,6 +49,7 @@ class DriftResult:
 class DriftSummary:
     candidates: int = 0
     changed: int = 0
+    access_states_changed: int = 0
     errors: int = 0
     dry_run: bool = True
     radius_refreshed: bool = False
@@ -69,33 +61,28 @@ class DriftSummary:
 
 
 def account_eligibility(db: Session, account_id: str) -> tuple[bool, str | None]:
-    """Per-account eligibility for the all-active reconcile.
+    """Return whether an account has safe, derived parent-status drift.
 
-    Eligible = a ``new`` or ``blocked`` subscriber whose subscriptions are ALL
-    active. Returns ``(eligible, reason_if_not)``. This is the guard that keeps
-    a targeted ``--account-ids`` run from flipping a mixed/active account:
-    ``reconcile_account`` alone would still derive ``active`` for any account with
-    one active sub, so the eligibility filter — not the derivation — is the safety.
+    Explicit overrides remain authoritative.  Otherwise any active child makes
+    a blocking parent a stale projection, even when another child is suspended;
+    per-service restrictions remain on that child and are not cleared here.
     """
     account = db.get(Subscriber, coerce_uuid(account_id))
     if account is None:
         return False, "not_found"
     if account.lifecycle_override_status is not None:
         return False, "explicit_lifecycle_override"
-    if account.status not in _SAFE_PRIOR_STATUSES:
+    if account.status in _PERMISSIVE_ACTIVE_PARENT_STATUSES:
         status = account.status.value if account.status else "unknown"
-        return False, f"not_safe_prior_status (status={status})"
+        return False, f"parent_already_permissive (status={status})"
     statuses = [
         r[0]
         for r in db.execute(
             select(Subscription.status).where(Subscription.subscriber_id == account.id)
         ).all()
     ]
-    active = sum(1 for s in statuses if s == SubscriptionStatus.active)
-    if active == 0:
+    if not any(status == SubscriptionStatus.active for status in statuses):
         return False, "no_active_subscription"
-    if active != len(statuses):
-        return False, "mixed_status (has non-active subscriptions)"
     return True, None
 
 
@@ -114,49 +101,24 @@ def _partition_requested(
     return eligible, skipped
 
 
-def find_safe_all_active_account_ids(
+def find_account_projection_drift_ids(
     db: Session, *, limit: int | None = None
 ) -> list[str]:
-    """Subscribers ``new``/``blocked`` whose subscriptions are ALL active.
-
-    Requires at least one subscription and zero non-active subscriptions, so a
-    mixed-status account (where the block may be legitimate) is never returned.
-    Uses ``SUM(CASE ...)`` rather than aggregate ``FILTER`` for SQLite parity.
-    """
-    active_count = func.sum(
-        case((Subscription.status == SubscriptionStatus.active, 1), else_=0)
-    )
-    total_count = func.count(Subscription.id)
-
-    sub_rollup = (
-        select(
-            Subscription.subscriber_id.label("subscriber_id"),
-            total_count.label("total"),
-            active_count.label("active"),
-        )
-        .group_by(Subscription.subscriber_id)
-        .subquery()
-    )
-
+    """Blocking parents with an active child and no explicit override."""
     stmt = (
         select(Subscriber.id)
-        .join(sub_rollup, sub_rollup.c.subscriber_id == Subscriber.id)
-        .where(Subscriber.status.in_(_SAFE_PRIOR_STATUSES))
+        .join(Subscription, Subscription.subscriber_id == Subscriber.id)
+        .where(
+            Subscription.status == SubscriptionStatus.active,
+            Subscriber.status.notin_(_PERMISSIVE_ACTIVE_PARENT_STATUSES),
+        )
         .where(Subscriber.lifecycle_override_status.is_(None))
-        .where(sub_rollup.c.active > 0)
-        .where(sub_rollup.c.total == sub_rollup.c.active)
+        .distinct()
         .order_by(Subscriber.id)
     )
     if limit is not None:
         stmt = stmt.limit(limit)
     return [str(r[0]) for r in db.execute(stmt).all()]
-
-
-def find_blocked_all_active_account_ids(
-    db: Session, *, limit: int | None = None
-) -> list[str]:
-    """Compatibility alias for the broadened safe projection finder."""
-    return find_safe_all_active_account_ids(db, limit=limit)
 
 
 def project_account(db: Session, account_id: str) -> DriftResult:
@@ -191,9 +153,29 @@ def reconcile_account(db: Session, account_id: str) -> DriftResult:
         prior_status=prior.value if prior else "unknown",
     )
     try:
+        before_access = {
+            str(subscription.id): subscription.access_state
+            for subscription in db.scalars(
+                select(Subscription).where(
+                    Subscription.subscriber_id == coerce_uuid(account_id)
+                )
+            ).all()
+        }
         new_status = compute_account_status(db, str(account_id))
         result.new_status = new_status.value
         result.changed = prior is not None and new_status != prior
+        after_access = {
+            str(subscription.id): subscription.access_state
+            for subscription in db.scalars(
+                select(Subscription).where(
+                    Subscription.subscriber_id == coerce_uuid(account_id)
+                )
+            ).all()
+        }
+        result.access_states_changed = sum(
+            before_access.get(subscription_id) != access_state
+            for subscription_id, access_state in after_access.items()
+        )
         db.commit()
     except Exception as exc:  # noqa: BLE001 — isolate one bad account from the batch
         db.rollback()
@@ -252,15 +234,12 @@ def reconcile_cohort(
     refresh_fn=None,
     coa_fn=None,
 ) -> DriftSummary:
-    """Reconcile safe all-active subscriber drift, then refresh RADIUS + CoA.
+    """Reconcile safe parent/access drift, then refresh RADIUS + CoA.
 
     ``account_ids`` given → reconcile ONLY those that pass the same eligibility
-    filter (new/blocked subscriber, all subs active); ineligible ones are recorded in
-    ``summary.skipped`` with a reason and NEVER mutated (the filter — not the
-    derivation — is the safety, since ``reconcile_account`` would otherwise flip
-    any account with one active sub). ``limit`` is ignored when ``account_ids`` is
-    given. Otherwise discover the full cohort via
-    ``find_blocked_all_active_account_ids``.
+    filter (active child, blocking parent, no explicit override); ineligible
+    accounts are recorded in ``summary.skipped`` and never mutated. ``limit`` is
+    ignored when ``account_ids`` is given.
 
     ``notify`` defaults False — this is a bulk catch-up, so suppress the
     "service resumed" burst. RADIUS is rebuilt ONCE after all status writes, then
@@ -275,7 +254,7 @@ def reconcile_cohort(
     if account_ids is not None:
         targets, skipped = _partition_requested(db, account_ids)
     else:
-        targets = find_safe_all_active_account_ids(db, limit=limit)
+        targets = find_account_projection_drift_ids(db, limit=limit)
     summary = DriftSummary(candidates=len(targets), dry_run=dry_run)
     summary.skipped = skipped
 
@@ -292,11 +271,15 @@ def reconcile_cohort(
             if result.error:
                 summary.errors += 1
                 continue
-            if result.changed:
-                summary.changed += 1
+            if result.changed or result.access_states_changed:
+                if result.changed:
+                    summary.changed += 1
                 coa_subscription_ids.update(_account_subscription_ids(db, account_id))
+            summary.access_states_changed += result.access_states_changed
 
-    if refresh_radius and (summary.changed or account_ids is not None):
+    if refresh_radius and (
+        summary.changed or summary.access_states_changed or account_ids is not None
+    ):
         (refresh_fn or _default_refresh_radius)()
         summary.radius_refreshed = True
 

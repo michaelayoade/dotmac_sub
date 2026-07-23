@@ -1,11 +1,4 @@
-"""Regression: the enforcement reconciler stays wired into the beat schedule.
-
-run_enforcement_reconciler (SP-1) closes the gap where a billing suspension
-only rejects at the next re-auth while a live PPPoE session survives — a
-suspended subscriber stays online (revenue leak). The task existed but was
-never scheduled; this pins that it remains declared in scheduler_config and
-resolves to a registered Celery task.
-"""
+"""The account-access control loop is mandatory and observable."""
 
 from __future__ import annotations
 
@@ -28,3 +21,9 @@ def test_enforcement_reconciler_has_reliability_contract() -> None:
     from app.services.task_reliability import TASK_RELIABILITY_CONTRACTS
 
     assert TASK in TASK_RELIABILITY_CONTRACTS
+
+
+def test_enforcement_reconciler_is_permanent() -> None:
+    from app.services.scheduler import PERMANENT_CUSTOMER_LIFECYCLE_TASKS
+
+    assert TASK in PERMANENT_CUSTOMER_LIFECYCLE_TASKS

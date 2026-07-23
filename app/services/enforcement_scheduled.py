@@ -44,34 +44,6 @@ def cleanup_subscription_block_sessions(
         session.close()
 
 
-def reconcile_account_status_drift() -> dict[str, int]:
-    from app.services.account_status_reconcile import reconcile_cohort
-
-    db = SessionLocal()
-    try:
-        summary = reconcile_cohort(db, dry_run=False)
-        db.commit()
-        logger.info(
-            "reconcile_account_status_drift candidates=%s changed=%s errors=%s "
-            "radius_refreshed=%s sessions_kicked=%s",
-            summary.candidates,
-            summary.changed,
-            summary.errors,
-            summary.radius_refreshed,
-            summary.sessions_kicked,
-        )
-        return {
-            "candidates": summary.candidates,
-            "changed": summary.changed,
-            "errors": summary.errors,
-        }
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        db.close()
-
-
 def detect_stale_overdue_locks() -> dict[str, int]:
     from app.services.stale_overdue_lock_reconcile import reconcile
 
