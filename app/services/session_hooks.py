@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import logging
-import time
 from collections.abc import Callable
+from time import monotonic
 from typing import Any
 
 from sqlalchemy import event
@@ -114,7 +114,7 @@ def _start_root_transaction_span(
     except Exception:
         pass
     session.info[_ROOT_TRANSACTION_SPAN_KEY] = {
-        "started": time.monotonic(),
+        "started": monotonic(),
         "request_id": request_id,
     }
 
@@ -132,7 +132,7 @@ def _finish_root_transaction_span(
     started = span.get("started")
     if not isinstance(started, (int, float)):
         return
-    duration = max(0.0, time.monotonic() - float(started))
+    duration = max(0.0, monotonic() - float(started))
     if duration < _TRANSACTION_WARN_SECONDS:
         return
     logger.warning(
