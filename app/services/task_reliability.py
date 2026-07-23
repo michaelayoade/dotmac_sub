@@ -560,6 +560,18 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.topology_metrics.export_topology_metrics": _c(
         "network", SWEEP, IDEMP, HEALTH
     ),
+    "app.tasks.outage_auto_notify.auto_dispatch_outage_notifications": _c(
+        "network",
+        SWEEP,
+        GUARDED,
+        STATUS,
+        "Customer-facing send, so it must never be blindly retried: the "
+        "persisted dispatch audit is also the debounce source, and a failed "
+        "pass rolls back so no boundary is muted by a send that never "
+        "happened. The next beat run re-attempts; a single-flight advisory "
+        "lock stops two passes double-notifying. Outcomes surface as dispatch "
+        "rows and outage_auto_notify_* log events.",
+    ),
     "app.tasks.topology_outage.reconcile_detected_outages": _c(
         "network",
         SWEEP,
