@@ -1358,6 +1358,52 @@ def _build_access_state_facts(subscription) -> dict[str, object] | None:
     }
 
 
+def _build_known_incident(db: Session, subscription) -> dict[str, object] | None:
+    """A detected incident already covering this customer, for the agent.
+
+    ``customer_service_state`` computes this for the portal, and its
+    ``support_context`` docstring names the subscriber detail page as a
+    consumer, but nothing wired it up. The result was that the *customer* was
+    told "we know, engineers are on it" while the *agent* looking at the same
+    account saw nothing, and asked the channel.
+
+    Returns None when there is no incident, so the panel stays absent rather
+    than rendering an empty "no known issues" box on every customer.
+    """
+
+    from app.services.customer_service_state import get_customer_service_state
+
+    try:
+        state = get_customer_service_state(db, subscription)
+    except Exception:
+        logger.warning(
+            "Service state resolution failed for subscription %s",
+            getattr(subscription, "id", None),
+            exc_info=True,
+        )
+        return None
+
+    if not (
+        state.area_outage
+        or state.active_outage_id
+        or state.open_infrastructure_ticket_id
+    ):
+        return None
+
+    return {
+        "area_outage": state.area_outage,
+        "connection_state": state.connection_state,
+        "incident_id": str(state.active_outage_id) if state.active_outage_id else None,
+        "infrastructure_ticket_id": (
+            str(state.open_infrastructure_ticket_id)
+            if state.open_infrastructure_ticket_id
+            else None
+        ),
+        "customer_message": state.customer_message,
+        "checked_at": state.checked_at.isoformat() if state.checked_at else None,
+    }
+
+
 def _ticket_prefill_url(subscription, card: dict[str, object]) -> str:
     """Pre-filled ticket URL carrying the observed state as evidence.
 
@@ -1408,6 +1454,7 @@ def _build_network_access_cards(
     endpoints_by_subscription: dict[str, dict[str, object]] | None = None,
     traces_by_subscription: dict[str, dict[str, object] | None] | None = None,
     access_state_by_subscription: dict[str, dict[str, object] | None] | None = None,
+    incident_by_subscription: dict[str, dict[str, object] | None] | None = None,
 ) -> list[dict]:
     """Build network access info cards from subscriptions with live access."""
     cards = []
@@ -1415,6 +1462,7 @@ def _build_network_access_cards(
     endpoints_by_subscription = endpoints_by_subscription or {}
     traces_by_subscription = traces_by_subscription or {}
     access_state_by_subscription = access_state_by_subscription or {}
+    incident_by_subscription = incident_by_subscription or {}
     for sub in subscriptions:
         raw_status = getattr(sub, "status", None)
         status_value = getattr(raw_status, "value", None)
@@ -1452,6 +1500,7 @@ def _build_network_access_cards(
                 "access_endpoint": endpoints_by_subscription.get(sub_id, {}),
                 "topology_trace": traces_by_subscription.get(sub_id),
                 "access_state": access_state_by_subscription.get(sub_id),
+                "known_incident": incident_by_subscription.get(sub_id),
             }
         )
         cards[-1]["ticket_prefill_url"] = _ticket_prefill_url(sub, cards[-1])
@@ -1886,10 +1935,12 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
     endpoints_by_subscription: dict[str, dict[str, object]] = {}
     traces_by_subscription: dict[str, dict[str, object] | None] = {}
     access_state_by_subscription: dict[str, dict[str, object] | None] = {}
+    incident_by_subscription: dict[str, dict[str, object] | None] = {}
     for sub in subscriptions:
         if not sub.login and not sub.ipv4_address:
             continue
         access_state_by_subscription[str(sub.id)] = _build_access_state_facts(sub)
+        incident_by_subscription[str(sub.id)] = _build_known_incident(db, sub)
         # One path resolution feeds both the endpoint card and the trace.
         try:
             path = resolve_customer_path(db, sub)
@@ -1912,6 +1963,7 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
         endpoints_by_subscription,
         traces_by_subscription,
         access_state_by_subscription,
+        incident_by_subscription,
     )
     account_health = build_portal_account_health(db, customer.id)
     pending_location_request = (

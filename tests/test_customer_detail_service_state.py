@@ -8,6 +8,7 @@ would, and a wrong guess is worse than none because it stops the agent looking.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
@@ -183,3 +184,92 @@ def test_template_shows_state_not_a_verdict():
 
     assert "access_state.radius_state" in template
     assert "diagnosis.verdict" not in template
+
+
+# ---------------------------------------------------------------------------
+# Known incident (G4)
+# ---------------------------------------------------------------------------
+
+
+class _ServiceState(SimpleNamespace):
+    pass
+
+
+def _state(**overrides):
+    defaults = {
+        "area_outage": True,
+        "connection_state": "outage",
+        "active_outage_id": uuid.uuid4(),
+        "open_infrastructure_ticket_id": uuid.uuid4(),
+        "customer_message": "We're working on an area outage.",
+        "checked_at": datetime(2026, 7, 23, 12, 0, tzinfo=UTC),
+    }
+    defaults.update(overrides)
+    return _ServiceState(**defaults)
+
+
+def _patch_state(monkeypatch, state):
+    monkeypatch.setattr(
+        "app.services.customer_service_state.get_customer_service_state",
+        lambda _db, _sub: state,
+    )
+
+
+def test_known_incident_is_surfaced_to_the_agent(monkeypatch):
+    """The customer already sees this on the portal; the agent did not."""
+
+    _patch_state(monkeypatch, _state())
+
+    incident = details._build_known_incident(None, _subscription())
+
+    assert incident["area_outage"] is True
+    assert incident["connection_state"] == "outage"
+    assert incident["incident_id"]
+    assert incident["infrastructure_ticket_id"]
+
+
+def test_no_incident_renders_no_panel(monkeypatch):
+    """Absent, not an empty "no known issues" box on every customer."""
+
+    _patch_state(
+        monkeypatch,
+        _state(
+            area_outage=False,
+            active_outage_id=None,
+            open_infrastructure_ticket_id=None,
+        ),
+    )
+
+    assert details._build_known_incident(None, _subscription()) is None
+
+
+def test_incident_without_a_ticket_still_surfaces(monkeypatch):
+    _patch_state(monkeypatch, _state(open_infrastructure_ticket_id=None))
+
+    incident = details._build_known_incident(None, _subscription())
+
+    assert incident["incident_id"]
+    assert incident["infrastructure_ticket_id"] is None
+
+
+def test_service_state_failure_does_not_break_the_page(monkeypatch):
+    def _boom(_db, _sub):
+        raise RuntimeError("topology unavailable")
+
+    monkeypatch.setattr(
+        "app.services.customer_service_state.get_customer_service_state", _boom
+    )
+
+    assert details._build_known_incident(None, _subscription()) is None
+
+
+def test_card_carries_the_known_incident(monkeypatch):
+    monkeypatch.setattr(details, "resolve_customer_access", lambda _s: _decision())
+    subscription = _subscription()
+    payload = {"area_outage": True, "incident_id": "abc"}
+
+    cards = details._build_network_access_cards(
+        [subscription], {}, {}, {}, {}, {}, {str(subscription.id): payload}
+    )
+
+    assert cards[0]["known_incident"] == payload
