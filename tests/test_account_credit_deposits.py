@@ -81,7 +81,7 @@ def _intent(db_session, subscriber, provider, *, amount="10000.00") -> TopupInte
     db_session.commit()
     db_session.refresh(intent)
     assert not replayed
-    assert preview.eligible_invoice_count == 0
+    assert preview.requested_deposit == Decimal(amount)
     return intent
 
 
@@ -152,23 +152,37 @@ def test_intent_persists_typed_server_owned_contract(db_session, subscriber):
     assert intent.channel == TopupIntentChannel.customer_selfcare.value
 
 
-def test_deposit_is_rejected_while_payable_invoice_exists(db_session, subscriber):
+def test_preview_applies_partial_deposit_to_existing_invoice(db_session, subscriber):
     provider = _provider(db_session)
-    db_session.add(
-        Invoice(
-            account_id=subscriber.id,
-            status=InvoiceStatus.issued,
-            currency="NGN",
-            total=Decimal("5000.00"),
-            balance_due=Decimal("5000.00"),
-        )
+    invoice = Invoice(
+        account_id=subscriber.id,
+        status=InvoiceStatus.issued,
+        currency="NGN",
+        total=Decimal("18000.00"),
+        balance_due=Decimal("18000.00"),
     )
+    db_session.add(invoice)
     db_session.commit()
 
-    with pytest.raises(DepositEligibilityError) as exc_info:
-        _intent(db_session, subscriber, provider)
+    preview = AccountCreditDeposits.preview(
+        db_session,
+        account_id=subscriber.id,
+        amount="10000.00",
+        currency="NGN",
+        minimum="1000.00",
+        maximum="500000.00",
+    )
 
-    assert exc_info.value.code == "deposit_payable_invoices_exist"
+    assert preview.eligible_invoice_count == 1
+    assert preview.total_applied_to_invoices == Decimal("10000.00")
+    assert preview.total_outstanding_after_application == Decimal("8000.00")
+    assert preview.remaining_account_credit == Decimal("0.00")
+    assert len(preview.invoice_applications) == 1
+    assert preview.invoice_applications[0].invoice_id == invoice.id
+    assert preview.invoice_applications[0].amount_applied == Decimal("10000.00")
+    assert preview.invoice_applications[0].outstanding_after_application == Decimal(
+        "8000.00"
+    )
 
 
 def test_confirmed_deposit_is_credit_only_and_grants_no_service(db_session, subscriber):
@@ -256,6 +270,122 @@ def test_confirmed_deposit_skips_eligible_prepaid_renewal(db_session, subscriber
         )
         .count()
         == 0
+    )
+
+
+def test_confirmed_deposit_partially_pays_existing_invoice(db_session, subscriber):
+    provider = _provider(db_session)
+    invoice = Invoice(
+        account_id=subscriber.id,
+        invoice_number="INV-PARTIAL-DEPOSIT",
+        status=InvoiceStatus.issued,
+        currency="NGN",
+        total=Decimal("18000.00"),
+        balance_due=Decimal("18000.00"),
+    )
+    db_session.add(invoice)
+    db_session.commit()
+    intent = _intent(db_session, subscriber, provider, amount="10000.00")
+
+    result = _settle(
+        db_session,
+        intent_id=intent.id,
+        transaction=_transaction(intent, external_id="gateway-partial-existing-debt"),
+    )
+
+    db_session.refresh(invoice)
+    assert result.application.applied == Decimal("10000.00")
+    assert invoice.status == InvoiceStatus.partially_paid
+    assert invoice.balance_due == Decimal("8000.00")
+    assert get_account_credit_balance(db_session, str(subscriber.id)) == Decimal("0.00")
+
+
+def test_second_deposit_pays_remaining_invoice_balance(db_session, subscriber):
+    provider = _provider(db_session)
+    invoice = Invoice(
+        account_id=subscriber.id,
+        invoice_number="INV-SECOND-DEPOSIT",
+        status=InvoiceStatus.issued,
+        currency="NGN",
+        total=Decimal("18000.00"),
+        balance_due=Decimal("18000.00"),
+    )
+    db_session.add(invoice)
+    db_session.commit()
+
+    first = _intent(db_session, subscriber, provider, amount="10000.00")
+    _settle(
+        db_session,
+        intent_id=first.id,
+        transaction=_transaction(first, external_id="gateway-second-first"),
+    )
+    second = _intent(db_session, subscriber, provider, amount="8000.00")
+    result = _settle(
+        db_session,
+        intent_id=second.id,
+        transaction=_transaction(second, external_id="gateway-second-second"),
+    )
+
+    db_session.refresh(invoice)
+    assert result.application.applied == Decimal("8000.00")
+    assert invoice.status == InvoiceStatus.paid
+    assert invoice.balance_due == Decimal("0.00")
+    assert get_account_credit_balance(db_session, str(subscriber.id)) == Decimal("0.00")
+
+
+def test_exact_deposit_closes_existing_invoice(db_session, subscriber):
+    provider = _provider(db_session)
+    invoice = Invoice(
+        account_id=subscriber.id,
+        invoice_number="INV-EXACT-DEPOSIT",
+        status=InvoiceStatus.issued,
+        currency="NGN",
+        total=Decimal("5000.00"),
+        balance_due=Decimal("5000.00"),
+    )
+    db_session.add(invoice)
+    db_session.commit()
+    intent = _intent(db_session, subscriber, provider, amount="5000.00")
+
+    result = _settle(
+        db_session,
+        intent_id=intent.id,
+        transaction=_transaction(intent, external_id="gateway-exact-existing-debt"),
+    )
+
+    db_session.refresh(invoice)
+    assert result.application.applied == Decimal("5000.00")
+    assert invoice.status == InvoiceStatus.paid
+    assert invoice.balance_due == Decimal("0.00")
+    assert get_account_credit_balance(db_session, str(subscriber.id)) == Decimal("0.00")
+
+
+def test_excess_deposit_retains_exact_remainder_as_credit(db_session, subscriber):
+    provider = _provider(db_session)
+    invoice = Invoice(
+        account_id=subscriber.id,
+        invoice_number="INV-EXCESS-DEPOSIT",
+        status=InvoiceStatus.issued,
+        currency="NGN",
+        total=Decimal("5000.00"),
+        balance_due=Decimal("5000.00"),
+    )
+    db_session.add(invoice)
+    db_session.commit()
+    intent = _intent(db_session, subscriber, provider, amount="7000.00")
+
+    result = _settle(
+        db_session,
+        intent_id=intent.id,
+        transaction=_transaction(intent, external_id="gateway-excess-existing-debt"),
+    )
+
+    db_session.refresh(invoice)
+    assert result.application.applied == Decimal("5000.00")
+    assert invoice.status == InvoiceStatus.paid
+    assert invoice.balance_due == Decimal("0.00")
+    assert get_account_credit_balance(db_session, str(subscriber.id)) == Decimal(
+        "2000.00"
     )
 
 
@@ -510,6 +640,67 @@ def test_draft_invoice_does_not_consume_credit_until_issued(db_session, subscrib
     )
     db_session.refresh(draft)
     assert draft.status == InvoiceStatus.paid
+
+
+def test_ineligible_invoice_states_and_currency_consume_nothing(db_session, subscriber):
+    provider = _provider(db_session)
+    invoices = [
+        Invoice(
+            account_id=subscriber.id,
+            invoice_number="INV-DRAFT-SKIP",
+            status=InvoiceStatus.draft,
+            currency="NGN",
+            total=Decimal("5000.00"),
+            balance_due=Decimal("5000.00"),
+        ),
+        Invoice(
+            account_id=subscriber.id,
+            invoice_number="INV-VOID-SKIP",
+            status=InvoiceStatus.void,
+            currency="NGN",
+            total=Decimal("5000.00"),
+            balance_due=Decimal("5000.00"),
+        ),
+        Invoice(
+            account_id=subscriber.id,
+            invoice_number="INV-WRITEOFF-SKIP",
+            status=InvoiceStatus.written_off,
+            currency="NGN",
+            total=Decimal("5000.00"),
+            balance_due=Decimal("5000.00"),
+        ),
+        Invoice(
+            account_id=subscriber.id,
+            invoice_number="INV-INACTIVE-SKIP",
+            status=InvoiceStatus.issued,
+            currency="NGN",
+            total=Decimal("5000.00"),
+            balance_due=Decimal("5000.00"),
+            is_active=False,
+        ),
+        Invoice(
+            account_id=subscriber.id,
+            invoice_number="INV-USD-SKIP",
+            status=InvoiceStatus.issued,
+            currency="USD",
+            total=Decimal("5.00"),
+            balance_due=Decimal("5.00"),
+        ),
+    ]
+    db_session.add_all(invoices)
+    db_session.commit()
+    intent = _intent(db_session, subscriber, provider, amount="5000.00")
+    result = _settle(
+        db_session,
+        intent_id=intent.id,
+        transaction=_transaction(intent, external_id="gateway-skip-ineligible"),
+    )
+
+    assert result.application.applied == Decimal("0.00")
+    assert db_session.query(PaymentAllocation).count() == 0
+    assert get_account_credit_balance(db_session, str(subscriber.id)) == Decimal(
+        "5000.00"
+    )
 
 
 def test_duplicate_confirmation_returns_same_payment(db_session, subscriber):

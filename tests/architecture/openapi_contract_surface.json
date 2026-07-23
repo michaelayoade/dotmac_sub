@@ -15176,6 +15176,17 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "POST /api/v1/me/topup/preview": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key"
+   ],
+   "request": "b59fe11d7766",
+   "responses": {
+    "200": "01f4435729a4",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "POST /api/v1/me/topup/verify": {
    "params": [
     "header:authorization",
@@ -19497,9 +19508,12 @@
   "TokenResponse": "b55a164b5612",
   "TopUserEntry": "a8f50c81e200",
   "TopupEligibleInvoice": "f867f52b262b",
-  "TopupInitiateRequest": "857f96d78a16",
+  "TopupInitiateRequest": "7a3f8d729837",
   "TopupInitiateResponse": "56a7817aa9ef",
   "TopupPageResponse": "70b5f0de03bc",
+  "TopupPreviewInvoiceApplication": "62758d89ad99",
+  "TopupPreviewRequest": "0cb61a5ccab3",
+  "TopupPreviewResponse": "9443f05ef4e7",
   "TopupVerifyRequest": "f525ae3c5229",
   "TopupVerifyResponse": "27efb8add81e",
   "Tr069ParameterMapCreate": "4ca892b9277d",
