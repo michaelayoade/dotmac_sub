@@ -115,3 +115,33 @@ def test_projection_fingerprint_covers_password_and_reply_rows(monkeypatch) -> N
     )
 
     assert observed["active"] != expected
+
+
+def test_concurrency_cutover_detects_wrong_table_and_missing_checks() -> None:
+    drift = compare_radius_projection(
+        _desired(active="active", blocked="reject", portal="captive"),
+        observed_auth={"active", "blocked", "portal"},
+        observed_reject={"blocked"},
+        observed_captive={"portal"},
+        enforce_simultaneous_use=True,
+        observed_simultaneous_use_check={"active", "blocked"},
+        observed_simultaneous_use_reply={"active", "portal"},
+    )
+
+    assert drift.missing_concurrency_check == {"portal"}
+    assert drift.stale_concurrency_check == {"blocked"}
+    assert drift.misplaced_concurrency_reply == {"active", "portal"}
+    assert drift.usernames == {"active", "blocked", "portal"}
+
+
+def test_concurrency_drift_is_ignored_before_cutover() -> None:
+    drift = compare_radius_projection(
+        _desired(active="active"),
+        observed_auth={"active"},
+        observed_reject=set(),
+        observed_captive=set(),
+        enforce_simultaneous_use=False,
+        observed_simultaneous_use_reply={"active"},
+    )
+
+    assert not drift.usernames
