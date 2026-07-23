@@ -26,9 +26,11 @@ INDEX_EXPRESSION = (
 )
 EXPECTED_KEYS = (
     "subscription_id",
-    "COALESCE(last_update_at, session_start, created_at) DESC",
-    "id DESC",
+    "COALESCE(last_update_at, session_start, created_at)",
+    "id",
 )
+EXPECTED_DESCENDING = (False, True, True)
+EXPECTED_NULLS_FIRST = (False, True, True)
 
 CREATE_POSTGRES_SQL = (
     f"CREATE INDEX CONCURRENTLY {INDEX_NAME} "
@@ -48,6 +50,8 @@ class IndexState:
     total_attribute_count: int
     has_predicate: bool
     keys: tuple[str, ...]
+    descending: tuple[bool | None, ...]
+    nulls_first: tuple[bool | None, ...]
 
 
 def _normalized(value: str) -> str:
@@ -72,7 +76,25 @@ def postgres_index_state(bind: sa.engine.Connection) -> IndexState | None:
                     access_method.amname AS access_method,
                     pg_get_indexdef(index_data.indexrelid, 1, true) AS key_1,
                     pg_get_indexdef(index_data.indexrelid, 2, true) AS key_2,
-                    pg_get_indexdef(index_data.indexrelid, 3, true) AS key_3
+                    pg_get_indexdef(index_data.indexrelid, 3, true) AS key_3,
+                    pg_index_column_has_property(
+                        index_data.indexrelid, 1, 'desc'
+                    ) AS descending_1,
+                    pg_index_column_has_property(
+                        index_data.indexrelid, 2, 'desc'
+                    ) AS descending_2,
+                    pg_index_column_has_property(
+                        index_data.indexrelid, 3, 'desc'
+                    ) AS descending_3,
+                    pg_index_column_has_property(
+                        index_data.indexrelid, 1, 'nulls_first'
+                    ) AS nulls_first_1,
+                    pg_index_column_has_property(
+                        index_data.indexrelid, 2, 'nulls_first'
+                    ) AS nulls_first_2,
+                    pg_index_column_has_property(
+                        index_data.indexrelid, 3, 'nulls_first'
+                    ) AS nulls_first_3
                 FROM pg_class AS index_class
                 JOIN pg_namespace AS index_namespace
                   ON index_namespace.oid = index_class.relnamespace
@@ -103,6 +125,22 @@ def postgres_index_state(bind: sa.engine.Connection) -> IndexState | None:
         total_attribute_count=int(row["total_attribute_count"]),
         has_predicate=bool(row["has_predicate"]),
         keys=tuple(str(row[f"key_{position}"] or "") for position in range(1, 4)),
+        descending=tuple(
+            (
+                None
+                if row[f"descending_{position}"] is None
+                else bool(row[f"descending_{position}"])
+            )
+            for position in range(1, 4)
+        ),
+        nulls_first=tuple(
+            (
+                None
+                if row[f"nulls_first_{position}"] is None
+                else bool(row[f"nulls_first_{position}"])
+            )
+            for position in range(1, 4)
+        ),
     )
 
 
@@ -141,8 +179,18 @@ def index_contract_errors(state: IndexState | None) -> list[str]:
         _normalized(key) for key in EXPECTED_KEYS
     ):
         errors.append(
-            f"{SCHEMA_NAME}.{INDEX_NAME} key definition does not match "
-            "the latest-session projection"
+            f"{SCHEMA_NAME}.{INDEX_NAME} key definition {state.keys!r} does not "
+            f"match the latest-session projection {EXPECTED_KEYS!r}"
+        )
+    if state.descending != EXPECTED_DESCENDING:
+        errors.append(
+            f"{SCHEMA_NAME}.{INDEX_NAME} descending flags "
+            f"{state.descending!r} do not match {EXPECTED_DESCENDING!r}"
+        )
+    if state.nulls_first != EXPECTED_NULLS_FIRST:
+        errors.append(
+            f"{SCHEMA_NAME}.{INDEX_NAME} nulls-first flags "
+            f"{state.nulls_first!r} do not match {EXPECTED_NULLS_FIRST!r}"
         )
     return errors
 

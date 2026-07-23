@@ -18,6 +18,8 @@ def _state(**overrides) -> contract.IndexState:
         "total_attribute_count": 3,
         "has_predicate": False,
         "keys": contract.EXPECTED_KEYS,
+        "descending": contract.EXPECTED_DESCENDING,
+        "nulls_first": contract.EXPECTED_NULLS_FIRST,
     }
     values.update(overrides)
     return contract.IndexState(**values)
@@ -61,7 +63,7 @@ def test_rebuild_must_be_catalog_valid_before_migration_can_finish(
 
 
 def test_valid_malformed_index_is_rejected_not_replaced(monkeypatch) -> None:
-    malformed = _state(keys=("subscription_id", "id DESC", "created_at DESC"))
+    malformed = _state(keys=("subscription_id", "id", "created_at"))
     states = iter([malformed, malformed])
     monkeypatch.setattr(contract, "postgres_index_state", lambda _bind: next(states))
     executed: list[str] = []
@@ -70,6 +72,18 @@ def test_valid_malformed_index_is_rejected_not_replaced(monkeypatch) -> None:
         contract.ensure_postgres_index(_bind(), executed.append)
 
     assert executed == []
+
+
+def test_wrong_sort_direction_is_rejected() -> None:
+    errors = contract.index_contract_errors(_state(descending=(False, False, True)))
+
+    assert any("descending flags" in error for error in errors)
+
+
+def test_wrong_null_ordering_is_rejected() -> None:
+    errors = contract.index_contract_errors(_state(nulls_first=(False, False, True)))
+
+    assert any("nulls-first flags" in error for error in errors)
 
 
 def test_valid_partial_or_covering_index_is_not_accepted() -> None:
