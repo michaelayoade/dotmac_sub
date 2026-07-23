@@ -10,6 +10,9 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import web_admin_notifications as web_admin_notifications_service
+from app.services import (
+    web_notification_channels as web_notification_channels_service,
+)
 from app.services import web_notifications as web_notifications_service
 from app.services import (
     web_notifications_alert_policies as web_alert_policies_service,
@@ -118,6 +121,52 @@ def notification_bulk_setup(
             "sidebar_stats": get_sidebar_stats(db),
         },
     )
+
+
+@router.get(
+    "/channels",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("notification:read"))],
+)
+def notification_channel_policy_page(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Show which channels each notification event goes out on."""
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    return templates.TemplateResponse(
+        "admin/notifications/channels.html",
+        {
+            "request": request,
+            **web_notification_channels_service.channel_policy_context(db),
+            "active_page": "notification-channels",
+            "active_menu": "system",
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+        },
+    )
+
+
+@router.post(
+    "/channels",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("notification:write"))],
+)
+async def notification_channel_policy_save(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Persist the channel matrix through the policy owner."""
+    form = await request.form()
+    try:
+        web_notification_channels_service.save_channel_policy(db, form)
+    except DomainError as exc:
+        return _htmx_error_response(str(exc), title="Channel policy not saved")
+    db.commit()
+    if request.headers.get("HX-Request"):
+        return Response(status_code=204, headers={"HX-Refresh": "true"})
+    return RedirectResponse(url="/admin/notifications/channels", status_code=303)
 
 
 @router.get(

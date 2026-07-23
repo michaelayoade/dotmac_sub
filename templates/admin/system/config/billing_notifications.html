@@ -15,7 +15,6 @@
         {% call card("Blocking Wave", color="emerald") %}
         <div class="grid gap-4 sm:grid-cols-2">
             <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Enabled</label><select name="blocking_wave_enabled" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"><option value="true" {% if billing_notif.blocking_wave_enabled == 'true' %}selected{% endif %}>Yes</option><option value="false" {% if billing_notif.blocking_wave_enabled != 'true' %}selected{% endif %}>No</option></select></div>
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Channel</label><select name="blocking_wave_channel" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"><option value="email" {% if billing_notif.blocking_wave_channel == 'email' %}selected{% endif %}>Email</option><option value="sms" {% if billing_notif.blocking_wave_channel == 'sms' %}selected{% endif %}>SMS</option><option value="both" {% if billing_notif.blocking_wave_channel == 'both' %}selected{% endif %}>Both</option></select></div>
             <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">BCC</label><input type="email" name="blocking_wave_bcc" value="{{ billing_notif.blocking_wave_bcc or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
         </div>
         {% endcall %}
@@ -23,9 +22,9 @@
         <div class="grid gap-4 sm:grid-cols-2">
             <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Enabled</label><select name="pre_block_wave1_enabled" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"><option value="true" {% if billing_notif.pre_block_wave1_enabled == 'true' %}selected{% endif %}>Yes</option><option value="false" {% if billing_notif.pre_block_wave1_enabled != 'true' %}selected{% endif %}>No</option></select></div>
             <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Days Before Blocking</label><input type="number" name="pre_block_wave1_days" value="{{ billing_notif.pre_block_wave1_days or '5' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Channel</label><select name="pre_block_wave1_channel" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"><option value="email">Email</option><option value="sms">SMS</option><option value="both">Both</option></select></div>
         </div>
         {% endcall %}
+        <p class="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">Delivery channels for billing notifications are set in <a href="/admin/notifications/channels" class="font-medium text-primary-600 hover:underline">Notification Channels</a> (category <span class="font-medium">billing</span>).</p>
         <div class="flex justify-end"><button type="submit" class="rounded-lg bg-emerald-600 px-6 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-emerald-700 transition">Save Notifications</button></div>
     </form>
     <section class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">

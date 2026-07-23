@@ -501,6 +501,46 @@ EVENT_TYPE_TO_TEMPLATE = {
 }
 
 
+@dataclass(frozen=True)
+class EventCatalogueEntry:
+    """One configurable event, as presented to an operator."""
+
+    event_type: str
+    template_code: str
+    category: str
+    default_channels: tuple[str, ...]
+    subject: str
+
+
+def event_catalogue() -> tuple[EventCatalogueEntry, ...]:
+    """Describe every event whose channels an operator can configure.
+
+    The channel policy owner resolves by ``template_code``/``category``; this
+    exposes the spec defaults so the admin surface can show what a given event
+    falls back to when no override is set.
+    """
+    return tuple(
+        sorted(
+            (
+                EventCatalogueEntry(
+                    event_type=event_type.value,
+                    template_code=spec.template_code,
+                    category=spec.category,
+                    default_channels=tuple(channel.value for channel in spec.channels),
+                    subject=spec.subject,
+                )
+                for event_type, spec in EVENT_NOTIFICATION_SPECS.items()
+            ),
+            key=lambda entry: (entry.category, entry.template_code),
+        )
+    )
+
+
+def event_categories() -> tuple[str, ...]:
+    """Distinct categories, for the category-level override rows."""
+    return tuple(sorted({spec.category for spec in EVENT_NOTIFICATION_SPECS.values()}))
+
+
 class NotificationHandler:
     """Handler that queues customer notifications."""
 
