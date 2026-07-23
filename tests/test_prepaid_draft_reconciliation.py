@@ -28,6 +28,7 @@ from app.services.prepaid_draft_reconciliation import (
     PrepaidDraftAction,
     PrepaidDraftDisposition,
     ReconcilePrepaidDraftCommand,
+    preview_prepaid_draft_cohort,
     preview_prepaid_draft_reconciliation,
     reconcile_prepaid_draft_invoice,
 )
@@ -168,6 +169,38 @@ def test_fifty_kobo_shortfall_stays_draft(
     assert db_session.query(PaymentAllocation).count() == 0
     assert db_session.query(AccountAdjustment).count() == 0
     assert db_session.query(ServiceEntitlement).count() == 0
+
+
+def test_cohort_deduplicates_invoice_with_multiple_prepaid_lines(
+    db_session,
+    subscriber,
+    subscription,
+):
+    invoice = _draft(
+        db_session,
+        subscriber,
+        subscription,
+        total=Decimal("100.00"),
+    )
+    db_session.add(
+        InvoiceLine(
+            invoice_id=invoice.id,
+            subscription_id=subscription.id,
+            description="Additional prepaid line",
+            quantity=Decimal("1.000"),
+            unit_price=Decimal("1.00"),
+            amount=Decimal("1.00"),
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    previews = preview_prepaid_draft_cohort(
+        db_session,
+        account_id=subscriber.id,
+    )
+
+    assert tuple(preview.invoice_id for preview in previews) == (invoice.id,)
 
 
 def test_legacy_unbacked_credit_is_separated_from_native_shortfall(
