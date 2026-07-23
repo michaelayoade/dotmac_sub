@@ -7761,7 +7761,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "producers."
                         ),
                         cutover_gate=(
-                            "Migration 408 terminalizes every unlinked executable row "
+                            "Migration 409 terminalizes every unlinked executable row "
                             "and moves the old flag value to the admission-only control."
                         ),
                         fallback_retirement=(
@@ -7772,6 +7772,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     steward="network operations",
                     design_refs=(
                         "docs/designs/TR069_COMMAND_LIFECYCLE.md",
+                        "docs/runbooks/TR069_COMMAND_CUTOVER.md",
                         "docs/SOT_RELATIONSHIP_MAP.md",
                         "docs/CODING_STANDARD.md",
                     ),

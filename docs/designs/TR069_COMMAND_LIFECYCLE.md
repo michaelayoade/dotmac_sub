@@ -21,6 +21,9 @@ There is no executable compatibility path. Migration
 it, marks pre-cutover running or pending work `unverified`, clears every
 pre-cutover payload, and removes the old control identity.
 
+The operator procedure, verification gate, and forward-only recovery boundary
+are defined in `docs/runbooks/TR069_COMMAND_CUTOVER.md`.
+
 ## Ten risks closed by this cutover
 
 1. **A mutable execution flag could strand accepted work.** The new capability
