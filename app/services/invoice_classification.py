@@ -88,6 +88,7 @@ def collectible_ar_invoice_filter():
         func.coalesce(Invoice.metadata_["reconciliation_hold"].as_string(), "")
     )
     return ~Invoice.id.in_(prepaid_non_ar_invoice_ids()) & and_(
+        Invoice.is_proforma.is_not(True),
         Invoice.metadata_["reconciliation_hold"].as_boolean().is_not(True),
         hold_text.notin_(_TRUTHY_METADATA_VALUES),
     )

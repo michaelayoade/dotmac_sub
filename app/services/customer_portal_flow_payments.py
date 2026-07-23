@@ -930,23 +930,17 @@ def create_invoice_payment_intent(
         db, customer, getattr(invoice, "account_id", None)
     ):
         raise ValueError("Invoice not found or access denied")
-    if invoice.status in (
-        InvoiceStatus.paid,
-        InvoiceStatus.void,
-        InvoiceStatus.written_off,
+    if (
+        invoice.status
+        in (
+            InvoiceStatus.draft,
+            InvoiceStatus.paid,
+            InvoiceStatus.void,
+            InvoiceStatus.written_off,
+        )
+        or invoice.is_proforma
     ):
         raise ValueError("Invoice is no longer payable")
-    if invoice.status == InvoiceStatus.draft:
-        transition = billing_service.invoices.issue_draft_system(
-            db,
-            str(invoice.id),
-            issued_at=datetime.now(UTC),
-            due_at=invoice.due_at,
-            reason="customer_invoice_payment_checkout",
-            announce=False,
-            commit=True,
-        )
-        invoice = transition.invoice
 
     amount = round_money(
         to_decimal(

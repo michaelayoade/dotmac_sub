@@ -508,6 +508,14 @@ class NotificationHandler:
         spec = EVENT_NOTIFICATION_SPECS.get(event.event_type)
         if spec is None:
             return
+        if (
+            event.event_type == EventType.invoice_created
+            and str(event.payload.get("status") or "").lower() == "draft"
+        ):
+            logger.info(
+                "Suppressed customer notification for draft invoice_created event"
+            )
+            return
         # Back-office bookkeeping (e.g. the cutover credit reconcile) suppresses
         # customer notifications: the activity is not a real-time customer action,
         # so "Payment received"/"Service resumed" mail would be wrong and, in a
@@ -841,7 +849,11 @@ class NotificationHandler:
                         exc_info=True,
                     )
 
-        if event.invoice_id and "invoice_number" not in context:
+        if event.invoice_id and not {
+            "invoice_number",
+            "amount",
+            "due_date",
+        }.issubset(context):
             try:
                 from app.models.billing import Invoice
 

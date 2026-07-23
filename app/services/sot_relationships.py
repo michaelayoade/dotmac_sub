@@ -2908,10 +2908,175 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="financial.invoice_draft_authoring",
+                module="app.services.invoice_draft_authoring",
+                owns=("administrative invoice draft authoring coordination",),
+                depends_on=(
+                    "customer.accounts",
+                    "financial.invoices",
+                    "financial.tax_configuration",
+                    "events.dispatcher",
+                ),
+                notes=(
+                    "This coordinator is the only administrative writer for a "
+                    "complete draft invoice aggregate. It admits a typed header and "
+                    "line set, locks the account before the invoice, and commits the "
+                    "document, totals, audit, idempotency evidence, and outbox event "
+                    "once. Issue, void, write-off, settlement, and repair remain with "
+                    "their named financial owners."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="administrative invoice draft authoring coordination",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "authenticated administrative draft command",
+                                "canonical customer account",
+                                "canonical invoice draft aggregate",
+                                "canonical invoice tax rates",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="authenticated administrative draft command",
+                            owner="financial.invoice_draft_authoring",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed header, complete line set, actor, scope, "
+                                "reason, correlation, and idempotency context"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical customer account",
+                            owner="customer.accounts",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="locked Subscriber account row",
+                        ),
+                        AuthorityInput(
+                            name="canonical invoice draft aggregate",
+                            owner="financial.invoices",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked Invoice row and active InvoiceLine rows with "
+                                "owner-derived totals"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical invoice tax rates",
+                            owner="financial.tax_configuration",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="referenced TaxRate rows",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        boundary=(
+                            "Create or update enters execute_owner_command once on a "
+                            "transaction-free session; header, active lines, totals, "
+                            "idempotency reservation, audit, and outbox event commit or "
+                            "roll back together."
+                        ),
+                        locking=(
+                            "The customer account is locked first, followed by the "
+                            "invoice and its active lines. New drafts reserve the "
+                            "account-scoped idempotency result in the same transaction."
+                        ),
+                        idempotency=(
+                            "Create hashes the caller key and replays the same invoice "
+                            "identifier. Update replaces the complete desired draft "
+                            "state under locks, so an identical retry converges without "
+                            "duplicating lines."
+                        ),
+                        retries=(
+                            "Adapters retry only the whole command after rollback. "
+                            "Stale, issued, cross-account, duplicate-number, or changed "
+                            "line evidence fails closed."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "financial.invoice_draft_authoring.account_not_found",
+                            "financial.invoice_draft_authoring.currency_invalid",
+                            "financial.invoice_draft_authoring.invoice_number_conflict",
+                            "financial.invoice_draft_authoring.line_required",
+                            "financial.invoice_draft_authoring.line_invalid",
+                            "financial.invoice_draft_authoring.tax_rate_not_found",
+                            "financial.invoice_draft_authoring.line_not_found",
+                            "financial.invoice_draft_authoring.idempotency_conflict",
+                            "financial.invoice_draft_authoring.invoice_not_found",
+                            "financial.invoice_draft_authoring.account_mismatch",
+                            "financial.invoice_draft_authoring.invoice_not_editable",
+                            "financial.invoice_draft_authoring.currency_mismatch",
+                            "financial.invoice_draft_authoring.invalid_command_context",
+                            "financial.invoice_draft_authoring.command_contract_violation",
+                            "financial.invoice_draft_authoring.nested_owner_command",
+                            "financial.invoice_draft_authoring.active_caller_transaction",
+                            "financial.invoice_draft_authoring.nested_transaction_completion",
+                        ),
+                        mapping_owner="administrative billing web adapters",
+                        retryable_codes=(),
+                        fail_closed_on=(
+                            "missing account, tax rate, or line evidence",
+                            "empty draft or duplicate invoice number",
+                            "non-draft, cross-account, or changed-currency update",
+                            "active caller transaction or manifest mismatch",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("invoice_created",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 includes canonical invoice, account, status, "
+                            "amount, due-date, currency, and proforma evidence."
+                        ),
+                        replay=(
+                            "Draft-created events rebuild projections and audit views; "
+                            "notification policy suppresses customer delivery until "
+                            "explicit issue or send."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "administrative web form header commit followed by "
+                            "independent invoice-line commits"
+                        ),
+                        new_owner="financial.invoice_draft_authoring",
+                        verification=(
+                            "Atomic rollback, create replay, draft-only update, "
+                            "proforma, event payload, adapter, manifest, and "
+                            "architecture tests."
+                        ),
+                        cutover_gate=(
+                            "Administrative create and edit adapters invoke only the "
+                            "typed owner command on a transaction-free session."
+                        ),
+                        fallback_retirement=(
+                            "The web adapter no longer commits invoice headers or "
+                            "iterates independent line create/update/delete writers."
+                        ),
+                    ),
+                    steward="finance operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/designs/INVOICE_DRAFT_AUTHORING.md",
+                    ),
+                    test_refs=(
+                        "tests/test_invoice_draft_authoring.py",
+                        "tests/test_web_billing_invoice_forms.py",
+                        "tests/architecture/test_invoice_draft_authoring_ownership.py",
+                    ),
+                ),
+            ),
+            SOTService(
                 name="financial.invoices",
                 module="app.services.billing.invoices",
                 owns=(
                     "invoice document lifecycle",
+                    "atomic invoice and invoice-line construction",
                     "invoice status transitions",
                     "invoice adjustment and reversal postings",
                     "automation invoice creation and draft issuance",

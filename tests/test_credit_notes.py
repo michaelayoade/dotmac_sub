@@ -140,6 +140,31 @@ def test_credit_form_rejects_non_positive_amounts(db_session, subscriber_account
         )
 
 
+def test_proforma_cannot_consume_credit_note(db_session, subscriber_account) -> None:
+    credit_note, invoice = _issued_credit_note_and_invoice(
+        db_session,
+        subscriber_account.id,
+        amount=Decimal("100.00"),
+    )
+    invoice.is_proforma = True
+    db_session.commit()
+
+    assert (
+        billing_service.credit_notes.list_application_options(
+            db_session,
+            str(invoice.id),
+        )
+        == []
+    )
+    with pytest.raises(HTTPException) as rejected:
+        billing_service.credit_notes.preview_application(
+            db_session,
+            str(credit_note.id),
+            CreditNoteApplicationPreviewRequest(invoice_id=invoice.id),
+        )
+    assert rejected.value.status_code == 400
+
+
 def test_credit_note_apply_reduces_invoice_balance(db_session, subscriber_account):
     invoice = billing_service.invoices.create(
         db_session,

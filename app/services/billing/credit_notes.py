@@ -311,6 +311,11 @@ def _build_application_preview(
 ) -> CreditApplicationPreview:
     if credit_note.status in {CreditNoteStatus.draft, CreditNoteStatus.void}:
         raise HTTPException(status_code=400, detail="Credit note is not applicable")
+    if invoice.is_proforma:
+        raise HTTPException(
+            status_code=400,
+            detail="Credit cannot be applied to a proforma document",
+        )
     if invoice.status not in _CREDIT_APPLICABLE_INVOICE_STATUSES:
         raise HTTPException(
             status_code=400,
@@ -1474,7 +1479,8 @@ class CreditNotes(ListResponseMixin):
         if not invoice:
             raise HTTPException(status_code=404, detail="Invoice not found")
         if (
-            invoice.status not in _CREDIT_APPLICABLE_INVOICE_STATUSES
+            invoice.is_proforma
+            or invoice.status not in _CREDIT_APPLICABLE_INVOICE_STATUSES
             or invoice.balance_due <= 0
         ):
             return []
