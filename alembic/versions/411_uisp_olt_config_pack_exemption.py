@@ -7,8 +7,8 @@ activating live UISP OLTs (leaving their subscribers' ONT assignments pointing a
 an "inactive" OLT). A UISP-managed OLT (``uisp_device_id IS NOT NULL``) is
 valid-active without a TR069 config pack.
 
-Revision ID: 410_uisp_olt_config_pack_exemption
-Revises: 409_tr069_operation_lifecycle
+Revision ID: 411_uisp_olt_config_pack_exemption
+Revises: 410_validate_radius_session_latest_index
 Create Date: 2026-07-23
 """
 
@@ -18,8 +18,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "410_uisp_olt_config_pack_exemption"
-down_revision = "409_tr069_operation_lifecycle"
+revision = "411_uisp_olt_config_pack_exemption"
+down_revision = "410_validate_radius_session_latest_index"
 branch_labels = None
 depends_on = None
 
