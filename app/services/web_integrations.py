@@ -30,6 +30,7 @@ from app.schemas.integration import IntegrationJobCreate, IntegrationTargetCreat
 from app.services import billing as billing_service
 from app.services import connector as connector_service
 from app.services import integration as integration_service
+from app.services import operational_checks as operational_checks_service
 from app.services.common import validate_enum
 from app.services.integrations import installations
 from app.services.integrations import registry as integration_registry
@@ -404,30 +405,29 @@ def _delivery_stats_by_installation(
     }
 
 
-def _installation_health(
+def _installation_evidence(
     last_run: tuple[str, datetime | None] | None,
     delivery_stats: tuple[int, int] | None,
-) -> tuple[str, dict[str, object]]:
-    """Health from real signals only: healthy / degraded / unknown.
-
-    Signals are the most recent completed IntegrationRun and recent webhook
-    delivery failures; a connector with neither is "unknown", never green.
-    """
+) -> dict[str, object]:
+    """Explain runtime evidence without collapsing it into a health label."""
     calls, failed = delivery_stats or (0, 0)
-    stats: dict[str, object] = {
+    last_status = last_run[0] if last_run else None
+    if last_status == "success":
+        result = "The last completed integration job succeeded."
+    elif last_status == "failed":
+        result = "The last completed integration job failed."
+    elif calls:
+        result = f"{calls} delivery attempt(s) recorded; {failed} require attention."
+    else:
+        result = "No completed job or delivery evidence has been recorded."
+    return {
+        "last_result": result,
+        "observed_at": last_run[1] if last_run else None,
         "calls": calls,
         "failed": failed,
-        "last_run_status": last_run[0] if last_run else None,
-        "last_run_at": last_run[1] if last_run else None,
+        "last_run_status": last_status,
+        "needs_attention": bool(last_status == "failed" or failed),
     }
-    degraded = bool(last_run and last_run[0] == "failed")
-    if calls and (failed / calls) >= 0.10:
-        degraded = True
-    if degraded:
-        return "degraded", stats
-    if last_run or calls:
-        return "healthy", stats
-    return "unknown", stats
 
 
 def build_installed_integrations_data(db: Session) -> dict[str, object]:
@@ -453,7 +453,7 @@ def build_installed_integrations_data(db: Session) -> dict[str, object]:
         definition = integration_registry.require_connector_definition(
             installation.connector_key
         )
-        health, health_stats = _installation_health(
+        evidence = _installation_evidence(
             last_runs.get(str(installation.id)),
             delivery_stats.get(str(installation.id)),
         )
@@ -463,8 +463,7 @@ def build_installed_integrations_data(db: Session) -> dict[str, object]:
                 "title": definition.name,
                 "root": "integrations",
                 "integration_type": definition.connector_type,
-                "health": health,
-                "health_stats": health_stats,
+                "operational_evidence": evidence,
                 "manage_url": _installation_manage_url(installation),
             }
         )
@@ -544,8 +543,20 @@ def build_installed_integrations_data(db: Session) -> dict[str, object]:
                 for installation in installed
                 if installation.state == IntegrationInstallationState.enabled.value
             ),
-            "healthy": sum(1 for row in rows if row["health"] == "healthy"),
+            "attention": sum(
+                1
+                for row in rows
+                if bool(
+                    cast(
+                        dict[str, object],
+                        row["operational_evidence"],
+                    ).get("needs_attention")
+                )
+            ),
         },
+        "crm_operational_check": operational_checks_service.crm_operational_check(
+            db
+        ).to_dict(),
     }
 
 

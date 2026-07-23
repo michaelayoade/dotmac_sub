@@ -7,7 +7,7 @@
 <div class="space-y-6">
     {% call page_header(
         title="NOC",
-        subtitle="Live attention queue — outages, device mismatches, and alarms, worst first",
+        subtitle="What failed, what evidence proves it, who is affected, and what happens next",
         icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>',
         color="accent",
         breadcrumbs=[{"label": "Network", "href": "/admin/network"}, {"label": "NOC"}]
@@ -16,12 +16,13 @@
     {% endcall %}
 
     {# counts #}
-    <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+    <div class="grid grid-cols-2 gap-3 sm:grid-cols-5">
         {% for c in [
             {"label": "In queue", "value": counts.total, "tone": ""},
             {"label": "Outages", "value": counts.outages, "tone": "negative"},
             {"label": "Device mismatches", "value": counts.mismatches, "tone": "warning"},
-            {"label": "Alarms", "value": counts.alarms, "tone": "warning"}
+            {"label": "Alarms", "value": counts.alarms, "tone": "warning"},
+            {"label": "Collector failures", "value": counts.collectors, "tone": "warning"}
         ] %}
         <div class="rounded-xl border border-slate-200 bg-white px-4 py-3 dark:border-slate-800 dark:bg-slate-900">
             <p class="text-[10.5px] font-semibold uppercase tracking-[0.1em] text-slate-400 dark:text-slate-500">{{ c.label }}</p>
@@ -29,6 +30,42 @@
         </div>
         {% endfor %}
     </div>
+
+    <section class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <div class="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+            <h2 class="font-display text-base font-semibold text-slate-900 dark:text-white">Operational evidence</h2>
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Expectation, last observation, customer-data impact, and next action are separate. A missing collector signal is never presented as a service outage.</p>
+        </div>
+        <div class="divide-y divide-slate-100 dark:divide-slate-800/70">
+            {% for check in operational_checks %}
+            <div class="grid gap-3 px-5 py-4 lg:grid-cols-[12rem_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]">
+                <div>
+                    <div class="flex items-center gap-2">
+                        <span class="h-2 w-2 rounded-full {{ 'bg-amber-500' if check.needs_attention else 'bg-emerald-500' }}"></span>
+                        <span class="sr-only">{{ 'Action needed' if check.needs_attention else 'No action queued' }}:</span>
+                        <a href="{{ check.action_url }}" class="text-sm font-semibold text-slate-900 hover:text-accent-600 dark:text-white dark:hover:text-accent-400">{{ check.subject }}</a>
+                    </div>
+                    <p class="mt-1 text-[11px] text-slate-500 dark:text-slate-400">{{ check.expected }}</p>
+                </div>
+                <div>
+                    <p class="text-[10.5px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Last observation</p>
+                    <p class="mt-1 text-sm text-slate-700 dark:text-slate-200">{{ check.last_result }}</p>
+                    {% if check.observed_at %}<time class="mt-1 block text-[11px] tabular-nums text-slate-400 dark:text-slate-500">{{ check.observed_at | app_datetime('%Y-%m-%d %H:%M:%S') }}</time>{% endif %}
+                    <p class="mt-1 text-[11px] text-slate-500 dark:text-slate-400">{{ check.evidence }}</p>
+                </div>
+                <div>
+                    <p class="text-[10.5px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Operational impact</p>
+                    <p class="mt-1 text-sm text-slate-700 dark:text-slate-200">{{ check.impact }}</p>
+                </div>
+                <div>
+                    <p class="text-[10.5px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">What happens next</p>
+                    <p class="mt-1 text-sm text-slate-700 dark:text-slate-200">{{ check.next_step }}</p>
+                    {% if check.next_attempt_at %}<p class="mt-1 text-[11px] font-medium tabular-nums text-amber-700 dark:text-amber-300">Next automatic attempt: {{ check.next_attempt_at | app_datetime('%Y-%m-%d %H:%M:%S') }}</p>{% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </section>
 
     {# queue + on-demand inspector #}
     <div class="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_24rem]">
@@ -47,7 +84,14 @@
             {% if item.count is not none %}
             <span class="shrink-0 text-xs font-medium tabular-nums text-slate-500 dark:text-slate-400">{{ item.count }} {{ item.count_label }}</span>
             {% endif %}
+            {% if item.status %}
             {{ status_presentation_badge(item.status, size="sm") }}
+            {% elif item.result %}
+            <div class="shrink-0 text-right">
+                <p class="text-xs font-semibold text-amber-700 dark:text-amber-300">{{ item.result }}</p>
+                {% if item.next_attempt_at %}<p class="text-[10.5px] tabular-nums text-slate-400 dark:text-slate-500">Retry {{ item.next_attempt_at | app_datetime('%H:%M:%S') }}</p>{% endif %}
+            </div>
+            {% endif %}
             {% if item.when %}<time class="hidden shrink-0 text-[11px] tabular-nums text-slate-400 dark:text-slate-500 sm:block">{{ item.when | app_datetime('%b %d, %H:%M') }}</time>{% endif %}
         {% if item.node_id %}</div>{% else %}</a>{% endif %}
         {% else %}

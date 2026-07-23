@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import random
 from datetime import UTC, datetime, timedelta
+from time import monotonic
 from typing import Any
 
 from billiard.exceptions import SoftTimeLimitExceeded
@@ -33,6 +34,16 @@ logger = logging.getLogger(__name__)
 _retry_jitter_random = random.SystemRandom()
 
 SessionLocal = db_session_adapter.create_session
+_SYNC_TASK_NAME = "app.tasks.tr069.sync_all_acs_devices"
+_SYNC_RETRY_SECONDS = (60, 300, 900)
+
+
+class _PartialAcsSyncError(RuntimeError):
+    """One or more ACS servers failed while the rest of the pass completed."""
+
+
+def _sync_retry_delay(retry_count: int) -> int:
+    return _SYNC_RETRY_SECONDS[min(max(retry_count, 0), len(_SYNC_RETRY_SECONDS) - 1)]
 
 
 def _is_psycopg_autocommit_state_error(exc: ProgrammingError) -> bool:
@@ -53,8 +64,8 @@ def _bootstrap_wait_idempotency_key(
     return f"{ont_id}:{operation_id or 'no-op'}:{service_retry_count}:{dispatch_scope}"
 
 
-@celery_app.task(name="app.tasks.tr069.sync_all_acs_devices")
-def sync_all_acs_devices() -> dict[str, int]:
+@celery_app.task(bind=True, name=_SYNC_TASK_NAME, max_retries=3)
+def sync_all_acs_devices(self) -> dict[str, int]:
     """Periodic sync of devices from all active ACS servers.
 
     Iterates over active Tr069AcsServer records and calls
@@ -64,21 +75,41 @@ def sync_all_acs_devices() -> dict[str, int]:
         Stats: {servers_synced, total_created, total_updated, errors}.
     """
     logger.info("Starting TR-069 ACS device sync")
+    started = monotonic()
     db = SessionLocal()
+    counters: dict[str, int] = {
+        "servers_total": 0,
+        "servers_synced": 0,
+        "total_created": 0,
+        "total_updated": 0,
+        "total_local_created": 0,
+        "total_local_reactivated": 0,
+        "errors": 0,
+    }
     try:
         servers = list(
             db.scalars(
                 select(Tr069AcsServer).where(Tr069AcsServer.is_active.is_(True))
             ).all()
         )
+        counters["servers_total"] = len(servers)
         if not servers:
             logger.info("No active ACS servers to sync")
-            return {
+            result = {
                 "servers_synced": 0,
                 "total_created": 0,
                 "total_updated": 0,
                 "errors": 0,
             }
+            from app.services.observability import record_task_run
+
+            record_task_run(
+                _SYNC_TASK_NAME,
+                status="ok",
+                counters=counters,
+                duration_seconds=monotonic() - started,
+            )
+            return result
 
         from app.services.tr069 import CpeDevices
 
@@ -97,6 +128,16 @@ def sync_all_acs_devices() -> dict[str, int]:
                 total_local_created += result.get("local_created", 0)
                 total_local_reactivated += result.get("local_reactivated", 0)
                 synced += 1
+                counters.update(
+                    {
+                        "servers_synced": synced,
+                        "total_created": total_created,
+                        "total_updated": total_updated,
+                        "total_local_created": total_local_created,
+                        "total_local_reactivated": total_local_reactivated,
+                        "errors": errors,
+                    }
+                )
             except SoftTimeLimitExceeded:
                 # The soft time limit fires asynchronously and may leave the
                 # shared session's connection mid-statement. Stop now rather
@@ -114,6 +155,7 @@ def sync_all_acs_devices() -> dict[str, int]:
                     "Failed to sync ACS server %s (%s): %s", server.name, server.id, e
                 )
                 errors += 1
+                counters["errors"] = errors
 
         # Emit event for newly discovered devices
         if total_created > 0:
@@ -143,7 +185,21 @@ def sync_all_acs_devices() -> dict[str, int]:
             total_local_reactivated,
             errors,
         )
-        return {
+        counters.update(
+            {
+                "servers_synced": synced,
+                "total_created": total_created,
+                "total_updated": total_updated,
+                "total_local_created": total_local_created,
+                "total_local_reactivated": total_local_reactivated,
+                "errors": errors,
+            }
+        )
+        if errors:
+            raise _PartialAcsSyncError(
+                f"{errors} of {len(servers)} ACS server syncs failed"
+            )
+        result = {
             "servers_synced": synced,
             "total_created": total_created,
             "total_updated": total_updated,
@@ -151,17 +207,60 @@ def sync_all_acs_devices() -> dict[str, int]:
             "total_local_reactivated": total_local_reactivated,
             "errors": errors,
         }
-    except SoftTimeLimitExceeded:
+        from app.services.observability import record_task_run
+
+        record_task_run(
+            _SYNC_TASK_NAME,
+            status="ok",
+            counters=counters,
+            duration_seconds=monotonic() - started,
+        )
+        return result
+    except (SoftTimeLimitExceeded, _PartialAcsSyncError) as exc:
         # Connection may be mid-statement; best-effort rollback only, then
-        # propagate. db.close() below resets/invalidates it on pool return.
+        # close/reset it before Celery dispatches the bounded retry.
         try:
             db.rollback()
         except Exception:  # noqa: BLE001
             logger.warning("rollback after ACS sync timeout failed; resetting on close")
-        raise
-    except Exception:
+        retry_count = int(getattr(self.request, "retries", 0))
+        delay = _sync_retry_delay(retry_count)
+        retry_exhausted = retry_count >= int(self.max_retries or 3)
+        next_attempt_at = (
+            None if retry_exhausted else datetime.now(UTC) + timedelta(seconds=delay)
+        )
+        from app.services.observability import record_task_run
+
+        record_task_run(
+            _SYNC_TASK_NAME,
+            status=("timeout" if isinstance(exc, SoftTimeLimitExceeded) else "partial"),
+            counters=counters,
+            duration_seconds=monotonic() - started,
+            next_attempt_at=next_attempt_at,
+        )
+        if retry_exhausted:
+            raise
+        raise self.retry(exc=exc, countdown=delay)
+    except Exception as exc:
         db.rollback()
-        raise
+        retry_count = int(getattr(self.request, "retries", 0))
+        delay = _sync_retry_delay(retry_count)
+        retry_exhausted = retry_count >= int(self.max_retries or 3)
+        next_attempt_at = (
+            None if retry_exhausted else datetime.now(UTC) + timedelta(seconds=delay)
+        )
+        from app.services.observability import record_task_run
+
+        record_task_run(
+            _SYNC_TASK_NAME,
+            status="error",
+            counters=counters,
+            duration_seconds=monotonic() - started,
+            next_attempt_at=next_attempt_at,
+        )
+        if retry_exhausted:
+            raise
+        raise self.retry(exc=exc, countdown=delay)
     finally:
         db.close()
 

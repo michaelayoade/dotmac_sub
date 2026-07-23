@@ -9394,6 +9394,90 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="observability.database_diagnostics",
+                module="app.services.db_error_observability",
+                owns=(
+                    "redacted database schema-error correlation",
+                    "redacted idle-transaction failure correlation",
+                ),
+                depends_on=("observability.recording",),
+                notes=(
+                    "Records request ID, application caller, SQLSTATE, safe missing "
+                    "identifier, and a statement fingerprint. SQL text, parameters, "
+                    "and result data are never logged."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="redacted database schema-error correlation",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "database driver failure observation",
+                                "request correlation context",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="redacted idle-transaction failure correlation",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "database driver failure observation",
+                                "request correlation context",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="database driver failure observation",
+                            owner="runtime.db_sessions",
+                            kind=AuthorityKind.OBSERVATION,
+                            source=(
+                                "SQLAlchemy handle_error context and original "
+                                "driver SQLSTATE"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="request correlation context",
+                            owner="observability.recording",
+                            kind=AuthorityKind.OBSERVATION,
+                            source="request ID context and application call stack",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.NOT_APPLICABLE,
+                        boundary=(
+                            "The SQLAlchemy error hook observes an already-failed "
+                            "operation and writes structured logs only."
+                        ),
+                        locking="No application lock or database write is performed.",
+                        idempotency=(
+                            "Repeated failures emit independent observations with "
+                            "the same stable statement fingerprint."
+                        ),
+                        retries=(
+                            "The observer never retries database work; the owning "
+                            "caller retains retry policy."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(),
+                        mapping_owner="database caller adapters and task owners",
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.NATIVE,
+                        new_owner="observability.database_diagnostics",
+                        verification=(
+                            "Fingerprint redaction and caller-correlation tests."
+                        ),
+                    ),
+                    steward="platform operations",
+                    design_refs=(
+                        "docs/designs/OPERATIONAL_EVIDENCE_AND_RETRY.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=("tests/test_operational_evidence_followup.py",),
+                ),
+            ),
+            SOTService(
                 name="observability.channel_health_contracts",
                 module="app.services.channel_health_contracts",
                 owns=(
@@ -18315,6 +18399,164 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     test_refs=(
                         "tests/test_ui_contracts.py",
                         "tests/architecture/test_template_projection_boundary.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="ui.operational_evidence_projection",
+                module="app.services.operational_checks",
+                owns=(
+                    "question-driven operational evidence projection",
+                    "operational retry and next-action projection",
+                ),
+                depends_on=(
+                    "ui.projection_contracts",
+                    "observability.recording",
+                    "scheduler.registry",
+                    "integration.registry",
+                    "integration.installations",
+                    "control.feature_registry",
+                ),
+                notes=(
+                    "Keeps administrative expectation, last observation, evidence "
+                    "age, customer-data impact, and retry/next action separate. It "
+                    "does not convert missing or stale telemetry into device or "
+                    "customer service down."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="question-driven operational evidence projection",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "bounded collector and task observations",
+                                "scheduler expectation",
+                                "integration capability binding facts",
+                                "native quote cutover controls",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="operational retry and next-action projection",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "bounded collector and task observations",
+                                "scheduler expectation",
+                                "integration capability binding facts",
+                                "native quote cutover controls",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="bounded collector and task observations",
+                            owner="observability.recording",
+                            kind=AuthorityKind.OBSERVATION,
+                            source=(
+                                "bandwidth poller snapshot, task heartbeat result, "
+                                "and CRM capability-operation receipt"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="scheduler expectation",
+                            owner="scheduler.registry",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="effective ScheduledTask enablement and cadence",
+                        ),
+                        AuthorityInput(
+                            name="integration capability binding facts",
+                            owner="integration.installations",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "version-pinned installation, enabled binding, "
+                                "validated config revision, and manifest declaration"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="native quote cutover controls",
+                            owner="control.feature_registry",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "effective quotes.native_read and "
+                                "quotes.native_write controls"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary=(
+                            "Materializes bounded database control facts and reads "
+                            "bounded cache observations without a business write."
+                        ),
+                        locking="Read projection acquires no mutation locks.",
+                        idempotency=(
+                            "The same facts and observation time produce the same "
+                            "operator questions, evidence, and next action."
+                        ),
+                        retries="Read projection calls are safe to retry.",
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(),
+                        mapping_owner="NOC and integration web adapters",
+                    ),
+                    projections=(
+                        ProjectionContract(
+                            name="question-driven operational evidence projection",
+                            input_names=(
+                                "bounded collector and task observations",
+                                "scheduler expectation",
+                                "integration capability binding facts",
+                                "native quote cutover controls",
+                            ),
+                            writer="ui.operational_evidence_projection",
+                            freshness=(
+                                "Each observation retains its source observed_at; "
+                                "expected cadence remains a separate control fact."
+                            ),
+                            stale_behavior=(
+                                "Explains that evidence is late or absent and never "
+                                "turns that gap into a service-down claim."
+                            ),
+                            drift_signal=(
+                                "NOC/integration projection contract tests and missing "
+                                "source timestamps."
+                            ),
+                            rebuild_operation=(
+                                "Recompute on read from bounded observations and "
+                                "current control-plane facts."
+                            ),
+                            repair_owner="ui.operational_evidence_projection",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "NOC and installed-integration templates collapsing "
+                            "expectation and evidence into healthy/degraded/unknown"
+                        ),
+                        new_owner="ui.operational_evidence_projection",
+                        verification=(
+                            "NOC, integration evidence, retry, freshness, and "
+                            "template projection tests."
+                        ),
+                        cutover_gate=(
+                            "NOC and installed integrations render owner-provided "
+                            "questions and evidence without local status derivation."
+                        ),
+                        fallback_retirement=(
+                            "The installed-integrations generic health field and "
+                            "health badge branch are removed."
+                        ),
+                    ),
+                    steward="platform operations UI",
+                    design_refs=(
+                        "docs/designs/OPERATIONAL_EVIDENCE_AND_RETRY.md",
+                        "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_operational_evidence_followup.py",
+                        "tests/test_web_network_noc.py",
+                        "tests/test_integrations_observability.py",
                     ),
                 ),
             ),

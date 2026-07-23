@@ -25,6 +25,7 @@ from app.services.integrations.runtime_execution import (
 from app.services.secrets import resolve_secret
 
 CONNECTOR_KEY = "dotmac.crm"
+_OPERATION_OBSERVATION_KEY = "integration.crm.capability.crm.operational_observation.v1"
 
 
 class CrmCapabilityClient:
@@ -159,13 +160,33 @@ class CrmCapabilityClient:
     def _operational(
         self, action: str, params: dict[str, Any], correlation: str
     ) -> dict[str, Any]:
-        return self._execute(
-            CRM_OPERATIONAL_OBSERVATION_CAPABILITY,
-            action,
-            params,
-            trigger=OperationTrigger.reconcile,
-            correlation_id=correlation,
+        from app.services import job_heartbeat
+
+        try:
+            result = self._execute(
+                CRM_OPERATIONAL_OBSERVATION_CAPABILITY,
+                action,
+                params,
+                trigger=OperationTrigger.reconcile,
+                correlation_id=correlation,
+            )
+        except Exception as exc:
+            job_heartbeat.record_result(
+                _OPERATION_OBSERVATION_KEY,
+                status="failed",
+                detail={
+                    "action": action,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            raise
+        job_heartbeat.record_success(_OPERATION_OBSERVATION_KEY)
+        job_heartbeat.record_result(
+            _OPERATION_OBSERVATION_KEY,
+            status="success",
+            detail={"action": action},
         )
+        return result
 
     def get_portal_referrals(self, crm_subscriber_id: str) -> dict[str, Any]:
         return dict(

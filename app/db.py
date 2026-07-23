@@ -47,7 +47,7 @@ def get_engine():
             f"{settings.db_idle_in_transaction_session_timeout_ms}"
         )
         connect_args["options"] = server_options
-    return create_engine(
+    engine = create_engine(
         settings.database_url,
         pool_pre_ping=True,
         pool_size=settings.db_pool_size,
@@ -56,12 +56,22 @@ def get_engine():
         pool_recycle=settings.db_pool_recycle,
         connect_args=connect_args,
     )
+    from app.services.db_error_observability import install_db_error_observability
+
+    install_db_error_observability(engine)
+    return engine
 
 
 _engine = get_engine()
 
 
 SessionLocal = sessionmaker(bind=_engine, autoflush=False, autocommit=False)
+
+# Register transaction-span observation for every web/task session, including
+# code paths that do not otherwise import the after-commit helper module.
+from app.services.session_hooks import install_session_hooks  # noqa: E402
+
+install_session_hooks()
 
 
 def dispose_engine() -> None:

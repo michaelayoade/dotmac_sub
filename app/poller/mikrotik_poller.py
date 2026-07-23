@@ -14,7 +14,7 @@ import signal
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
 
@@ -43,6 +43,22 @@ def _sanitize_exc(exc: BaseException) -> str:
     """Strip routeros_api's cleartext =password=... from exception text."""
     message = _PASSWORD_RE.sub("=password=<redacted>", str(exc))
     return message or type(exc).__name__
+
+
+def _error_category(exc: BaseException) -> str:
+    """Bounded operator-facing classification without leaking credentials."""
+    message = _sanitize_exc(exc).lower()
+    if "no route to host" in message:
+        return "no_route_to_host"
+    if "timed out" in message or "timeout" in message:
+        return "timeout"
+    if "authentication" in message or "invalid user" in message:
+        return "authentication_rejected"
+    if "connection refused" in message:
+        return "connection_refused"
+    if "network is unreachable" in message:
+        return "network_unreachable"
+    return "transport_error"
 
 
 # Configuration
@@ -150,8 +166,10 @@ class MikroTikConnection:
         username: str,
         password: str,
         port: int = 8728,
+        display_name: str | None = None,
     ):
         self.device_id = device_id
+        self.display_name = display_name or str(device_id)
         self.host = host
         self.username = username
         self.password = password
@@ -161,6 +179,9 @@ class MikroTikConnection:
         self._last_connected: datetime | None = None
         self._last_attempt: datetime | None = None
         self._consecutive_failures: int = 0
+        self._last_error_category: str | None = None
+        self._last_error: str | None = None
+        self._last_successful_poll: datetime | None = None
         # Background tasks that disconnect pools whose construction was still
         # in-flight when connect() timed out. Held so asyncio does not GC them.
         self._drain_tasks: set[asyncio.Task] = set()
@@ -228,10 +249,14 @@ class MikroTikConnection:
             )
             self._last_connected = datetime.now(UTC)
             self._consecutive_failures = 0
+            self._last_error_category = None
+            self._last_error = None
             logger.info(f"Connected to MikroTik device {self.device_id} at {self.host}")
             return True
         except Exception as e:
             self._consecutive_failures += 1
+            self._last_error_category = _error_category(e)
+            self._last_error = _sanitize_exc(e)[:240]
             logger.error(f"Failed to connect to {self.host}: {_sanitize_exc(e)}")
             # The pool was already constructed (and thus logged in) before the
             # failure, so disconnect it here to avoid orphaning the session.
@@ -360,10 +385,15 @@ class MikroTikConnection:
                 )
 
             self._consecutive_failures = 0
+            self._last_successful_poll = datetime.now(UTC)
+            self._last_error_category = None
+            self._last_error = None
             return stats
 
         except Exception as e:
             self._consecutive_failures += 1
+            self._last_error_category = _error_category(e)
+            self._last_error = _sanitize_exc(e)[:240]
             logger.error(
                 f"Failed to get queue stats from {self.host}: {_sanitize_exc(e)}"
             )
@@ -372,15 +402,28 @@ class MikroTikConnection:
             return []
 
     @property
-    def should_retry(self) -> bool:
-        """Check if we should attempt reconnection."""
-        # Back off exponentially based on failures
+    def retry_delay_seconds(self) -> int:
         if self._consecutive_failures == 0:
-            return True
-        backoff_seconds = min(
+            return 0
+        return min(
             2**self._consecutive_failures,
             FAILURE_BACKOFF_MAX_SECONDS,
         )
+
+    @property
+    def next_retry_at(self) -> datetime | None:
+        reference = self._last_attempt or self._last_connected
+        if reference is None or self._consecutive_failures == 0:
+            return None
+        return reference + timedelta(seconds=self.retry_delay_seconds)
+
+    @property
+    def should_retry(self) -> bool:
+        """Check if we should attempt reconnection."""
+        # Back off exponentially based on failures.
+        backoff_seconds = self.retry_delay_seconds
+        if backoff_seconds == 0:
+            return True
         # Compare against the last attempt (success or failure). Using
         # _last_connected alone would skip backoff entirely for devices that
         # have never connected — producing a 1-Hz retry storm.
@@ -531,6 +574,7 @@ class DevicePool:
                         continue
                     self._connections[device_id] = MikroTikConnection(
                         device_id=device_id,
+                        display_name=str(device.name or device_id),
                         host=device.management_ip,
                         username=device.api_username,
                         password=api_password,
@@ -726,7 +770,7 @@ class DevicePool:
                     continue
         return None
 
-    def health_snapshot(self) -> dict[str, int]:
+    def health_snapshot(self) -> dict[str, object]:
         """Per-cycle device health for telemetry: total / reachable / failing.
 
         A device is "failing" while it has consecutive poll failures (it's in
@@ -737,10 +781,52 @@ class DevicePool:
         failing = sum(
             1 for c in self._connections.values() if c._consecutive_failures > 0
         )
+        failures = []
+        for connection in self._connections.values():
+            if connection._consecutive_failures <= 0:
+                continue
+            mapped_services = len(
+                set(self._queue_mappings.get(connection.device_id, {}).values())
+                | set(self._login_mappings.get(connection.device_id, {}).values())
+            )
+            failures.append(
+                {
+                    "device_id": str(connection.device_id),
+                    "name": connection.display_name,
+                    "host": connection.host,
+                    "error_category": connection._last_error_category
+                    or "transport_error",
+                    "error": connection._last_error or "Polling did not complete",
+                    "consecutive_failures": connection._consecutive_failures,
+                    "last_attempt_at": (
+                        connection._last_attempt.isoformat()
+                        if connection._last_attempt
+                        else None
+                    ),
+                    "last_success_at": (
+                        connection._last_successful_poll.isoformat()
+                        if connection._last_successful_poll
+                        else None
+                    ),
+                    "next_attempt_at": (
+                        connection.next_retry_at.isoformat()
+                        if connection.next_retry_at
+                        else None
+                    ),
+                    "services_without_live_bandwidth": mapped_services,
+                }
+            )
+        failures.sort(
+            key=lambda item: (
+                -int(item["consecutive_failures"]),
+                str(item["name"]).lower(),
+            )
+        )
         return {
             "devices_total": total,
             "devices_ok": total - failing,
             "devices_failing": failing,
+            "device_failures": failures[:100],
         }
 
     async def close(self):
