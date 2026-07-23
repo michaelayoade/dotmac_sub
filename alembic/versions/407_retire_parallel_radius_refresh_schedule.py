@@ -1,7 +1,7 @@
 """Retire the parallel periodic RADIUS projection refresh.
 
-Revision ID: 405_retire_parallel_radius_refresh
-Revises: 404_team_inbox_sot_completion
+Revision ID: 407_retire_parallel_radius_refresh
+Revises: 406_support_ticket_work_order_provenance
 
 The permanent account-access reconciler owns periodic drift detection. The
 full RADIUS projection writer remains available for event-time and reconciler-
@@ -15,8 +15,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "405_retire_parallel_radius_refresh"
-down_revision = "404_team_inbox_sot_completion"
+revision = "407_retire_parallel_radius_refresh"
+down_revision = "406_support_ticket_work_order_provenance"
 branch_labels = None
 depends_on = None
 

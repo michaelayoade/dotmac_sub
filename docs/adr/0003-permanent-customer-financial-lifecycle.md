@@ -71,7 +71,7 @@ owners and transport outcomes; they do not decide whether the domain exists.
 ## Migration and cutover
 
 Migration 398 deletes the retired financial settings instead of preserving
-tombstones and re-enables the permanent scheduled-task rows. Migration 405
+tombstones and re-enables the permanent scheduled-task rows. Migration 407
 deletes the parallel RADIUS refresh controls and disables stale independent
 refresh schedules. The registry, settings UI, module manager, task adapters,
 notification handlers, and enforcement planner no longer read those settings.
@@ -116,7 +116,7 @@ idempotency contracts; they do not change money ownership.
 - Account quarantine, shields, grace, funding, coverage, payment, renewal,
   suspension, restoration, notification, and idempotency suites remain green.
 - Alembic has one head; migration 398 removes the retired financial rows while
-  enabling the canonical tasks, and migration 405 retires the parallel RADIUS
+  enabling the canonical tasks, and migration 407 retires the parallel RADIUS
   refresh controls and schedule.
 
 ## Rollback or forward-fix
