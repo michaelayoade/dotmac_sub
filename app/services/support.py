@@ -1316,9 +1316,32 @@ class Tickets:
             event_type="support_ticket_status_changed",
             subject=f"Support ticket {ticket_ref}: {message['label']}",
             body=f"Ticket {ticket_ref} ({ticket.title}) {message['body']}",
-            dedupe_key=f"ticket-status:{ticket.id}:{current}",
+            dedupe_key=Tickets._status_change_dedupe_key(
+                ticket, previous_status, current
+            ),
             extra_metadata={"from_status": previous_status, "to_status": current},
         )
+
+    @staticmethod
+    def _status_change_dedupe_key(
+        ticket: Ticket, previous_status: str, current: str
+    ) -> str:
+        """Identify one *transition*, not one status.
+
+        Intent dedupe is permanent and global (``communication_intents.submit``
+        looks the key up with ``one_or_none()`` over all time), so keying on the
+        status alone silences every later re-entry into it. A ticket parked
+        on_hold is told "we'll let you know when it resumes" and then never
+        hears the resume; a ticket that bounces back to waiting_on_customer asks
+        for input once and then stalls silently. Both are the "any update?"
+        contact this notification exists to prevent.
+
+        The minute bucket keeps genuine idempotency — a retry or double submit
+        of the same transition still collapses — while letting a later,
+        distinct transition through.
+        """
+        stamp = _now().strftime("%Y%m%d%H%M")
+        return f"ticket-status:{ticket.id}:{previous_status}->{current}:{stamp}"
 
     @staticmethod
     def _queue_resolution_confirmation_notifications(
