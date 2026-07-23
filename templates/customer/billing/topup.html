@@ -3,9 +3,10 @@
 {% block title %}Deposit Account Credit - Customer Portal{% endblock %}
 
 {% block content %}
-{% set topup_options = payment_options|default([
-    {"provider_type": "paystack", "label": "Pay with Paystack"}
-], true) %}
+{% set topup_options = payment_options|default([], true) %}
+{% set topup_provider_values = topup_options|map(attribute="provider_type")|list %}
+{% set default_topup_provider = provider_type if provider_type in topup_provider_values else (topup_options[0].provider_type if topup_options else "") %}
+{% set default_payment_choice = ("provider:" ~ default_topup_provider) if default_topup_provider else (("card:" ~ payment_methods[0].id) if payment_methods|default([]) else "") %}
 <div class="space-y-6" x-data="topupPage()">
     <div>
         <nav class="mb-2 flex items-center gap-2 text-sm text-stone-500 dark:text-stone-400">
@@ -24,10 +25,17 @@
     </div>
     {% endif %}
     {% if add_card %}
+    {% if "paystack" in topup_provider_values %}
     <div class="rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-sm text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-200">
         <p class="font-semibold">Adding a card</p>
         <p class="mt-1">Pay with Paystack and we&rsquo;ll save the card for next time. The receipt becomes evidenced account credit. &ldquo;Save this card&rdquo; is already ticked below.</p>
     </div>
+    {% else %}
+    <div class="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200">
+        <p class="font-semibold">Card setup is temporarily unavailable</p>
+        <p class="mt-1">The card-capable payment connector is not currently enabled. No card will be requested or stored.</p>
+    </div>
+    {% endif %}
     {% endif %}
     {% if pending_direct_transfer %}
     <div class="flex flex-col gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200 sm:flex-row sm:items-center sm:justify-between">
@@ -130,6 +138,12 @@
                 {% include "customer/billing/_payment_method_choice.html" %}
                 {% endfor %}
             </div>
+            {% if not topup_options and not payment_methods|default([]) %}
+            <div class="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200">
+                <p class="font-semibold">Online payment is temporarily unavailable</p>
+                <p class="mt-1">No validated payment gateway or bank-transfer route is currently enabled. Please try again later or contact support.</p>
+            </div>
+            {% endif %}
 
             <label
                 x-show="selectedPaymentChoice === 'provider:paystack'"
@@ -295,7 +309,7 @@ function topupPage() {
         providerErrors: {},
         showTopupHelp: false,
         saveCard: {{ 'true' if add_card else 'false' }},
-        selectedPaymentChoice: 'provider:{{ provider_type }}',
+        selectedPaymentChoice: {{ default_payment_choice|tojson }},
         idempotencyKey: null,
         currentCredit: {% if account_credit is not none %}Number('{{ account_credit }}'){% else %}null{% endif %},
         previewFingerprint: '',
@@ -341,7 +355,7 @@ function topupPage() {
         },
         canPay() {
             const amount = this.currentAmount();
-            if (!amount || !this.hasValidPrecision() || !this.previewFingerprint) {
+            if (!this.selectedPaymentChoice || !amount || !this.hasValidPrecision() || !this.previewFingerprint) {
                 return false;
             }
             return amount >= this.minAmount && amount <= this.maxAmount;
@@ -507,9 +521,8 @@ function topupPage() {
             this.validationError = '';
             this.clearProviderErrors();
             const self = this;
-            const selectedChoice = this.selectedPaymentChoice || 'provider:{{ provider_type }}';
+            const selectedChoice = this.selectedPaymentChoice || '';
             const selectedProvider = selectedChoice.startsWith('provider:') ? selectedChoice.replace('provider:', '') : '';
-            const requestProvider = selectedProvider || 'paystack';
             const selectedPaymentMethodId = selectedChoice.startsWith('card:') ? selectedChoice.replace('card:', '') : null;
             // One idempotency key per page session (not per click): a saved-card
             // charge that succeeded but lost its response replays on re-click
@@ -528,7 +541,7 @@ function topupPage() {
                     idempotencyKey: this.idempotencyKey,
                     body: {
                         amount: amount.toFixed(2),
-                        provider: requestProvider,
+                        provider: selectedProvider || null,
                         payment_method_id: selectedPaymentMethodId,
                         preview_fingerprint: this.previewFingerprint,
                     },
@@ -588,8 +601,7 @@ function topupPage() {
 </script>
 
 {% include "customer/billing/_payment_intent_js.html" %}
-{% set topup_provider_types = topup_options|map(attribute="provider_type")|list %}
-{% if "paystack" in topup_provider_types %}
+{% if "paystack" in topup_provider_values %}
 <script src="https://js.paystack.co/v1/inline.js"></script>
 {% endif %}
 {% endblock %}

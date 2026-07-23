@@ -4,35 +4,14 @@ from pathlib import Path
 import pytest
 
 from app.models.billing import PaymentProvider, PaymentProviderType, TopupIntent
-from app.models.domain_settings import DomainSetting, SettingDomain
-from app.models.subscription_engine import SettingValueType
 from app.services.payment_gateway_adapter import payment_gateway_adapter
 from app.services.payment_routing import (
-    eligible_routes,
+    gateway_options,
     provider_for_intent,
     provider_health,
     select_checkout_provider,
 )
-from app.services.settings_cache import SettingsCache
 from tests.integration_platform_helpers import enable_payment_provider
-
-
-def _setting(db, key: str, value: str | bool) -> None:
-    setting = (
-        db.query(DomainSetting).filter_by(domain=SettingDomain.billing, key=key).first()
-    )
-    if setting is None:
-        setting = DomainSetting(domain=SettingDomain.billing, key=key)
-    setting.value_type = (
-        SettingValueType.boolean if isinstance(value, bool) else SettingValueType.string
-    )
-    setting.value_text = str(value).lower() if isinstance(value, bool) else value
-    setting.value_json = None
-    setting.is_secret = "secret" in key
-    setting.is_active = True
-    db.add(setting)
-    db.commit()
-    SettingsCache.invalidate(SettingDomain.billing.value, key)
 
 
 def _provider(db, provider_type: PaymentProviderType, *, active: bool = True):
@@ -47,58 +26,52 @@ def _provider(db, provider_type: PaymentProviderType, *, active: bool = True):
     return provider
 
 
-def test_routes_only_healthy_providers_in_policy_order(db_session):
+def test_gateway_options_follow_binding_presentment_priority(db_session):
     paystack = _provider(db_session, PaymentProviderType.paystack)
     flutterwave = _provider(db_session, PaymentProviderType.flutterwave)
-    enable_payment_provider(db_session, "paystack")
-    enable_payment_provider(db_session, "flutterwave")
-    _setting(db_session, "payment_gateway_primary_provider", "flutterwave")
-    _setting(db_session, "payment_gateway_secondary_provider", "paystack")
+    enable_payment_provider(db_session, "paystack", presentment_priority=10)
+    enable_payment_provider(db_session, "flutterwave", presentment_priority=20)
 
-    routes = eligible_routes(db_session)
+    routes = gateway_options(db_session)
 
     assert [(route.provider_type, route.provider_id) for route in routes] == [
-        (PaymentProviderType.flutterwave, str(flutterwave.id)),
-        (PaymentProviderType.paystack, str(paystack.id)),
+        (PaymentProviderType.flutterwave, flutterwave.id),
+        (PaymentProviderType.paystack, paystack.id),
     ]
 
 
-def test_disabled_provider_is_not_available_for_new_checkout(db_session):
+def test_finance_active_flag_does_not_control_checkout(db_session):
     _provider(db_session, PaymentProviderType.paystack, active=False)
     enable_payment_provider(db_session, "paystack")
 
-    assert eligible_routes(db_session) == []
-    with pytest.raises(ValueError, match="not available"):
-        select_checkout_provider(db_session, "paystack")
+    assert [route.provider_type for route in gateway_options(db_session)] == [
+        PaymentProviderType.paystack
+    ]
+    assert (
+        select_checkout_provider(db_session, "paystack").provider_type
+        == PaymentProviderType.paystack
+    )
 
 
-def test_failover_disabled_prevents_automatic_fallback_but_keeps_manual_choice(
-    db_session,
-):
+def test_default_selection_is_first_presentment_option(db_session):
     _provider(db_session, PaymentProviderType.paystack)
     _provider(db_session, PaymentProviderType.flutterwave)
-    enable_payment_provider(db_session, "paystack")
-    enable_payment_provider(db_session, "flutterwave")
-    _setting(db_session, "payment_gateway_failover_enabled", False)
+    enable_payment_provider(db_session, "paystack", presentment_priority=5)
+    enable_payment_provider(db_session, "flutterwave", presentment_priority=50)
 
-    assert [route.provider_type for route in eligible_routes(db_session)] == [
-        PaymentProviderType.paystack,
+    assert [route.provider_type for route in gateway_options(db_session)] == [
         PaymentProviderType.flutterwave,
+        PaymentProviderType.paystack,
     ]
     assert (
         select_checkout_provider(db_session, "flutterwave").provider_type
         == PaymentProviderType.flutterwave
     )
 
-    paystack = (
-        db_session.query(PaymentProvider)
-        .filter_by(provider_type=PaymentProviderType.paystack)
-        .one()
+    assert (
+        select_checkout_provider(db_session).provider_type
+        == PaymentProviderType.flutterwave
     )
-    paystack.is_active = False
-    db_session.commit()
-    with pytest.raises(ValueError, match="No online"):
-        select_checkout_provider(db_session)
 
 
 def test_multiple_active_rows_make_provider_ambiguous(db_session):
@@ -106,10 +79,10 @@ def test_multiple_active_rows_make_provider_ambiguous(db_session):
     _provider(db_session, PaymentProviderType.paystack)
     enable_payment_provider(db_session, "paystack")
 
-    health = {row["provider_type"]: row for row in provider_health(db_session)}
+    health = {row.provider_type: row for row in provider_health(db_session)}
 
-    assert health["paystack"]["health"] == "ambiguous"
-    assert eligible_routes(db_session) == []
+    assert health[PaymentProviderType.paystack].health == "ambiguous"
+    assert gateway_options(db_session) == []
 
 
 def test_intent_provider_is_authoritative_after_checkout(db_session, subscriber):
@@ -127,7 +100,11 @@ def test_intent_provider_is_authoritative_after_checkout(db_session, subscriber)
 
 def test_gateway_adapter_rejects_unknown_provider_before_fallback(db_session):
     with pytest.raises(ValueError, match="Unsupported payment provider"):
-        payment_gateway_adapter.build_context(db_session, provider_type="stripe")
+        payment_gateway_adapter.build_context(
+            db_session,
+            provider_type="stripe",
+            capability_binding_id=uuid.UUID(int=0),
+        )
     with pytest.raises(ValueError, match="Unsupported payment provider"):
         payment_gateway_adapter.verify(
             db_session, provider_type="stripe", reference="unknown"

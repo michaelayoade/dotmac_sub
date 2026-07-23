@@ -14,6 +14,7 @@ from app.services import gateway_topup_intents as svc
 from app.services.account_credit_deposits import AccountCreditDeposits
 from app.services.db_session_adapter import db_session_adapter
 from app.services.owner_commands import CommandContext
+from tests.integration_platform_helpers import enable_payment_provider
 
 
 def _patch_policy(monkeypatch) -> None:
@@ -37,10 +38,15 @@ def _context(scope: str, *, idempotency_key: str | None = None) -> CommandContex
     )
 
 
+def _checkout_binding(db_session, provider_type: str = "paystack"):
+    return enable_payment_provider(db_session, provider_type)["payments.intent.v1"]
+
+
 def _create_deposit(
     db_session,
     subscriber,
     *,
+    capability_binding_id: UUID,
     preview_fingerprint: str | None = None,
 ) -> svc.GatewayTopupIntentResult:
     account_id = subscriber.id
@@ -62,6 +68,7 @@ def _create_deposit(
         provider_id=None,
         created_by="pytest",
         expected_preview_fingerprint=preview_fingerprint,
+        capability_binding_id=capability_binding_id,
     )
     db_session_adapter.release_read_transaction(db_session)
     return svc.create_customer_gateway_topup_intent(
@@ -91,6 +98,8 @@ def test_customer_invoice_creation_derives_locked_invoice_amount(
     db_session.commit()
     invoice_id = invoice.id
     account_id = subscriber.id
+    binding = _checkout_binding(db_session)
+    binding_id = binding.id
 
     db_session_adapter.release_read_transaction(db_session)
     result = svc.create_customer_gateway_topup_intent(
@@ -103,6 +112,7 @@ def test_customer_invoice_creation_derives_locked_invoice_amount(
             provider_type="paystack",
             provider_id=None,
             created_by="pytest",
+            capability_binding_id=binding_id,
         ),
         context=_context(svc.CREATE_CUSTOMER_SCOPE),
     )
@@ -115,6 +125,7 @@ def test_customer_invoice_creation_derives_locked_invoice_amount(
         "invoice_id": str(invoice_id),
         "invoice_number": "INV-GATEWAY-OWNER",
         "account_id": str(account_id),
+        "capability_binding_id": str(binding_id),
     }
 
 
@@ -122,11 +133,17 @@ def test_customer_deposit_creation_uses_policy_and_replays(
     monkeypatch, db_session, subscriber
 ):
     _patch_policy(monkeypatch)
+    binding = _checkout_binding(db_session)
 
-    first = _create_deposit(db_session, subscriber)
+    first = _create_deposit(
+        db_session,
+        subscriber,
+        capability_binding_id=binding.id,
+    )
     second = _create_deposit(
         db_session,
         subscriber,
+        capability_binding_id=binding.id,
         preview_fingerprint=first.preview_fingerprint,
     )
 
@@ -140,6 +157,7 @@ def test_customer_deposit_creation_requires_reviewed_preview(
     monkeypatch, db_session, subscriber
 ):
     _patch_policy(monkeypatch)
+    binding = _checkout_binding(db_session)
 
     command = svc.CreateCustomerGatewayTopupIntentCommand(
         flow=svc.CustomerGatewayTopupFlow.account_credit_deposit,
@@ -149,6 +167,7 @@ def test_customer_deposit_creation_requires_reviewed_preview(
         provider_type="paystack",
         provider_id=None,
         created_by="pytest",
+        capability_binding_id=binding.id,
     )
     db_session_adapter.release_read_transaction(db_session)
 
@@ -178,6 +197,8 @@ def test_reseller_creation_locks_canonical_billing_account(monkeypatch, db_sessi
     db_session.commit()
     reseller_id = reseller.id
     billing_account_id = billing_account.id
+    binding = _checkout_binding(db_session)
+    binding_id = binding.id
 
     db_session_adapter.release_read_transaction(db_session)
     result = svc.create_reseller_gateway_topup_intent(
@@ -189,6 +210,7 @@ def test_reseller_creation_locks_canonical_billing_account(monkeypatch, db_sessi
             provider_type="paystack",
             provider_id=None,
             requested_amount="12000.00",
+            capability_binding_id=binding_id,
             save_card=True,
         ),
         context=_context(svc.CREATE_RESELLER_SCOPE),
@@ -205,7 +227,8 @@ def test_saved_card_failure_atomically_releases_retry_reservation(
     monkeypatch, db_session, subscriber
 ):
     _patch_policy(monkeypatch)
-    result = _create_deposit(db_session, subscriber)
+    binding = _checkout_binding(db_session)
+    result = _create_deposit(db_session, subscriber, capability_binding_id=binding.id)
     reservation = IdempotencyKey(
         scope=svc.SavedCardChargeScope.account_credit_deposit.value,
         key="declined-charge-key",
@@ -237,7 +260,8 @@ def test_saved_card_failure_rolls_back_on_reservation_mismatch(
     monkeypatch, db_session, subscriber
 ):
     _patch_policy(monkeypatch)
-    result = _create_deposit(db_session, subscriber)
+    binding = _checkout_binding(db_session)
+    result = _create_deposit(db_session, subscriber, capability_binding_id=binding.id)
     reservation = IdempotencyKey(
         scope=svc.SavedCardChargeScope.invoice.value,
         key="mismatched-charge-key",
@@ -263,3 +287,29 @@ def test_saved_card_failure_rolls_back_on_reservation_mismatch(
     intent = db_session.get(TopupIntent, result.intent_id)
     assert intent is not None and intent.status == "pending"
     assert db_session.get(IdempotencyKey, reservation_id) is not None
+
+
+def test_customer_creation_rejects_missing_checkout_binding(
+    monkeypatch, db_session, subscriber
+):
+    _patch_policy(monkeypatch)
+    command = svc.CreateCustomerGatewayTopupIntentCommand(
+        flow=svc.CustomerGatewayTopupFlow.account_credit_deposit,
+        account_id=subscriber.id,
+        requested_amount="5000.00",
+        reference="gateway-missing-binding-ref",
+        provider_type="paystack",
+        provider_id=None,
+        created_by="pytest",
+        capability_binding_id=UUID(int=0),
+    )
+
+    db_session_adapter.release_read_transaction(db_session)
+    with pytest.raises(svc.GatewayTopupIntentError) as exc_info:
+        svc.create_customer_gateway_topup_intent(
+            db_session,
+            command,
+            context=_context(svc.CREATE_CUSTOMER_SCOPE),
+        )
+
+    assert exc_info.value.code.endswith("checkout_binding_unavailable")

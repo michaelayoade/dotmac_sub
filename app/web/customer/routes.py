@@ -2242,10 +2242,6 @@ def customer_billing_topup(
         return RedirectResponse(url="/portal/auth/login", status_code=303)
 
     page_data = customer_portal.get_topup_page(db, customer)
-    if not page_data.get("payment_options"):
-        page_data["payment_options"] = [
-            {"provider_type": "paystack", "label": "Pay with Paystack"},
-        ]
     return templates.TemplateResponse(
         "customer/billing/topup.html",
         {

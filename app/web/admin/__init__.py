@@ -26,7 +26,6 @@ from app.web.admin.billing_invoice_bulk import router as billing_invoice_bulk_ro
 from app.web.admin.billing_invoices import router as billing_invoices_router
 from app.web.admin.billing_payment_proofs import router as billing_payment_proofs_router
 from app.web.admin.billing_payments import router as billing_payments_router
-from app.web.admin.billing_providers import router as billing_providers_router
 from app.web.admin.billing_reporting import router as billing_reporting_router
 from app.web.admin.catalog import router as catalog_router
 from app.web.admin.catalog_settings import legacy_add_ons_router
@@ -243,10 +242,6 @@ router.include_router(
 )
 router.include_router(
     billing_payments_router,
-    dependencies=[Depends(module_manager_service.require_module_enabled("billing"))],
-)
-router.include_router(
-    billing_providers_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("billing"))],
 )
 router.include_router(

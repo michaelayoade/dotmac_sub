@@ -56,6 +56,9 @@ class EventType(enum.Enum):
     payment_reversed = "payment.reversed"
     payment_provider_event_processed = "payment_provider_event.processed"
     payment_provider_event_failed = "payment_provider_event.failed"
+    payment_gateway_finance_identity_ensured = (
+        "payment_gateway.finance_identity_ensured"
+    )
     account_credit_deposited = "account_credit.deposited"
     prepaid_service_renewed = "prepaid_service.renewed"
     subscription_billing_treatment_changed = "subscription_billing_treatment.changed"

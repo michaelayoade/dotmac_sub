@@ -335,6 +335,7 @@ class TestCustomerTopupRoutes:
             "min_amount": 1000,
             "max_amount": 500000,
             "preset_amounts": [1000, 2000, 5000],
+            "payment_options": [],
         }
         template_response = MagicMock(name="template_response")
 
@@ -363,9 +364,7 @@ class TestCustomerTopupRoutes:
         context = render.call_args.args[1]
         assert "payment_reference" not in context
         assert context["active_page"] == "billing"
-        assert context["payment_options"] == [
-            {"provider_type": "paystack", "label": "Pay with Paystack"},
-        ]
+        assert context["payment_options"] == []
 
     def test_topup_intent_route_returns_json_payload(self) -> None:
         import json
