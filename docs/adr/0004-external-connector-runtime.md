@@ -80,8 +80,12 @@ Each phase lands independently and leaves the system releasable.
 - **Phase 1 — manifest-driven resolution.** Dispatch on the declared tier and
   fail closed on tiers with no executor. No behaviour change for existing
   connectors. This ADR ships with it.
-- **Phase 2 — runner wire contract and SDK.** Define the transport for the four
-  verbs and publish a conformance suite a connector author runs before release.
+- **Phase 2 — runner wire contract and SDK.** Splits in two. The *contract* —
+  `app/services/integrations/runner_protocol.py`, a versioned request and
+  response schema for the four verbs — is language-agnostic and lands without
+  waiting on open decision 3. The *SDK package* a connector author depends on
+  does not, because its language is that decision. Transport is deliberately
+  excluded: the schema fixes what crosses the boundary, Phase 3 fixes how.
 - **Phase 3 — `ExternalOciRunner` and supervision.** Image pull, digest
   verification, signature verification, container lifecycle, resource bounds,
   deadline enforcement, and in-memory secret delivery.
