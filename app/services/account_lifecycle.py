@@ -1196,6 +1196,56 @@ def derive_account_status(db: Session, subscriber_id: str) -> SubscriberStatus:
     return SubscriberStatus.canceled
 
 
+def _stage_subscription_access_projection(
+    db: Session,
+    subscriber: Subscriber,
+) -> int:
+    """Stage every child service's canonical desired access state.
+
+    ``Subscriber.status`` is a projection of lifecycle facts, so it must not be
+    persisted independently from the access decisions that consume it.  Keeping
+    both projections in this owner transaction prevents a stale parent status
+    from being fed back into RADIUS policy after a payment or restoration.
+    External RADIUS remains eventual and is reconciled only after commit.
+    """
+    from app.services.access_resolution import resolve_customer_access
+    from app.services.walled_garden_policy import resolve_subscription_restriction
+
+    changed = 0
+    subscriptions = list(
+        db.scalars(
+            select(Subscription).where(Subscription.subscriber_id == subscriber.id)
+        ).all()
+    )
+    for subscription in subscriptions:
+        restriction = resolve_subscription_restriction(
+            db,
+            subscription,
+            account=subscriber,
+        )
+        decision = resolve_customer_access(
+            subscription,
+            subscriber=subscriber,
+            access_restriction_mode=(
+                restriction.effective_mode if restriction is not None else None
+            ),
+        )
+        state = decision.radius_access_state
+        projected = state.value if state is not None else None
+        if subscription.access_state == projected:
+            continue
+        subscription.access_state = projected
+        changed += 1
+    if changed:
+        db.flush()
+        logger.info(
+            "Account access projection staged: subscriber=%s subscriptions_changed=%s",
+            subscriber.id,
+            changed,
+        )
+    return changed
+
+
 def compute_account_status(db: Session, subscriber_id: str) -> SubscriberStatus:
     """Derive and persist subscriber status from subscription states.
 
@@ -1257,6 +1307,7 @@ def compute_account_status(db: Session, subscriber_id: str) -> SubscriberStatus:
     if new_status in {SubscriberStatus.disabled, SubscriberStatus.canceled}:
         clear_prepaid_enforcement_timers(db, subscriber_id)
 
+    _stage_subscription_access_projection(db, subscriber)
     db.flush()
 
     return new_status

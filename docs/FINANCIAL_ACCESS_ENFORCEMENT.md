@@ -4,15 +4,10 @@ Status: canonical and active
 
 Decision authority: [ADR 0003](adr/0003-permanent-customer-financial-lifecycle.md)
 
-This document is the single current contract and operator runbook for postpaid
+This document is the current contract and operator runbook for postpaid
 dunning, prepaid renewal/funding/coverage enforcement, financial restoration,
 enforcement locks, RADIUS projection, and their timing. Dated audits and ADRs
-remain historical evidence; they are not runtime instructions.
-
-It supersedes the former billing automation launch runbook, billing/dunning
-access review, enforcement-window design, prepaid funding reconstruction
-design, prepaid service coverage design, billing revenue-leak design, and
-prepaid invoice/deposit alignment design.
+are supporting evidence, not runtime instructions.
 
 ## Permanent contract
 
@@ -54,8 +49,8 @@ account-scoped; it is never coerced to zero, paid, funded, or safe-to-suspend.
 | Prepaid warn/suspend/restore plan | `financial.prepaid_enforcement` | Owns one plan used by dry-run and execution. |
 | Postpaid collections policy | `financial.dunning` | Owns overdue AR consequences and financial shields. |
 | Financial consequence confirmation | `financial.dunning` access consequence owner | Locks, recomputes, fingerprints, applies, and evidences suspend/restore/throttle/reject consequences. |
-| Locks and subscription/account state | `access.subscription_lifecycle` | Sole writer of reason-scoped locks and lifecycle state. |
-| Network projection | RADIUS/connectivity reconcilers | Idempotently project canonical lifecycle state; they do not decide financial eligibility. |
+| Locks and subscription/account state | `access.subscription_lifecycle` | Sole writer of reason-scoped locks, account status, and child-service access state in one transaction. |
+| Network projection | `access.radius_projection` | Owns the exact per-login plan, idempotent external writes, and bidirectional convergence check. |
 
 Routes, jobs, webhooks, event handlers, commands, and notification transports
 are adapters. They invoke the owner and map its typed outcome; they do not
@@ -213,6 +208,24 @@ RADIUS population, connectivity reconciliation, session cleanup, portal views,
 and audit comparators consume that state; none independently interprets account
 or subscription statuses.
 
+## Account and RADIUS convergence
+
+The mandatory access-control loop runs at the configured operational cadence
+and cannot be disabled. It performs one sequence:
+
+1. invoke `access.subscription_lifecycle` to repair derived account and child
+   access state from canonical service facts;
+2. resolve the exact per-login RADIUS plan consumed by the projection writer;
+3. compare that plan with radcheck Reject and radreply captive state in both
+   directions;
+4. request one idempotent projection refresh when rows are missing or stale;
+5. reconcile live sessions within the configured disconnect cap; and
+6. record an outcome alert until local and external projections converge.
+
+The task is a recovery adapter. Payment, renewal, dunning, administrative, and
+service-lifecycle commands still invoke the lifecycle owner in their own
+transactions so ordinary access changes do not wait for the periodic pass.
+
 ## Timing
 
 Enforcement is eligible every calendar day. The only financial enforcement
@@ -228,8 +241,9 @@ audit/enforce-mode, prepaid-specific activation, readiness, and health switches
 are retired.
 
 Notification quiet hours remain delivery timing policy. Scheduled cadence must
-enter the configured window. Permanent customer-financial tasks may change
-cadence or local run time but cannot be disabled, renamed, or deleted.
+enter the configured window. Permanent customer-financial and access-control
+tasks may change cadence or local run time but cannot be disabled, renamed, or
+deleted.
 
 ## One-time funding reconstruction
 

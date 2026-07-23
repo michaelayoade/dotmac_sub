@@ -813,7 +813,12 @@ detailed security and delivery boundary is
    profile validity, payment-arrangement/proof/extension shields, canonical
    receivables or prepaid funding, and billing enforcement health immediately
    before acting. `access.subscription_lifecycle` is the sole writer of
-   enforcement locks and subscription/account access status.
+   enforcement locks and subscription/account access status. It persists the
+   derived account status and every child service's desired access state in one
+   transaction. The mandatory access-control reconciler invokes that owner,
+   compares the exact per-login projection consumed by the RADIUS writer in
+   both directions, requests one idempotent projection refresh when needed,
+   and reports a degraded outcome until the external rows converge.
 16. `financial.payment_arrangements` owns arrangement eligibility, lifecycle,
    installment schedule, payment application, and active-arrangement shield
    state. Dunning consumes the shield; it does not reimplement arrangement

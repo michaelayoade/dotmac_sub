@@ -512,6 +512,14 @@ def _collect_infrastructure_findings(db: Session) -> list[AlertFinding]:
             )
         )
     try:
+        findings.extend(_radius_health_findings(db))
+    except Exception:
+        logger.exception("RADIUS health findings failed")
+    try:
+        findings.extend(_access_control_findings())
+    except Exception:
+        logger.exception("Access-control findings failed")
+    try:
         findings.extend(_poll_health_findings(db))
     except Exception:
         logger.exception("Infrastructure poll health findings failed")
@@ -520,6 +528,38 @@ def _collect_infrastructure_findings(db: Session) -> list[AlertFinding]:
     except Exception:
         logger.exception("Stale auto-detect incident findings failed")
     return findings
+
+
+def _access_control_findings() -> list[AlertFinding]:
+    """Report a completed access-control pass that did not converge."""
+    from app.services.job_heartbeat import get_last_result
+
+    result = get_last_result("app.tasks.radius.run_enforcement_reconciler")
+    if not result or result.get("status") == "ok":
+        return []
+    detail = result.get("detail")
+    counters = detail if isinstance(detail, dict) else {}
+    unconverged = int(counters.get("radius_projection_unconverged") or 0)
+    errors = int(counters.get("account_projection_errors") or 0)
+    target_configured = int(counters.get("accounting_target_configured") or 0)
+    return [
+        AlertFinding(
+            fingerprint=f"{INFRASTRUCTURE_ALERT_PREFIX}radius:access-control-loop",
+            category="infrastructure",
+            source="access-control-reconciler",
+            severity=(
+                AlertSeverity.critical
+                if not target_configured or errors
+                else AlertSeverity.warning
+            ),
+            title="Customer access reconciliation is not converged",
+            summary=(
+                f"The latest access-control pass reported {unconverged} RADIUS "
+                f"projection difference(s) and {errors} local projection error(s)."
+            ),
+            details=_json_safe(result),
+        )
+    ]
 
 
 def _stale_autodetect_incident_findings(db: Session) -> list[AlertFinding]:
