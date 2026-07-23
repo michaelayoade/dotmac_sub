@@ -191,20 +191,6 @@ def _coerce_setting_int(value: object | None) -> int | None:
     return None
 
 
-def _coerce_setting_bool(
-    value: object | None, default: bool | None = None
-) -> bool | None:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        text = value.strip().lower()
-        if text in {"1", "true", "yes", "on"}:
-            return True
-        if text in {"0", "false", "no", "off"}:
-            return False
-    return default
-
-
 def _coerce_setting_decimal(value: object | None) -> Decimal | None:
     if value is None or isinstance(value, bool):
         return None
@@ -227,7 +213,7 @@ def _format_commercial_value(key: str, value: object | None) -> str:
     if value is None:
         return "Not set"
     if key == "billing_enabled":
-        return "Enabled" if bool(value) else "Disabled"
+        return "Approved" if bool(value) else "Administratively disabled"
     if key == "billing_day":
         return f"Day {value}"
     if key in {"payment_due_days", "grace_period_days"}:
@@ -247,7 +233,7 @@ def _enum_raw_value(value: object | None) -> str:
 
 
 def _billing_global_defaults(db: Session) -> dict[str, object | None]:
-    keys = {"billing_enabled", "billing_day", "minimum_balance"}
+    keys = {"billing_day", "minimum_balance"}
     rows = (
         db.query(DomainSetting)
         .filter(DomainSetting.domain == SettingDomain.billing)
@@ -259,7 +245,6 @@ def _billing_global_defaults(db: Session) -> dict[str, object | None]:
         for row in rows
     }
     return {
-        "billing_enabled": _coerce_setting_bool(raw.get("billing_enabled"), True),
         "billing_day": _coerce_setting_int(raw.get("billing_day")),
         "payment_due_days": resolve_payment_due_days(db),
         "min_balance": _coerce_setting_decimal(raw.get("minimum_balance")),
@@ -322,7 +307,7 @@ def _subscription_commercial_policy(
 
     subscriber_fields = [
         ("payment_method", "Payment Method", False),
-        ("billing_enabled", "Billing", True),
+        ("billing_enabled", "Billing and Service Approval", False),
         ("billing_day", "Billing Day", True),
         ("payment_due_days", "Payment Due", True),
         ("grace_period_days", "Grace Period", False),

@@ -402,14 +402,14 @@
                     <div class="flex items-center gap-3">
                         <input type="checkbox" x-model="bulkUpdateForm.billingEnabledEnabled" class="h-4 w-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500">
                         <div>
-                            <p class="text-sm font-semibold text-slate-900 dark:text-white">Billing Enabled</p>
-                            <p class="text-xs text-slate-500 dark:text-slate-400">Turn billing on or off for all matched customers.</p>
+                            <p class="text-sm font-semibold text-slate-900 dark:text-white">Billing and service approval</p>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">Revoking approval disables every matched account and its non-terminal services.</p>
                         </div>
                     </div>
                     <div x-show="bulkUpdateForm.billingEnabledEnabled" x-cloak class="mt-3">
                         <select x-model="bulkUpdateForm.billingEnabled" class="block w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-amber-300 focus:outline-none focus:ring-4 focus:ring-amber-500/15 dark:border-slate-700 dark:bg-slate-950 dark:text-white">
-                            <option value="true">Enabled</option>
-                            <option value="false">Disabled</option>
+                            <option value="true">Approved — restore billing-owned disables</option>
+                            <option value="false">Revoke — disable billing and service</option>
                         </select>
                     </div>
                 </label>

@@ -403,6 +403,209 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="customer.billing_approval",
+                module="app.services.account_billing_approval",
+                owns=(
+                    "atomic account billing-approval and lifecycle transition",
+                    "account billing-approval drift reconciliation",
+                ),
+                depends_on=(
+                    "customer.accounts",
+                    "access.subscription_lifecycle",
+                    "financial.subscription_billing_treatments",
+                    "events.dispatcher",
+                    "observability.audit_log",
+                ),
+                notes=(
+                    "Subscriber.billing_enabled is an activation-admission fact, "
+                    "not an independent runtime switch. Revocation disables "
+                    "non-terminal service through access.subscription_lifecycle; "
+                    "re-approval restores only a disable created by this owner. "
+                    "Explicit billing treatments, not this flag, own complimentary "
+                    "or sponsored service."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name=(
+                                "atomic account billing-approval and lifecycle "
+                                "transition"
+                            ),
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "account billing-approval command evidence",
+                                "canonical account billing-approval fact",
+                                "canonical account lifecycle state",
+                                "canonical subscription lifecycle state",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="account billing-approval drift reconciliation",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "account billing-approval command evidence",
+                                "canonical account billing-approval fact",
+                                "canonical account lifecycle state",
+                                "canonical subscription lifecycle state",
+                                "effective subscription billing treatment",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="account billing-approval command evidence",
+                            owner="customer.billing_approval",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed approval, actor, scope, reason, command, "
+                                "correlation, and idempotency context"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical account billing-approval fact",
+                            owner="customer.billing_approval",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="locked Subscriber.billing_enabled",
+                        ),
+                        AuthorityInput(
+                            name="canonical account lifecycle state",
+                            owner="access.subscription_lifecycle",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "locked Subscriber lifecycle override and derived "
+                                "account status"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical subscription lifecycle state",
+                            owner="access.subscription_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="locked Subscription.status rows",
+                        ),
+                        AuthorityInput(
+                            name="effective subscription billing treatment",
+                            owner="financial.subscription_billing_treatments",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "effective, evidence-bound complimentary or sponsored "
+                                "billing-treatment decision"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        boundary=(
+                            "Each approval change or per-account repair enters "
+                            "execute_owner_command once; the approval fact, account "
+                            "and subscription transitions, audit, and event evidence "
+                            "commit or roll back together."
+                        ),
+                        locking=(
+                            "The Subscriber locks first, followed by its Subscription "
+                            "rows in stable UUID order; lifecycle participants reuse "
+                            "those locks."
+                        ),
+                        idempotency=(
+                            "An already aligned approval and lifecycle state returns "
+                            "unchanged; a billing-owned disable carries an explicit "
+                            "source so only its matching re-approval can restore it."
+                        ),
+                        retries=(
+                            "Adapters retry transient transaction failures with the "
+                            "same command evidence. Missing accounts, invalid scope, "
+                            "and unrelated lifecycle disables fail closed."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "customer.billing_approval.active_caller_transaction",
+                            "customer.billing_approval.command_contract_violation",
+                            "customer.billing_approval.invalid_command_context",
+                            "customer.billing_approval.nested_owner_command",
+                            "customer.billing_approval.nested_transaction_completion",
+                            "customer.billing_approval.account_not_found",
+                            "customer.billing_approval.invalid_scope",
+                            "customer.billing_approval.invalid_reason",
+                        ),
+                        mapping_owner="subscriber API, admin web, and task adapters",
+                        fail_closed_on=(
+                            "missing account",
+                            "missing billing-approval scope or reason",
+                            "active unapproved service without an effective treatment",
+                            "unrelated administrative lifecycle disable",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("subscriber.billing_approval_changed",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Additive payload fields only within schema version 1."
+                        ),
+                        replay=(
+                            "Replay consumes the committed approval and lifecycle "
+                            "outcome; it never re-decides or rewrites source state."
+                        ),
+                    ),
+                    projections=(
+                        ProjectionContract(
+                            name="account billing-approval alignment",
+                            input_names=(
+                                "canonical account billing-approval fact",
+                                "canonical subscription lifecycle state",
+                                "effective subscription billing treatment",
+                            ),
+                            writer="customer.billing_approval",
+                            freshness="Reconciled every fifteen minutes.",
+                            stale_behavior=(
+                                "An unapproved active service is fail-safe drift: an "
+                                "effective treatment repairs redundant approval to true; "
+                                "otherwise the account is disabled."
+                            ),
+                            drift_signal=(
+                                "Subscriber.billing_enabled=false joined to an active "
+                                "Subscription."
+                            ),
+                            rebuild_operation=(
+                                "reconcile_account_billing_approval for the bounded "
+                                "drift cohort"
+                            ),
+                            repair_owner="customer.billing_approval",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "generic Subscriber updates, customer profile forms, and "
+                            "bulk actions writing billing_enabled independently"
+                        ),
+                        new_owner="customer.billing_approval",
+                        verification=(
+                            "Owner command, activation guard, adapter, reconciliation, "
+                            "scheduler permanence, and architecture tests."
+                        ),
+                        cutover_gate=(
+                            "No active account can be excluded from billing without an "
+                            "effective treatment or a disabled lifecycle state."
+                        ),
+                        fallback_retirement=(
+                            "Raw update writers and active/unapproved runtime fallback "
+                            "are removed."
+                        ),
+                    ),
+                    steward="customer and billing operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
+                        "docs/adr/0003-permanent-customer-financial-lifecycle.md",
+                    ),
+                    test_refs=(
+                        "tests/test_account_billing_approval.py",
+                        "tests/architecture/test_account_billing_approval_boundary.py",
+                    ),
+                ),
+            ),
+            SOTService(
                 name="customer.identity_scope",
                 module="app.services.customer_context",
                 owns=(

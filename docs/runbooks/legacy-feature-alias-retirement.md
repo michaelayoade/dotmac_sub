@@ -18,9 +18,11 @@ release.
 - Operator surfaces: Module Manager for mutation and provenance; read-only
   Control Plane for cross-domain effective state, health, and audit history.
 
-`Subscriber.billing_enabled` is excluded from deletion. It remains the independent
-cross-feature billing master and is no longer treated as the editable value
-source for `billing.invoicing`.
+`Subscriber.billing_enabled` is excluded from deletion. It is the
+`customer.billing_approval` activation-admission fact, not a feature control or
+independent runtime switch. Revocation is an explicit lifecycle command that
+administratively disables non-terminal service; it is no longer treated as the
+editable value source for `billing.invoicing`.
 
 ## Release gate
 

@@ -725,6 +725,16 @@ def build_beat_schedule() -> dict:
         _retire_scheduled_task(
             session, "app.tasks.enforcement.reconcile_account_status_drift"
         )
+        # Billing approval is an admission fact, not a runtime bypass. This
+        # permanent owner pass repairs the impossible active + unapproved split
+        # state through the account lifecycle coordinator.
+        _sync_scheduled_task(
+            session,
+            name="billing_approval_reconcile",
+            task_name="app.tasks.enforcement.reconcile_billing_approval_drift",
+            enabled=True,
+            interval_seconds=900,
+        )
         # stale overdue locks: money-adjacent, so DETECT-only (dry-run) — it
         # WARNs with the candidate count for an operator to clear after review,
         # rather than auto-clearing an overdue lock on a possibly-wrong "no debt".

@@ -25,6 +25,7 @@ REQUIRED_PERMANENT_TASKS = {
     "app.tasks.collections.prepaid_balance_sweep",
     "app.tasks.autopay.charge_due_invoices",
     "app.tasks.catalog.expire_subscriptions",
+    "app.tasks.enforcement.reconcile_billing_approval_drift",
     "app.tasks.notifications.deliver_notification_queue",
     "app.tasks.events.dispatch_pending_events",
     "app.tasks.radius.run_enforcement_reconciler",

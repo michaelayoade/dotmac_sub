@@ -38,11 +38,17 @@ event enable/disable controls are not part of this authority boundary.
   `collections.enforcement_window_start` and
   `collections.enforcement_window_end` constrain its local execution time.
 - Notification quiet-hour start/end settings remain delivery timing policy.
-- Per-account approval (`Subscriber.billing_enabled`), funding, coverage,
-  quarantine, invalid billing profiles, payment arrangements, payment-proof
-  review, outage shields, grace, and provider/transport capability remain
-  canonical facts. They determine an account outcome; they do not stop owners
-  from evaluating other accounts.
+- Per-account approval (`Subscriber.billing_enabled`) is an activation-admission
+  fact, not an independent runtime switch. An unapproved account cannot activate
+  service. Revoking approval on an existing account atomically moves every
+  non-terminal subscription to the reversible administrative `disabled` state;
+  re-approval restores only a disable created by the billing-approval owner.
+  Complimentary or sponsored service requires an explicit subscription billing
+  treatment and never uses a false approval flag.
+- Funding, coverage, quarantine, invalid billing profiles, payment arrangements,
+  payment-proof review, outage shields, grace, and provider/transport capability
+  remain canonical facts. They determine an account outcome; they do not stop
+  owners from evaluating other accounts.
 - Health and drift observations remain visible but do not become hidden
   lifecycle authorities.
 - Number allocation, proration, backdated-period handling, and lifecycle
@@ -66,6 +72,12 @@ re-enables the permanent scheduled-task rows. The registry, settings UI, module
 manager, task adapters, notification handlers, and enforcement planner no longer
 read those settings. Historical readiness rows remain evidence only and do not
 gate runtime decisions.
+
+The `customer.billing_approval` coordinator replaces generic profile, API, and
+bulk writers of `Subscriber.billing_enabled`. Its permanent reconciler repairs
+legacy `active service + billing approval false` rows: an effective explicit
+billing treatment makes the redundant approval true; otherwise the account is
+administratively disabled through `access.subscription_lifecycle`.
 
 This is a forward-only authority cutover. A downgrade does not recreate the
 retired controls. Any future need to change financial behavior must be expressed

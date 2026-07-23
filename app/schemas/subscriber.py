@@ -305,6 +305,26 @@ class SubscriberUpdate(BaseModel):
         return normalized
 
 
+class SubscriberBillingApprovalUpdate(BaseModel):
+    """Explicit account billing/service lifecycle transition request."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    approved: bool
+    reason: str = Field(min_length=1, max_length=500)
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=500)
+
+
+class SubscriberBillingApprovalRead(BaseModel):
+    account_id: UUID
+    approved: bool
+    prior_approved: bool
+    prior_status: SubscriberStatus
+    status: SubscriberStatus
+    action: str
+    affected_subscription_ids: tuple[UUID, ...]
+
+
 class SubscriberRead(SubscriberBase):
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 

@@ -29,6 +29,7 @@ PERMANENT_CUSTOMER_LIFECYCLE_TASKS = frozenset(
         "app.tasks.catalog.apply_due_subscription_changes",
         "app.tasks.catalog.apply_due_subscription_status_commands",
         "app.tasks.vacation_holds.resume_expired_holds",
+        "app.tasks.enforcement.reconcile_billing_approval_drift",
         "app.tasks.notifications.deliver_notification_queue",
         "app.tasks.events.dispatch_pending_events",
         "app.tasks.events.retry_failed_events",
