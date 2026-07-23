@@ -825,7 +825,7 @@ def test_create_invoice_payment_intent_gateway_paystack(
     assert payload["checkout_metadata"]["payment_flow"] == "invoice_payment"
 
 
-def test_create_invoice_payment_intent_issues_draft_through_lifecycle_owner(
+def test_create_invoice_payment_intent_rejects_draft_without_mutating_it(
     monkeypatch, db_session, subscriber
 ):
     _patch_topup_settings(monkeypatch)
@@ -850,21 +850,21 @@ def test_create_invoice_payment_intent_issues_draft_through_lifecycle_owner(
         ),
     )
 
-    create_invoice_payment_intent(
-        db_session,
-        _invoice_customer(subscriber),
-        str(invoice.id),
-        provider="paystack",
-    )
+    with pytest.raises(ValueError, match="no longer payable"):
+        create_invoice_payment_intent(
+            db_session,
+            _invoice_customer(subscriber),
+            str(invoice.id),
+            provider="paystack",
+        )
 
     db_session.refresh(invoice)
-    assert invoice.status == InvoiceStatus.issued
-    assert invoice.issued_at is not None
+    assert invoice.status == InvoiceStatus.draft
+    assert invoice.issued_at is None
     intent = db_session.scalar(
         select(TopupIntent).where(TopupIntent.reference == "pay-ref-issued-draft")
     )
-    assert intent is not None
-    assert intent.metadata_["invoice_id"] == str(invoice.id)
+    assert intent is None
 
 
 def test_create_invoice_payment_intent_charges_saved_card(

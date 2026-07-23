@@ -203,6 +203,7 @@ def eligible_invoices(db: Session, account_id: str) -> list[Invoice]:
         db.query(Invoice)
         .filter(Invoice.account_id == coerce_uuid(account_id))
         .filter(Invoice.is_active.is_(True))
+        .filter(Invoice.is_proforma.is_not(True))
         .filter(Invoice.status.in_(ELIGIBLE_INVOICE_STATUSES))
         .filter(Invoice.balance_due > 0)
         .order_by(

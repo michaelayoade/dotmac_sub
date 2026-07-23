@@ -6,7 +6,7 @@ import json
 import logging
 import secrets
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import TypedDict
 from uuid import UUID
 
@@ -21,7 +21,6 @@ from app.schemas.billing import (
     CreditNoteApplicationPreviewRequest,
     CreditNoteApplyRequest,
     InvoiceClosureConfirm,
-    InvoiceCreate,
     InvoiceLineCreate,
     InvoiceLineUpdate,
     InvoiceUpdate,
@@ -30,14 +29,15 @@ from app.services import audit as audit_service
 from app.services import billing as billing_service
 from app.services import billing_invoice_pdf as billing_invoice_pdf_service
 from app.services import invoice_bank_details as invoice_bank_details_service
-from app.services import numbering
+from app.services import invoice_draft_authoring, numbering
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services.audit_helpers import (
-    build_changes_metadata,
     extract_changes,
     format_changes,
     log_audit_event,
 )
+from app.services.db_session_adapter import db_session_adapter
+from app.services.owner_commands import CommandContext
 from app.services.status_presentation import invoice_status_presentation
 from app.validators.forms import parse_datetime, parse_decimal, parse_uuid
 
@@ -47,6 +47,7 @@ PROFORMA_PREFIX = "PF-"
 
 
 class InvoiceLineItem(TypedDict):
+    line_id: UUID | None
     description: str
     quantity: Decimal
     unit_price: Decimal
@@ -176,32 +177,39 @@ def parse_create_line_items(
     line_tax_rate_id: list[str],
     parse_decimal,
 ) -> list[InvoiceLineItem]:
-    """Parse line items from JSON or legacy array fields."""
+    """Parse a complete line set and reject malformed or empty drafts."""
     line_items: list[InvoiceLineItem] = []
     if line_items_json and line_items_json.strip():
         try:
             items_data = json.loads(line_items_json)
             if not isinstance(items_data, list):
-                items_data = []
+                raise ValueError("Line items must be a list.")
             for item in items_data:
                 if not isinstance(item, dict):
-                    continue
+                    raise ValueError("Each invoice line must be an object.")
                 description = str(item.get("description", "")).strip()
                 if not description:
-                    continue
+                    raise ValueError("Each invoice line needs a description.")
+                raw_line_id = (
+                    item.get("id") or item.get("lineId") or item.get("line_id")
+                )
                 line_items.append(
                     {
+                        "line_id": UUID(str(raw_line_id)) if raw_line_id else None,
                         "description": description,
                         "quantity": Decimal(str(item.get("quantity", 1))),
                         "unit_price": Decimal(str(item.get("unitPrice", 0))),
-                        "tax_rate_id": UUID(str(item["taxRateId"]))
-                        if item.get("taxRateId")
+                        "tax_rate_id": UUID(
+                            str(item.get("taxRateId") or item.get("tax_rate_id"))
+                        )
+                        if item.get("taxRateId") or item.get("tax_rate_id")
                         else None,
                     }
                 )
-        except (json.JSONDecodeError, KeyError, ValueError):
-            pass
-    if line_items:
+        except (json.JSONDecodeError, InvalidOperation, KeyError, TypeError) as exc:
+            raise ValueError("Line items are malformed.") from exc
+        if not line_items:
+            raise ValueError("Add at least one invoice line.")
         return line_items
 
     for idx, description in enumerate(line_description):
@@ -212,6 +220,7 @@ def parse_create_line_items(
         tax_rate_raw = line_tax_rate_id[idx] if idx < len(line_tax_rate_id) else ""
         line_items.append(
             {
+                "line_id": None,
                 "description": description.strip(),
                 "quantity": parse_decimal(quantity_raw, "quantity", Decimal("1")),
                 "unit_price": parse_decimal(
@@ -220,6 +229,8 @@ def parse_create_line_items(
                 "tax_rate_id": UUID(tax_rate_raw) if tax_rate_raw else None,
             }
         )
+    if not line_items:
+        raise ValueError("Add at least one invoice line.")
     return line_items
 
 
@@ -267,12 +278,15 @@ def maybe_send_invoice_notification(
     """Request canonical invoice notification delivery when selected."""
     if not send_notification or not invoice:
         return
-    if invoice.status in {
+    if invoice.is_proforma or invoice.status in {
         InvoiceStatus.draft,
         InvoiceStatus.void,
         InvoiceStatus.written_off,
     }:
-        return
+        raise HTTPException(
+            status_code=409,
+            detail="Only a final issued invoice can be sent",
+        )
     billing_service.invoices.announce_issued(
         db,
         str(invoice.id),
@@ -300,11 +314,13 @@ def create_invoice_from_form(
     line_items_json: str | None,
     issue_immediately: str | None,
     send_notification: str | None,
+    actor_id: str | None = None,
+    draft_idempotency_key: str | None = None,
     parse_uuid=parse_uuid,
     parse_datetime=parse_datetime,
     parse_decimal=parse_decimal,
 ) -> tuple[Invoice, str | None]:
-    """Process invoice-create web form and return created invoice."""
+    """Parse the web form and invoke the atomic draft-authoring owner."""
     resolved_account_id = account_id
     if not resolved_account_id and customer_ref:
         customer_accounts = web_billing_customers_service.accounts_for_customer(
@@ -324,19 +340,15 @@ def create_invoice_from_form(
         memo=memo,
         proforma_invoice=bool(proforma_invoice),
     )
-    payload_data = build_invoice_payload_data(
-        account_id=parse_uuid(resolved_account_id, "account_id"),
-        invoice_number=invoice_number,
-        status=status,
-        currency=currency,
-        issued_at=parse_datetime(issued_at),
-        due_at=parse_datetime(due_at),
-        memo=memo,
-        is_proforma=bool(proforma_invoice),
-    )
-    payload = InvoiceCreate.model_validate(payload_data)
-    invoice = billing_service.invoices.create(db=db, payload=payload)
-
+    if status and status != InvoiceStatus.draft.value:
+        raise ValueError(
+            "Administrative authoring creates a draft; issue it after review."
+        )
+    if issue_immediately or send_notification:
+        raise ValueError(
+            "Save the complete draft first, then issue or send it separately."
+        )
+    resolved_account_uuid = parse_uuid(resolved_account_id, "account_id")
     line_items = parse_create_line_items(
         line_items_json=line_items_json,
         line_description=line_description,
@@ -345,23 +357,36 @@ def create_invoice_from_form(
         line_tax_rate_id=line_tax_rate_id,
         parse_decimal=parse_decimal,
     )
-    create_invoice_lines(
+    db_session_adapter.release_read_transaction(db)
+    result = invoice_draft_authoring.create_invoice_draft(
         db,
-        invoice_id=invoice.id,
-        line_items=line_items,
+        invoice_draft_authoring.CreateInvoiceDraftCommand(
+            account_id=resolved_account_uuid,
+            invoice_number=invoice_number,
+            currency=currency,
+            issued_at=parse_datetime(issued_at),
+            due_at=parse_datetime(due_at),
+            memo=memo,
+            is_proforma=bool(proforma_invoice),
+            lines=tuple(
+                invoice_draft_authoring.DraftLineCommand(
+                    line_id=item["line_id"],
+                    description=item["description"],
+                    quantity=item["quantity"],
+                    unit_price=item["unit_price"],
+                    tax_rate_id=item["tax_rate_id"],
+                )
+                for item in line_items
+            ),
+        ),
+        context=CommandContext.system(
+            actor=actor_id or "admin-billing",
+            scope="invoice_draft:create",
+            reason="Create administrative invoice draft",
+            idempotency_key=draft_idempotency_key,
+        ),
     )
-    issued_invoice = maybe_issue_invoice(
-        db,
-        invoice_id=invoice.id,
-        issue_immediately=issue_immediately,
-    )
-    if issued_invoice:
-        invoice = issued_invoice
-    maybe_send_invoice_notification(
-        db,
-        invoice=invoice,
-        send_notification=send_notification,
-    )
+    invoice = billing_service.invoices.get(db=db, invoice_id=str(result.invoice_id))
     return invoice, resolved_account_id
 
 
@@ -378,37 +403,63 @@ def update_invoice_from_form(
     memo: str | None,
     proforma_invoice: str | None,
     line_items_json: str | None,
+    actor_id: str | None = None,
+    draft_idempotency_key: str | None = None,
     parse_uuid=parse_uuid,
     parse_datetime=parse_datetime,
 ) -> tuple[Invoice, dict[str, object] | None]:
-    """Process invoice-update web form and return updated invoice + audit metadata."""
+    """Parse the web form and atomically replace one draft aggregate."""
     before = billing_service.invoices.get(db=db, invoice_id=invoice_id)
+    if before.status != InvoiceStatus.draft:
+        raise ValueError("Only draft invoices can be edited.")
+    if status and status != InvoiceStatus.draft.value:
+        raise ValueError("Issue and overdue transitions use their separate actions.")
     invoice_number, memo = apply_proforma_form_values(
         invoice_number=invoice_number,
         memo=memo,
         proforma_invoice=bool(proforma_invoice),
     )
-    payload_data = build_invoice_payload_data(
-        account_id=parse_uuid(account_id, "account_id"),
-        invoice_number=invoice_number,
-        status=status,
-        currency=currency,
-        issued_at=parse_datetime(issued_at),
-        due_at=parse_datetime(due_at),
-        memo=memo,
-        is_proforma=bool(proforma_invoice),
-    )
-    payload = InvoiceUpdate.model_validate(payload_data)
-    billing_service.invoices.update(db=db, invoice_id=invoice_id, payload=payload)
-    apply_line_items_json_update(
-        db,
-        invoice_id=UUID(invoice_id),
-        before_invoice=before,
+    lines = parse_create_line_items(
         line_items_json=line_items_json,
+        line_description=[],
+        line_quantity=[],
+        line_unit_price=[],
+        line_tax_rate_id=[],
+        parse_decimal=parse_decimal,
     )
-    after = billing_service.invoices.get(db=db, invoice_id=invoice_id)
-    metadata_payload = build_changes_metadata(before, after)
-    return after, metadata_payload
+    resolved_account_id = parse_uuid(account_id, "account_id")
+    db_session_adapter.release_read_transaction(db)
+    result = invoice_draft_authoring.update_invoice_draft(
+        db,
+        invoice_draft_authoring.UpdateInvoiceDraftCommand(
+            invoice_id=UUID(invoice_id),
+            account_id=resolved_account_id,
+            invoice_number=invoice_number,
+            currency=currency,
+            issued_at=parse_datetime(issued_at),
+            due_at=parse_datetime(due_at),
+            memo=memo,
+            is_proforma=bool(proforma_invoice),
+            lines=tuple(
+                invoice_draft_authoring.DraftLineCommand(
+                    line_id=item["line_id"],
+                    description=item["description"],
+                    quantity=item["quantity"],
+                    unit_price=item["unit_price"],
+                    tax_rate_id=item["tax_rate_id"],
+                )
+                for item in lines
+            ),
+        ),
+        context=CommandContext.system(
+            actor=actor_id or "admin-billing",
+            scope=f"invoice_draft:{invoice_id}:update",
+            reason="Update administrative invoice draft",
+            idempotency_key=draft_idempotency_key,
+        ),
+    )
+    after = billing_service.invoices.get(db=db, invoice_id=str(result.invoice_id))
+    return after, None
 
 
 def create_invoice_web(
@@ -432,6 +483,7 @@ def create_invoice_web(
     line_items_json: str | None,
     issue_immediately: str | None,
     send_notification: str | None,
+    draft_idempotency_key: str | None = None,
 ) -> tuple[Invoice, str | None]:
     invoice, resolved_account_id = create_invoice_from_form(
         db,
@@ -451,15 +503,8 @@ def create_invoice_web(
         line_items_json=line_items_json,
         issue_immediately=issue_immediately,
         send_notification=send_notification,
-    )
-    log_audit_event(
-        db=db,
-        request=request,
-        action="create",
-        entity_type="invoice",
-        entity_id=str(invoice.id),
         actor_id=actor_id,
-        metadata={"invoice_number": invoice.invoice_number},
+        draft_idempotency_key=draft_idempotency_key,
     )
     return invoice, resolved_account_id
 
@@ -479,8 +524,9 @@ def update_invoice_web(
     memo: str | None,
     proforma_invoice: str | None,
     line_items_json: str | None,
+    draft_idempotency_key: str | None = None,
 ) -> Invoice:
-    invoice, metadata_payload = update_invoice_from_form(
+    invoice, _metadata_payload = update_invoice_from_form(
         db,
         invoice_id=invoice_id,
         account_id=account_id,
@@ -492,15 +538,8 @@ def update_invoice_web(
         memo=memo,
         proforma_invoice=proforma_invoice,
         line_items_json=line_items_json,
-    )
-    log_audit_event(
-        db=db,
-        request=request,
-        action="update",
-        entity_type="invoice",
-        entity_id=invoice_id,
         actor_id=actor_id,
-        metadata=metadata_payload,
+        draft_idempotency_key=draft_idempotency_key,
     )
     return invoice
 
