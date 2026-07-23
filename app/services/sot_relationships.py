@@ -38,6 +38,161 @@ class DomainSOT:
     rule: str
 
 
+def _team_inbox_contract(
+    *,
+    service_name: str,
+    concerns: tuple[tuple[str, OwnerRole], ...],
+    inputs: tuple[AuthorityInput, ...],
+    transaction_mode: TransactionMode,
+    event_types: tuple[str, ...] = (),
+    projections: tuple[str, ...] = (),
+    mapping_owner: str = "Team Inbox transport and web adapters",
+) -> ServiceContract:
+    """Build the uniformly complete contract shared by the Inbox owner family."""
+
+    input_names = tuple(item.name for item in inputs)
+    writer_roles = {
+        OwnerRole.AUTHORITATIVE_RECORD,
+        OwnerRole.OBSERVATION_COLLECTOR,
+        OwnerRole.COMMAND_WRITER,
+        OwnerRole.RECONCILER,
+        OwnerRole.PROJECTION_WRITER,
+    }
+    has_writer = any(role in writer_roles for _name, role in concerns)
+    boundary_codes = (
+        owner_command_boundary_error_codes(service_name)
+        if transaction_mode
+        in {TransactionMode.OWNER_MANAGED, TransactionMode.COORDINATOR_MANAGED}
+        else ()
+    )
+    return ServiceContract(
+        concerns=tuple(
+            ConcernContract(
+                name=name,
+                role=role,
+                input_names=input_names,
+                canonical_writer=service_name if role in writer_roles else None,
+            )
+            for name, role in concerns
+        ),
+        authoritative_inputs=inputs,
+        transaction=TransactionContract(
+            mode=transaction_mode,
+            boundary=(
+                "Public commands enter execute_owner_command once on a transaction-free "
+                "session; participants only flush; read and transport owners never "
+                "complete a business transaction."
+            ),
+            locking=(
+                "Conversation, observation, assignment, contact-link, message, and read "
+                "cursor identities are locked in stable aggregate order; database unique "
+                "constraints arbitrate concurrent provider and operator retries."
+            ),
+            idempotency=(
+                "Provider/account/event identity, external message identity, communication "
+                "intent identity, active assignment/contact uniqueness, and operator read "
+                "cursors replay the same stable outcome or reject changed evidence."
+            ),
+            retries=(
+                "Adapters retry only after complete rollback; deterministic duplicates and "
+                "reordered receipts return stable non-regressing outcomes."
+            ),
+        ),
+        errors=ErrorContract(
+            domain_codes=(
+                f"{service_name}.invalid_command",
+                f"{service_name}.invalid_observation",
+                f"{service_name}.invalid_read_time",
+                f"{service_name}.not_found",
+                f"{service_name}.conversation_not_found",
+                f"{service_name}.message_not_found",
+                f"{service_name}.message_scope_mismatch",
+                f"{service_name}.observation_not_found",
+                f"{service_name}.identity_collision",
+                f"{service_name}.provider_event_identity_collision",
+                f"{service_name}.command_rejected",
+                *boundary_codes,
+            ),
+            mapping_owner=mapping_owner,
+            retryable_codes=(),
+            fail_closed_on=(
+                "unverified provider provenance",
+                "ambiguous contact identity",
+                "provider identity reuse with changed evidence",
+                "stale or cross-conversation operator input",
+            ),
+        ),
+        events=(
+            EventContract(
+                event_types=event_types or (f"{service_name}.changed.v1",),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility=(
+                    "Version 1 carries stable message, conversation, participant, channel, "
+                    "command/correlation, provenance, and outcome identifiers without raw "
+                    "provider payloads."
+                ),
+                replay=(
+                    "Authoritative Inbox rows plus observation, intent, assignment, contact, "
+                    "receipt, and read-cursor evidence deterministically rebuild projections."
+                ),
+            )
+            if has_writer
+            else None
+        ),
+        projections=tuple(
+            ProjectionContract(
+                name=name,
+                input_names=input_names,
+                writer=service_name,
+                freshness="Transaction-current for database reads; realtime is best effort.",
+                stale_behavior=(
+                    "Database truth remains usable with explicit freshness; realtime clients "
+                    "refetch when an event is missed or unavailable."
+                ),
+                drift_signal=(
+                    "Projection parity queries compare cohort counts, read cursors, receipt "
+                    "order, contact links, and current conversation/message state."
+                ),
+                rebuild_operation=(
+                    "The owner recomputes the projection from authoritative Inbox rows and "
+                    "committed provider observations without replaying transports."
+                ),
+                repair_owner=service_name,
+            )
+            for name in projections
+        ),
+        migration=MigrationContract(
+            state=AuthorityMigrationState.COMPLETE,
+            old_owner=(
+                "communications.team_inbox catch-all plus route-owned list contracts and "
+                "helper-level transaction completion"
+            ),
+            new_owner=service_name,
+            verification=(
+                "Focused Inbox behavior, idempotency, projection, UI contract, and architecture tests."
+            ),
+            cutover_gate=(
+                "Every adapter delegates to the typed owner and all provider facts are durable before consequences."
+            ),
+            fallback_retirement=(
+                "The catch-all legacy manifest rows, route list definition, raw provider decision paths, and helper commits are removed."
+            ),
+        ),
+        steward="customer experience platform",
+        design_refs=(
+            "docs/designs/TEAM_INBOX_SOURCE_OF_TRUTH.md",
+            "docs/SOT_RELATIONSHIP_MAP.md",
+            "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+        ),
+        test_refs=(
+            "tests/test_team_inbox_sot_completion.py",
+            "tests/architecture/test_team_inbox_boundaries.py",
+            "tests/architecture/test_team_inbox_sot_contracts.py",
+        ),
+    )
+
+
 DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
     DomainSOT(
         domain="party_identity",
@@ -191,7 +346,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "Party contact-point verification and consent coverage report",
                     "Team Inbox canonical contact-point projection debt report",
                 ),
-                depends_on=("party.registry", "communications.team_inbox"),
+                depends_on=(
+                    "party.registry",
+                    "communications.team_inbox_contact_resolution",
+                ),
                 notes=(
                     "Reports only aggregate schema, identity, contact-point, and "
                     "Inbox routing-projection counts. It never emits identity "
@@ -242,6 +400,209 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "Subscriber or Reseller rows or decide account lifecycle "
                     "state themselves. "
                     "Existing direct writers remain shrink-only migration debt."
+                ),
+            ),
+            SOTService(
+                name="customer.billing_approval",
+                module="app.services.account_billing_approval",
+                owns=(
+                    "atomic account billing-approval and lifecycle transition",
+                    "account billing-approval drift reconciliation",
+                ),
+                depends_on=(
+                    "customer.accounts",
+                    "access.subscription_lifecycle",
+                    "financial.subscription_billing_treatments",
+                    "events.dispatcher",
+                    "observability.audit_log",
+                ),
+                notes=(
+                    "Subscriber.billing_enabled is an activation-admission fact, "
+                    "not an independent runtime switch. Revocation disables "
+                    "non-terminal service through access.subscription_lifecycle; "
+                    "re-approval restores only a disable created by this owner. "
+                    "Explicit billing treatments, not this flag, own complimentary "
+                    "or sponsored service."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name=(
+                                "atomic account billing-approval and lifecycle "
+                                "transition"
+                            ),
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "account billing-approval command evidence",
+                                "canonical account billing-approval fact",
+                                "canonical account lifecycle state",
+                                "canonical subscription lifecycle state",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="account billing-approval drift reconciliation",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "account billing-approval command evidence",
+                                "canonical account billing-approval fact",
+                                "canonical account lifecycle state",
+                                "canonical subscription lifecycle state",
+                                "effective subscription billing treatment",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="account billing-approval command evidence",
+                            owner="customer.billing_approval",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed approval, actor, scope, reason, command, "
+                                "correlation, and idempotency context"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical account billing-approval fact",
+                            owner="customer.billing_approval",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="locked Subscriber.billing_enabled",
+                        ),
+                        AuthorityInput(
+                            name="canonical account lifecycle state",
+                            owner="access.subscription_lifecycle",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "locked Subscriber lifecycle override and derived "
+                                "account status"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical subscription lifecycle state",
+                            owner="access.subscription_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="locked Subscription.status rows",
+                        ),
+                        AuthorityInput(
+                            name="effective subscription billing treatment",
+                            owner="financial.subscription_billing_treatments",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "effective, evidence-bound complimentary or sponsored "
+                                "billing-treatment decision"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        boundary=(
+                            "Each approval change or per-account repair enters "
+                            "execute_owner_command once; the approval fact, account "
+                            "and subscription transitions, audit, and event evidence "
+                            "commit or roll back together."
+                        ),
+                        locking=(
+                            "The Subscriber locks first, followed by its Subscription "
+                            "rows in stable UUID order; lifecycle participants reuse "
+                            "those locks."
+                        ),
+                        idempotency=(
+                            "An already aligned approval and lifecycle state returns "
+                            "unchanged; a billing-owned disable carries an explicit "
+                            "source so only its matching re-approval can restore it."
+                        ),
+                        retries=(
+                            "Adapters retry transient transaction failures with the "
+                            "same command evidence. Missing accounts, invalid scope, "
+                            "and unrelated lifecycle disables fail closed."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "customer.billing_approval.active_caller_transaction",
+                            "customer.billing_approval.command_contract_violation",
+                            "customer.billing_approval.invalid_command_context",
+                            "customer.billing_approval.nested_owner_command",
+                            "customer.billing_approval.nested_transaction_completion",
+                            "customer.billing_approval.account_not_found",
+                            "customer.billing_approval.invalid_scope",
+                            "customer.billing_approval.invalid_reason",
+                        ),
+                        mapping_owner="subscriber API, admin web, and task adapters",
+                        fail_closed_on=(
+                            "missing account",
+                            "missing billing-approval scope or reason",
+                            "active unapproved service without an effective treatment",
+                            "unrelated administrative lifecycle disable",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("subscriber.billing_approval_changed",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Additive payload fields only within schema version 1."
+                        ),
+                        replay=(
+                            "Replay consumes the committed approval and lifecycle "
+                            "outcome; it never re-decides or rewrites source state."
+                        ),
+                    ),
+                    projections=(
+                        ProjectionContract(
+                            name="account billing-approval alignment",
+                            input_names=(
+                                "canonical account billing-approval fact",
+                                "canonical subscription lifecycle state",
+                                "effective subscription billing treatment",
+                            ),
+                            writer="customer.billing_approval",
+                            freshness="Reconciled every fifteen minutes.",
+                            stale_behavior=(
+                                "An unapproved active service is fail-safe drift: an "
+                                "effective treatment repairs redundant approval to true; "
+                                "otherwise the account is disabled."
+                            ),
+                            drift_signal=(
+                                "Subscriber.billing_enabled=false joined to an active "
+                                "Subscription."
+                            ),
+                            rebuild_operation=(
+                                "reconcile_account_billing_approval for the bounded "
+                                "drift cohort"
+                            ),
+                            repair_owner="customer.billing_approval",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "generic Subscriber updates, customer profile forms, and "
+                            "bulk actions writing billing_enabled independently"
+                        ),
+                        new_owner="customer.billing_approval",
+                        verification=(
+                            "Owner command, activation guard, adapter, reconciliation, "
+                            "scheduler permanence, and architecture tests."
+                        ),
+                        cutover_gate=(
+                            "No active account can be excluded from billing without an "
+                            "effective treatment or a disabled lifecycle state."
+                        ),
+                        fallback_retirement=(
+                            "Raw update writers and active/unapproved runtime fallback "
+                            "are removed."
+                        ),
+                    ),
+                    steward="customer and billing operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
+                        "docs/adr/0003-permanent-customer-financial-lifecycle.md",
+                    ),
+                    test_refs=(
+                        "tests/test_account_billing_approval.py",
+                        "tests/architecture/test_account_billing_approval_boundary.py",
+                    ),
                 ),
             ),
             SOTService(
@@ -643,8 +1004,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     steward="finance operations",
                     design_refs=(
                         "docs/SOT_RELATIONSHIP_MAP.md",
-                        "docs/designs/PREPAID_INVOICE_DEPOSIT_ALIGNMENT.md",
-                        "docs/designs/PREPAID_SERVICE_COVERAGE.md",
+                        "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
                     ),
                     test_refs=(
                         "tests/test_customer_financial_ledger.py",
@@ -3851,7 +4211,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     steward="billing and finance operations",
                     design_refs=(
                         "docs/designs/SUBSCRIPTION_BILLING_TREATMENTS.md",
-                        "docs/designs/PREPAID_SERVICE_COVERAGE.md",
+                        "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
                         "docs/SOT_RELATIONSHIP_MAP.md",
                     ),
                     test_refs=(
@@ -3989,7 +4349,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     ),
                     steward="billing and network access",
                     design_refs=(
-                        "docs/designs/PREPAID_SERVICE_COVERAGE.md",
+                        "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
                         "docs/SOT_RELATIONSHIP_MAP.md",
                     ),
                     test_refs=(
@@ -4184,7 +4544,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     ),
                     steward="billing operations",
                     design_refs=(
-                        "docs/designs/PREPAID_SERVICE_COVERAGE.md",
+                        "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
                         "docs/SOT_RELATIONSHIP_MAP.md",
                     ),
                     test_refs=(
@@ -4206,13 +4566,14 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "customer.accounts",
                     "financial.prepaid_currency",
                     "financial.prepaid_service_coverage",
+                    "financial.prepaid_service_renewals",
                     "financial.subscription_billing_treatments",
-                    "service_intent.catalog_policy",
                 ),
                 notes=(
-                    "Returns typed minimum and unfunded-renewal provenance. Missing "
-                    "accounts, invalid minimums, absent prices, and cross-currency "
-                    "evidence fail closed."
+                    "Returns typed minimum and unfunded-renewal provenance. Renewal "
+                    "and enforcement consume one exact taxed contract charge. Missing "
+                    "renewal terms produce a typed protected outcome; missing accounts, "
+                    "invalid minimums, and cross-currency evidence fail closed."
                 ),
                 contract=ServiceContract(
                     concerns=(
@@ -4233,7 +4594,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "canonical collectible prepaid subscriptions",
                                 "canonical current service coverage",
                                 "effective subscription billing treatment",
-                                "canonical recurring catalog prices",
+                                "exact taxed contracted renewal charge",
                                 "canonical prepaid currency",
                                 "prepaid threshold protocol",
                             ),
@@ -4280,11 +4641,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             ),
                         ),
                         AuthorityInput(
-                            name="canonical recurring catalog prices",
-                            owner="service_intent.catalog_policy",
-                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            name="exact taxed contracted renewal charge",
+                            owner="financial.prepaid_service_renewals",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
                             source=(
-                                "newest active recurring OfferVersionPrice or OfferPrice"
+                                "positive Subscription unit_price with effective discount, "
+                                "tax precedence, currency, and monthly cadence"
                             ),
                         ),
                         AuthorityInput(
@@ -4298,9 +4660,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             owner="financial.prepaid_threshold",
                             kind=AuthorityKind.CONTROL_INPUT,
                             source=(
-                                "collectible status set, coverage precedence, newest-price "
-                                "ordering, discount semantics, current-coverage precedence, "
-                                "and due-only max(minimum, renewal) rule"
+                                "collectible status set, coverage precedence, typed missing-"
+                                "renewal protection, current-coverage precedence, and due-"
+                                "only max(minimum, renewal) rule"
                             ),
                         ),
                     ),
@@ -4308,8 +4670,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         mode=TransactionMode.READ_ONLY,
                         boundary=(
                             "Caller creates and closes the session; the batched resolver "
-                            "reads canonical account, service, coverage, price, and setting "
-                            "evidence without writes or transaction completion."
+                            "reads canonical account, service, coverage, exact renewal "
+                            "charge, and setting evidence without writes or transaction "
+                            "completion."
                         ),
                         locking=(
                             "No row lock for projections. State-changing enforcement "
@@ -4320,8 +4683,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "evidence produce identical typed threshold decisions."
                         ),
                         retries=(
-                            "Transient reads may be retried. Missing, invalid, unpriced, or "
-                            "cross-currency evidence remains a deterministic failure."
+                            "Transient reads may be retried. Missing renewal terms remain a "
+                            "deterministic protected outcome; invalid or cross-currency "
+                            "evidence remains a deterministic failure."
                         ),
                     ),
                     errors=ErrorContract(
@@ -4329,7 +4693,6 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "financial.prepaid_threshold.account_not_found",
                             "financial.prepaid_threshold.currency_mismatch",
                             "financial.prepaid_threshold.invalid_minimum_balance",
-                            "financial.prepaid_threshold.missing_subscription_price",
                         ),
                         mapping_owner=(
                             "access, enforcement, status, audit, and reporting adapters"
@@ -4337,7 +4700,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         fail_closed_on=(
                             "missing requested account",
                             "negative, non-finite, or malformed minimum balance",
-                            "unfunded collectible subscription without a price",
+                            "unfunded collectible subscription without exact renewal terms",
                             "price and enforcement currency mismatch",
                             "missing or invalid canonical prepaid currency",
                         ),
@@ -4351,8 +4714,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         new_owner="financial.prepaid_threshold",
                         verification=(
-                            "Scalar/batch parity, query budget, price precedence, paid "
-                            "coverage, provenance, failure, caller, and architecture tests."
+                            "Scalar/batch parity, query budget, renewal-charge/tax parity, "
+                            "missing-term protection, paid coverage, provenance, caller, "
+                            "and architecture tests."
                         ),
                         cutover_gate=(
                             "Access consumes the typed threshold decision; service status "
@@ -4366,6 +4730,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     ),
                     steward="billing operations",
                     design_refs=(
+                        "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
                         "docs/SOT_RELATIONSHIP_MAP.md",
                         "docs/audits/BILLING_SOT_AUDIT_2026-07-12.md",
                         "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
@@ -4788,7 +5153,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     ),
                     steward="billing operations",
                     design_refs=(
-                        "docs/designs/PREPAID_FUNDING_RECONSTRUCTION.md",
+                        "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
                         "docs/SOT_RELATIONSHIP_MAP.md",
                         "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
                     ),
@@ -4939,7 +5304,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     ),
                     steward="billing operations",
                     design_refs=(
-                        "docs/designs/PREPAID_FUNDING_RECONSTRUCTION.md",
+                        "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
                         "docs/SOT_RELATIONSHIP_MAP.md",
                         "docs/adr/0002-owner-command-transaction-boundary.md",
                     ),
@@ -5055,9 +5420,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 notes=(
                     "One read-only policy owner resolves customer-impact, billing, "
                     "prepaid funding, and RADIUS answers from the same account and "
-                    "subscription evidence. The former access.control_resolution "
-                    "registry alias and customer_service_state implementation are "
-                    "retired."
+                    "subscription evidence."
                 ),
                 contract=ServiceContract(
                     concerns=(
@@ -7123,6 +7486,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "device operation re-execution eligibility",
                     "immutable redrive lineage and reviewed-head evidence",
                     "typed recovery eligibility and retry limits",
+                    "customer subscription/device command scope and typed outcomes",
                 ),
                 depends_on=("network.identity",),
                 notes=(
@@ -7136,6 +7500,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "remain immutable; approved retries create linked operations "
                     "through app.services.network_operation_recovery. Unregistered "
                     "device writes fail closed."
+                    " Customer reboot and Wi-Fi adapters delegate subscription,"
+                    " subscriber, and active assignment scope to"
+                    " app.services.customer_device_commands; its stable outcome"
+                    " carries the exact subscription, device, and operation IDs."
                 ),
             ),
             SOTService(
@@ -8110,38 +8478,644 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
-                name="communications.team_inbox",
-                module="app.services.team_inbox_commands",
+                name="communications.team_inbox_observations",
+                module="app.services.team_inbox_observations",
+                owns=("normalized inbound provider observation ledger",),
+                depends_on=("integration.inbox",),
+                contract=_team_inbox_contract(
+                    service_name="communications.team_inbox_observations",
+                    concerns=(
+                        (
+                            "normalized inbound provider observation ledger",
+                            OwnerRole.OBSERVATION_COLLECTOR,
+                        ),
+                    ),
+                    inputs=(
+                        AuthorityInput(
+                            name="verified normalized provider fact",
+                            owner="external:communications_provider",
+                            kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                            source="Authenticated email, WhatsApp, social, or widget adapter output with bounded message or receipt fields.",
+                        ),
+                        AuthorityInput(
+                            name="verified webhook admission",
+                            owner="integration.inbox",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Committed integration receipt trust binding, provider-event identity, digest, and retry lifecycle.",
+                        ),
+                    ),
+                    transaction_mode=TransactionMode.OWNER_MANAGED,
+                    event_types=("team_inbox.provider_observation_recorded.v1",),
+                ),
+            ),
+            SOTService(
+                name="communications.team_inbox_processing",
+                module="app.services.team_inbox_processing",
+                owns=("provider observation consequence coordination",),
+                depends_on=(
+                    "communications.team_inbox_observations",
+                    "communications.team_inbox_threads",
+                    "communications.team_inbox_contact_resolution",
+                    "communications.team_inbox_routing",
+                    "communications.team_inbox_delivery_receipts",
+                ),
+                contract=_team_inbox_contract(
+                    service_name="communications.team_inbox_processing",
+                    concerns=(
+                        (
+                            "provider observation consequence coordination",
+                            OwnerRole.APPLICATION_COORDINATOR,
+                        ),
+                    ),
+                    inputs=(
+                        AuthorityInput(
+                            name="committed normalized observation",
+                            owner="communications.team_inbox_observations",
+                            kind=AuthorityKind.OBSERVATION,
+                            source="Locked InboxProviderObservation recorded in an earlier owner transaction.",
+                        ),
+                        AuthorityInput(
+                            name="conversation identity",
+                            owner="communications.team_inbox_threads",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Canonical provider, channel, thread, conversation, and message identity.",
+                        ),
+                        AuthorityInput(
+                            name="contact decision",
+                            owner="communications.team_inbox_contact_resolution",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="Explicit matched, ambiguous, suppressed, or unmatched contact outcome.",
+                        ),
+                        AuthorityInput(
+                            name="routing decision",
+                            owner="communications.team_inbox_routing",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="Effective team, assignment, and escalation outcome.",
+                        ),
+                        AuthorityInput(
+                            name="delivery receipt state",
+                            owner="communications.team_inbox_delivery_receipts",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="Timestamp-monotonic provider delivery state.",
+                        ),
+                    ),
+                    transaction_mode=TransactionMode.COORDINATOR_MANAGED,
+                ),
+            ),
+            SOTService(
+                name="communications.team_inbox_threads",
+                module="app.services.team_inbox_receive",
                 owns=(
-                    "conversation collaboration",
-                    "conversation assignment",
-                    "inbox reply and contact-link workflows",
-                    "inbound channel ingestion",
-                    "admin inbox mutation transactions",
-                    "InboxContactLink canonical contact-point routing projection",
-                    "exact open, response, assignment, mute, and snooze queue cohorts",
-                    "failed outbound queue count and worklist",
+                    "conversation identity and threading",
+                    "authoritative conversation and message records",
+                ),
+                depends_on=("communications.team_inbox_observations",),
+                contract=_team_inbox_contract(
+                    service_name="communications.team_inbox_threads",
+                    concerns=(
+                        ("conversation identity and threading", OwnerRole.RESOLVER),
+                        (
+                            "authoritative conversation and message records",
+                            OwnerRole.AUTHORITATIVE_RECORD,
+                        ),
+                    ),
+                    inputs=(
+                        AuthorityInput(
+                            name="normalized inbound message fact",
+                            owner="communications.team_inbox_observations",
+                            kind=AuthorityKind.OBSERVATION,
+                            source="Provider/account/message identity, channel, observed time, references, subject, participant address, and bounded content.",
+                        ),
+                    ),
+                    transaction_mode=TransactionMode.PARTICIPANT,
+                    event_types=(
+                        "team_inbox.message_recorded.v1",
+                        "team_inbox.conversation_opened.v1",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="communications.team_inbox_contact_resolution",
+                module="app.services.team_inbox_contact_links",
+                owns=(
+                    "contact subscriber reseller and ticket association resolution",
+                    "reviewed contact association and projection repair",
                 ),
                 depends_on=(
                     "party.registry",
                     "customer.identity_scope",
+                    "communications.team_inbox_threads",
+                ),
+                contract=_team_inbox_contract(
+                    service_name="communications.team_inbox_contact_resolution",
+                    concerns=(
+                        (
+                            "contact subscriber reseller and ticket association resolution",
+                            OwnerRole.RESOLVER,
+                        ),
+                        (
+                            "reviewed contact association and projection repair",
+                            OwnerRole.PROJECTION_WRITER,
+                        ),
+                    ),
+                    inputs=(
+                        AuthorityInput(
+                            name="canonical party contact facts",
+                            owner="party.registry",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Reviewed Party, contact point, provider scope, and relationship evidence.",
+                        ),
+                        AuthorityInput(
+                            name="customer identity scope",
+                            owner="customer.identity_scope",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Active Subscriber and reseller ownership identifiers; never fuzzy name or shared-address inference.",
+                        ),
+                        AuthorityInput(
+                            name="conversation contact route",
+                            owner="communications.team_inbox_threads",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Conversation channel and normalized contact address.",
+                        ),
+                    ),
+                    transaction_mode=TransactionMode.OWNER_MANAGED,
+                    event_types=("team_inbox.contact_link_changed.v1",),
+                    projections=(
+                        "InboxContactLink canonical contact-point projection",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="communications.team_inbox_routing",
+                module="app.services.team_inbox_assignment",
+                owns=(
+                    "routing assignment and escalation policy",
+                    "routing assignment and escalation transitions",
+                ),
+                depends_on=(
+                    "communications.team_inbox_threads",
+                    "operations.sla_escalation",
+                    "auth.permission_gate",
+                ),
+                contract=_team_inbox_contract(
+                    service_name="communications.team_inbox_routing",
+                    concerns=(
+                        ("routing assignment and escalation policy", OwnerRole.POLICY),
+                        (
+                            "routing assignment and escalation transitions",
+                            OwnerRole.COMMAND_WRITER,
+                        ),
+                    ),
+                    inputs=(
+                        AuthorityInput(
+                            name="conversation routing facts",
+                            owner="communications.team_inbox_threads",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Recipients, current owner team, assignment, priority, and lifecycle.",
+                        ),
+                        AuthorityInput(
+                            name="operational escalation policy",
+                            owner="operations.sla_escalation",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="Configured Inbox event, severity, delay, participant, and level.",
+                        ),
+                        AuthorityInput(
+                            name="operator authorization",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="Granular assignment and escalation permission evidence.",
+                        ),
+                    ),
+                    transaction_mode=TransactionMode.OWNER_MANAGED,
+                    event_types=(
+                        "team_inbox.assignment_changed.v1",
+                        "team_inbox.escalated.v1",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="communications.team_inbox_operator_state",
+                module="app.services.team_inbox_read_state",
+                owns=("operator read cursor", "operator unread projection repair"),
+                depends_on=(
+                    "communications.team_inbox_threads",
+                    "auth.permission_gate",
+                ),
+                contract=_team_inbox_contract(
+                    service_name="communications.team_inbox_operator_state",
+                    concerns=(
+                        ("operator read cursor", OwnerRole.COMMAND_WRITER),
+                        ("operator unread projection repair", OwnerRole.RECONCILER),
+                    ),
+                    inputs=(
+                        AuthorityInput(
+                            name="message chronology",
+                            owner="communications.team_inbox_threads",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Inbound occurrence time and stable message/conversation identity.",
+                        ),
+                        AuthorityInput(
+                            name="operator principal",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="Authenticated person UUID and granular Inbox update scope.",
+                        ),
+                    ),
+                    transaction_mode=TransactionMode.OWNER_MANAGED,
+                    event_types=("team_inbox.operator_read_state_changed.v1",),
+                    projections=("per-operator unread conversation projection",),
+                ),
+            ),
+            SOTService(
+                name="communications.team_inbox_outbound_intents",
+                module="app.services.team_inbox_outbound",
+                owns=(
+                    "transactional outbound communication intent",
+                    "outbound Inbox message attempt projection",
+                ),
+                depends_on=(
+                    "communications.team_inbox_threads",
+                    "communications.intents",
                     "communications.channel_policy",
-                    "communications.notification_service",
+                ),
+                contract=_team_inbox_contract(
+                    service_name="communications.team_inbox_outbound_intents",
+                    concerns=(
+                        (
+                            "transactional outbound communication intent",
+                            OwnerRole.COMMAND_WRITER,
+                        ),
+                        (
+                            "outbound Inbox message attempt projection",
+                            OwnerRole.PROJECTION_WRITER,
+                        ),
+                    ),
+                    inputs=(
+                        AuthorityInput(
+                            name="conversation reply target",
+                            owner="communications.team_inbox_threads",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Active unresolved conversation, channel, participant, subject, and team sender context.",
+                        ),
+                        AuthorityInput(
+                            name="communication intent lifecycle",
+                            owner="communications.intents",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Transactional intent, Notification outbox identity, eligibility, and queue outcome.",
+                        ),
+                        AuthorityInput(
+                            name="effective channel policy",
+                            owner="communications.channel_policy",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="Provider-neutral channel and sender eligibility.",
+                        ),
+                    ),
+                    transaction_mode=TransactionMode.OWNER_MANAGED,
+                    event_types=("team_inbox.outbound_intent_recorded.v1",),
+                    projections=("outbound attempt and failed-worklist projection",),
+                ),
+            ),
+            SOTService(
+                name="communications.team_inbox_delivery_receipts",
+                module="app.services.team_inbox_delivery_receipts",
+                owns=("provider delivery receipt reconciliation",),
+                depends_on=(
+                    "communications.team_inbox_observations",
+                    "communications.team_inbox_outbound_intents",
+                ),
+                contract=_team_inbox_contract(
+                    service_name="communications.team_inbox_delivery_receipts",
+                    concerns=(
+                        (
+                            "provider delivery receipt reconciliation",
+                            OwnerRole.PROJECTION_WRITER,
+                        ),
+                    ),
+                    inputs=(
+                        AuthorityInput(
+                            name="normalized receipt",
+                            owner="communications.team_inbox_observations",
+                            kind=AuthorityKind.OBSERVATION,
+                            source="Provider message identity, bounded status, observed time, recipient reference, and error codes.",
+                        ),
+                        AuthorityInput(
+                            name="outbound attempt identity",
+                            owner="communications.team_inbox_outbound_intents",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Inbox message and communication intent provider-message linkage.",
+                        ),
+                    ),
+                    transaction_mode=TransactionMode.PARTICIPANT,
+                    event_types=("team_inbox.delivery_receipt_reconciled.v1",),
+                    projections=("timestamp-monotonic Inbox delivery state",),
+                ),
+            ),
+            SOTService(
+                name="communications.team_inbox_commands",
+                module="app.services.team_inbox_commands",
+                owns=("operator conversation and collaboration commands",),
+                depends_on=(
+                    "auth.permission_gate",
+                    "communications.team_inbox_threads",
+                    "communications.team_inbox_contact_resolution",
+                    "communications.team_inbox_routing",
+                    "communications.team_inbox_outbound_intents",
+                    "communications.team_inbox_operator_state",
+                ),
+                contract=_team_inbox_contract(
+                    service_name="communications.team_inbox_commands",
+                    concerns=(
+                        (
+                            "operator conversation and collaboration commands",
+                            OwnerRole.APPLICATION_COORDINATOR,
+                        ),
+                    ),
+                    inputs=(
+                        AuthorityInput(
+                            name="authenticated operator command",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="CommandContext, granular permission, typed targets, expected state, and reason.",
+                        ),
+                        AuthorityInput(
+                            name="current conversation state",
+                            owner="communications.team_inbox_threads",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Locked conversation, collaboration records, labels, comments, and messages.",
+                        ),
+                        AuthorityInput(
+                            name="contact association decision",
+                            owner="communications.team_inbox_contact_resolution",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="Reviewed subscriber/reseller/contact-point outcome.",
+                        ),
+                        AuthorityInput(
+                            name="routing transition decision",
+                            owner="communications.team_inbox_routing",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="Assignment, escalation, and lifecycle eligibility.",
+                        ),
+                        AuthorityInput(
+                            name="outbound intent outcome",
+                            owner="communications.team_inbox_outbound_intents",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Stable queued or suppressed intent and message identifiers.",
+                        ),
+                        AuthorityInput(
+                            name="operator read state",
+                            owner="communications.team_inbox_operator_state",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="Per-person read cursor and unread cohort.",
+                        ),
+                    ),
+                    transaction_mode=TransactionMode.COORDINATOR_MANAGED,
+                ),
+            ),
+            SOTService(
+                name="communications.team_inbox_widget",
+                module="app.services.team_inbox_widget",
+                owns=("authenticated visitor message and read-state commands",),
+                depends_on=(
+                    "customer.identity_scope",
+                    "communications.team_inbox_threads",
+                ),
+                contract=_team_inbox_contract(
+                    service_name="communications.team_inbox_widget",
+                    concerns=(
+                        (
+                            "authenticated visitor message and read-state commands",
+                            OwnerRole.COMMAND_WRITER,
+                        ),
+                    ),
+                    inputs=(
+                        AuthorityInput(
+                            name="authenticated visitor principal",
+                            owner="customer.identity_scope",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="Exact Subscriber or reseller principal and bounded signed widget-session identity.",
+                        ),
+                        AuthorityInput(
+                            name="widget conversation identity",
+                            owner="communications.team_inbox_threads",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Native chat-widget conversation and message chronology.",
+                        ),
+                    ),
+                    transaction_mode=TransactionMode.OWNER_MANAGED,
+                    event_types=(
+                        "team_inbox.widget_message_recorded.v1",
+                        "team_inbox.widget_read_state_changed.v1",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="communications.team_inbox_projection",
+                module="app.services.team_inbox_projection",
+                owns=("Inbox list detail metrics unread and action projection",),
+                depends_on=(
+                    "communications.team_inbox_threads",
+                    "communications.team_inbox_contact_resolution",
+                    "communications.team_inbox_routing",
+                    "communications.team_inbox_delivery_receipts",
+                    "communications.team_inbox_operator_state",
+                ),
+                contract=_team_inbox_contract(
+                    service_name="communications.team_inbox_projection",
+                    concerns=(
+                        (
+                            "Inbox list detail metrics unread and action projection",
+                            OwnerRole.RESOLVER,
+                        ),
+                    ),
+                    inputs=(
+                        AuthorityInput(
+                            name="conversation records",
+                            owner="communications.team_inbox_threads",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Current conversation/message chronology and lifecycle.",
+                        ),
+                        AuthorityInput(
+                            name="contact projection",
+                            owner="communications.team_inbox_contact_resolution",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="Reviewed link and explicit resolution state.",
+                        ),
+                        AuthorityInput(
+                            name="routing state",
+                            owner="communications.team_inbox_routing",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Team, assignee, escalation, priority, mute, and snooze state.",
+                        ),
+                        AuthorityInput(
+                            name="delivery projection",
+                            owner="communications.team_inbox_delivery_receipts",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="Current monotonic delivery state and bounded failure codes.",
+                        ),
+                        AuthorityInput(
+                            name="unread projection",
+                            owner="communications.team_inbox_operator_state",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="Per-person read cursor and unread decision.",
+                        ),
+                    ),
+                    transaction_mode=TransactionMode.READ_ONLY,
+                    projections=(
+                        "Inbox queue detail metrics actions and unread cohorts",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="communications.team_inbox_maintenance",
+                module="app.services.team_inbox_maintenance",
+                owns=("scheduled Inbox projection maintenance and repair",),
+                depends_on=(
+                    "communications.team_inbox_threads",
+                    "communications.team_inbox_outbound_intents",
+                    "communications.team_inbox_projection",
+                ),
+                contract=_team_inbox_contract(
+                    service_name="communications.team_inbox_maintenance",
+                    concerns=(
+                        (
+                            "scheduled Inbox projection maintenance and repair",
+                            OwnerRole.RECONCILER,
+                        ),
+                    ),
+                    inputs=(
+                        AuthorityInput(
+                            name="current Inbox projection",
+                            owner="communications.team_inbox_projection",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="Failed outbound, stale conversation, and unmaterialized media worklists.",
+                        ),
+                        AuthorityInput(
+                            name="canonical conversation identity",
+                            owner="communications.team_inbox_threads",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Current conversation, message, lifecycle, and attachment metadata.",
+                        ),
+                        AuthorityInput(
+                            name="outbound intent state",
+                            owner="communications.team_inbox_outbound_intents",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Retryable failed communication intent and message evidence.",
+                        ),
+                    ),
+                    transaction_mode=TransactionMode.OWNER_MANAGED,
+                    event_types=("team_inbox.projection_repaired.v1",),
+                    projections=("repairable Inbox worklists and media projection",),
+                ),
+            ),
+            SOTService(
+                name="communications.team_inbox_realtime",
+                module="app.services.team_inbox_realtime",
+                owns=("best-effort realtime Inbox projection and rebuild",),
+                depends_on=("communications.team_inbox_projection",),
+                contract=_team_inbox_contract(
+                    service_name="communications.team_inbox_realtime",
+                    concerns=(
+                        (
+                            "best-effort realtime Inbox projection and rebuild",
+                            OwnerRole.TRANSPORT,
+                        ),
+                    ),
+                    inputs=(
+                        AuthorityInput(
+                            name="current Inbox projection",
+                            owner="communications.team_inbox_projection",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="Committed conversation state serialized into the realtime v1 envelope.",
+                        ),
+                    ),
+                    transaction_mode=TransactionMode.NOT_APPLICABLE,
+                    projections=("best-effort conversation topic projection",),
+                ),
+            ),
+            SOTService(
+                name="communications.team_inbox_smtp_transport",
+                module="app.services.team_inbox_smtp_inbound",
+                owns=("dedicated SMTP intake process and envelope transport",),
+                depends_on=("communications.team_inbox_observations",),
+                contract=_team_inbox_contract(
+                    service_name="communications.team_inbox_smtp_transport",
+                    concerns=(
+                        (
+                            "dedicated SMTP intake process and envelope transport",
+                            OwnerRole.TRANSPORT,
+                        ),
+                    ),
+                    inputs=(
+                        AuthorityInput(
+                            name="SMTP envelope and RFC822 bytes",
+                            owner="external:customer_mail_server",
+                            kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                            source="Allowed recipient envelope and RFC822 bytes normalized before observation admission.",
+                        ),
+                    ),
+                    transaction_mode=TransactionMode.NOT_APPLICABLE,
+                ),
+            ),
+            SOTService(
+                name="communications.team_inbox_health",
+                module="app.services.team_inbox_health",
+                owns=("verified SMTP probe delivery projection",),
+                depends_on=("communications.team_inbox_threads",),
+                contract=_team_inbox_contract(
+                    service_name="communications.team_inbox_health",
+                    concerns=(
+                        (
+                            "verified SMTP probe delivery projection",
+                            OwnerRole.PROJECTION_WRITER,
+                        ),
+                    ),
+                    inputs=(
+                        AuthorityInput(
+                            name="exact synthetic SMTP message",
+                            owner="communications.team_inbox_threads",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Exact runtime-generated Message-ID and bounded probe marker on the committed Inbox message.",
+                        ),
+                    ),
+                    transaction_mode=TransactionMode.OWNER_MANAGED,
+                    projections=("verified SMTP delivery health evidence",),
                 ),
             ),
             SOTService(
                 name="communications.team_inbox_campaigns",
                 module="app.services.team_inbox_campaigns",
-                owns=(
-                    "campaign-sourced inbox conversation materialization",
-                    "campaign outbound inbox message rows",
+                owns=("campaign-sourced conversation and message materialization",),
+                depends_on=(
+                    "communications.team_inbox_threads",
+                    "communications.team_inbox_outbound_intents",
                 ),
-                depends_on=("communications.team_inbox",),
-                notes=(
-                    "Campaigns decide audience, sequence, and content; inbox "
-                    "rows stay inside the team-inbox family. comms_campaigns "
-                    "requests materialization here instead of writing inbox "
-                    "ORM rows itself."
+                contract=_team_inbox_contract(
+                    service_name="communications.team_inbox_campaigns",
+                    concerns=(
+                        (
+                            "campaign-sourced conversation and message materialization",
+                            OwnerRole.PROJECTION_WRITER,
+                        ),
+                    ),
+                    inputs=(
+                        AuthorityInput(
+                            name="canonical conversation identity",
+                            owner="communications.team_inbox_threads",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Existing channel/subscriber thread or deterministic campaign thread identity.",
+                        ),
+                        AuthorityInput(
+                            name="outbound intent",
+                            owner="communications.team_inbox_outbound_intents",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Stable intent, Notification, channel, content, and delivery state.",
+                        ),
+                    ),
+                    transaction_mode=TransactionMode.PARTICIPANT,
+                    event_types=("team_inbox.campaign_message_materialized.v1",),
+                    projections=(
+                        "campaign conversation and outbound message projection",
+                    ),
                 ),
             ),
         ),
@@ -8420,6 +9394,90 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="observability.database_diagnostics",
+                module="app.services.db_error_observability",
+                owns=(
+                    "redacted database schema-error correlation",
+                    "redacted idle-transaction failure correlation",
+                ),
+                depends_on=("observability.recording",),
+                notes=(
+                    "Records request ID, application caller, SQLSTATE, safe missing "
+                    "identifier, and a statement fingerprint. SQL text, parameters, "
+                    "and result data are never logged."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="redacted database schema-error correlation",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "database driver failure observation",
+                                "request correlation context",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="redacted idle-transaction failure correlation",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "database driver failure observation",
+                                "request correlation context",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="database driver failure observation",
+                            owner="runtime.db_sessions",
+                            kind=AuthorityKind.OBSERVATION,
+                            source=(
+                                "SQLAlchemy handle_error context and original "
+                                "driver SQLSTATE"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="request correlation context",
+                            owner="observability.recording",
+                            kind=AuthorityKind.OBSERVATION,
+                            source="request ID context and application call stack",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.NOT_APPLICABLE,
+                        boundary=(
+                            "The SQLAlchemy error hook observes an already-failed "
+                            "operation and writes structured logs only."
+                        ),
+                        locking="No application lock or database write is performed.",
+                        idempotency=(
+                            "Repeated failures emit independent observations with "
+                            "the same stable statement fingerprint."
+                        ),
+                        retries=(
+                            "The observer never retries database work; the owning "
+                            "caller retains retry policy."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(),
+                        mapping_owner="database caller adapters and task owners",
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.NATIVE,
+                        new_owner="observability.database_diagnostics",
+                        verification=(
+                            "Fingerprint redaction and caller-correlation tests."
+                        ),
+                    ),
+                    steward="platform operations",
+                    design_refs=(
+                        "docs/designs/OPERATIONAL_EVIDENCE_AND_RETRY.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=("tests/test_operational_evidence_followup.py",),
+                ),
+            ),
+            SOTService(
                 name="observability.channel_health_contracts",
                 module="app.services.channel_health_contracts",
                 owns=(
@@ -8429,7 +9487,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "channel alert severity contract",
                 ),
                 depends_on=(
-                    "communications.team_inbox",
+                    "communications.team_inbox_commands",
                     "observability.recording",
                 ),
             ),
@@ -8462,19 +9520,566 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         domain="support_operations",
         services=(
             SOTService(
+                name="support.ticket_assignment_rule_configuration",
+                module="app.services.ticket_assignment.admin",
+                owns=("ticket assignment-rule configuration",),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="ticket assignment-rule configuration",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "typed assignment-rule command",
+                                "assignment rules",
+                            ),
+                            canonical_writer=(
+                                "support.ticket_assignment_rule_configuration"
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="typed assignment-rule command",
+                            owner="support.ticket_assignment_rule_configuration",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed create/delete command with explicit region, team, "
+                                "assignee, strategy, priority, actor, and idempotency evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="assignment rules",
+                            owner="support.ticket_assignment_rule_configuration",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="TicketAssignmentRule rows and their active evaluation order",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "create/delete commands enter execute_owner_command once; validation "
+                            "and persistence are flush-only inside the root transaction"
+                        ),
+                        locking="rule identity and target references are rechecked before write",
+                        idempotency=(
+                            "stable rule identifiers and command idempotency evidence converge "
+                            "replay"
+                        ),
+                        retries="retry the complete configuration command after rollback",
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "assignment_rule_not_found",
+                            "assignment_rule_invalid",
+                            *owner_command_boundary_error_codes(
+                                "support.ticket_assignment_rule_configuration"
+                            ),
+                        ),
+                        mapping_owner="support settings web adapters",
+                        fail_closed_on=(
+                            "invalid team/person target",
+                            "ambiguous rule identity",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("ticket.assignment_rule_changed",),
+                        schema_version=1,
+                        delivery_owner="observability.audit_log",
+                        compatibility="Version 1 records rule identity and change type only.",
+                        replay="TicketAssignmentRule rows plus audit evidence reconstruct changes.",
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner="support ticket settings route and direct-commit helpers",
+                        new_owner="support.ticket_assignment_rule_configuration",
+                        verification="assignment configuration and architecture tests",
+                        cutover_gate="all assignment rule writes use typed owner commands",
+                        fallback_retirement="direct settings-route rule writes are absent",
+                    ),
+                    steward="support operations",
+                    design_refs=(
+                        "docs/designs/SUPPORT_TICKET_LIFECYCLE_SOT.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_ticket_assignment_engine.py",
+                        "tests/architecture/test_support_ticket_sot_boundary.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="support.ticket_assignment_evaluation",
+                module="app.services.ticket_assignment.engine",
+                owns=(
+                    "ticket assignment-rule evaluation",
+                    "ticket assignment round-robin cursor",
+                ),
+                depends_on=("support.ticket_assignment_rule_configuration",),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="ticket assignment-rule evaluation",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical assignment rules",
+                                "ticket assignment facts",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="ticket assignment round-robin cursor",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "canonical assignment rules",
+                                "assignment cursor state",
+                            ),
+                            canonical_writer="support.ticket_assignment_evaluation",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical assignment rules",
+                            owner="support.ticket_assignment_rule_configuration",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="active TicketAssignmentRule rows in priority order",
+                        ),
+                        AuthorityInput(
+                            name="ticket assignment facts",
+                            owner="support.ticket_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "Ticket region, customer, existing team/person assignment, and "
+                                "eligible team membership facts"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="assignment cursor state",
+                            owner="support.ticket_assignment_evaluation",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="locked TicketAssignmentCounter row for a rule/team scope",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.PARTICIPANT,
+                        boundary=(
+                            "The Ticket lifecycle owner holds the root transaction; evaluation "
+                            "returns a typed AssignmentResult and may only flush its locked cursor"
+                        ),
+                        locking="round-robin counter is selected FOR UPDATE",
+                        idempotency=(
+                            "one cursor advance occurs within the atomic Ticket command; rollback "
+                            "restores both proposal cursor and Ticket mutation"
+                        ),
+                        retries="the Ticket owner reruns evaluation after full rollback",
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=("assignment_evaluation_invalid_scope",),
+                        mapping_owner="support.ticket_lifecycle",
+                        fail_closed_on=("inactive team", "ineligible assignee"),
+                    ),
+                    events=EventContract(
+                        event_types=("ticket.assignment_evaluated",),
+                        schema_version=1,
+                        delivery_owner="observability.audit_log",
+                        compatibility=(
+                            "Version 1 records matched rule/scope and selected team/person "
+                            "identifiers without customer payloads."
+                        ),
+                        replay=(
+                            "TicketAssignmentRule, TicketAssignmentCounter, and Ticket audit "
+                            "evidence explain the selected proposal."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner="assignment engine direct Ticket writer",
+                        new_owner="support.ticket_assignment_evaluation",
+                        verification="assignment proposal-only and lifecycle application tests",
+                        cutover_gate="evaluation returns typed proposals without Ticket writes",
+                        fallback_retirement="policy-side Ticket and TicketAssignee writes are absent",
+                    ),
+                    steward="support operations",
+                    design_refs=(
+                        "docs/designs/SUPPORT_TICKET_LIFECYCLE_SOT.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_ticket_assignment_engine.py",
+                        "tests/architecture/test_support_ticket_sot_boundary.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="support.ticket_automation_rule_configuration",
+                module="app.services.support_automation_rules",
+                owns=("ticket automation-rule configuration",),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="ticket automation-rule configuration",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "typed automation-rule command",
+                                "automation rules",
+                            ),
+                            canonical_writer=(
+                                "support.ticket_automation_rule_configuration"
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="typed automation-rule command",
+                            owner="support.ticket_automation_rule_configuration",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed create/update/delete/activation command with validated "
+                                "trigger, conditions, action, actor, and idempotency evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="automation rules",
+                            owner="support.ticket_automation_rule_configuration",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="TicketAutomationRule rows and active priority order",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary="each rule mutation enters execute_owner_command once",
+                        locking="rule row is locked for update/delete/activation",
+                        idempotency="command key and stable rule identity bound replay",
+                        retries="retry the complete rule command after rollback",
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "automation_rule_not_found",
+                            "automation_rule_invalid",
+                            *owner_command_boundary_error_codes(
+                                "support.ticket_automation_rule_configuration"
+                            ),
+                        ),
+                        mapping_owner="support automation web adapters",
+                        fail_closed_on=("invalid trigger", "invalid action target"),
+                    ),
+                    events=EventContract(
+                        event_types=("ticket.automation_rule_changed",),
+                        schema_version=1,
+                        delivery_owner="observability.audit_log",
+                        compatibility="Version 1 records rule identity and change type only.",
+                        replay="TicketAutomationRule rows and audit evidence reconstruct changes.",
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner="automation route and direct-commit service helpers",
+                        new_owner="support.ticket_automation_rule_configuration",
+                        verification="automation configuration and architecture tests",
+                        cutover_gate="all rule writes use typed owner commands",
+                        fallback_retirement="HTTP and direct transaction behavior are absent",
+                    ),
+                    steward="support operations",
+                    design_refs=(
+                        "docs/designs/SUPPORT_TICKET_LIFECYCLE_SOT.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_support_automation.py",
+                        "tests/architecture/test_support_ticket_sot_boundary.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="support.ticket_automation_evaluation",
+                module="app.services.support_automation",
+                owns=("ticket automation-rule evaluation",),
+                depends_on=("support.ticket_automation_rule_configuration",),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="ticket automation-rule evaluation",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical automation rules",
+                                "ticket automation facts",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical automation rules",
+                            owner="support.ticket_automation_rule_configuration",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="active TicketAutomationRule rows for the trigger",
+                        ),
+                        AuthorityInput(
+                            name="ticket automation facts",
+                            owner="support.ticket_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="current typed Ticket fields and identity-review evidence",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary="evaluation is side-effect-free and returns typed proposals",
+                        locking="not applicable; lifecycle owner rechecks state before application",
+                        idempotency="same rules and Ticket facts produce the same ordered proposals",
+                        retries="re-evaluate from canonical inputs",
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=("automation_evaluation_invalid_rule",),
+                        mapping_owner="support.ticket_lifecycle",
+                        fail_closed_on=("identity manual review", "unknown action"),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner="automation engine direct Ticket writer",
+                        new_owner="support.ticket_automation_evaluation",
+                        verification="proposal-only automation and lifecycle application tests",
+                        cutover_gate="policy returns TicketAutomationProposal values only",
+                        fallback_retirement="automation policy cannot mutate or flush Ticket rows",
+                    ),
+                    steward="support operations",
+                    design_refs=(
+                        "docs/designs/SUPPORT_TICKET_LIFECYCLE_SOT.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_support_automation.py",
+                        "tests/architecture/test_support_ticket_sot_boundary.py",
+                    ),
+                ),
+            ),
+            SOTService(
                 name="support.ticket_lifecycle",
                 module="app.services.support",
                 owns=(
+                    "ticket lifecycle mutations",
+                    "ticket creation and identity",
+                    "support ticket human-readable number allocation",
                     "ticket status vocabulary",
                     "guarded ticket status transitions",
                     "ticket lifecycle timestamps and consequences",
+                    "ticket team and person assignment",
+                    "ticket comments mentions and attachments",
+                    "ticket links duplicates and merges",
                     "signed-link and authenticated resolution confirmation/dispute",
+                    "ticket CSAT and satisfaction",
+                    "ticket audit official timeline and transactional events",
+                ),
+                contract=ServiceContract(
+                    concerns=tuple(
+                        ConcernContract(
+                            name=name,
+                            role=(
+                                OwnerRole.COMMAND_WRITER
+                                if name
+                                in {
+                                    "ticket lifecycle mutations",
+                                    "support ticket human-readable number allocation",
+                                }
+                                else OwnerRole.AUTHORITATIVE_RECORD
+                            ),
+                            input_names=(
+                                "typed ticket command",
+                                "canonical ticket state",
+                                "ticket configuration",
+                                "customer identity evidence",
+                                "assignment policy proposal",
+                                "automation policy proposal",
+                            ),
+                            canonical_writer="support.ticket_lifecycle",
+                        )
+                        for name in (
+                            "ticket lifecycle mutations",
+                            "ticket creation and identity",
+                            "support ticket human-readable number allocation",
+                            "ticket status vocabulary",
+                            "guarded ticket status transitions",
+                            "ticket lifecycle timestamps and consequences",
+                            "ticket team and person assignment",
+                            "ticket comments mentions and attachments",
+                            "ticket links duplicates and merges",
+                            "signed-link and authenticated resolution confirmation/dispute",
+                            "ticket CSAT and satisfaction",
+                            "ticket audit official timeline and transactional events",
+                        )
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="typed ticket command",
+                            owner="support.ticket_lifecycle",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed TicketCreate, TicketUpdate, comment, merge, link, "
+                                "resolution, satisfaction, attachment, and bulk command inputs "
+                                "with CommandContext"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical ticket state",
+                            owner="support.ticket_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "Ticket, TicketAssignee, TicketComment, TicketLink, "
+                                "TicketMerge, TicketAccessToken, and transactional audit/event "
+                                "rows"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="ticket configuration",
+                            owner="support.ticket_configuration",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "validated status subset, priorities, types, defaults, routing, "
+                                "and SLA target settings"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="customer identity evidence",
+                            owner="customer.identity_scope",
+                            kind=AuthorityKind.OBSERVATION,
+                            source=(
+                                "reviewed subscriber, account, inbound sender, and Lead binding "
+                                "evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="assignment policy proposal",
+                            owner="support.ticket_assignment_evaluation",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "typed proposal containing team/person/scope and rule evidence; "
+                                "never a Ticket mutation"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="automation policy proposal",
+                            owner="support.ticket_automation_evaluation",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "typed action proposal derived from a matching active rule; "
+                                "never a Ticket mutation"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "Each public Ticket mutation enters execute_owner_command once on a "
+                            "transaction-free session. Lifecycle helpers, SLA clocks, policy "
+                            "evaluators, notifications, audit, and events are flush-only "
+                            "participants."
+                        ),
+                        locking=(
+                            "Existing Ticket mutations lock or operate under the root command; "
+                            "status guards and merge/confirmation state are rechecked before "
+                            "writing."
+                        ),
+                        idempotency=(
+                            "Adapter Idempotency-Key is carried in CommandContext where supplied; "
+                            "link identity, merge source state, access-token state, notification "
+                            "keys, and event/audit evidence make replay observable and bounded."
+                        ),
+                        retries=(
+                            "Retry the complete command after rollback with the same typed input "
+                            "and idempotency key; nested helpers never retry independently."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "ticket_not_found",
+                            "comment_not_found",
+                            "sla_event_not_found",
+                            "lead_not_found",
+                            "subscriber_not_found",
+                            "lead_subscriber_mismatch",
+                            "ticket_merged_source",
+                            "invalid_ticket_filter",
+                            "invalid_ticket_status",
+                            "ticket_merge_self",
+                            "satisfaction_not_eligible",
+                            "resolution_confirmation_not_eligible",
+                            "resolution_confirmation_terminal",
+                            "resolution_confirmation_not_pending",
+                            "resolution_confirmation_inactive",
+                            "resolution_dispute_terminal",
+                            *owner_command_boundary_error_codes(
+                                "support.ticket_lifecycle"
+                            ),
+                        ),
+                        mapping_owner=(
+                            "support API, admin web, customer portal, public confirmation, task, "
+                            "and CRM transport adapters"
+                        ),
+                        fail_closed_on=(
+                            "invalid or stale lifecycle status",
+                            "ambiguous customer identity",
+                            "merged source",
+                            "inactive confirmation capability",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "ticket.created",
+                            "ticket.assigned",
+                            "ticket.status_changed",
+                            "ticket.comment_added",
+                            "ticket.resolution_requested",
+                            "ticket.resolution_confirmed",
+                            "ticket.resolution_disputed",
+                            "ticket.merged",
+                        ),
+                        schema_version=1,
+                        delivery_owner="communications.notification_service",
+                        compatibility=(
+                            "Version 1 carries stable Ticket/account identifiers and bounded "
+                            "change evidence; private comment bodies and attachments are not "
+                            "placed in transport events."
+                        ),
+                        replay=(
+                            "Canonical Ticket rows, official comments, links/merges, access "
+                            "tokens, and AuditEvent rows reconstruct the lifecycle."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "support route/API/task mutations, direct service transaction "
+                            "completion, and assignment/automation policy Ticket writers"
+                        ),
+                        new_owner="support.ticket_lifecycle",
+                        verification=(
+                            "Support lifecycle, assignment, automation, comment, attachment, "
+                            "link, duplicate, merge, CSAT, portal, and architecture tests"
+                        ),
+                        cutover_gate=(
+                            "all Ticket mutations enter the registered owner; policies return "
+                            "proposals and all participants are transaction-neutral"
+                        ),
+                        fallback_retirement=(
+                            "the retired lifecycle-owner alias, HTTPException service coupling, direct "
+                            "service commits/rollbacks, and policy-side Ticket writes are absent"
+                        ),
+                    ),
+                    steward="support operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/designs/SUPPORT_TICKET_LIFECYCLE_SOT.md",
+                        "docs/designs/SUPPORT_UX_POLISH_AUDIT.md",
+                    ),
+                    test_refs=(
+                        "tests/test_support_services.py",
+                        "tests/test_ticket_status_transition.py",
+                        "tests/test_support_automation.py",
+                        "tests/test_ticket_assignment_engine.py",
+                        "tests/architecture/test_support_ticket_sot_boundary.py",
+                    ),
                 ),
             ),
             SOTService(
                 name="support.ticket_configuration",
                 module="app.services.support_ticket_settings",
                 owns=(
+                    "ticket configuration mutations",
                     "operator-visible ticket status subset",
                     "ticket priority and type options",
                     "ticket routing and priority/type SLA target policy",
@@ -8484,6 +10089,113 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "Configured status choices are constrained to the lifecycle "
                     "vocabulary and do not own semantic colors or tones. Every "
                     "ticket SLA target is operator-managed in the ticket settings UI."
+                ),
+                contract=ServiceContract(
+                    concerns=tuple(
+                        ConcernContract(
+                            name=name,
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "typed ticket configuration command",
+                                "ticket lifecycle vocabulary",
+                                "current ticket configuration",
+                            ),
+                            canonical_writer="support.ticket_configuration",
+                        )
+                        for name in (
+                            "ticket configuration mutations",
+                            "operator-visible ticket status subset",
+                            "ticket priority and type options",
+                            "ticket routing and priority/type SLA target policy",
+                        )
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="typed ticket configuration command",
+                            owner="support.ticket_configuration",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "validated option, routing, team membership, auto-assignment, "
+                                "and SLA target collections with CommandContext"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="ticket lifecycle vocabulary",
+                            owner="support.ticket_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="TicketStatus enum and guarded terminal-state semantics",
+                        ),
+                        AuthorityInput(
+                            name="current ticket configuration",
+                            owner="support.ticket_configuration",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "workflow DomainSetting rows plus synchronized ServiceTeam and "
+                                "ServiceTeamMember records"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "update_options enters execute_owner_command once; all settings, "
+                            "team, routing, and SLA writes flush in the same root transaction"
+                        ),
+                        locking=(
+                            "setting keys and referenced team/member identities are re-read and "
+                            "synchronized in the owner command"
+                        ),
+                        idempotency=(
+                            "normalized option values and stable team/member identifiers make "
+                            "repeated replacement commands converge"
+                        ),
+                        retries="retry the complete configuration replacement after rollback",
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "ticket_configuration_invalid",
+                            *owner_command_boundary_error_codes(
+                                "support.ticket_configuration"
+                            ),
+                        ),
+                        mapping_owner="admin system ticket-settings adapter",
+                        fail_closed_on=(
+                            "status outside lifecycle vocabulary",
+                            "invalid team/person identity",
+                            "invalid SLA target",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("ticket.configuration_changed",),
+                        schema_version=1,
+                        delivery_owner="observability.audit_log",
+                        compatibility=(
+                            "Version 1 identifies the configuration owner and operation without "
+                            "publishing staff or customer details."
+                        ),
+                        replay=(
+                            "workflow DomainSetting, ServiceTeam, ServiceTeamMember, and audit "
+                            "rows reconstruct configuration."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner="ticket settings form and multi-commit settings helpers",
+                        new_owner="support.ticket_configuration",
+                        verification="ticket settings, SLA, assignment, and architecture tests",
+                        cutover_gate="one typed owner command replaces the complete settings set",
+                        fallback_retirement="mid-command commit and settings-route writes are absent",
+                    ),
+                    steward="support operations",
+                    design_refs=(
+                        "docs/designs/SUPPORT_TICKET_LIFECYCLE_SOT.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_support_ticket_settings.py",
+                        "tests/test_sla_assignment.py",
+                        "tests/architecture/test_support_ticket_sot_boundary.py",
+                    ),
                 ),
             ),
             SOTService(
@@ -8669,6 +10381,208 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "carry no issuance authority. Field completion records an "
                     "internal timeline fact and never closes the ticket."
                 ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="ticket-to-work-order issuance eligibility",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "canonical ticket lifecycle state",
+                                "assigned support-team membership",
+                                "typed issuance request",
+                                "work-order command result",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="native ticket-to-work-order provenance",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical ticket lifecycle state",
+                                "typed issuance request",
+                                "work-order command result",
+                            ),
+                            canonical_writer="support.ticket_work_order_handoff",
+                        ),
+                        ConcernContract(
+                            name="field-outcome projection onto the ticket timeline",
+                            role=OwnerRole.PROJECTION_WRITER,
+                            input_names=(
+                                "native ticket-to-work-order provenance",
+                                "authoritative field outcome",
+                                "canonical ticket lifecycle state",
+                            ),
+                            canonical_writer="support.ticket_work_order_handoff",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical ticket lifecycle state",
+                            owner="support.ticket_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked Ticket identity, active state, status, subscriber, "
+                                "priority, and assigned service_team_id"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="assigned support-team membership",
+                            owner="support.ticket_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active ServiceTeam and ServiceTeamMember rows selected by "
+                                "the Ticket assignment"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="typed issuance request",
+                            owner="support.ticket_work_order_handoff",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "TicketWorkOrderIssueCommand with explicit actor, both "
+                                "permissions, scope, reason, and idempotency key"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="work-order command result",
+                            owner="operations.work_order_commands",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "participant-created WorkOrder with origin_ticket_id and "
+                                "stable native-create fingerprint"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="native ticket-to-work-order provenance",
+                            owner="support.ticket_work_order_handoff",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "WorkOrder.origin_ticket_id plus ticket.work_order_issued "
+                                "audit evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="authoritative field outcome",
+                            owner="operations.work_order_status",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="completed or failed WorkOrder field event",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        boundary=(
+                            "issue_work_order enters execute_owner_command once on a "
+                            "transaction-free adapter session; work-order creation and audit "
+                            "are flush-only participants."
+                        ),
+                        locking=(
+                            "The Ticket is selected FOR UPDATE before eligibility; the "
+                            "deterministic WorkOrder public id serializes concurrent replays."
+                        ),
+                        idempotency=(
+                            "Scope-local Idempotency-Key is mandatory and derives the stable "
+                            "work-order id and ticket issuance audit request id."
+                        ),
+                        retries=(
+                            "Integrity conflicts roll back the complete root command; the "
+                            "adapter retries with the same idempotency key."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "ticket_not_found",
+                            "ticket_inactive",
+                            "ticket_terminal",
+                            "ticket_subscriber_required",
+                            "ticket_team_required",
+                            "ticket_team_inactive",
+                            "assigned_team_membership_required",
+                            "project_task_not_found",
+                            "project_task_ticket_mismatch",
+                            "project_task_project_mismatch",
+                            "permission_required",
+                            "idempotency_key_required",
+                            "invalid_command_scope",
+                            *owner_command_boundary_error_codes(
+                                "support.ticket_work_order_handoff"
+                            ),
+                        ),
+                        mapping_owner="support API and admin web adapters",
+                        fail_closed_on=(
+                            "missing permission evidence",
+                            "missing idempotency evidence",
+                            "stale or terminal ticket state",
+                            "ambiguous project-task scope",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("ticket.work_order_issued",),
+                        schema_version=1,
+                        delivery_owner="observability.audit_log",
+                        compatibility=(
+                            "Version 1 records native ticket/work-order/project scope and "
+                            "the assigned team without customer payloads."
+                        ),
+                        replay=(
+                            "WorkOrder.origin_ticket_id and request-scoped AuditEvent rows "
+                            "reconstruct issuance."
+                        ),
+                    ),
+                    projections=(
+                        ProjectionContract(
+                            name="ticket field-outcome timeline evidence",
+                            input_names=(
+                                "native ticket-to-work-order provenance",
+                                "authoritative field outcome",
+                                "canonical ticket lifecycle state",
+                            ),
+                            writer="support.ticket_work_order_handoff",
+                            freshness="transactional with the field outcome command",
+                            stale_behavior=(
+                                "Ticket remains open for Support verification; absence never "
+                                "implies resolution."
+                            ),
+                            drift_signal=(
+                                "origin-linked terminal WorkOrder without matching ticket "
+                                "timeline evidence"
+                            ),
+                            rebuild_operation=(
+                                "replay terminal WorkOrder field events by field_event_id"
+                            ),
+                            repair_owner="support.ticket_work_order_handoff",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "support automation field_visit tag, Ticket.metadata work_order_id, "
+                            "and overloaded WorkOrder.crm_ticket_id"
+                        ),
+                        new_owner="support.ticket_work_order_handoff",
+                        verification=(
+                            "migration provenance validator and handoff behavior/architecture "
+                            "tests"
+                        ),
+                        cutover_gate=(
+                            "native origin_ticket_id is populated only from corroborated links; "
+                            "external CRM provenance remains preserved"
+                        ),
+                        fallback_retirement=(
+                            "tags and metadata cannot issue or link field work and generic work-"
+                            "order schemas cannot accept origin_ticket_id"
+                        ),
+                    ),
+                    steward="support and field operations",
+                    design_refs=(
+                        "docs/designs/TICKET_WORK_ORDER_HANDOFF_SOT.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/runbooks/TICKET_WORK_ORDER_PROVENANCE_CUTOVER.md",
+                    ),
+                    test_refs=(
+                        "tests/test_ticket_work_order_handoff.py",
+                        "tests/test_ticket_work_order_handoff_migration.py",
+                        "tests/architecture/test_ticket_work_order_handoff_boundary.py",
+                    ),
+                ),
             ),
             SOTService(
                 name="support.ticket_bulk_commands",
@@ -8690,6 +10604,106 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "app.services.support.Tickets.update through Tickets.bulk_update "
                     "so SLA, automation, assignment, notification, "
                     "event, audit, and workqueue consequences have one owner."
+                ),
+                contract=ServiceContract(
+                    concerns=tuple(
+                        ConcernContract(
+                            name=name,
+                            role=(
+                                OwnerRole.POLICY
+                                if name
+                                in {
+                                    "support-ticket bulk update eligibility preview",
+                                    "support-ticket bulk confirmation drift detection",
+                                }
+                                else OwnerRole.RESOLVER
+                            ),
+                            input_names=(
+                                "typed bulk selection and changes",
+                                "canonical ticket lifecycle state",
+                                "ticket configuration",
+                            ),
+                        )
+                        for name in (
+                            "selected support-ticket bulk membership resolution",
+                            "support-ticket bulk change normalization",
+                            "support-ticket bulk update eligibility preview",
+                            "support-ticket bulk confirmation drift detection",
+                            "structured support-ticket bulk update outcomes",
+                        )
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="typed bulk selection and changes",
+                            owner="support.ticket_bulk_commands",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "page-only explicit Ticket identifiers, normalized change set, "
+                                "expected count, scope token, and confirmation flag"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical ticket lifecycle state",
+                            owner="support.ticket_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="active Ticket identity, merge state, and current field values",
+                        ),
+                        AuthorityInput(
+                            name="ticket configuration",
+                            owner="support.ticket_configuration",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="configured status, priority, and assignment choices",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary=(
+                            "membership, normalization, preview, and drift validation are read-"
+                            "only; confirmed writes enter support.ticket_lifecycle separately"
+                        ),
+                        locking=(
+                            "confirmation recomputes exact membership and eligibility immediately "
+                            "before the lifecycle command"
+                        ),
+                        idempotency=(
+                            "deterministic scope token covers normalized changes and every "
+                            "selected eligibility outcome"
+                        ),
+                        retries="re-preview from canonical Ticket/configuration inputs",
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "support_ticket_bulk_invalid",
+                            "support_ticket_bulk_preview_required",
+                            "support_ticket_bulk_scope_drift",
+                            "support_ticket_bulk_confirmation_required",
+                        ),
+                        mapping_owner="admin support bulk HTTP adapter",
+                        fail_closed_on=(
+                            "missing confirmation",
+                            "membership drift",
+                            "eligibility drift",
+                            "unconfigured value",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner="admin bulk route and client-selected membership",
+                        new_owner="support.ticket_bulk_commands",
+                        verification="bulk preview, drift, execution, and architecture tests",
+                        cutover_gate="route delegates exact preview and confirmed execution scope",
+                        fallback_retirement="route-side eligibility and unverified membership are absent",
+                    ),
+                    steward="support operations",
+                    design_refs=(
+                        "docs/designs/SUPPORT_TICKET_LIFECYCLE_SOT.md",
+                        "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_support_ticket_bulk_actions.py",
+                        "tests/architecture/test_support_ticket_sot_boundary.py",
+                    ),
                 ),
             ),
         ),
@@ -13096,6 +15110,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "effective scheduled-task registration",
                     "permanent customer-financial lifecycle task registration",
+                    "mandatory account-access reconciliation registration",
+                    "event-driven transport exclusion from periodic registration",
                     "optional capability task synchronization",
                     "Celery runtime schedule config",
                 ),
@@ -13107,6 +15123,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "ScheduledTask cadence management",
                     "permanent lifecycle task mutation protection",
+                    "event-driven transport schedule rejection",
                     "manual task enqueue operations",
                 ),
                 depends_on=("scheduler.registry",),
@@ -13122,7 +15139,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         rule=(
             "Core customer-financial lifecycle tasks are always registered and cannot "
             "be disabled, renamed, or deleted. Optional capability scheduling composes "
-            "through the feature control plane; task bodies remain thin adapters."
+            "through the feature control plane. Event-driven transports remain "
+            "requestable but cannot register as independent periodic repair owners; "
+            "task bodies remain thin adapters."
         ),
     ),
     DomainSOT(
@@ -13136,6 +15155,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "persisted access restriction intent",
                     "subscription access-status transitions",
                     "subscriber access-status projection",
+                    "atomic account and child-service access projection",
                 ),
                 depends_on=(
                     "events.dispatcher",
@@ -13491,10 +15511,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 name="access.radius_projection",
                 module="app.services.radius_population",
                 owns=(
+                    "canonical per-login RADIUS projection plan",
                     "radcheck/radreply/radusergroup customer projection",
                     "radcheck_admin/radreply_admin device-login projection",
                     "idempotent per-target advisory-locked RADIUS auth projection",
                     "walled-garden/reject radreply on blocked/suspended access",
+                    "bidirectional desired-versus-observed projection drift",
                 ),
                 depends_on=(
                     "access.radius_state",
@@ -13505,7 +15527,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "Single writer of the FreeRADIUS auth tables across every "
                     "configured runtime target. Event-time and per-user callers "
                     "request a full or scoped projection; they do not write auth "
-                    "tables directly."
+                    "tables directly. The permanent account-access reconciler is the "
+                    "only periodic drift detector and requests the full writer only "
+                    "when drift exists; the writer is never independently scheduled. "
+                    "The writer and reconciler consume the same per-login plan and "
+                    "therefore cannot reinterpret lifecycle statuses independently."
                 ),
             ),
             SOTService(
@@ -14282,6 +16308,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "billing and access impact projection",
                     "service-change delivery-mode decision",
                     "service-address qualification and field-fee preview",
+                    "vacation-hold duration, annual-limit, cooldown, and resume policy",
                     "subscription command and outcome contracts",
                 ),
                 depends_on=(
@@ -14313,6 +16340,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "subscription command idempotent replay",
                     "structured subscription command outcomes",
                     "persisted relocation qualification and fee evidence",
+                    "vacation-hold and exact customer-lock resume orchestration",
                     "independently committed subscription command batches",
                 ),
                 depends_on=(
@@ -14334,6 +16362,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "service_intent.subscription_lifecycle_scheduling. Admin "
                     "single and bulk adapters delegate here instead of writing "
                     "subscription lifecycle fields directly."
+                    " Customer, admin, and automatic vacation-hold adapters all "
+                    "delegate customer_hold lock creation/resolution here."
                 ),
             ),
             SOTService(
@@ -14355,6 +16385,233 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "time and delegates every mutation to the canonical command "
                     "executor. Plan scheduling remains with the catalog change "
                     "request owner."
+                ),
+            ),
+            SOTService(
+                name="service_intent.subscription_change_execution",
+                module="app.services.subscription_change_execution",
+                owns=(
+                    "relocation charge evidence and settlement admission",
+                    "paid relocation fulfillment release",
+                    "remote reprovision verification",
+                    "verified service-change finalization",
+                    "interrupted execution-chain reconciliation",
+                ),
+                depends_on=(
+                    "service_intent.subscription_lifecycle_execution",
+                    "financial.invoices",
+                    "financial.payments",
+                    "operations.service_order_lifecycle",
+                    "operations.work_order_commands",
+                    "operations.provisioning_lifecycle",
+                    "access.radius_state",
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="relocation charge evidence and settlement admission",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "confirmed relocation quote evidence",
+                                "canonical invoice and payment allocation evidence",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="paid relocation fulfillment release",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "canonical invoice and payment allocation evidence",
+                                "canonical subscription-change execution state",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="remote reprovision verification",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "catalog-linked target RADIUS profile",
+                                "canonical RADIUS profile observation",
+                                "canonical subscription-change execution state",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="verified service-change finalization",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "canonical provisioning-readiness decision",
+                                "canonical subscription-change execution state",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="interrupted execution-chain reconciliation",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "canonical invoice and payment allocation evidence",
+                                "canonical RADIUS profile observation",
+                                "canonical subscription-change execution state",
+                                "canonical provisioning-readiness decision",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="confirmed relocation quote evidence",
+                            owner="service_intent.subscription_lifecycle_execution",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked SubscriptionChangeRequest target address, "
+                                "qualification, exact fee, currency, and quote fingerprint"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical invoice and payment allocation evidence",
+                            owner="financial.payments",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "exact issued Invoice, succeeded Payment, active "
+                                "PaymentAllocation, and paid invoice state"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="catalog-linked target RADIUS profile",
+                            owner="service_intent.subscription_lifecycle_execution",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "the single OfferRadiusProfile linked to the confirmed "
+                                "target offer"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical RADIUS profile observation",
+                            owner="access.radius_state",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "exact subscription-scoped RadiusUser profile and "
+                                "post-request last_sync_at watermark"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical subscription-change execution state",
+                            owner="service_intent.subscription_change_execution",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked SubscriptionChangeRequest execution state and "
+                                "structural invoice, payment, service-order, work-order, "
+                                "and readiness-decision links"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical provisioning-readiness decision",
+                            owner="operations.provisioning_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "activated ProvisioningReadinessDecision for the exact "
+                                "linked ServiceOrder"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        boundary=(
+                            "Each event admission locks one change request and stages "
+                            "structural evidence plus delegated owner results before the "
+                            "adapter transaction completes."
+                        ),
+                        locking="The exact SubscriptionChangeRequest is locked first.",
+                        idempotency=(
+                            "Unique structural links and deterministic service/work-order "
+                            "keys replay the original outcome."
+                        ),
+                        retries=(
+                            "Unsettled or unverified observations fail closed and retry "
+                            "after their authoritative evidence changes."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "service_intent.subscription_change_execution.service_change_not_found",
+                            "service_intent.subscription_change_execution.relocation_fee_not_settled",
+                            "service_intent.subscription_change_execution.provisioning_verification_missing",
+                            "service_intent.subscription_change_execution.remote_radius_profile_ambiguous",
+                            "service_intent.subscription_change_execution.remote_access_credential_ambiguous",
+                            "service_intent.subscription_change_execution.remote_reprovision_verification_missing",
+                            "service_intent.subscription_change_execution.service_change_not_finalizable",
+                            "service_intent.subscription_change_execution.reconciliation_head_invalid",
+                            "service_intent.subscription_change_execution.reconciliation_head_stale",
+                            "service_intent.subscription_change_execution.reconciliation_key_invalid",
+                            "service_intent.subscription_change_execution.reconciliation_key_conflict",
+                            "service_intent.subscription_change_execution.reconciliation_reason_invalid",
+                            "service_intent.subscription_change_execution.reconciliation_not_repairable",
+                            "service_intent.subscription_change_execution.invalid_command_context",
+                            "service_intent.subscription_change_execution.command_contract_violation",
+                            "service_intent.subscription_change_execution.nested_owner_command",
+                            "service_intent.subscription_change_execution.active_caller_transaction",
+                            "service_intent.subscription_change_execution.nested_transaction_completion",
+                        ),
+                        mapping_owner="event and service-change adapters",
+                        retryable_codes=(
+                            "service_intent.subscription_change_execution.relocation_fee_not_settled",
+                            "service_intent.subscription_change_execution.provisioning_verification_missing",
+                            "service_intent.subscription_change_execution.remote_reprovision_verification_missing",
+                        ),
+                        fail_closed_on=(
+                            "missing or mismatched fee, currency, invoice, allocation, or payment",
+                            "missing field-work or provisioning verification",
+                            "missing, stale, ambiguous, or mismatched RADIUS profile evidence",
+                            "mismatched service-order scope",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "invoice.created",
+                            "service_order.created",
+                            "service_order.completed",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Events carry exact request, invoice, payment, service-order, "
+                            "and readiness identifiers where applicable."
+                        ),
+                        replay=(
+                            "Structural request links and canonical owner records rebuild "
+                            "the execution chain without memo or status inference."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        new_owner="service_intent.subscription_change_execution",
+                        old_owner=(
+                            "unimplemented handoff after awaiting_payment with no "
+                            "structural settlement, fulfillment, verification, or "
+                            "finalization evidence chain"
+                        ),
+                        verification=(
+                            "Focused tests cover charge creation, exact settlement, "
+                            "fulfillment release, RADIUS and field verification gates, "
+                            "and replay."
+                            " Reviewed operator repair covers interrupted states,"
+                            " stale-head rejection, and durable idempotent replay."
+                        ),
+                        cutover_gate=(
+                            "Migrations 401-402 backfill deferred execution state; every "
+                            "new priced relocation or remote reprovision receives "
+                            "structural evidence."
+                        ),
+                        fallback_retirement=(
+                            "No support-ticket, memo lookup, invoice-status-only, or "
+                            "work-order completion shortcut is retained."
+                        ),
+                    ),
+                    steward="customer service delivery, billing, and network operations",
+                    design_refs=(
+                        "docs/designs/CUSTOMER_SELF_SERVICE_LIFECYCLE.md",
+                        "docs/designs/PROVISIONING_LIFECYCLE_SOT.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_customer_plan_change_prepaid.py",
+                        "tests/architecture/test_provisioning_lifecycle_sot.py",
+                    ),
                 ),
             ),
             SOTService(
@@ -15788,6 +18045,79 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "reads through one partial. Exports consume the same complete "
                     "scope without a silent row cap."
                 ),
+                contract=ServiceContract(
+                    concerns=tuple(
+                        ConcernContract(
+                            name=name,
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "typed support Ticket list query",
+                                "canonical ticket lifecycle state",
+                                "ticket configuration",
+                            ),
+                        )
+                        for name in (
+                            "admin support-ticket searchable fields",
+                            "admin support-ticket filter semantics",
+                            "admin support-ticket stable sort semantics",
+                            "admin support-ticket page and status-summary projection",
+                            "admin support-ticket export scope",
+                        )
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="typed support Ticket list query",
+                            owner="ui.support_ticket_list_projection",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "SUPPORT_TICKET_LIST_DEFINITION-normalized ListQuery with declared "
+                                "search/filter/sort/pagination capabilities"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical ticket lifecycle state",
+                            owner="support.ticket_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="canonical Tickets.query scope before sort and pagination",
+                        ),
+                        AuthorityInput(
+                            name="ticket configuration",
+                            owner="support.ticket_configuration",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="configured filter option vocabulary",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary="list, summaries, and export are read-only projections",
+                        locking="stable unique Ticket.id tie-breaker prevents page ambiguity",
+                        idempotency="same ListQuery and database snapshot yield the same scope",
+                        retries="repeat the read from the canonical query",
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=("support_ticket_list_invalid_query",),
+                        mapping_owner="admin support list and export HTTP adapters",
+                        fail_closed_on=("unsupported filter", "unsupported sort"),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner="support list route, template, and export parameter logic",
+                        new_owner="ui.support_ticket_list_projection",
+                        verification="list projection, export, HTMX, browser, and architecture tests",
+                        cutover_gate="full page, partial, summaries, and export share one ListQuery",
+                        fallback_retirement="route/template pagination and silent export caps are absent",
+                    ),
+                    steward="support product UI",
+                    design_refs=(
+                        "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                        "docs/designs/SUPPORT_UX_POLISH_AUDIT.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_support_ticket_list_ui_contract.py",
+                        "tests/playwright/e2e/test_customer_portal.py",
+                    ),
+                ),
             ),
             SOTService(
                 name="ui.reseller_list_projection",
@@ -16131,6 +18461,77 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "Selection is page-only. The command owner previews exact "
                     "membership, proposed changes, and eligibility before execution."
                 ),
+                contract=ServiceContract(
+                    concerns=tuple(
+                        ConcernContract(
+                            name=name,
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "bulk interaction contract",
+                                "support Ticket list projection",
+                                "support Ticket bulk preview",
+                            ),
+                        )
+                        for name in (
+                            "admin support-ticket bulk action visibility",
+                            "admin support-ticket page-selection presentation",
+                            "admin support-ticket row eligibility presentation",
+                        )
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="bulk interaction contract",
+                            owner="ui.bulk_action_contracts",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="page-only selection and preview/confirmation UI contract",
+                        ),
+                        AuthorityInput(
+                            name="support Ticket list projection",
+                            owner="ui.support_ticket_list_projection",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="current visible page membership and row identifiers",
+                        ),
+                        AuthorityInput(
+                            name="support Ticket bulk preview",
+                            owner="support.ticket_bulk_commands",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="exact eligible/skipped membership and signed scope token",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary="visibility, selection, and row eligibility are read-only UI data",
+                        locking="not applicable; command owner rechecks all eligibility",
+                        idempotency="same page and preview facts yield the same actions",
+                        retries="rebuild from current list and bulk preview",
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=("support_ticket_bulk_projection_invalid",),
+                        mapping_owner="admin support Ticket template/JSON adapters",
+                        fail_closed_on=(
+                            "missing page membership",
+                            "missing permission",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner="support Ticket template and JavaScript bulk eligibility logic",
+                        new_owner="ui.support_ticket_bulk_action_projection",
+                        verification="bulk action projection, template, and browser tests",
+                        cutover_gate="UI renders typed server-declared actions and preview facts",
+                        fallback_retirement="client-side lifecycle eligibility decisions are absent",
+                    ),
+                    steward="support product UI",
+                    design_refs=(
+                        "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                        "docs/designs/SUPPORT_UX_POLISH_AUDIT.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_support_ticket_bulk_actions.py",
+                        "tests/test_support_ticket_list_ui_contract.py",
+                    ),
+                ),
             ),
         ),
         entrypoints=(
@@ -16319,6 +18720,164 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     test_refs=(
                         "tests/test_ui_contracts.py",
                         "tests/architecture/test_template_projection_boundary.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="ui.operational_evidence_projection",
+                module="app.services.operational_checks",
+                owns=(
+                    "question-driven operational evidence projection",
+                    "operational retry and next-action projection",
+                ),
+                depends_on=(
+                    "ui.projection_contracts",
+                    "observability.recording",
+                    "scheduler.registry",
+                    "integration.registry",
+                    "integration.installations",
+                    "control.feature_registry",
+                ),
+                notes=(
+                    "Keeps administrative expectation, last observation, evidence "
+                    "age, customer-data impact, and retry/next action separate. It "
+                    "does not convert missing or stale telemetry into device or "
+                    "customer service down."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="question-driven operational evidence projection",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "bounded collector and task observations",
+                                "scheduler expectation",
+                                "integration capability binding facts",
+                                "native quote cutover controls",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="operational retry and next-action projection",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "bounded collector and task observations",
+                                "scheduler expectation",
+                                "integration capability binding facts",
+                                "native quote cutover controls",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="bounded collector and task observations",
+                            owner="observability.recording",
+                            kind=AuthorityKind.OBSERVATION,
+                            source=(
+                                "bandwidth poller snapshot, task heartbeat result, "
+                                "and CRM capability-operation receipt"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="scheduler expectation",
+                            owner="scheduler.registry",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="effective ScheduledTask enablement and cadence",
+                        ),
+                        AuthorityInput(
+                            name="integration capability binding facts",
+                            owner="integration.installations",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "version-pinned installation, enabled binding, "
+                                "validated config revision, and manifest declaration"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="native quote cutover controls",
+                            owner="control.feature_registry",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "effective quotes.native_read and "
+                                "quotes.native_write controls"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary=(
+                            "Materializes bounded database control facts and reads "
+                            "bounded cache observations without a business write."
+                        ),
+                        locking="Read projection acquires no mutation locks.",
+                        idempotency=(
+                            "The same facts and observation time produce the same "
+                            "operator questions, evidence, and next action."
+                        ),
+                        retries="Read projection calls are safe to retry.",
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(),
+                        mapping_owner="NOC and integration web adapters",
+                    ),
+                    projections=(
+                        ProjectionContract(
+                            name="question-driven operational evidence projection",
+                            input_names=(
+                                "bounded collector and task observations",
+                                "scheduler expectation",
+                                "integration capability binding facts",
+                                "native quote cutover controls",
+                            ),
+                            writer="ui.operational_evidence_projection",
+                            freshness=(
+                                "Each observation retains its source observed_at; "
+                                "expected cadence remains a separate control fact."
+                            ),
+                            stale_behavior=(
+                                "Explains that evidence is late or absent and never "
+                                "turns that gap into a service-down claim."
+                            ),
+                            drift_signal=(
+                                "NOC/integration projection contract tests and missing "
+                                "source timestamps."
+                            ),
+                            rebuild_operation=(
+                                "Recompute on read from bounded observations and "
+                                "current control-plane facts."
+                            ),
+                            repair_owner="ui.operational_evidence_projection",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "NOC and installed-integration templates collapsing "
+                            "expectation and evidence into healthy/degraded/unknown"
+                        ),
+                        new_owner="ui.operational_evidence_projection",
+                        verification=(
+                            "NOC, integration evidence, retry, freshness, and "
+                            "template projection tests."
+                        ),
+                        cutover_gate=(
+                            "NOC and installed integrations render owner-provided "
+                            "questions and evidence without local status derivation."
+                        ),
+                        fallback_retirement=(
+                            "The installed-integrations generic health field and "
+                            "health badge branch are removed."
+                        ),
+                    ),
+                    steward="platform operations UI",
+                    design_refs=(
+                        "docs/designs/OPERATIONAL_EVIDENCE_AND_RETRY.md",
+                        "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_operational_evidence_followup.py",
+                        "tests/test_web_network_noc.py",
+                        "tests/test_integrations_observability.py",
                     ),
                 ),
             ),

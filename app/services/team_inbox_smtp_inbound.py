@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib
 import logging
 from dataclasses import dataclass
@@ -10,12 +11,21 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db import SessionLocal
-from app.services import team_inbox_rfc822, team_inbox_routing
+from app.models.team_inbox import InboxChannelType, InboxObservationKind
+from app.services import (
+    team_inbox_observations,
+    team_inbox_processing,
+    team_inbox_rfc822,
+    team_inbox_routing,
+)
+from app.services.common import coerce_uuid
+from app.services.owner_commands import (
+    CommandContext,
+)
 
 logger = logging.getLogger(__name__)
 
 SMTP_PROBE_HEADER_VALUE = "team_inbox_smtp_e2e"
-SMTP_PROBE_VERIFIED_KEY = "smtp_probe_verified"
 
 SMTPController: Any = None
 try:
@@ -72,58 +82,91 @@ def handle_smtp_message(
         return SmtpInboundResult(kind="skipped", reason="self_sender")
 
     try:
-        result = team_inbox_rfc822.receive_rfc822_email(
-            db,
+        parsed = team_inbox_rfc822.parse_rfc822_email(
             data,
             mail_from=mail_from,
             rcpt_to=rcpt_to or [],
             source="smtp",
             fallback_service_team_id=fallback_service_team_id,
         )
-        db.commit()
+        payload = parsed.payload
+        external_message_id = str(payload.message_id or "").strip() or (
+            "sha256:" + hashlib.sha256(data).hexdigest()
+        )
+        # A missing Date header is explicit unknown provenance. Using a stable
+        # sentinel keeps an exact SMTP retry fingerprint-equivalent; recorded_at
+        # still captures when Sub admitted the observation.
+        observed_at = payload.received_at or datetime.fromtimestamp(0, tz=UTC)
+        account_scope = ",".join(sorted(payload.to_addresses))[:160] or "default"
+        recorded = team_inbox_observations.record_provider_observation(
+            db,
+            team_inbox_observations.RecordProviderObservationCommand(
+                context=CommandContext.system(
+                    actor="transport:smtp",
+                    scope="team-inbox:provider-observation",
+                    reason="record normalized SMTP observation",
+                    idempotency_key=external_message_id,
+                ),
+                provider=team_inbox_observations.InboxProvider.smtp,
+                provider_account_scope=account_scope,
+                provider_event_id=f"message:{external_message_id}",
+                kind=InboxObservationKind.message,
+                channel_type=InboxChannelType.email,
+                external_message_id=external_message_id,
+                observed_at=observed_at,
+                payload=team_inbox_observations.InboundMessageObservation(
+                    contact_address=payload.from_address,
+                    body=payload.body or "",
+                    subject=payload.subject,
+                    to_addresses=tuple(payload.to_addresses),
+                    cc_addresses=tuple(payload.cc_addresses),
+                    in_reply_to=payload.in_reply_to,
+                    references=payload.references,
+                    smtp_probe=(
+                        (payload.metadata or {}).get("smtp_probe")
+                        == SMTP_PROBE_HEADER_VALUE
+                    ),
+                    fallback_service_team_id=coerce_uuid(
+                        payload.fallback_service_team_id
+                    ),
+                    attachments=tuple(
+                        team_inbox_observations.InboundAttachmentObservation(
+                            asset_type=str(item.get("type") or "file"),
+                            file_name=str(item["file_name"])
+                            if item.get("file_name")
+                            else None,
+                            mime_type=str(item["mime_type"])
+                            if item.get("mime_type")
+                            else None,
+                            file_size=int(item["file_size"])
+                            if item.get("file_size") is not None
+                            else None,
+                        )
+                        for item in parsed.attachments
+                    ),
+                ),
+            ),
+        )
+        result = team_inbox_processing.process_provider_observation(
+            db,
+            observation_id=recorded.observation_id,
+            context=CommandContext.system(
+                actor="system:team-inbox-observation-processor",
+                scope="team-inbox:provider-consequence",
+                reason="resolve committed SMTP observation",
+                idempotency_key=str(recorded.observation_id),
+            ),
+        )
         return SmtpInboundResult(
-            kind=result.kind,
-            conversation_id=result.conversation_id,
-            message_id=result.message_id,
+            kind=result.consequence_kind or "duplicate",
+            conversation_id=str(result.conversation_id)
+            if result.conversation_id
+            else None,
+            message_id=str(result.message_id) if result.message_id else None,
         )
     except Exception:
-        db.rollback()
         logger.exception("team_inbox_smtp_message_failed")
         return SmtpInboundResult(kind="failed", reason="processing_error")
-
-
-def verify_smtp_probe_delivery(
-    db: Session,
-    *,
-    external_message_id: str,
-) -> dict[str, str] | None:
-    """Verify and mark the exact synthetic message requested by the runtime.
-
-    A sender-controlled header alone is not trusted. The runtime supplies the
-    random Message-ID it generated, and this inbox owner marks that exact row as
-    a verified probe. Continuous health collection excludes only verified probe
-    rows from natural-traffic freshness.
-    """
-    from app.models.team_inbox import InboxMessage
-
-    row = (
-        db.query(InboxMessage)
-        .filter(InboxMessage.external_message_id == external_message_id)
-        .one_or_none()
-    )
-    metadata = dict(row.metadata_ or {}) if row is not None else {}
-    if row is None or metadata.get("smtp_probe") != SMTP_PROBE_HEADER_VALUE:
-        return None
-    if metadata.get(SMTP_PROBE_VERIFIED_KEY) is not True:
-        metadata[SMTP_PROBE_VERIFIED_KEY] = True
-        metadata["smtp_probe_verified_at"] = datetime.now(UTC).isoformat()
-        row.metadata_ = metadata
-        db.commit()
-    return {
-        "message_id": str(row.id),
-        "conversation_id": str(row.conversation_id),
-        "external_message_id": external_message_id,
-    }
 
 
 class TeamInboxSMTPHandler:

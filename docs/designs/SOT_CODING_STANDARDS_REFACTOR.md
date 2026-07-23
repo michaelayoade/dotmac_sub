@@ -1,14 +1,18 @@
 # SOT coding standards refactor
 
-Status: active, not merge-ready
+Status: historical implementation record; not a current branch or merge plan
+
+Current ownership contracts are generated into `docs/SOT_RELATIONSHIP_MAP.md`.
+Current financial-access behavior and operations are specified only in
+`docs/FINANCIAL_ACCESS_ENFORCEMENT.md`.
 
 Change classification: major
 
 Owning system: Dotmac Sub
 
-Working branch: `feat/sot-coding-standards-refactor-main-sync`
+Historical working branch: `feat/sot-coding-standards-refactor-main-sync`
 
-Base: `origin/main` at `b3899a0492ae0d61c3ed5571cd834570ffe0f965`
+Historical base: `origin/main` at `b3899a0492ae0d61c3ed5571cd834570ffe0f965`
 
 ## Baseline at branch creation
 
@@ -175,12 +179,13 @@ profile is missing, mixed, or contradictory.
 The completed prepaid funding-input slice separates
 `financial.prepaid_currency` from `financial.access_resolution`, removing the
 hidden threshold-to-access-resolution callback cycle. Access, funding position,
-threshold, enforcement planning, and readiness now consume one normalized,
+threshold, and enforcement planning now consume one normalized,
 fail-closed currency policy. `financial.prepaid_threshold` returns typed minimum
-and unfunded-renewal provenance from the batched owner. The duplicate
+and exact taxed contracted-renewal provenance from the batched owner. The duplicate
 service-status derivation is removed, and missing accounts, invalid minimums,
-unpriced collectible subscriptions, and cross-currency prices are stable domain
-failures instead of guessed or silently ignored inputs.
+unresolved collectible renewal terms, and cross-currency prices are typed,
+fail-closed outcomes instead of guessed or silently ignored inputs. Current
+behavior is specified only in `docs/FINANCIAL_ACCESS_ENFORCEMENT.md`.
 
 The completed collections grace slice is `financial.grace_policy`. Account,
 reseller, offer/version, policy-set, and billing-mode default precedence now
@@ -196,10 +201,11 @@ The completed prepaid planning slice is `financial.prepaid_enforcement`. Cohort,
 funding-only eligibility, repair inclusion, policy settings, and each account's
 warn/wait/defer/shield/health/suspend/restore outcome now use typed identifiers,
 actions, policy issues, and reason provenance. Missing accounts and malformed
-blocking time, holiday, or communication policy evidence fail with stable domain
-errors. The sweep, dry-run, readiness proof, deployment acceptance, and funding
-audit continue to consume the same read-only owner; execution still belongs to
-the established timer, lifecycle, and access writers.
+time-window or communication policy evidence fail with stable domain errors.
+Every calendar day is eligible, the permanent sweep and dry-run consume the
+same read-only owner, and execution remains with the lifecycle and access
+writers. Current behavior is specified only in
+`docs/FINANCIAL_ACCESS_ENFORCEMENT.md`.
 
 The current completed access slice is `auth.system_user_assignments`. It is the
 only application writer for system-user role and direct-permission grants. Local

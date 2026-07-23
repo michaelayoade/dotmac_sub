@@ -14,7 +14,6 @@ from difflib import SequenceMatcher
 from typing import Any
 from uuid import UUID
 
-from fastapi import HTTPException
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import ColumnElement
@@ -28,6 +27,12 @@ from app.services.customer_support_links import (
     ticket_links_customer,
     ticket_unlinked_customer_filter,
 )
+from app.services.domain_errors import DomainError
+
+
+class TicketValidationError(DomainError):
+    """Transport-neutral Ticket creation policy failure."""
+
 
 _OPEN_STATUSES = {
     TicketStatus.new.value,
@@ -94,16 +99,18 @@ def validate_ticket_creation(db: Session, payload: TicketCreate) -> None:
         _created_by_is_customer(db, payload)
         and not str(payload.ticket_type or "").strip()
     ):
-        raise HTTPException(status_code=400, detail="Ticket type is required.")
+        raise TicketValidationError(
+            code="ticket_type_required", message="Ticket type is required."
+        )
 
     if ticket_type_requires_subscriber(payload.ticket_type) and not (
         payload.subscriber_id
         or payload.customer_account_id
         or payload.customer_person_id
     ):
-        raise HTTPException(
-            status_code=400,
-            detail="Subscriber is required for the selected ticket type.",
+        raise TicketValidationError(
+            code="ticket_subscriber_required",
+            message="Subscriber is required for the selected ticket type.",
         )
 
     metadata = payload.metadata_ if isinstance(payload.metadata_, dict) else {}
@@ -112,17 +119,17 @@ def validate_ticket_creation(db: Session, payload: TicketCreate) -> None:
         ticket_type_requires_base_station(payload.ticket_type)
         and not base_station_details
     ):
-        raise HTTPException(
-            status_code=400,
-            detail="Base station details are required for the selected ticket type.",
+        raise TicketValidationError(
+            code="ticket_base_station_required",
+            message="Base station details are required for the selected ticket type.",
         )
 
     context = build_pre_create_context(db, payload)
     duplicate_ticket_id = context.get("duplicate_ticket_id")
     if duplicate_ticket_id and metadata.get("duplicate_block") is True:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Duplicate open ticket already exists (blocking ticket: {duplicate_ticket_id})",
+        raise TicketValidationError(
+            code="ticket_duplicate_conflict",
+            message=f"Duplicate open ticket already exists (blocking ticket: {duplicate_ticket_id})",
         )
 
 

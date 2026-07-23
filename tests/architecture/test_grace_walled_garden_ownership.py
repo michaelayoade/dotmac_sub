@@ -32,11 +32,12 @@ def test_access_decision_modules_do_not_consume_raw_captive_flag():
 
 def test_radius_and_connectivity_writers_consume_canonical_restriction():
     for relative in (
-        "app/services/radius_population.py",
+        "app/services/radius_projection_planner.py",
         "app/services/events/handlers/enforcement.py",
         "app/services/connectivity_reconciler.py",
     ):
         assert "resolve_subscription_restriction" in _read(relative), relative
+    assert "plan_login_radius_projections" in _read("app/services/radius_population.py")
 
 
 def test_financial_owner_persists_access_mode_and_grace_evidence():

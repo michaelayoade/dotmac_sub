@@ -26,10 +26,14 @@ router = APIRouter(prefix="/portal", tags=["web-customer"])
 logger = logging.getLogger(__name__)
 
 
-def _quotes(db: Session, subscriber_id: str) -> dict:
+def _quotes(db: Session, subscriber_id: str) -> tuple[dict[str, object], str]:
     if selfserve_service.native_read_enabled(db):
-        return selfserve_service.selfserve_quotes.read_for_subscriber(db, subscriber_id)
-    return quotes_mirror.read_for_subscriber(db, subscriber_id)
+        return (
+            selfserve_service.selfserve_quotes.read_for_subscriber(db, subscriber_id),
+            quotes_mirror.QuoteReadState.current.value,
+        )
+    result = quotes_mirror.read_for_subscriber_result(db, subscriber_id)
+    return result.payload, result.state.value
 
 
 @router.get("/quotes", response_class=HTMLResponse)
@@ -40,10 +44,12 @@ def customer_quotes(request: Request, db: Session = Depends(get_db)) -> Response
             url="/portal/auth/login?next=/portal/quotes", status_code=303
         )
     subscriber_id = str(optional_customer_subscriber_id(db, customer) or "")
+    quotes, quote_read_state = _quotes(db, subscriber_id)
     context = {
         "request": request,
         "customer": customer,
         "active_page": "quotes",
-        "quotes": _quotes(db, subscriber_id),
+        "quotes": quotes,
+        "quote_read_state": quote_read_state,
     }
     return templates.TemplateResponse("customer/quotes/index.html", context)

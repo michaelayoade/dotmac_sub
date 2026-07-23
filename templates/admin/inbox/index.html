@@ -1,155 +1,95 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/triage.html" import triage_shell, triage_list, pane_header, conversation_list_item %}
-{% from "components/ui/list_macros.html" import list_pagination %}
 
-{% block title %}Team Inbox - Admin{% endblock %}
-
-{# Full-bleed, flat: drop the centered max-w container and the mesh/noise wash. #}
+{% block title %}Inbox - Admin{% endblock %}
 {% block main_class %}overflow-hidden bg-slate-100 dark:bg-slate-950{% endblock %}
 
+{% block head %}
+{{ super() }}
+<meta name="inbox-workspace" content="admin.inbox.workspace">
+{% endblock %}
+
 {% block main_body %}
-{% call triage_shell(mode='detail' if selected else 'list') %}
+<div x-data="inboxWorkspace({
+        selectedId: '{{ selected.id if selected else '' }}',
+        actorId: '{{ actor_person_id }}',
+        initialMode: '{{ 'detail' if selected else 'list' }}'
+     })"
+     x-init="init()"
+     @keydown.window="handleShortcut($event)"
+     class="relative flex h-full min-h-0 w-full overflow-hidden bg-slate-100 dark:bg-slate-950"
+     data-inbox-workspace
+     data-triage-shell
+     data-triage-mode="{{ 'detail' if selected else 'list' }}">
 
-    {# ---------- LIST PANE ---------- #}
-    {% call triage_list() %}
-        {% call pane_header("Team Inbox", (count ~ " conversations")) %}
-            <a href="/admin/reports/inbox-escalations" title="Escalations"
-               class="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-            </a>
-        {% endcall %}
-
-        {# compact metric chips — each is a filtered view #}
-        <div class="grid grid-cols-4 gap-px border-b border-slate-200 bg-slate-200 text-center dark:border-slate-800 dark:bg-slate-800">
-            {% for m in [
-                {"label": "Open", "value": queue_metrics.total_open, "href": "/admin/inbox?open_only=true", "tone": ""},
-                {"label": "Needs reply", "value": queue_metrics.needs_response, "href": "/admin/inbox?needs_response=true", "tone": "warning"},
-                {"label": "Unassigned", "value": queue_metrics.unassigned_open, "href": "/admin/inbox?open_only=true&unassigned=true", "tone": ""},
-                {"label": "Failed", "value": queue_metrics.failed_outbound, "href": "/admin/inbox/reports/outbox-failures", "tone": "negative"}
-            ] %}
-            <a href="{{ m.href }}" class="bg-white px-1 py-2 hover:bg-slate-50 dark:bg-slate-900 dark:hover:bg-slate-800">
-                <p class="text-lg font-bold tabular-nums {% if m.tone == 'warning' and m.value %}status-foreground status-tone-warning{% elif m.tone == 'negative' and m.value %}status-foreground status-tone-negative{% else %}text-slate-900 dark:text-white{% endif %}">{{ m.value }}</p>
-                <p class="text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">{{ m.label }}</p>
-            </a>
-            {% endfor %}
+    <section id="inbox-sidebar"
+             class="relative flex w-full min-w-0 shrink-0 flex-col border-r border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 md:w-[320px] [[data-triage-mode=detail]_&]:hidden md:[[data-triage-mode=detail]_&]:flex"
+             :style="desktopSidebarStyle()"
+             data-triage-pane="list"
+             aria-label="Conversation queue">
+        <div id="inbox-sidebar-content" class="flex min-h-0 flex-1 flex-col">
+            {% include "admin/inbox/_sidebar.html" %}
         </div>
+        <button type="button"
+                class="absolute -right-1 top-0 z-20 hidden h-full w-2 cursor-col-resize touch-none md:block"
+                @pointerdown="startSidebarResize($event)"
+                aria-label="Resize conversation list"
+                title="Drag to resize conversation list">
+            <span class="absolute left-1/2 top-1/2 h-12 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-slate-300 opacity-0 transition-opacity hover:opacity-100 dark:bg-slate-600"></span>
+        </button>
+    </section>
 
-        {# secondary cohorts — every triage cohort keeps a stable entry URL #}
-        <div class="flex items-center gap-4 border-b border-slate-200 px-4 py-1.5 dark:border-slate-800">
-            {% for m in [
-                {"label": "Snoozed", "value": queue_metrics.snoozed_open, "href": "/admin/inbox?open_only=true&snoozed=true"},
-                {"label": "Muted", "value": queue_metrics.muted_open, "href": "/admin/inbox?open_only=true&muted=true"}
-            ] %}
-            <a href="{{ m.href }}" class="text-[11px] font-medium text-slate-500 hover:text-accent-700 dark:text-slate-400 dark:hover:text-accent-300">{{ m.label }} <span class="tabular-nums font-semibold text-slate-700 dark:text-slate-200">{{ m.value }}</span></a>
-            {% endfor %}
-        </div>
-
-        {# filters — GET round-trips through list_query #}
-        <form method="get" action="/admin/inbox" class="border-b border-slate-200 px-3 py-2.5 dark:border-slate-800" x-data="{ more: false }">
-            <div class="flex items-center gap-2">
-                <div class="relative flex-1">
-                    <svg class="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z"/></svg>
-                    <input type="search" name="search" value="{{ search }}" placeholder="Search conversations"
-                           class="w-full rounded-lg border-slate-300 pl-8 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white">
-                </div>
-                <button type="button" @click="more = !more" :class="more ? 'bg-accent-50 text-accent-700 dark:bg-accent-900/30 dark:text-accent-300' : 'text-slate-500'"
-                        class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300 hover:bg-slate-50 dark:border-slate-600 dark:hover:bg-slate-800" aria-label="More filters">
-                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4h18M6 12h12M10 20h4"/></svg>
-                </button>
-            </div>
-            <div x-show="more" x-cloak class="mt-2 space-y-2">
-                <div class="grid grid-cols-2 gap-2">
-                    <select name="status" class="rounded-lg border-slate-300 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-white">
-                        <option value="">All statuses</option>
-                        {% for option in status_options %}<option value="{{ option }}" {% if option == status %}selected{% endif %}>{{ option | replace('_',' ') | title }}</option>{% endfor %}
-                    </select>
-                    <select name="channel_type" class="rounded-lg border-slate-300 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-white">
-                        <option value="">All channels</option>
-                        {% for option in channel_options %}<option value="{{ option }}" {% if option == channel_type %}selected{% endif %}>{{ option | replace('_',' ') | title }}</option>{% endfor %}
-                    </select>
-                    <select name="service_team_id" class="col-span-2 rounded-lg border-slate-300 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-white">
-                        <option value="">All teams</option>
-                        {% for team in service_team_options %}<option value="{{ team.id }}" {% if team.id|string == service_team_id %}selected{% endif %}>{{ team.name }}</option>{% endfor %}
-                    </select>
-                </div>
-                <label class="inline-flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
-                    <input type="checkbox" name="needs_response" value="true" {% if needs_response %}checked{% endif %} class="rounded border-slate-300 text-accent-600">Needs response
-                </label>
-                <div class="flex gap-2">
-                    <button type="submit" class="flex-1 rounded-lg bg-accent-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-700">Apply</button>
-                    <a href="/admin/inbox" class="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-800">Clear</a>
-                </div>
-            </div>
-        </form>
-
-        {# conversation list — scrolls independently #}
-        <div class="flex-1 overflow-y-auto">
-            {% if rows %}
-                {% for row in rows %}{{ conversation_list_item(row, active_id=(selected.id if selected else "")) }}{% endfor %}
-            {% else %}
-                <div class="px-4 py-12 text-center">
-                    <svg class="mx-auto h-8 w-8 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h8M8 14h5m8-2a9 9 0 11-4.5-7.8L21 3v5h-5"/></svg>
-                    <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">No conversations match these filters.</p>
-                </div>
-            {% endif %}
-        </div>
-
-        {% if rows %}
-        <div class="border-t border-slate-200 px-3 py-2 dark:border-slate-800">
-            {{ list_pagination(list_query, page_meta, '/admin/inbox', entity='conversations') }}
-        </div>
-        {% endif %}
-    {% endcall %}
-
-    {# ---------- DETAIL REGION (thread + context) ---------- #}
-    <div id="triage-detail" class="flex min-w-0 flex-1 overflow-hidden">
+    <main id="triage-detail" class="flex min-w-0 flex-1 overflow-hidden" aria-live="polite">
         {% if selected %}
             {% include "admin/inbox/_conversation.html" %}
         {% else %}
-            <div class="flex flex-1 flex-col items-center justify-center px-6 text-center">
-                <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-200/70 dark:bg-slate-800">
-                    <svg class="h-7 w-7 text-slate-400 dark:text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h8M8 14h5m8-2a9 9 0 11-4.5-7.8L21 3v5h-5"/></svg>
-                </div>
-                <h3 class="mt-3 font-display text-base font-semibold text-slate-700 dark:text-slate-200">Select a conversation</h3>
-                <p class="mt-1 max-w-xs text-sm text-slate-500 dark:text-slate-400">Pick a conversation from the queue to read the thread, reply, and see the customer’s context.</p>
-            </div>
+            {% include "admin/inbox/_empty_state.html" %}
         {% endif %}
+    </main>
+
+    <div x-show="contactOpen" x-cloak class="fixed inset-0 z-40 bg-slate-950/40 xl:hidden" @click="closeContact()" aria-hidden="true"></div>
+    <aside x-show="contactOpen"
+           x-cloak
+           x-transition:enter="transition ease-out duration-200"
+           x-transition:enter-start="translate-x-full"
+           x-transition:enter-end="translate-x-0"
+           x-transition:leave="transition ease-in duration-150"
+           x-transition:leave-start="translate-x-0"
+           x-transition:leave-end="translate-x-full"
+           class="fixed inset-y-0 right-0 z-50 flex w-[min(100vw,320px)] shrink-0 flex-col overflow-hidden border-l border-slate-200 bg-white shadow-xl xl:static xl:z-auto xl:shadow-none dark:border-slate-800 dark:bg-slate-900"
+           role="complementary"
+           aria-label="Contact details">
+        <div class="flex min-h-[3.5rem] items-center justify-between border-b border-slate-200 px-4 dark:border-slate-800">
+            <div>
+                <h2 class="font-display text-sm font-semibold text-slate-950 dark:text-white">Contact details</h2>
+                <p class="text-[11px] text-slate-500">Loads independently from the thread</p>
+            </div>
+            <button type="button" @click="closeContact()" class="inline-flex h-10 w-10 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 dark:hover:bg-slate-800" aria-label="Close contact details">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+        </div>
+        <div id="inbox-contact-content" class="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+            <div class="p-5 text-center text-sm text-slate-500">Select a contact to load context.</div>
+        </div>
+    </aside>
+
+    {% include "admin/inbox/_overlays.html" %}
+
+    <div x-show="toastMessage" x-cloak class="pointer-events-none fixed bottom-4 left-1/2 z-[70] -translate-x-1/2" aria-live="polite">
+        <div class="pointer-events-auto rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-800 shadow-xl dark:border-slate-700 dark:bg-slate-900 dark:text-white" x-text="toastMessage"></div>
     </div>
 
-{% endcall %}
-
-{# post-action feedback — semantic tone, not a hardcoded status color #}
-{% if request.query_params.get('message') %}
-<div class="pointer-events-none fixed bottom-4 left-1/2 z-50 -translate-x-1/2"
-     x-data="{ show: true }" x-show="show" x-init="setTimeout(() => show = false, 5000)" x-transition>
-    <div class="status-tone status-panel status-tone-{{ 'negative' if request.query_params.get('status') == 'error' else 'positive' }} pointer-events-auto rounded-lg border px-4 py-2.5 text-sm font-medium shadow-lg">
-        {{ request.query_params.get('message') }}
+    {% if request.query_params.get('message') %}
+    <div class="pointer-events-none fixed bottom-4 left-1/2 z-[70] -translate-x-1/2"
+         x-data="{ show: true }" x-show="show" x-init="setTimeout(() => show = false, 5000)" x-transition>
+        <div class="status-tone status-panel status-tone-{{ 'negative' if request.query_params.get('status') == 'error' else 'positive' }} pointer-events-auto rounded-lg border px-4 py-2.5 text-sm font-medium shadow-lg">
+            {{ request.query_params.get('message') }}
+        </div>
     </div>
+    {% endif %}
 </div>
-{% endif %}
+{% endblock %}
 
-<script>
-(function () {
-    function scrollThread() {
-        var sc = document.querySelector('[data-thread-scroll]');
-        if (sc) sc.scrollTop = sc.scrollHeight;
-    }
-    document.addEventListener('DOMContentLoaded', scrollThread);
-    document.body.addEventListener('htmx:afterOnLoad', function (e) {
-        if (!e.detail || !e.detail.target || e.detail.target.id !== 'triage-detail') return;
-        var shell = document.querySelector('[data-triage-shell]');
-        if (shell) shell.setAttribute('data-triage-mode', 'detail');
-        document.querySelectorAll('.conversation-item[aria-current]').forEach(function (el) {
-            el.removeAttribute('aria-current');
-            el.classList.remove('bg-accent-50', 'dark:bg-accent-900/20');
-        });
-        var src = e.detail.requestConfig && e.detail.requestConfig.elt;
-        if (src && src.classList && src.classList.contains('conversation-item')) {
-            src.setAttribute('aria-current', 'true');
-            src.classList.add('bg-accent-50', 'dark:bg-accent-900/20');
-        }
-        scrollThread();
-    });
-})();
-</script>
+{% block scripts %}
+{{ super() }}
+<script src="/static/js/admin-inbox.js?v=20260723a"></script>
 {% endblock %}

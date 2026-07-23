@@ -4,6 +4,7 @@ import 'package:dotmac_portal/src/config/env.dart';
 import 'package:dotmac_portal/src/models/auth.dart';
 import 'package:dotmac_portal/src/models/addon.dart';
 import 'package:dotmac_portal/src/models/account_health.dart';
+import 'package:dotmac_portal/src/models/device_command.dart';
 import 'package:dotmac_portal/src/models/invoice.dart';
 import 'package:dotmac_portal/src/models/ledger.dart';
 import 'package:dotmac_portal/src/models/notification.dart';
@@ -17,6 +18,20 @@ import 'package:dotmac_portal/src/models/ticket.dart';
 import 'package:dotmac_portal/src/models/usage.dart';
 
 void main() {
+  test('device command outcome preserves canonical operation evidence', () {
+    final outcome = DeviceCommandOutcome.fromJson({
+      'command': 'reboot',
+      'status': 'succeeded',
+      'subscription_id': 'sub-1',
+      'device_id': 'ont-1',
+      'operation_id': 'op-1',
+      'message': 'Restart completed',
+    });
+    expect(outcome.succeeded, isTrue);
+    expect(outcome.operationId, 'op-1');
+    expect(outcome.subscriptionId, 'sub-1');
+  });
+
   group('LoginResult', () {
     test('parses a token response', () {
       final r = LoginResult.fromJson({

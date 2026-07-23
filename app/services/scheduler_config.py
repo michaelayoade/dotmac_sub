@@ -10,6 +10,7 @@ from app.models.scheduler import ScheduledTask, ScheduleType
 from app.services import control_registry
 from app.services import integration as integration_service
 from app.services.db_session_adapter import db_session_adapter
+from app.services.scheduler import is_event_driven_transport_task
 from app.services.settings_spec import resolve_value
 from app.timezone import APP_TIMEZONE_NAME
 
@@ -474,6 +475,15 @@ def _scheduled_row_to_entry(task) -> tuple[str, dict] | None:
     warning if malformed); ``interval`` rows use the interval anchoring. Pure (no
     DB) so it can be unit-tested against in-memory rows.
     """
+    if is_event_driven_transport_task(task.task_name):
+        logger.warning(
+            "scheduled_task_event_transport_rejected",
+            extra={
+                "task_id": str(task.id),
+                "task_name": task.task_name,
+            },
+        )
+        return None
     options: dict = {}
     if task.task_name in TR069_TASK_QUEUE_NAMES:
         options["queue"] = "acs"
@@ -702,14 +712,7 @@ def build_beat_schedule() -> dict:
         # sessions whose user has no radcheck row or sits in a reject pool, and
         # repairs walled-garden radreply drift. It caps kicks per run so systemic
         # drift degrades to alerts rather than a mass disconnect — hence safe to
-        # run by default. Previously defined but never scheduled.
-        enforcement_reconciler_enabled = _effective_bool(
-            session,
-            SettingDomain.usage,
-            "enforcement_reconciler_enabled",
-            "ENFORCEMENT_RECONCILER_ENABLED",
-            True,
-        )
+        # run continuously as a mandatory lifecycle task.
         enforcement_reconciler_interval_seconds = max(
             _effective_int(
                 session,
@@ -724,27 +727,29 @@ def build_beat_schedule() -> dict:
             session,
             name="enforcement_reconciler",
             task_name="app.tasks.radius.run_enforcement_reconciler",
-            enabled=enforcement_reconciler_enabled,
+            enabled=True,
             interval_seconds=enforcement_reconciler_interval_seconds,
         )
-        # Daily status-backstop reconcilers (SP-8): the event path normally
-        # clears these, but the sweeps are the catch-up for lost events.
-        # account_status: auto-repair subscribers stuck `new`/`blocked` while
-        # all subs are active. The all-active filter is a robust guard, pure
-        # service-state, so apply mode is safe.
-        account_status_reconcile_enabled = _effective_bool(
-            session,
-            SettingDomain.billing,
-            "account_status_reconcile_enabled",
-            "ACCOUNT_STATUS_RECONCILE_ENABLED",
-            True,
+        # Account and external access projections share this recovery loop.
+        # Keep exactly one scheduled owner for access convergence.
+        _retire_scheduled_task(
+            session, "app.tasks.enforcement.reconcile_account_status_drift"
         )
+        # Billing approval is an admission fact, not a runtime bypass. This
+        # permanent owner pass repairs the impossible active + unapproved split
+        # state through the account lifecycle coordinator.
         _sync_scheduled_task(
             session,
-            name="account_status_reconcile",
-            task_name="app.tasks.enforcement.reconcile_account_status_drift",
-            enabled=account_status_reconcile_enabled,
-            interval_seconds=86400,
+            name="billing_approval_reconcile",
+            task_name="app.tasks.enforcement.reconcile_billing_approval_drift",
+            enabled=True,
+            interval_seconds=900,
+        )
+        # The full RADIUS projection writer remains an event-driven transport.
+        # This permanent reconciler compares desired-versus-observed state and
+        # requests that writer only when repair is required.
+        _retire_scheduled_task(
+            session, "app.tasks.radius_population.refresh_radius_from_subs"
         )
         # stale overdue locks: money-adjacent, so DETECT-only (dry-run) — it
         # WARNs with the candidate count for an operator to clear after review,
@@ -2346,34 +2351,6 @@ def build_beat_schedule() -> dict:
                     "schedule": timedelta(seconds=radius_sync_interval),
                     "args": [str(sync_job.id)],
                 }
-
-        # RADIUS refresh safety-net. radcheck/radreply rebuilds are normally
-        # enqueued fire-and-forget on block/restore events; if that enqueue is
-        # lost (worker down, broker hiccup, restart) a paid customer can stay
-        # walled-gardened until the next event touches them. This periodic
-        # whole-table rebuild converges radcheck/radreply on the authoritative
-        # subscription/subscriber status, so a dropped enqueue self-heals within
-        # one interval. Idempotent (per-user DELETE+INSERT). (cutover fix)
-        radius_refresh_safety_enabled = _effective_bool(
-            session,
-            SettingDomain.subscriber,
-            "radius_refresh_safety_net_enabled",
-            "RADIUS_REFRESH_SAFETY_NET_ENABLED",
-            True,
-        )
-        radius_refresh_safety_interval = _effective_int(
-            session,
-            SettingDomain.subscriber,
-            "radius_refresh_safety_net_interval_minutes",
-            "RADIUS_REFRESH_SAFETY_NET_INTERVAL_MINUTES",
-            15,
-        )
-        radius_refresh_safety_interval = max(radius_refresh_safety_interval, 5)
-        if radius_refresh_safety_enabled:
-            schedule["radius_refresh_safety_net"] = {
-                "task": "app.tasks.radius_population.refresh_radius_from_subs",
-                "schedule": timedelta(minutes=radius_refresh_safety_interval),
-            }
 
         # CRM ticket pull: inbound CRM tickets/comments into local support tickets.
         crm_ticket_pull_enabled = _effective_bool(

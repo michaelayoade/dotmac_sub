@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import pytest
-from fastapi import HTTPException
 
 from app.schemas.support import TicketCreate
 from app.services import support as support_service
 from app.services import ticket_validation
+from app.services.domain_errors import DomainError
 
 
 def _payload(**overrides) -> TicketCreate:
@@ -19,37 +19,37 @@ def _payload(**overrides) -> TicketCreate:
 
 
 def test_customer_created_ticket_requires_ticket_type(db_session, subscriber):
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(DomainError) as exc:
         ticket_validation.validate_ticket_creation(
             db_session,
             _payload(created_by_person_id=subscriber.id),
         )
 
-    assert exc.value.status_code == 400
-    assert exc.value.detail == "Ticket type is required."
+    assert exc.value.code == "ticket_type_required"
+    assert exc.value.message == "Ticket type is required."
 
 
 def test_subscriber_required_ticket_type_requires_customer_link(db_session):
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(DomainError) as exc:
         ticket_validation.validate_ticket_creation(
             db_session,
             _payload(ticket_type="Router Replacement"),
         )
 
-    assert exc.value.status_code == 400
-    assert exc.value.detail == "Subscriber is required for the selected ticket type."
+    assert exc.value.code == "ticket_subscriber_required"
+    assert exc.value.message == "Subscriber is required for the selected ticket type."
 
 
 def test_base_station_required_ticket_type_requires_details(db_session):
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(DomainError) as exc:
         ticket_validation.validate_ticket_creation(
             db_session,
             _payload(ticket_type="BTS Outage"),
         )
 
-    assert exc.value.status_code == 400
+    assert exc.value.code == "ticket_base_station_required"
     assert (
-        exc.value.detail
+        exc.value.message
         == "Base station details are required for the selected ticket type."
     )
 
@@ -110,7 +110,7 @@ def test_duplicate_open_ticket_can_be_blocked_by_metadata_policy(
         actor_id=str(subscriber.id),
     )
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(DomainError) as exc:
         support_service.tickets.create(
             db_session,
             _payload(
@@ -122,8 +122,8 @@ def test_duplicate_open_ticket_can_be_blocked_by_metadata_policy(
             actor_id=str(subscriber.id),
         )
 
-    assert exc.value.status_code == 409
-    assert "Duplicate open ticket already exists" in str(exc.value.detail)
+    assert exc.value.code == "ticket_duplicate_conflict"
+    assert "Duplicate open ticket already exists" in exc.value.message
 
 
 def test_duplicate_open_ticket_context_matches_customer_person_link(

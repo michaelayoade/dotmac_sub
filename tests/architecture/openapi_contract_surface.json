@@ -15070,6 +15070,30 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "POST /api/v1/me/subscriptions/{subscription_id}/device/reboot": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:subscription_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "8bd97beb0d9c",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/me/subscriptions/{subscription_id}/device/wifi": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:subscription_id!"
+   ],
+   "request": "1650f389f60c",
+   "responses": {
+    "200": "8bd97beb0d9c",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "POST /api/v1/me/subscriptions/{subscription_id}/service-change": {
    "params": [
     "header:authorization",
@@ -17254,6 +17278,18 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "POST /api/v1/subscribers/{subscriber_id}/billing-approval": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:subscriber_id!"
+   ],
+   "request": "a367b836636a",
+   "responses": {
+    "200": "d2e38101f42a",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "POST /api/v1/subscribers/{subscriber_id}/verify-nin": {
    "params": [
     "header:authorization",
@@ -18442,6 +18478,9 @@
   "CurrencySettingsResponse": "914ef6200eb8",
   "CustomerActionKey": "173053403c88",
   "CustomerDefaultsResponse": "c0892eba5f8c",
+  "CustomerDeviceCommandKind": "cb81f2ec8d71",
+  "CustomerDeviceCommandOutcomeRead": "010e7587a7ae",
+  "CustomerDeviceCommandStatus": "ad00fbf13724",
   "CustomerExperienceAcceptRequest": "0e8608e2743a",
   "CustomerExperienceAttentionRequest": "870e7a93b7e7",
   "CustomerExperienceHandoffRead": "ad4250a7fc1d",
@@ -18460,6 +18499,7 @@
   "CustomerSearchItem": "4c18d2fd0e9a",
   "CustomerSelfCareAction": "e02758717c77",
   "CustomerTicketReference": "81fc82df5eef",
+  "CustomerWifiUpdateRequest": "151cb7d26303",
   "CustomerWorkOrderReference": "84bade5f8a00",
   "DailyUsageHistoryResponse": "12516e963930",
   "DailyUsagePoint": "9235b923a598",
@@ -19379,6 +19419,8 @@
   "StatusIcon": "a2f487075407",
   "StatusPresentation": "849b7d3979d4",
   "StatusTone": "97e30697e883",
+  "SubscriberBillingApprovalRead": "dc5c9860df3d",
+  "SubscriberBillingApprovalUpdate": "ab4ee6d39406",
   "SubscriberCategory": "31a6680cced1",
   "SubscriberChannelRead": "b9e64d360038",
   "SubscriberContactCreate": "05942c71dfeb",
@@ -19393,7 +19435,7 @@
   "SubscriberRoleCreate": "14354d9a4521",
   "SubscriberRoleRead": "ce3c778333ed",
   "SubscriberRoleUpdate": "fb77a484b0b4",
-  "SubscriberStatus": "457a9495ef4c",
+  "SubscriberStatus": "04f90e59577f",
   "SubscriberSyncRead": "58184c709835",
   "SubscriberUpdate": "c91ae8100670",
   "SubscriptionAddOnCreate": "254584caf81b",
@@ -19403,7 +19445,7 @@
   "SubscriptionCreate": "dd2fcd35ad82",
   "SubscriptionDefaultsResponse": "3e153d9f51b0",
   "SubscriptionRead": "4217aba4c23f",
-  "SubscriptionStatus": "408b453376eb",
+  "SubscriptionStatus": "55da6209c756",
   "SubscriptionUpdate": "4f329c8bf079",
   "SuppressionCreate": "875f5ad57243",
   "SuppressionReason": "e3c4e28c7028",

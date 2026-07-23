@@ -52,6 +52,15 @@ visits. If visits exist, every active work order must be terminal and at least
 one must be completed. Work-order completion is evidence; it does not itself
 complete a project task or activate service.
 
+For an existing-subscription relocation, the canonical relationship is
+`SubscriptionChangeRequest.service_order_id` plus its exact
+`SubscriptionChangeRequest.work_order_id`. This branch does not manufacture a
+new-install sales order or project. The readiness owner requires that linked
+native work order to be completed, along with the normal provisioning-run and
+IP-assignment checks. Its activated decision is the only evidence accepted by
+`service_intent.subscription_change_execution` for the final address/offer
+command.
+
 ## Readiness facts and decisions
 
 `ProvisioningReadinessDecision` is append-only and idempotent on
@@ -78,6 +87,16 @@ as a readiness observation. The existing activation projections remain in
 place, but failures now propagate to the event store instead of being logged
 and treated as customer success. The connectivity cutover described in
 `CONNECTIVITY_STATE_MACHINE.md` remains a separate guarded migration.
+
+Remote same-medium service changes use the existing RADIUS control plane rather
+than manufacturing a field service order. The service-change execution
+coordinator asks `access.radius_state` to stage the exact catalog-linked target
+profile on the exact subscription credential. It does not change the live
+offer. Finalization requires a structurally linked `RadiusUser` for that
+subscription whose observed profile matches and whose `last_sync_at` is at or
+after the staging watermark. Ambiguous profiles, credentials, users, stale
+syncs, and mismatched profiles fail closed and remain repairable from the same
+canonical evidence.
 
 ## Migration and repair
 

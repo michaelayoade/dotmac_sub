@@ -12,12 +12,14 @@ from app.models.team_inbox import (
     InboxComment,
     InboxConversation,
     InboxConversationAssignment,
+    InboxConversationLabel,
     InboxConversationTeam,
+    InboxLabel,
     InboxMediaAsset,
     InboxMessage,
     InboxMessageDirection,
 )
-from app.services import team_inbox_media
+from app.services import team_inbox_media, team_inbox_read_state
 
 
 @dataclass(frozen=True)
@@ -117,9 +119,19 @@ class InboxConversationListRow:
     latest_message_at: datetime | None
     contact_resolution_status: str | None
     latest_delivery_status: str | None
+    latest_delivery_error: str | None
     active_assigned_person_id: str | None
     needs_response: bool
+    is_unread: bool
     team_count: int
+    labels: tuple[InboxConversationListLabel, ...]
+
+
+@dataclass(frozen=True)
+class InboxConversationListLabel:
+    id: str
+    name: str
+    color: str | None
 
 
 @dataclass(frozen=True)
@@ -192,6 +204,19 @@ def _delivery_status(message: InboxMessage | None) -> str | None:
     return None
 
 
+def _delivery_error(message: InboxMessage | None) -> str | None:
+    if message is None:
+        return None
+    metadata = message.metadata_ or {}
+    value = str(
+        metadata.get("send_error")
+        or metadata.get("failure_reason")
+        or metadata.get("last_error")
+        or ""
+    ).strip()
+    return value or None
+
+
 def _message_attachments(message: InboxMessage) -> list[dict]:
     metadata = message.metadata_ or {}
     attachments = metadata.get("attachments")
@@ -235,6 +260,8 @@ def list_conversations(
     snoozed: bool | None = None,
     open_only: bool = False,
     unassigned: bool = False,
+    operator_person_id: UUID | None = None,
+    unread_only: bool = False,
     order_by: str | None = None,
     order_dir: str = "desc",
     limit: int = 50,
@@ -354,7 +381,9 @@ def list_conversations(
             InboxConversation.id.asc(),
         )
     total = query.count()
-    needs_python_filter = bool(needs_response or contact_resolution_status)
+    needs_python_filter = bool(
+        needs_response or contact_resolution_status or unread_only
+    )
     rows = (
         ordered_query.all()
         if needs_python_filter
@@ -389,6 +418,25 @@ def list_conversations(
         if conversation_ids
         else {}
     )
+    labels_by_conversation: dict[UUID, list[InboxConversationListLabel]] = {}
+    if conversation_ids:
+        label_rows = (
+            db.query(InboxConversationLabel, InboxLabel)
+            .join(InboxLabel, InboxLabel.id == InboxConversationLabel.label_id)
+            .filter(InboxConversationLabel.conversation_id.in_(conversation_ids))
+            .filter(InboxConversationLabel.is_active.is_(True))
+            .filter(InboxLabel.is_active.is_(True))
+            .order_by(InboxConversationLabel.created_at.asc())
+            .all()
+        )
+        for link, label in label_rows:
+            labels_by_conversation.setdefault(link.conversation_id, []).append(
+                InboxConversationListLabel(
+                    id=str(label.id),
+                    name=label.name,
+                    color=label.color,
+                )
+            )
 
     items: list[InboxConversationListRow] = []
     for conversation, team in rows:
@@ -403,6 +451,17 @@ def list_conversations(
         if needs_response and not row_needs_response:
             continue
         if contact_resolution_status and resolution_status != contact_resolution_status:
+            continue
+        row_is_unread = (
+            team_inbox_read_state.conversation_is_unread(
+                db,
+                conversation_id=conversation.id,
+                person_id=operator_person_id,
+            )
+            if operator_person_id is not None
+            else False
+        )
+        if unread_only and not row_is_unread:
             continue
         items.append(
             InboxConversationListRow(
@@ -432,11 +491,14 @@ def list_conversations(
                 latest_message_at=_message_time(latest) if latest is not None else None,
                 contact_resolution_status=resolution_status,
                 latest_delivery_status=_delivery_status(latest),
+                latest_delivery_error=_delivery_error(latest),
                 active_assigned_person_id=str(active_assignment.person_id)
                 if active_assignment is not None
                 else None,
                 needs_response=row_needs_response,
+                is_unread=row_is_unread,
                 team_count=int(team_counts.get(conversation.id, 0)),
+                labels=tuple(labels_by_conversation.get(conversation.id, [])),
             )
         )
     filtered_count = len(items) if needs_python_filter else total

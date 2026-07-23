@@ -898,6 +898,12 @@ def test_get_device_health_table_uses_latest_metrics(db_session, network_device)
                 value=84,
                 recorded_at=now,
             ),
+            DeviceMetric(
+                device_id=network_device.id,
+                metric_type=MetricType.uptime,
+                value=90_000,
+                recorded_at=now,
+            ),
         ]
     )
     db_session.commit()
@@ -908,6 +914,7 @@ def test_get_device_health_table_uses_latest_metrics(db_session, network_device)
     assert row["ip"] == str(network_device.mgmt_ip or "")
     assert row["cpu"] == 71.0
     assert row["memory"] == 84.0
+    assert row["uptime"] == "1d 1h 0m"
 
 
 def test_get_device_health_page_paginates_and_clamps(db_session, network_device):

@@ -18,6 +18,8 @@ from app.models.ticket_workflow import (
 from app.services import support as support_service
 from app.services import support_ticket_settings as support_ticket_settings_service
 from app.services.auth_dependencies import require_permission
+from app.services.db_session_adapter import db_session_adapter
+from app.services.domain_errors import DomainError
 from app.services.ticket_assignment import admin as assignment_admin_service
 
 router = APIRouter(
@@ -135,6 +137,29 @@ def _build_match_config(
     return config
 
 
+def _typed_match_config(config: dict[str, object]):
+    def strings(key: str) -> tuple[str, ...]:
+        values = config.get(key)
+        return tuple(str(value) for value in values) if isinstance(values, list) else ()
+
+    assignee = str(config.get("assignee_person_id") or "").strip()
+    target = str(config.get("assignment_target") or "").strip()
+    return assignment_admin_service.TicketAssignmentRuleMatch(
+        entity_types=strings("entity_types"),
+        priorities=strings("priorities"),
+        ticket_types=strings("ticket_types"),
+        project_types=strings("project_types"),
+        regions=strings("regions"),
+        sources=strings("sources"),
+        service_team_ids=tuple(UUID(value) for value in strings("service_team_ids")),
+        tags_any=strings("tags_any"),
+        assignee_person_id=UUID(assignee) if assignee else None,
+        assignment_target=(
+            assignment_admin_service.TicketAssignmentTarget(target) if target else None
+        ),
+    )
+
+
 def _rule_lookups(db: Session, rules: list) -> dict:
     """Resolve team and assignee labels used by the rules table."""
     team_lookup = {
@@ -221,20 +246,20 @@ def assignment_rule_create(
             assignment_target=assignment_target,
             assignee_person_id=assignee_person_id,
         )
+        validated_team_id = _validate_team_id(db, team_id)
+        db_session_adapter.release_read_transaction(db)
         assignment_admin_service.create_rule(
             db,
             name=name,
             priority=priority,
             strategy=strategy,
-            match_config=match_config,
-            team_id=_validate_team_id(db, team_id),
+            match_config=_typed_match_config(match_config),
+            team_id=validated_team_id,
             assign_manager=assign_manager,
             assign_spc=assign_spc,
             is_active=is_active,
         )
-        db.commit()
-    except (ValueError, KeyError) as exc:
-        db.rollback()
+    except (ValueError, KeyError, DomainError) as exc:
         context = _ctx(request, db)
         context.update(
             {
@@ -324,21 +349,21 @@ def assignment_rule_update(
             assignment_target=assignment_target,
             assignee_person_id=assignee_person_id,
         )
+        validated_team_id = _validate_team_id(db, team_id)
+        db_session_adapter.release_read_transaction(db)
         assignment_admin_service.update_rule(
             db,
             str(rule_id),
             name=name,
             priority=priority,
             strategy=strategy,
-            match_config=match_config,
-            team_id=_validate_team_id(db, team_id),
+            match_config=_typed_match_config(match_config),
+            team_id=validated_team_id,
             assign_manager=assign_manager,
             assign_spc=assign_spc,
             is_active=is_active,
         )
-        db.commit()
-    except (ValueError, KeyError) as exc:
-        db.rollback()
+    except (ValueError, KeyError, DomainError) as exc:
         rule = assignment_admin_service.get_rule(db, str(rule_id))
         context = _ctx(request, db)
         context.update({"rule": rule, "form_mode": "edit", "error": str(exc)})
@@ -354,8 +379,8 @@ def assignment_rule_update(
     dependencies=[Depends(require_permission("support:automation:write"))],
 )
 def assignment_rule_delete(rule_id: UUID, db: Session = Depends(get_db)):
+    db_session_adapter.release_read_transaction(db)
     assignment_admin_service.delete_rule(db, str(rule_id))
-    db.commit()
     return RedirectResponse(url="/admin/support/assignment-rules", status_code=303)
 
 
@@ -374,11 +399,11 @@ def assignment_rule_toggle(
     If `target=on` or `target=off` is supplied, the call is idempotent
     (double-click won't flip back). Otherwise falls back to legacy flip.
     """
+    db_session_adapter.release_read_transaction(db)
     if target in ("on", "off"):
         assignment_admin_service.set_rule_active(
             db, str(rule_id), is_active=(target == "on")
         )
     else:
         assignment_admin_service.toggle_rule(db, str(rule_id))
-    db.commit()
     return RedirectResponse(url="/admin/support/assignment-rules", status_code=303)

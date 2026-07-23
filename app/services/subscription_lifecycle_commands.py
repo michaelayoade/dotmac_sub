@@ -12,7 +12,7 @@ import json
 import logging
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from fastapi import HTTPException
@@ -382,7 +382,19 @@ def confirm_subscription_service_change(
         request.field_fee_amount = field_quote.fee_amount
         request.field_fee_currency = field_quote.currency
         request.field_quote_fingerprint = field_quote.fingerprint
+        from app.services.subscription_change_execution import stage_relocation_charge
+
+        stage_relocation_charge(db, request)
         db.flush()
+    elif delivery_mode == ServiceChangeDeliveryMode.remote_reprovision:
+        from app.services.subscription_change_execution import stage_remote_reprovision
+
+        if prior is None:
+            stage_remote_reprovision(db, request)
+    else:
+        from app.models.subscription_change import SubscriptionChangeExecutionState
+
+        request.execution_state = SubscriptionChangeExecutionState.payment_settled
     db.commit()
     updated = resolve_subscription_lifecycle(db, command.subscription_id)
     message = (
@@ -512,6 +524,19 @@ def _command_contract_rejection(
             "idempotency_key_required",
             "An idempotency key is required before execution",
         )
+    if (
+        command.kind
+        in {
+            SubscriptionCommandKind.vacation_hold,
+            SubscriptionCommandKind.vacation_resume,
+        }
+        and command.effective_timing != SubscriptionEffectiveTiming.immediate
+    ):
+        return (
+            "vacation_command_must_be_immediate",
+            "Vacation hold commands must execute immediately; auto-resume uses the "
+            "customer-hold expiry task",
+        )
     return None
 
 
@@ -600,6 +625,59 @@ def _dispatch_command(
             "Subscription suspension command applied",
         )
 
+    if command.kind == SubscriptionCommandKind.vacation_hold:
+        lock = suspend_subscription(
+            db,
+            command.subscription_id,
+            reason=EnforcementReason.customer_hold,
+            source=command.source,
+            notes=reason,
+        )
+        assert command.vacation_hold_days is not None
+        lock.resume_at = preview.effective_at + timedelta(
+            days=command.vacation_hold_days
+        )
+        db.flush()
+        return (
+            SubscriptionCommandOutcomeStatus.applied,
+            (str(lock.id),),
+            "Vacation hold applied",
+        )
+
+    if command.kind == SubscriptionCommandKind.vacation_resume:
+        from app.models.enforcement_lock import EnforcementLock
+        from app.services.account_lifecycle import restore_subscription
+
+        vacation_lock = db.scalar(
+            select(EnforcementLock).where(
+                EnforcementLock.subscription_id == subscription.id,
+                EnforcementLock.reason == EnforcementReason.customer_hold,
+                EnforcementLock.is_active.is_(True),
+            )
+        )
+        if vacation_lock is None:
+            raise SubscriptionCommandExecutionRejected(
+                "active_customer_hold_missing",
+                "No active customer vacation hold exists",
+            )
+        trigger = "admin" if command.source.startswith("admin:") else "customer"
+        restored = restore_subscription(
+            db,
+            command.subscription_id,
+            trigger=trigger,
+            resolved_by=command.source,
+            reason=EnforcementReason.customer_hold,
+            notes=reason,
+        )
+        return (
+            SubscriptionCommandOutcomeStatus.applied,
+            (str(vacation_lock.id),),
+            (
+                "Vacation hold cleared and service restored"
+                if restored
+                else "Vacation hold cleared; another access restriction remains"
+            ),
+        )
     target_status = {
         SubscriptionCommandKind.activate: SubscriptionStatus.active,
         SubscriptionCommandKind.restore: SubscriptionStatus.active,
@@ -779,6 +857,36 @@ def _replay_outcome(
             and snapshot.pending_change.target_offer_id == str(command.target_offer_id)
         ):
             artifact_ids = (snapshot.pending_change.request_id,)
+    elif command.kind in {
+        SubscriptionCommandKind.vacation_hold,
+        SubscriptionCommandKind.vacation_resume,
+    }:
+        from app.models.enforcement_lock import EnforcementLock
+
+        lock: EnforcementLock | None = None
+        if command.kind == SubscriptionCommandKind.vacation_resume:
+            raw_lock_id = str(command.idempotency_key or "").rsplit(":", 1)[-1]
+            try:
+                lock = db.get(EnforcementLock, coerce_uuid(raw_lock_id))
+            except (TypeError, ValueError):
+                lock = None
+        else:
+            lock = db.scalar(
+                select(EnforcementLock)
+                .where(
+                    EnforcementLock.subscription_id
+                    == coerce_uuid(command.subscription_id),
+                    EnforcementLock.reason == EnforcementReason.customer_hold,
+                    EnforcementLock.source == command.source,
+                )
+                .order_by(EnforcementLock.created_at.desc())
+            )
+        if (
+            lock is not None
+            and lock.subscription_id == coerce_uuid(command.subscription_id)
+            and lock.reason == EnforcementReason.customer_hold
+        ):
+            artifact_ids = (str(lock.id),)
     elif command.effective_timing != SubscriptionEffectiveTiming.immediate:
         from app.models.subscription_lifecycle_schedule import (
             SubscriptionLifecycleSchedule,
@@ -829,6 +937,7 @@ def subscription_command_fingerprint(command: SubscriptionLifecycleCommand) -> s
         "expected_head": command.expected_head,
         "expected_financial_fingerprint": command.expected_financial_fingerprint,
         "expected_field_quote_fingerprint": command.expected_field_quote_fingerprint,
+        "vacation_hold_days": command.vacation_hold_days,
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()

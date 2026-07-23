@@ -268,15 +268,17 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.enforcement.cleanup_subscription_block_sessions": _c(
         "enforcement", SWEEP, IDEMP, HEALTH
     ),
-    "app.tasks.enforcement.detect_stale_overdue_locks": _c(
-        "enforcement", SWEEP, IDEMP, STATUS, "Dry-run detector; writes nothing."
-    ),
-    "app.tasks.enforcement.reconcile_account_status_drift": _c(
+    "app.tasks.enforcement.reconcile_billing_approval_drift": _c(
         "enforcement",
         SWEEP,
-        GUARDED,
-        STATUS,
-        "Beat-rerun self-heals; all-active cohort filter is the guard.",
+        PER_ITEM,
+        LOG,
+        "Permanent drift sweep; each account is locked and recomputed by the "
+        "billing-approval owner, failures are isolated, and the next beat pass "
+        "reselects any remaining active/unapproved account.",
+    ),
+    "app.tasks.enforcement.detect_stale_overdue_locks": _c(
+        "enforcement", SWEEP, IDEMP, STATUS, "Dry-run detector; writes nothing."
     ),
     "app.tasks.events.cleanup_old_events": _c("events", SWEEP, IDEMP, LOG),
     "app.tasks.events.dispatch_pending_events": _c(
@@ -488,7 +490,15 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.radius.connectivity_shadow_audit": _c("radius", SWEEP, IDEMP, HEALTH),
     "app.tasks.radius.reap_radacct_ghosts": _c("radius", SWEEP, IDEMP, HEALTH),
     "app.tasks.radius.reconcile_active_sessions": _c("radius", SWEEP, IDEMP, HEALTH),
-    "app.tasks.radius.run_enforcement_reconciler": _c("radius", STATE, GUARDED, STATUS),
+    "app.tasks.radius.run_enforcement_reconciler": _c(
+        "radius",
+        STATE,
+        GUARDED,
+        STATUS,
+        "Mandatory owner-driven recovery loop; isolates account errors, caps "
+        "disconnects, requests one idempotent projection refresh, and records "
+        "a degraded outcome until desired and observed access converge.",
+    ),
     "app.tasks.radius.run_radius_sync_job": _c("radius", SWEEP, IDEMP, STATUS),
     "app.tasks.radius_population.refresh_radius_from_subs": _c(
         "radius", SWEEP, IDEMP, STATUS
@@ -638,7 +648,15 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.tr069.refresh_single_ont_runtime": _c("tr069", MANUAL, IDEMP, STATUS),
     "app.tasks.tr069.scrape_genieacs_metrics": _c("tr069", SWEEP, IDEMP, HEALTH),
     "app.tasks.tr069.setup_genieacs": _c("tr069", MANUAL, GUARDED, STATUS),
-    "app.tasks.tr069.sync_all_acs_devices": _c("tr069", SWEEP, IDEMP, HEALTH),
+    "app.tasks.tr069.sync_all_acs_devices": _c(
+        "tr069",
+        AUTORETRY,
+        IDEMP,
+        HEALTH,
+        "A complete pass records duration, server counts, and freshness. "
+        "Timeouts, unexpected failures, and partial server passes retry after "
+        "1m/5m/15m; the periodic schedule remains the recovery backstop.",
+    ),
     "app.tasks.tr069.wait_for_ont_bootstrap": _c("tr069", STATE, STATEFUL, STATUS),
     "app.tasks.usage.evaluate_fup_rules": _c("usage", STATE, GUARDED, HEALTH),
     "app.tasks.usage.import_radius_accounting": _c("usage", SWEEP, PER_ITEM, HEALTH),

@@ -30,7 +30,6 @@ commit 5 app/tasks/ont_runtime_status.py
 commit 1 app/tasks/ont_signal_observations.py
 commit 2 app/tasks/radius.py
 commit 26 app/tasks/router_sync.py
-commit 3 app/tasks/team_inbox.py
 commit 1 app/tasks/topology_lldp.py
 commit 1 app/tasks/topology_outage.py
 commit 1 app/tasks/topology_ufiber_link.py
@@ -40,7 +39,6 @@ commit 7 app/tasks/uisp_control.py
 commit 1 app/tasks/uisp_ip_backfill.py
 commit 1 app/tasks/unmatched_radio.py
 commit 2 app/tasks/usage.py
-commit 1 app/tasks/vacation_holds.py
 commit 2 app/web/admin/catalog.py
 commit 2 app/web/admin/customers.py
 commit 1 app/web/admin/dashboard.py
@@ -51,8 +49,6 @@ commit 3 app/web/admin/network_olts_profiles.py
 commit 1 app/web/admin/network_onts_actions.py
 commit 2 app/web/admin/network_operations.py
 commit 2 app/web/admin/reports.py
-commit 4 app/web/admin/support_assignment_rules.py
-commit 4 app/web/admin/support_automation.py
 commit 1 app/web/admin/system.py
 commit 2 app/web/customer/location.py
 flush 1 app/services/events/handlers/enforcement.py
@@ -98,7 +94,6 @@ rollback 11 app/tasks/tr069.py
 rollback 3 app/tasks/uisp_control.py
 rollback 4 app/tasks/uisp_ip_backfill.py
 rollback 1 app/tasks/unmatched_radio.py
-rollback 1 app/tasks/vacation_holds.py
 rollback 2 app/web/admin/billing_accounts.py
 rollback 2 app/web/admin/billing_consolidated.py
 rollback 2 app/web/admin/billing_credits.py
@@ -114,11 +109,8 @@ rollback 6 app/web/admin/notifications.py
 rollback 9 app/web/admin/projects.py
 rollback 5 app/web/admin/resellers.py
 rollback 6 app/web/admin/sales.py
-rollback 2 app/web/admin/support_assignment_rules.py
-rollback 2 app/web/admin/support_automation.py
 rollback 4 app/web/admin/support_tickets.py
-rollback 24 app/web/admin/system.py
+rollback 22 app/web/admin/system.py
 rollback 2 app/web/admin/vendors.py
 rollback 2 app/web/customer/location.py
 rollback 5 app/web/customer/routes.py
-rollback 2 app/web/public/ticket_confirm.py

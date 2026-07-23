@@ -1,6 +1,6 @@
 # Customer Self-Service Lifecycle
 
-Status: approved target; migration in progress
+Status: implemented
 
 ## Contract
 
@@ -36,6 +36,7 @@ downstream records; none may independently decide the customer lifecycle.
 | Support-to-field handoff | `support.ticket_work_order_handoff` |
 | Work-order execution | `operations.work_order_commands` |
 | Provisioning readiness/result | `operations.provisioning_lifecycle` |
+| Deferred change payment admission, fulfillment release, and verified finalization | `service_intent.subscription_change_execution` |
 | Cross-surface read projection | `ui.portal_account_health_projection` |
 
 ## Change classes
@@ -120,16 +121,49 @@ Completed in this slice:
 - Fixed-wireless/radio relocation is serviceability-qualified and catalog-
   priced, and confirmation remains `awaiting_payment` without prematurely
   changing the subscription.
+- Priced relocation confirmation creates and structurally links the exact
+  issued invoice. Canonical paid-invoice allocation evidence advances the
+  locked request from `awaiting_payment` and creates one idempotent service
+  order plus native work order; invoice status or memo text alone is never
+  settlement evidence.
+- Relocation work-order completion is now an explicit provisioning-readiness
+  input. The final address/offer application is admitted only from the
+  `activated` readiness decision for the exact linked service order, and the
+  request preserves invoice, payment, service-order, work-order, and readiness
+  identifiers for audit and repair.
+- The execution owner exposes deterministic drift audit and idempotent repair
+  for paid-but-unreleased and verified-but-not-finalized requests; it never
+  repairs from memo text, portal state, or unverified provider payloads.
+- Remote reprovisioning now resolves exactly one catalog-linked target RADIUS
+  profile and one active subscription credential. It stages that desired
+  profile without changing the live offer, then accepts completion only when
+  the exact subscription-scoped RADIUS user carries that profile with a sync
+  watermark after the request. The structural profile/user links and
+  verification time remain available for replay, drift audit, and repair.
+- Vacation hold and resume are explicit subscription lifecycle commands. The
+  lifecycle policy owner resolves duration, annual-use, cooldown, active-lock,
+  and subscription-status eligibility from canonical settings and exact
+  `customer_hold` lock history. Customer, admin, and automatic-expiry adapters
+  now delegate to the same locked, reviewed-head, idempotent command and retain
+  the exact enforcement-lock identifier in the outcome.
+- Customer reboot and Wi-Fi updates now enter one subscription-scoped command
+  boundary. It proves the authenticated subscriber, active subscription, and
+  exact active non-UISP ONT assignment before invoking the network operation
+  ledger. Web and `/api/v1/me` expose the same typed command, status,
+  subscription, device, operation, and message outcome; mobile provides both
+  actions and renders that canonical outcome without inferring device state.
+- Superseded customer device-command wrappers and their duplicate cooldown and
+  validation decisions are retired; web routes, API, and mobile enter the
+  canonical scoped owner directly.
+- Operators now have a permission-gated service-change reconciliation surface.
+  Its read-only inspection reports bounded canonical drift with a reviewed
+  evidence head. Repair requires that exact head, a durable idempotency key,
+  actor, and reason, then resumes only from structural payment, fulfillment,
+  RADIUS, or provisioning evidence. A crash after payment settlement but before
+  fulfillment release is explicitly detectable and repairable.
 
-Still required before this lifecycle is complete:
-
-- implement the remote provisioning verifier and the field fulfillment/service
-  order handoff; for a priced relocation this includes invoice/payment evidence,
-  then a service order and work order, and finally a subscription command only
-  after verified delivery;
-- route vacation hold/resume through the lifecycle command owner;
-- expose scoped reboot/Wi-Fi command outcomes consistently on web and mobile;
-- remove the superseded customer-route decisions and add repair/audit tooling.
+The lifecycle migration is complete. Further changes extend this contract and
+must preserve these owners rather than introduce compatibility writers.
 
 No compatibility response or fallback will be retained after each in-repository
 consumer is migrated and the cutover gate is green.

@@ -21,14 +21,9 @@ def cleanup_subscription_block_sessions(
     )
 
 
-@celery_app.task(name="app.tasks.enforcement.reconcile_account_status_drift")
-def reconcile_account_status_drift() -> dict[str, int]:
-    """Repair safe ``new``/``blocked`` parent drift for all-active services.
-
-    The all-active cohort filter is the guard; mixed-status accounts are
-    excluded. Pure service-state - no money writes.
-    """
-    return enforcement_scheduled.reconcile_account_status_drift()
+@celery_app.task(name="app.tasks.enforcement.reconcile_billing_approval_drift")
+def reconcile_billing_approval_drift() -> dict[str, int]:
+    return enforcement_scheduled.reconcile_billing_approval_drift()
 
 
 @celery_app.task(name="app.tasks.enforcement.detect_stale_overdue_locks")

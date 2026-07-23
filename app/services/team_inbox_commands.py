@@ -21,6 +21,7 @@ from app.models.team_inbox import (
     InboxConversation,
     InboxConversationStatus,
     InboxMessage,
+    InboxSavedFilter,
 )
 from app.services import (
     team_inbox_contact_links,
@@ -28,25 +29,56 @@ from app.services import (
     team_inbox_outbound,
 )
 from app.services.common import coerce_uuid
+from app.services.domain_errors import DomainError
+from app.services.owner_commands import (
+    CommandContext,
+    OwnerCommandDefinition,
+    execute_owner_command,
+)
 
 T = TypeVar("T")
 
 
-class InboxCommandError(ValueError):
+OWNER = "communications.team_inbox_commands"
+_ADMIN_MUTATION = OwnerCommandDefinition(
+    owner=OWNER,
+    concern="operator conversation and collaboration commands",
+    name="execute_team_inbox_admin_mutation",
+)
+
+
+class InboxCommandError(DomainError, ValueError):
     """Base error safe for an admin adapter to render."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        suffix: str = "rejected",
+        details: dict[str, object] | None = None,
+    ) -> None:
+        super().__init__(code=f"{OWNER}.{suffix}", message=message, details=details)
 
 
 class ConversationNotFoundError(InboxCommandError):
-    pass
+    def __init__(self, message: str = "Conversation not found.") -> None:
+        super().__init__(message, suffix="conversation_not_found")
 
 
 class MessageNotFoundError(InboxCommandError):
-    pass
+    def __init__(self, message: str = "Message not found.") -> None:
+        super().__init__(message, suffix="message_not_found")
 
 
 class InboxCommandRejected(InboxCommandError):
     def __init__(self, message: str, *, conversation_id: UUID | str | None = None):
-        super().__init__(message)
+        super().__init__(
+            message,
+            suffix="command_rejected",
+            details={"conversation_id": str(conversation_id)}
+            if conversation_id
+            else None,
+        )
         self.conversation_id = str(conversation_id) if conversation_id else None
 
 
@@ -55,6 +87,7 @@ class ReplyOutcome:
     conversation_id: str
     kind: str
     sender: str
+    replayed: bool = False
 
 
 @dataclass(frozen=True)
@@ -76,21 +109,40 @@ class StatusOutcome:
     already_set: bool
 
 
-def _commit(db: Session, action: Callable[[], T]) -> T:
-    try:
-        result = action()
-        db.commit()
-        return result
-    except Exception:
-        db.rollback()
-        raise
-
-
-def _active_conversation(db: Session, conversation_id: str | UUID) -> InboxConversation:
-    conversation_uuid = coerce_uuid(conversation_id)
-    conversation = (
-        db.get(InboxConversation, conversation_uuid) if conversation_uuid else None
+def _commit(
+    db: Session,
+    action: Callable[[], T],
+    *,
+    context: CommandContext | None = None,
+) -> T:
+    command_context = context or CommandContext.system(
+        actor="system:team-inbox-admin-adapter",
+        scope="team-inbox:operator-command",
+        reason="execute typed Team Inbox operator command",
     )
+    return execute_owner_command(
+        db,
+        definition=_ADMIN_MUTATION,
+        context=command_context,
+        operation=action,
+    )
+
+
+def _active_conversation(
+    db: Session,
+    conversation_id: str | UUID,
+    *,
+    for_update: bool = False,
+) -> InboxConversation:
+    conversation_uuid = coerce_uuid(conversation_id)
+    conversation = None
+    if conversation_uuid is not None:
+        query = db.query(InboxConversation).filter(
+            InboxConversation.id == conversation_uuid
+        )
+        if for_update:
+            query = query.with_for_update()
+        conversation = query.one_or_none()
     if conversation is None or not conversation.is_active:
         raise ConversationNotFoundError("Conversation not found.")
     return conversation
@@ -104,10 +156,61 @@ def reply(
     actor_person_id: str | UUID | None,
     macro_id: str | UUID | None = None,
     template_id: str | UUID | None = None,
+    idempotency_key: str | None = None,
+    reply_to_message_id: str | UUID | None = None,
 ) -> ReplyOutcome:
     def action() -> ReplyOutcome:
-        conversation = _active_conversation(db, conversation_id)
+        conversation = _active_conversation(db, conversation_id, for_update=True)
         clean_body = str(body_text or "").strip()
+        clean_idempotency_key = str(idempotency_key or "").strip()
+        reply_to_uuid = coerce_uuid(reply_to_message_id)
+        if reply_to_message_id and reply_to_uuid is None:
+            raise InboxCommandRejected(
+                "Quoted message is invalid.",
+                conversation_id=conversation.id,
+            )
+        if len(clean_idempotency_key) > 200:
+            raise InboxCommandError("Reply idempotency key is too long.")
+        if clean_idempotency_key:
+            previous = (
+                db.query(InboxMessage)
+                .filter(InboxMessage.conversation_id == conversation.id)
+                .filter(InboxMessage.direction == "outbound")
+                .filter(
+                    InboxMessage.metadata_["idempotency_key"].as_string()
+                    == clean_idempotency_key
+                )
+                .order_by(InboxMessage.created_at.desc())
+                .first()
+            )
+            if previous is not None:
+                previous_body = str(
+                    (previous.metadata_ or {}).get("body_text") or ""
+                ).strip()
+                previous_reply = (previous.metadata_ or {}).get("reply_to")
+                previous_reply_id = (
+                    str(previous_reply.get("message_id") or "")
+                    if isinstance(previous_reply, dict)
+                    else ""
+                )
+                requested_reply_id = str(reply_to_uuid) if reply_to_uuid else ""
+                if (
+                    previous_body
+                    and previous_body != clean_body
+                    or previous_reply_id != requested_reply_id
+                ):
+                    raise InboxCommandRejected(
+                        "This send key was already used for a different reply.",
+                        conversation_id=conversation.id,
+                    )
+                return ReplyOutcome(
+                    conversation_id=str(conversation.id),
+                    kind=str(
+                        (previous.metadata_ or {}).get("delivery_status") or "queued"
+                    ),
+                    sender=previous.from_address or "team sender",
+                    replayed=True,
+                )
         template = None
         clean_template_id = (
             str(template_id).strip()
@@ -129,7 +232,28 @@ def reply(
         reply_metadata: dict[str, object] = {
             "source_route": "admin_inbox_detail_reply",
             "template_id": str(template.id) if template is not None else None,
+            "idempotency_key": clean_idempotency_key or None,
         }
+        if reply_to_uuid is not None:
+            quoted_message = db.get(InboxMessage, reply_to_uuid)
+            if (
+                quoted_message is None
+                or quoted_message.conversation_id != conversation.id
+            ):
+                raise InboxCommandRejected(
+                    "Quoted message does not belong to this conversation.",
+                    conversation_id=conversation.id,
+                )
+            reply_metadata["reply_to"] = {
+                "message_id": str(quoted_message.id),
+                "author": quoted_message.from_address
+                or (
+                    "Support agent"
+                    if quoted_message.direction == "outbound"
+                    else "Customer"
+                ),
+                "excerpt": str(quoted_message.body or "")[:240],
+            }
         if (
             template is not None
             and conversation.channel_type == InboxChannelType.whatsapp.value
@@ -353,12 +477,32 @@ def save_filter(
     )
 
 
+def delete_filter(
+    db: Session,
+    *,
+    filter_id: str | UUID,
+    actor_person_id: str | UUID | None,
+) -> None:
+    def action() -> None:
+        filter_uuid = coerce_uuid(filter_id)
+        actor_uuid = coerce_uuid(actor_person_id)
+        saved_filter = db.get(InboxSavedFilter, filter_uuid) if filter_uuid else None
+        if saved_filter is None or not saved_filter.is_active:
+            raise InboxCommandError("Saved filter not found.")
+        if actor_uuid is None or saved_filter.owner_person_id != actor_uuid:
+            raise InboxCommandRejected("Only the saved view owner can delete it.")
+        team_inbox_operations.delete_saved_filter(db, filter_id=saved_filter.id)
+
+    _commit(db, action)
+
+
 def bulk_action(
     db: Session,
     *,
     conversation_ids: Sequence[str | UUID],
     action: str,
     status_value: str | None = None,
+    priority: int | None = None,
     label_id: str | UUID | None = None,
     service_team_id: str | UUID | None = None,
     assigned_person_id: str | UUID | None = None,
@@ -378,6 +522,15 @@ def bulk_action(
             )
             verb = "Updated"
             noun = "conversation statuses"
+        elif action == "priority":
+            result = team_inbox_operations.bulk_update_priority(
+                db,
+                conversation_ids=conversation_ids,
+                priority=priority,
+                actor_person_id=actor_person_id,
+            )
+            verb = "Updated priority for"
+            noun = "conversations"
         elif action == "label":
             result = team_inbox_operations.bulk_apply_label(
                 db,

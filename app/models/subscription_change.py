@@ -35,6 +35,18 @@ class SubscriptionChangeStatus(enum.Enum):
     canceled = "canceled"
 
 
+class SubscriptionChangeExecutionState(enum.Enum):
+    """Operational execution state for deferred service changes."""
+
+    awaiting_payment = "awaiting_payment"
+    payment_settled = "payment_settled"
+    fulfillment_released = "fulfillment_released"
+    provisioning = "provisioning"
+    provisioning_verified = "provisioning_verified"
+    completed = "completed"
+    failed = "failed"
+
+
 class SubscriptionChangeRequest(Base):
     """Durable intent, confirmation, and result evidence for one plan change.
 
@@ -94,6 +106,46 @@ class SubscriptionChangeRequest(Base):
     field_fee_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     field_fee_currency: Mapped[str | None] = mapped_column(String(3))
     field_quote_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    execution_state: Mapped[SubscriptionChangeExecutionState | None] = mapped_column(
+        Enum(
+            SubscriptionChangeExecutionState,
+            name="subscriptionchangeexecutionstate",
+        )
+    )
+    field_fee_invoice_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("invoices.id", ondelete="RESTRICT")
+    )
+    field_fee_payment_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("payments.id", ondelete="RESTRICT")
+    )
+    service_order_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("service_orders.id", ondelete="RESTRICT")
+    )
+    work_order_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("work_order.id", ondelete="RESTRICT")
+    )
+    provisioning_readiness_decision_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("provisioning_readiness_decisions.id", ondelete="RESTRICT"),
+    )
+    remote_radius_profile_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("radius_profiles.id", ondelete="RESTRICT")
+    )
+    remote_radius_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("radius_users.id", ondelete="RESTRICT")
+    )
+    remote_reprovision_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    payment_settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    provisioning_verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    reconciliation_idempotency_key_hash: Mapped[str | None] = mapped_column(String(64))
+    reconciliation_reviewed_head: Mapped[str | None] = mapped_column(String(64))
+    reconciliation_actor_id: Mapped[str | None] = mapped_column(String(120))
+    reconciliation_reason: Mapped[str | None] = mapped_column(Text)
+    reconciled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status: Mapped[SubscriptionChangeStatus] = mapped_column(
         Enum(SubscriptionChangeStatus), default=SubscriptionChangeStatus.pending
     )
@@ -155,6 +207,20 @@ class SubscriptionChangeRequest(Base):
         "ServiceQualification", foreign_keys=[service_qualification_id]
     )
     field_fee_offer = relationship("CatalogOffer", foreign_keys=[field_fee_offer_id])
+    field_fee_invoice = relationship("Invoice", foreign_keys=[field_fee_invoice_id])
+    field_fee_payment = relationship("Payment", foreign_keys=[field_fee_payment_id])
+    service_order = relationship("ServiceOrder", foreign_keys=[service_order_id])
+    work_order = relationship("WorkOrder", foreign_keys=[work_order_id])
+    provisioning_readiness_decision = relationship(
+        "ProvisioningReadinessDecision",
+        foreign_keys=[provisioning_readiness_decision_id],
+    )
+    remote_radius_profile = relationship(
+        "RadiusProfile", foreign_keys=[remote_radius_profile_id]
+    )
+    remote_radius_user = relationship(
+        "RadiusUser", foreign_keys=[remote_radius_user_id]
+    )
     requested_by = relationship("Subscriber", foreign_keys=[requested_by_subscriber_id])
     reviewed_by = relationship("Subscriber", foreign_keys=[reviewed_by_subscriber_id])
     account_adjustment = relationship(

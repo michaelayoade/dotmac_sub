@@ -5,7 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.db import get_db
+from app.db import finish_read_transaction, get_db
 from app.schemas.common import ListResponse
 from app.schemas.dispatch import WorkOrderHeaderRead
 from app.schemas.support import (
@@ -45,6 +45,9 @@ from app.services import (
     ticket_work_order_handoff,
 )
 from app.services.auth_dependencies import require_permission, require_user_auth
+from app.services.common import coerce_uuid
+from app.services.db_session_adapter import db_session_adapter
+from app.services.owner_commands import CommandContext
 
 router = APIRouter(prefix="/support", tags=["support"])
 
@@ -72,6 +75,7 @@ def create_ticket(
     auth=Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
+    db_session_adapter.release_read_transaction(db)
     return support_service.tickets.create(
         db, payload, actor_id=_actor_id(auth), request=None
     )
@@ -217,14 +221,30 @@ def issue_ticket_work_order(
     request_id: str | None = Header(default=None, alias="X-Request-ID"),
     db: Session = Depends(get_db),
 ):
+    actor_id = coerce_uuid(_actor_id(auth))
+    if actor_id is None:
+        raise HTTPException(status_code=403, detail="Authenticated actor required")
+    db_session_adapter.release_read_transaction(db)
     return ticket_work_order_handoff.issue_work_order(
         db,
-        ticket_id,
-        payload,
-        actor_id=_actor_id(auth),
-        auth=auth,
-        idempotency_key=idempotency_key,
-        request_id=request_id,
+        ticket_work_order_handoff.TicketWorkOrderIssueCommand(
+            ticket_id=ticket_id,
+            request=payload,
+            actor_id=actor_id,
+            actor_type=ticket_work_order_handoff.HandoffActorType(
+                str(auth.get("principal_type") or "system_user")
+            ),
+            permissions=frozenset(
+                {"support:ticket:update", "operations:dispatch:write"}
+            ),
+            context=CommandContext.system(
+                actor=str(actor_id),
+                scope=ticket_work_order_handoff.WORK_ORDER_ISSUE_SCOPE,
+                reason=payload.reason,
+                idempotency_key=idempotency_key,
+            ),
+            request_id=request_id,
+        ),
     ).work_order
 
 
@@ -239,6 +259,7 @@ def update_ticket(
     auth=Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
+    db_session_adapter.release_read_transaction(db)
     return support_service.tickets.update(
         db, str(ticket_id), payload, actor_id=_actor_id(auth), request=None
     )
@@ -252,6 +273,7 @@ def update_ticket(
 def soft_delete_ticket(
     ticket_id: UUID, auth=Depends(require_user_auth), db: Session = Depends(get_db)
 ):
+    db_session_adapter.release_read_transaction(db)
     support_service.tickets.soft_delete(
         db, str(ticket_id), actor_id=_actor_id(auth), request=None
     )
@@ -267,6 +289,7 @@ def bulk_update_tickets(
     auth=Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
+    db_session_adapter.release_read_transaction(db)
     items = support_service.tickets.bulk_update(
         db, payload, actor_id=_actor_id(auth), request=None
     )
@@ -280,6 +303,7 @@ def bulk_update_tickets(
 def manual_auto_assign(
     ticket_id: UUID, auth=Depends(require_user_auth), db: Session = Depends(get_db)
 ):
+    db_session_adapter.release_read_transaction(db)
     return support_service.tickets.manual_auto_assign(
         db, str(ticket_id), actor_id=_actor_id(auth), request=None
     )
@@ -297,6 +321,7 @@ def escalate_inbox_conversation(
     db: Session = Depends(get_db),
 ):
     actor_id = _actor_id(auth)
+    finish_read_transaction(db)
     result = team_inbox_assignment.escalate_conversation_committed(
         db,
         conversation_id=conversation_id,
@@ -412,6 +437,7 @@ def reply_to_inbox_conversation(
     auth=Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
+    finish_read_transaction(db)
     result = team_inbox_outbound.send_inbox_reply_for_conversation_committed(
         db,
         conversation_id=conversation_id,
@@ -469,6 +495,7 @@ def link_inbox_conversation_contact(
     auth=Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
+    finish_read_transaction(db)
     try:
         result = team_inbox_contact_links.link_conversation_contact_by_id_committed(
             db,
@@ -506,6 +533,7 @@ def create_ticket_link(
     auth=Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
+    db_session_adapter.release_read_transaction(db)
     return support_service.tickets.link_ticket(
         db,
         from_ticket_id=str(ticket_id),
@@ -530,6 +558,7 @@ def merge_ticket(
     auth=Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
+    db_session_adapter.release_read_transaction(db)
     return support_service.tickets.merge(
         db,
         str(ticket_id),
@@ -551,6 +580,7 @@ def create_comment(
     auth=Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
+    db_session_adapter.release_read_transaction(db)
     return support_service.tickets.create_comment(
         db,
         str(ticket_id),
@@ -572,6 +602,7 @@ def bulk_create_comments(
     auth=Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
+    db_session_adapter.release_read_transaction(db)
     items = support_service.tickets.bulk_create_comments(
         db,
         str(ticket_id),
@@ -626,6 +657,7 @@ def update_comment(
     comment = support_service.ticket_comments.get(db, str(comment_id))
     if str(comment.ticket_id) != str(ticket_id):
         raise HTTPException(status_code=404, detail="Ticket comment not found")
+    db_session_adapter.release_read_transaction(db)
     return support_service.ticket_comments.update(
         db, comment=comment, payload=payload, actor_id=_actor_id(auth), request=None
     )
@@ -645,6 +677,7 @@ def delete_comment(
     comment = support_service.ticket_comments.get(db, str(comment_id))
     if str(comment.ticket_id) != str(ticket_id):
         raise HTTPException(status_code=404, detail="Ticket comment not found")
+    db_session_adapter.release_read_transaction(db)
     support_service.ticket_comments.delete(
         db, comment=comment, actor_id=_actor_id(auth), request=None
     )
@@ -657,6 +690,7 @@ def delete_comment(
     dependencies=[Depends(require_permission("support:ticket:update"))],
 )
 def create_sla_event(payload: TicketSlaEventCreate, db: Session = Depends(get_db)):
+    db_session_adapter.release_read_transaction(db)
     return support_service.ticket_sla_events.create(db, payload)
 
 
@@ -695,6 +729,7 @@ def update_sla_event(
     event_id: UUID, payload: TicketSlaEventUpdate, db: Session = Depends(get_db)
 ):
     event = support_service.ticket_sla_events.get(db, str(event_id))
+    db_session_adapter.release_read_transaction(db)
     return support_service.ticket_sla_events.update(db, event, payload)
 
 
@@ -705,4 +740,5 @@ def update_sla_event(
 )
 def delete_sla_event(event_id: UUID, db: Session = Depends(get_db)):
     event = support_service.ticket_sla_events.get(db, str(event_id))
+    db_session_adapter.release_read_transaction(db)
     support_service.ticket_sla_events.delete(db, event)

@@ -27,6 +27,7 @@ from app.services.service_entitlements import (
 )
 from tests.prepaid_funding_helpers import (
     TEST_PREPAID_POSITION_AT,
+    ensure_test_prepaid_contract,
     materialize_test_prepaid_opening_balance,
     materialize_test_prepaid_opening_balances,
 )
@@ -101,6 +102,7 @@ def _make_prepaid(db, account, subscription, *, credit: Decimal, min_balance="10
     account.billing_enabled = True
     subscription.status = SubscriptionStatus.active
     subscription.billing_mode = BillingMode.prepaid
+    ensure_test_prepaid_contract(db, subscription)
     db.commit()
     materialize_test_prepaid_opening_balance(db, account.id, credit)
 
@@ -142,6 +144,26 @@ def test_missing_control_rows_do_not_disable_sweep(
     assert subscriber_account.prepaid_low_balance_at is not None
     assert subscriber_account.prepaid_deactivation_at is not None
     assert subscription.status == SubscriptionStatus.suspended
+
+
+def test_missing_contract_price_is_typed_and_never_suspends(
+    db_session, subscriber_account, subscription
+):
+    _make_prepaid(db_session, subscriber_account, subscription, credit=Decimal("0"))
+    subscription.unit_price = None
+    db_session.commit()
+
+    result = run_prepaid_balance_sweep(db_session, now=_MONDAY_NOON)
+
+    db_session.refresh(subscriber_account)
+    db_session.refresh(subscription)
+    assert result["renewal_terms_unresolved"] == 1
+    assert result["suspended"] == 0
+    assert subscription.status == SubscriptionStatus.active
+    assert subscriber_account.prepaid_low_balance_at is None
+    assert subscriber_account.prepaid_deactivation_at is None
+    assert _prepaid_locks(db_session, subscription) == []
+    assert _notices(db_session, subscriber_account) == []
 
 
 def test_subscription_account_mode_mismatch_blocks_prepaid_enforcement(

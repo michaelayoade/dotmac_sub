@@ -31,6 +31,7 @@ from app.services.account_lifecycle import (
     transition_account_status,
 )
 from app.services.events import emit_event
+from app.services.events.dispatcher import EventDispatcher
 from app.services.events.types import EventType
 
 
@@ -674,7 +675,10 @@ class TestComputeAccountStatus:
 
         subscriber = _make_subscriber(db_session)
         offer = _make_offer(db_session)
-        _make_subscription(db_session, subscriber, offer)
+        subscription = _make_subscription(db_session, subscriber, offer)
+        from tests.prepaid_funding_helpers import ensure_test_prepaid_contract
+
+        ensure_test_prepaid_contract(db_session, subscription)
         self._add_open_ar_and_credit(db_session, subscriber, ar=5000, credit=8000)
         db_session.add(
             DunningCase(account_id=subscriber.id, status=DunningCaseStatus.open)
@@ -692,7 +696,10 @@ class TestComputeAccountStatus:
 
         subscriber = _make_subscriber(db_session)
         offer = _make_offer(db_session)
-        _make_subscription(db_session, subscriber, offer)
+        subscription = _make_subscription(db_session, subscriber, offer)
+        from tests.prepaid_funding_helpers import ensure_test_prepaid_contract
+
+        ensure_test_prepaid_contract(db_session, subscription)
         self._add_open_ar_and_credit(db_session, subscriber, ar=5000, credit=2000)
         db_session.add(
             DunningCase(account_id=subscriber.id, status=DunningCaseStatus.open)
@@ -1095,6 +1102,97 @@ class TestEventEmission:
         event_types = [e[0] for e in emitted]
         assert EventType.enforcement_lock_resolved in event_types
         assert EventType.subscription_resumed in event_types
+
+    def test_suspend_delivery_waits_for_commit(self, db_session, monkeypatch):
+        """Lifecycle consequences cannot escape before the lock transaction."""
+        dispatched: list[uuid.UUID] = []
+
+        def record_dispatch(_self, _db, event_store_id):  # noqa: ANN001
+            dispatched.append(event_store_id)
+            return True
+
+        monkeypatch.setattr(
+            EventDispatcher,
+            "dispatch_pending_event",
+            record_dispatch,
+        )
+        subscriber = _make_subscriber(db_session)
+        offer = _make_offer(db_session)
+        subscription = _make_subscription(db_session, subscriber, offer)
+
+        suspend_subscription(
+            db_session,
+            str(subscription.id),
+            reason=EnforcementReason.overdue,
+            source="test:post-commit-suspend",
+            emit=True,
+        )
+
+        assert dispatched == []
+        db_session.commit()
+        assert len(dispatched) == 2
+
+    def test_rolled_back_suspend_has_no_delivery(self, db_session, monkeypatch):
+        dispatched: list[uuid.UUID] = []
+
+        def record_dispatch(_self, _db, event_store_id):  # noqa: ANN001
+            dispatched.append(event_store_id)
+            return True
+
+        monkeypatch.setattr(
+            EventDispatcher,
+            "dispatch_pending_event",
+            record_dispatch,
+        )
+        subscriber = _make_subscriber(db_session)
+        offer = _make_offer(db_session)
+        subscription = _make_subscription(db_session, subscriber, offer)
+
+        suspend_subscription(
+            db_session,
+            str(subscription.id),
+            reason=EnforcementReason.overdue,
+            source="test:rollback-suspend",
+            emit=True,
+        )
+        db_session.rollback()
+
+        assert dispatched == []
+
+    def test_rolled_back_restore_has_no_delivery(self, db_session, monkeypatch):
+        subscriber = _make_subscriber(db_session)
+        offer = _make_offer(db_session)
+        subscription = _make_subscription(db_session, subscriber, offer)
+        suspend_subscription(
+            db_session,
+            str(subscription.id),
+            reason=EnforcementReason.overdue,
+            source="test:restore-setup",
+            emit=False,
+        )
+        db_session.commit()
+        dispatched: list[uuid.UUID] = []
+
+        def record_dispatch(_self, _db, event_store_id):  # noqa: ANN001
+            dispatched.append(event_store_id)
+            return True
+
+        monkeypatch.setattr(
+            EventDispatcher,
+            "dispatch_pending_event",
+            record_dispatch,
+        )
+
+        assert restore_subscription(
+            db_session,
+            str(subscription.id),
+            trigger="payment",
+            resolved_by="test:rollback-restore",
+            emit=True,
+        )
+        db_session.rollback()
+
+        assert dispatched == []
 
 
 class TestAllowedRestorers:

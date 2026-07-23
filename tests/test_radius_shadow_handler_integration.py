@@ -12,6 +12,8 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
+import pytest
+
 from app.models.catalog import (
     AccessState,
     Subscription,
@@ -21,7 +23,10 @@ from app.services.enforcement_event_policy import (
     GroupRoutingPolicy,
     SessionRefreshPolicy,
 )
-from app.services.events.handlers.enforcement import EnforcementHandler
+from app.services.events.handlers.enforcement import (
+    EnforcementHandler,
+    EnforcementProjectionError,
+)
 from app.services.events.types import Event, EventType
 
 
@@ -116,9 +121,8 @@ class TestShadowWriteFeatureFlagGate:
 
         mock_set.assert_called_once_with(db, str(sub.id), AccessState.suspended)
 
-    def test_set_failure_is_swallowed_not_raised(self):
-        """A failing shadow write must not break the caller — the legacy
-        block path is still authoritative."""
+    def test_set_failure_propagates_for_durable_retry(self):
+        """An incomplete projection must keep the durable event retryable."""
         handler = EnforcementHandler()
         db = MagicMock()
         sub = _stub_subscription()
@@ -134,8 +138,9 @@ class TestShadowWriteFeatureFlagGate:
                 "app.services.events.handlers.enforcement.set_subscription_access_state",
                 side_effect=RuntimeError("external DB down"),
             ),
+            pytest.raises(RuntimeError, match="external DB down"),
         ):
-            handler._shadow_write_access_state(db, str(sub.id))  # must not raise
+            handler._shadow_write_access_state(db, str(sub.id))
 
     def test_missing_subscription_returns_without_calling_set(self):
         handler = EnforcementHandler()
@@ -179,7 +184,7 @@ class TestBlockHandlerInvokesShadowWrite:
 
         mock_shadow.assert_called_once_with(db, str(sub.id))
 
-    def test_projection_failure_suppresses_session_cleanup(self):
+    def test_projection_failure_suppresses_cleanup_and_remains_retryable(self):
         handler = EnforcementHandler()
         db = MagicMock()
         sub = _stub_subscription(status=SubscriptionStatus.suspended)
@@ -193,6 +198,7 @@ class TestBlockHandlerInvokesShadowWrite:
             ),
             patch.object(handler, "_shadow_write_access_state"),
             patch.object(handler, "_enqueue_subscription_session_cleanup") as cleanup,
+            pytest.raises(EnforcementProjectionError, match="projection incomplete"),
         ):
             handler._enforce_subscription_block(db, str(sub.id))
 
@@ -237,7 +243,7 @@ class TestRestoreHandlerInvokesShadowWrite:
 
         mock_shadow.assert_called_once_with(db, str(sub.id))
 
-    def test_projection_failure_suppresses_restore_coa_and_unblock(self):
+    def test_projection_failure_suppresses_restore_and_remains_retryable(self):
         handler = EnforcementHandler()
         db = MagicMock()
         sub = _stub_subscription(status=SubscriptionStatus.active)
@@ -264,6 +270,7 @@ class TestRestoreHandlerInvokesShadowWrite:
                 "app.services.events.handlers.enforcement."
                 "remove_subscription_address_list_block"
             ) as remove_block,
+            pytest.raises(EnforcementProjectionError, match="projection incomplete"),
         ):
             handler._handle_subscription_restore(db, event)
 

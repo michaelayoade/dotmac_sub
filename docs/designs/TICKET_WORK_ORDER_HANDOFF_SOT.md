@@ -58,10 +58,18 @@ New owner/path: `support.ticket_work_order_handoff` decides explicit issuance;
 `WorkOrder.origin_ticket_id` is the only native link.
 
 Migration `382_ticket_work_order_handoff` backfills only work orders that carry
-both sides of the retired automation evidence, clears the overloaded CRM value,
-and removes the duplicate ticket/work-order metadata keys. The migration is
-irreversible because a downgrade would restore parallel authority and a
-one-work-order cache that cannot represent the new cardinality.
+both sides of the retired native automation evidence, clears that overloaded
+native UUID value, and removes the duplicate ticket/work-order metadata keys.
+It deliberately leaves imported `WorkOrder.crm_ticket_id` provenance intact.
+
+Migration `406_support_ticket_work_order_provenance` then joins preserved CRM
+Work-Order provenance to the exact imported Ticket provenance in
+`Ticket.metadata.crm_ticket_id`, requires subscriber agreement, fails on
+duplicate or conflicting identity, and fills `origin_ticket_id` without
+clearing `crm_ticket_id`. Unmatched external rows remain provenance-only; the
+migration never guesses from titles, tags, or timestamps. Operator preflight,
+verification, and repair are documented in
+`docs/runbooks/TICKET_WORK_ORDER_PROVENANCE_CUTOVER.md`.
 
 Cutover gates are:
 
@@ -73,6 +81,7 @@ Cutover gates are:
 - field outcome evidence is written exactly once with the field event and does
   not change ticket status;
 - both ticket and dispatch projections link to the authoritative relationship.
+- historical exact CRM links have native origins while retaining their CRM ids.
 
 There is no runtime fallback. Repair consists of reconciling the native foreign
 key from retained audit evidence, never re-enabling tag automation or metadata

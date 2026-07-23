@@ -72,40 +72,89 @@
    Loads the detail into #triage-detail via HTMX; falls back to a
    normal link (which the server redirects to the workspace).
    ============================================================ #}
-{% macro conversation_list_item(row, active_id="") %}
+{% macro conversation_list_item(row, active_id="", agent_options=()) %}
 {% set is_active = (row.id | string) == (active_id | string) %}
-<a href="/admin/inbox/{{ row.id }}"
-   hx-get="/admin/inbox/{{ row.id }}"
-   hx-target="#triage-detail"
-   hx-swap="innerHTML"
-   hx-push-url="true"
-   class="conversation-item block border-b border-slate-100 px-4 py-3 transition-colors dark:border-slate-800/70
-          {% if is_active %}bg-accent-50 dark:bg-accent-900/20{% else %}hover:bg-slate-50 dark:hover:bg-slate-800/50{% endif %}"
-   {% if is_active %}aria-current="true"{% endif %}
-   data-conversation-id="{{ row.id }}">
-    <div class="flex items-start gap-2.5">
-        <span class="mt-1.5 h-2 w-2 shrink-0 rounded-full {% if row.needs_response %}status-tone-dot status-tone-dot-warning{% else %}bg-slate-300 dark:bg-slate-600{% endif %}"
-              {% if row.needs_response %}title="Needs response"{% endif %} aria-hidden="true"></span>
-        <div class="min-w-0 flex-1">
+{% set contact_name = row.contact_address or "(unknown contact)" %}
+{% set assignee = namespace(initials="") %}
+{% if row.active_assigned_person_id %}
+    {% for agent in agent_options %}
+        {% if (agent.id | string) == (row.active_assigned_person_id | string) %}
+            {% set assignee.initials = agent.initials %}
+        {% endif %}
+    {% endfor %}
+{% endif %}
+<article class="conversation-item group relative border-b border-slate-100 transition-colors dark:border-slate-800/70
+        {% if is_active %}border-l-[3px] border-l-amber-500 bg-amber-50 dark:bg-amber-950/25{% elif row.is_unread %}{% if row.channel_type == 'whatsapp' %}bg-emerald-50/60 dark:bg-emerald-950/15{% elif row.channel_type == 'email' %}bg-violet-50/60 dark:bg-violet-950/15{% else %}bg-amber-50/50 dark:bg-amber-950/10{% endif %}{% else %}border-l-[3px] border-l-transparent hover:bg-amber-50/60 dark:hover:bg-amber-950/15{% endif %}"
+         data-conversation-id="{{ row.id }}">
+    <div class="flex items-start gap-2.5 px-3 py-3">
+        <label class="mt-3 inline-flex h-10 w-6 shrink-0 cursor-pointer items-center justify-center" @click.stop>
+            <span class="sr-only">Select conversation with {{ contact_name }}</span>
+            <input type="checkbox" name="conversation_ids" value="{{ row.id }}" form="inbox-bulk-form"
+                   @change="toggleSelection('{{ row.id }}', $event.target.checked)"
+                   class="rounded border-slate-300 text-amber-500 focus:ring-amber-500">
+        </label>
+        <button type="button"
+                hx-get="/admin/inbox/{{ row.id }}/contact"
+                hx-target="#inbox-contact-content"
+                hx-swap="innerHTML"
+                @click.stop="openContact('{{ row.id }}')"
+                class="relative mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-200 text-xs font-bold uppercase text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 dark:bg-slate-700 dark:text-slate-100"
+                aria-label="Open contact details for {{ contact_name }}">
+            {{ contact_name[:2] | upper }}
+            <span class="absolute -bottom-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full border-2 border-white text-[9px] font-black text-white dark:border-slate-900
+                {% if row.channel_type == 'email' %}bg-violet-500{% elif row.channel_type == 'whatsapp' %}bg-emerald-500{% elif row.channel_type == 'sms' %}bg-orange-500{% elif row.channel_type == 'telegram' %}bg-sky-500{% elif row.channel_type == 'facebook' %}bg-blue-600{% elif row.channel_type == 'instagram' %}bg-pink-500{% else %}bg-amber-500{% endif %}"
+                title="{{ row.channel_type | replace('_',' ') | title }}">{{ row.channel_type[:1] | upper }}</span>
+        </button>
+        <a href="/admin/inbox?conversation_id={{ row.id }}"
+           hx-get="/admin/inbox/{{ row.id }}"
+           hx-target="#triage-detail"
+           hx-swap="innerHTML"
+           hx-push-url="/admin/inbox?conversation_id={{ row.id }}"
+           @click="selectConversation('{{ row.id }}', $event.currentTarget)"
+           class="min-w-0 flex-1 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
+           {% if is_active %}aria-current="true"{% endif %}>
             <div class="flex items-baseline justify-between gap-2">
-                <p class="truncate text-[13px] font-semibold text-slate-900 dark:text-white">{{ row.contact_address or "(unknown contact)" }}</p>
+                <p class="truncate text-[13px] {% if row.is_unread %}font-bold{% else %}font-semibold{% endif %} text-slate-950 dark:text-white">{{ contact_name }}</p>
                 <time class="shrink-0 text-[11px] tabular-nums text-slate-400 dark:text-slate-500">{{ ts(row.latest_message_at or row.last_message_at) }}</time>
             </div>
-            <p class="truncate text-xs text-slate-600 dark:text-slate-300">{{ row.subject or "(no subject)" }}</p>
+            {% if row.subscriber_id %}
+            <p class="truncate font-mono text-[10px] text-slate-400" title="{{ row.subscriber_id }}">Customer · {{ row.subscriber_id[:8] }}</p>
+            {% endif %}
+            {% if row.subject %}<p class="truncate text-xs font-medium text-slate-700 dark:text-slate-200">{{ row.subject }}</p>{% endif %}
             <p class="mt-0.5 line-clamp-1 text-xs text-slate-500 dark:text-slate-400">
                 {%- if row.latest_message_direction == 'outbound' %}<span class="text-slate-400 dark:text-slate-500">You: </span>{% endif -%}
-                {{ row.latest_message_body or "—" }}
+                {{ row.latest_message_body or "No message preview" }}
             </p>
-            <div class="mt-1.5 flex flex-wrap items-center gap-1.5">
+            <div class="mt-1.5 flex min-w-0 flex-wrap items-center gap-1.5">
                 {{ status_badge(row.status | replace('_', ' ') | title, row.status, size="sm", show_icon=False) }}
+                <span class="rounded-lg bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-300">{{ row.channel_type | replace('_',' ') | title }}</span>
+                {% if row.contact_resolution_status %}<span class="max-w-24 truncate rounded-lg bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500 dark:bg-slate-800">{{ row.contact_resolution_status | replace('_',' ') }}</span>{% endif %}
+                {% if row.priority <= 75 %}
+                    {% if row.priority == 0 %}{% set priority_label = "Urgent" %}
+                    {% elif row.priority <= 25 %}{% set priority_label = "High" %}
+                    {% elif row.priority <= 50 %}{% set priority_label = "Medium" %}
+                    {% else %}{% set priority_label = "Low" %}{% endif %}
+                    {{ status_badge(priority_label, "negative" if row.priority <= 25 else "warning", size="sm", show_icon=False) }}
+                {% endif %}
                 {% if row.latest_delivery_status == 'failed' %}{{ status_badge("Send failed", "negative", size="sm") }}{% endif %}
-                {% if row.is_snoozed %}{{ status_badge("Snoozed", "snoozed", size="sm", show_icon=False) }}{% endif %}
-                {% if row.is_muted %}{{ status_badge("Muted", "neutral", size="sm", show_icon=False) }}{% endif %}
-                <span class="ml-auto truncate text-[11px] text-slate-400 dark:text-slate-500">{{ row.primary_service_team_name or "Unrouted" }}</span>
+                {% if row.is_snoozed %}{{ status_badge("Snoozed", "neutral", size="sm", show_icon=False) }}{% endif %}
+                {% if row.is_muted %}<span title="Muted" aria-label="Muted">🔕</span>{% endif %}
+                {% if row.is_unread %}<span class="ml-auto inline-flex min-w-5 items-center justify-center rounded-lg bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold text-white" aria-label="Unread conversation">1</span>{% elif row.active_assigned_person_id %}<span class="ml-auto flex h-5 min-w-5 items-center justify-center rounded-lg bg-slate-200 px-1 text-[9px] font-bold text-slate-600 dark:bg-slate-700 dark:text-slate-200" title="Assigned agent">{{ assignee.initials or "AG" }}</span>{% endif %}
             </div>
-        </div>
+            {% if row.labels %}
+            <div class="mt-1 flex min-w-0 items-center gap-1">
+                {% for label in row.labels[:2] %}<span class="max-w-24 truncate rounded-lg bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">{{ label.name }}</span>{% endfor %}
+                {% if row.labels | length > 2 %}<span class="text-[10px] font-semibold text-slate-400">+{{ (row.labels | length) - 2 }}</span>{% endif %}
+            </div>
+            {% endif %}
+            {% if row.latest_delivery_status == 'failed' and row.latest_delivery_error %}<p class="mt-1 truncate text-[10px] font-medium text-rose-600 dark:text-rose-300" title="{{ row.latest_delivery_error }}">{{ row.latest_delivery_error }}</p>{% endif %}
+            <div class="mt-1 flex items-center justify-between gap-2 text-[10px] text-slate-400">
+                <span class="truncate">{{ row.primary_service_team_name or "Unrouted" }}</span>
+                {% if row.needs_response %}<span class="font-semibold text-amber-700 dark:text-amber-300">Needs reply</span>{% endif %}
+            </div>
+        </a>
     </div>
-</a>
+</article>
 {% endmacro %}
 
 {# ============================================================
@@ -117,51 +166,81 @@
    ============================================================ #}
 {% macro message_bubble(message) %}
 {% set dir = message.direction %}
-{% if dir == 'internal' %}
+{% set metadata = message.metadata or {} %}
+{% set system_event = metadata.get('system_event_type') %}
+{% if system_event %}
+<div class="flex items-center justify-center gap-2 py-1 text-center text-[11px] text-slate-500 dark:text-slate-400" role="note">
+    <span class="h-px w-8 bg-slate-200 dark:bg-slate-800"></span>
+    <span class="rounded-lg bg-slate-100 px-2.5 py-1 dark:bg-slate-900">{{ system_event | replace('_',' ') | title }} · {{ ts(message.created_at) }}</span>
+    <span class="h-px w-8 bg-slate-200 dark:bg-slate-800"></span>
+</div>
+{% elif dir == 'internal' %}
 <div class="mx-auto w-full max-w-2xl rounded-lg border border-amber-200/70 bg-amber-50/70 px-3.5 py-2.5 dark:border-amber-700/40 dark:bg-amber-900/15">
     <div class="mb-1 flex items-center gap-2">
         {{ status_badge("Internal note", "warning", size="sm") }}
         <time class="text-[11px] tabular-nums text-slate-400 dark:text-slate-500">{{ ts(message.created_at) }}</time>
     </div>
     <p class="whitespace-pre-wrap text-[13px] leading-relaxed text-slate-700 dark:text-slate-200">{{ message.body or "—" }}</p>
+    <p class="mt-1.5 text-[10px] font-medium text-amber-700 dark:text-amber-300">Private · never sent to the customer</p>
 </div>
 {% else %}
 {% set outbound = dir == 'outbound' %}
-<div class="flex {% if outbound %}justify-end{% endif %}">
+<div class="flex items-end gap-2 {% if outbound %}justify-end{% endif %}">
+    {% if not outbound %}<div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-slate-200 text-[10px] font-bold text-slate-600 dark:bg-slate-800 dark:text-slate-200">{{ (message.from_address or 'CU')[:2] | upper }}</div>{% endif %}
     <div class="max-w-[80%] min-w-0">
         <div class="mb-1 flex items-center gap-2 {% if outbound %}justify-end{% endif %}">
-            {{ status_badge(dir | title, ("positive" if outbound else "info"), size="sm", show_icon=False) }}
+            <span class="text-[11px] font-medium text-slate-500 dark:text-slate-400">{{ "Support agent" if outbound else (message.from_address or "Customer") }}</span>
             <time class="text-[11px] tabular-nums text-slate-400 dark:text-slate-500">{{ ts(message.sent_at or message.received_at or message.created_at) }}</time>
         </div>
         <div class="rounded-2xl px-3.5 py-2.5 text-[13px] leading-relaxed
-                    {% if outbound %}rounded-br-md bg-accent-600 text-white dark:bg-accent-600{% else %}rounded-bl-md border border-slate-200 bg-white text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100{% endif %}">
+                    {% if outbound %}rounded-br-md border border-amber-200 bg-amber-50 text-slate-900 dark:border-amber-800/60 dark:bg-amber-950/25 dark:text-slate-100{% else %}rounded-bl-md border border-slate-200 bg-slate-100 text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100{% endif %}">
+            {% if metadata.get('reply_to') %}
+            {% set reply = metadata.get('reply_to') %}
+            <div class="mb-2 rounded-lg border-l-4 border-amber-400 bg-white/70 px-2.5 py-2 text-[11px] text-slate-600 dark:bg-slate-900/50 dark:text-slate-300">
+                <p class="font-semibold">{{ reply.get('author') or "Previous message" }}</p>
+                <p class="line-clamp-2">{{ reply.get('excerpt') or "" }}</p>
+            </div>
+            {% endif %}
             <p class="whitespace-pre-wrap break-words">{{ message.body or "—" }}</p>
             {% if message.attachments %}
-            <div class="mt-2 flex flex-wrap gap-1.5">
+            <div class="mt-2 grid gap-2 sm:grid-cols-2">
                 {% for att in message.attachments %}
+                {% if att.mime_type and att.mime_type.startswith('image/') and (att.url or att.source_url or att.storage_url) %}
+                <a href="{{ att.url or att.source_url or att.storage_url }}" target="_blank" rel="noopener" class="block overflow-hidden rounded-lg border border-black/10">
+                    <img src="{{ att.url or att.source_url or att.storage_url }}" alt="{{ att.filename or att.file_name or 'Message image' }}" loading="lazy" class="max-h-56 w-full object-cover">
+                </a>
+                {% else %}
                 <a href="{{ att.url or att.source_url or att.storage_url or '#' }}" target="_blank" rel="noopener"
                    class="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-medium
-                          {% if outbound %}bg-white/20 text-white hover:bg-white/30{% else %}bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-200{% endif %}">
+                          bg-white/70 text-slate-700 hover:bg-white dark:bg-slate-700 dark:text-slate-200">
                     <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/></svg>
                     {{ att.filename or att.file_name or att.type or "Attachment" }}
                 </a>
+                {% endif %}
                 {% endfor %}
             </div>
             {% endif %}
         </div>
-        {% if not outbound and message.from_address %}
-        <p class="mt-1 text-[11px] text-slate-400 dark:text-slate-500">from {{ message.from_address }}</p>
-        {% endif %}
-        {% if message.metadata and message.metadata.get('delivery_status') == 'failed' %}
-        <div class="mt-1.5 flex items-center justify-end gap-2">
+        <div class="mt-1 flex items-center gap-2 {% if outbound %}justify-end{% endif %}">
+            {% if outbound %}
+            {% set delivery = metadata.get('delivery_status') or 'sent' %}
+            <span class="text-[10px] font-medium {% if delivery == 'failed' %}text-rose-600{% else %}text-slate-400{% endif %}">{{ delivery | title }}{% if metadata.get('read_at') %} · Read{% endif %}</span>
+            {% endif %}
+            <button type="button"
+                    @click='$dispatch("inbox-quote", {{ {"id": message.id, "author": ("Support agent" if outbound else (message.from_address or "Customer")), "excerpt": (message.body or "")[:120]} | tojson }})'
+                    class="min-h-8 rounded-md px-2 text-[10px] font-semibold text-slate-400 hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 dark:hover:bg-slate-800 dark:hover:text-slate-200">Quote</button>
+        </div>
+        {% if metadata.get('delivery_status') == 'failed' %}
+        <div class="mt-1.5 flex flex-wrap items-center justify-end gap-2">
             {{ status_badge("Delivery failed", "negative", size="sm") }}
-            {% if message.metadata.get('send_error') %}<span class="text-[11px] text-slate-500 dark:text-slate-400">{{ message.metadata.get('send_error') }}</span>{% endif %}
+            {% if metadata.get('send_error') %}<span class="text-[11px] text-slate-500 dark:text-slate-400">{{ metadata.get('send_error') }}</span>{% endif %}
             <form method="post" action="/admin/inbox/messages/{{ message.id }}/retry">
-                <button type="submit" class="rounded-md border border-slate-300 px-2 py-0.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">Retry</button>
+                <button type="submit" class="min-h-8 rounded-md border border-slate-300 px-2 text-[11px] font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">Retry</button>
             </form>
         </div>
         {% endif %}
     </div>
+    {% if outbound %}<div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-[10px] font-bold text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">AG</div>{% endif %}
 </div>
 {% endif %}
 {% endmacro %}

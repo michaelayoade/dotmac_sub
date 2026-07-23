@@ -306,6 +306,19 @@ def execute_owner_savepoint(
         db.info.pop(_AUTHORIZED_SAVEPOINT_KEY, None)
 
 
+def owner_command_active(db: Session, *, owner: str | None = None) -> bool:
+    """Return whether ``db`` is inside the requested public owner command.
+
+    Passing an owner prevents a participant owned by another service from
+    treating the current transaction as its own command boundary.
+    """
+
+    definition = db.info.get(_ACTIVE_COMMAND_KEY)
+    if definition is None:
+        return False
+    return owner is None or definition.owner == owner
+
+
 def execute_owner_command(
     db: Session,
     *,

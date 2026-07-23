@@ -20,9 +20,10 @@ class EventType(enum.Enum):
     Event naming convention: {entity}.{action}
     """
 
-    # Subscriber events (5)
+    # Subscriber events
     subscriber_created = "subscriber.created"
     subscriber_updated = "subscriber.updated"
+    subscriber_billing_approval_changed = "subscriber.billing_approval_changed"
     subscriber_suspended = "subscriber.suspended"
     subscriber_reactivated = "subscriber.reactivated"
     subscriber_throttled = "subscriber.throttled"

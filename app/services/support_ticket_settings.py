@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import re
+from functools import wraps
 from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy.orm import Session
 
+from app.models.audit import AuditActorType
 from app.models.domain_settings import SettingDomain
 from app.models.service_team import ServiceTeam, ServiceTeamMember, ServiceTeamType
 from app.models.subscription_engine import SettingValueType
@@ -13,6 +15,14 @@ from app.models.support import TicketStatus
 from app.models.ticket_workflow import TicketAssignmentRule, TicketAssignmentStrategy
 from app.schemas.settings import DomainSettingUpdate
 from app.services import domain_settings as domain_settings_service
+from app.services.audit_adapter import stage_audit_event
+from app.services.domain_errors import DomainError
+from app.services.owner_commands import (
+    CommandContext,
+    OwnerCommandDefinition,
+    execute_owner_command,
+    owner_command_active,
+)
 
 STATUS_OPTIONS_KEY = "support_ticket_status_options"
 PRIORITY_OPTIONS_KEY = "support_ticket_priority_options"
@@ -56,6 +66,60 @@ DEFAULT_SLA_POLICY = {
 TERMINAL_STATUSES = {"resolved", "closed", "canceled", "merged"}
 
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
+_CONFIGURATION_OWNER = "support.ticket_configuration"
+_CONFIGURATION_CONCERN = "ticket configuration mutations"
+
+
+class SupportTicketConfigurationError(DomainError):
+    """Transport-neutral ticket configuration error."""
+
+
+def _configuration_command(name: str):
+    definition = OwnerCommandDefinition(
+        owner=_CONFIGURATION_OWNER,
+        concern=_CONFIGURATION_CONCERN,
+        name=name,
+    )
+
+    def decorate(operation):
+        @wraps(operation)
+        def wrapped(db: Session, *args, **kwargs):
+            if owner_command_active(db, owner=_CONFIGURATION_OWNER):
+                return operation(db, *args, **kwargs)
+            if not owner_command_active(db):
+                from app.services.db_session_adapter import db_session_adapter
+
+                db_session_adapter.release_read_transaction(db)
+            context = CommandContext.system(
+                actor="support-settings-admin",
+                scope=f"support.ticket_configuration:{name}",
+                reason=f"change Ticket configuration via {name}",
+            )
+
+            def apply():
+                try:
+                    result = operation(db, *args, **kwargs)
+                except ValueError as exc:
+                    raise SupportTicketConfigurationError(
+                        code="ticket_configuration_invalid",
+                        message=str(exc),
+                    ) from exc
+                stage_audit_event(
+                    db,
+                    action="ticket.configuration_changed",
+                    entity_type="support_ticket_configuration",
+                    actor_type=AuditActorType.system,
+                    metadata={"owner": _CONFIGURATION_OWNER, "operation": name},
+                )
+                return result
+
+            return execute_owner_command(
+                db, definition=definition, context=context, operation=apply
+            )
+
+        return wrapped
+
+    return decorate
 
 
 def _settings_service():
@@ -138,7 +202,7 @@ def _write_list(
     )
     service = _settings_service()
     if getattr(service, "domain", None) is not None:
-        service.upsert_by_key(db, key, payload)
+        service.stage_upsert_by_key(db, key, payload)
         return
     domain_settings_service.settings.upsert_by_key(db, key, payload)
 
@@ -169,7 +233,7 @@ def _write_json(db: Session, *, key: str, value: Any) -> None:
     )
     service = _settings_service()
     if getattr(service, "domain", None) is not None:
-        service.upsert_by_key(db, key, payload)
+        service.stage_upsert_by_key(db, key, payload)
         return
     domain_settings_service.settings.upsert_by_key(db, key, payload)
 
@@ -185,7 +249,7 @@ def _write_bool(db: Session, *, key: str, value: bool) -> None:
     )
     service = _settings_service()
     if getattr(service, "domain", None) is not None:
-        service.upsert_by_key(db, key, payload)
+        service.stage_upsert_by_key(db, key, payload)
         return
     domain_settings_service.settings.upsert_by_key(db, key, payload)
 
@@ -203,7 +267,7 @@ def _write_optional_int(db: Session, *, key: str, value: int | None) -> None:
     )
     service = _settings_service()
     if getattr(service, "domain", None) is not None:
-        service.upsert_by_key(db, key, payload)
+        service.stage_upsert_by_key(db, key, payload)
         return
     domain_settings_service.settings.upsert_by_key(db, key, payload)
 
@@ -369,46 +433,43 @@ def create_assignment_rule(
         raise ValueError("Assignment strategy is invalid.")
     clean_team_id = _normalize_uuid(team_id)
     clean_assignee_id = _normalize_uuid(assignee_person_id)
-    config: dict[str, Any] = {"entity_types": ["ticket"]}
+    from app.services.ticket_assignment import admin as assignment_admin
+
     normalized_ticket_types = [
         str(item).strip() for item in ticket_types if str(item).strip()
     ]
     normalized_regions = [
         normalize_system_value(str(item)) for item in regions if str(item).strip()
     ]
-    if normalized_ticket_types:
-        config["ticket_types"] = normalized_ticket_types
-    if normalized_regions:
-        config["regions"] = normalized_regions
-    if clean_assignee_id:
-        config["assignee_person_id"] = clean_assignee_id
-        config["assignment_target"] = (
-            str(assignment_target or "technician").strip() or "technician"
-        )
-
-    rule = TicketAssignmentRule(
+    target = str(assignment_target or "technician").strip() or "technician"
+    return assignment_admin.create_rule(
+        db,
         name=clean_name,
         priority=_normalize_non_negative_int(priority),
-        is_active=is_active,
-        match_config=config,
         strategy=clean_strategy,
         team_id=UUID(clean_team_id) if clean_team_id else None,
+        is_active=is_active,
+        match_config=assignment_admin.TicketAssignmentRuleMatch(
+            entity_types=("ticket",),
+            ticket_types=tuple(normalized_ticket_types),
+            regions=tuple(normalized_regions),
+            assignee_person_id=UUID(clean_assignee_id) if clean_assignee_id else None,
+            assignment_target=(
+                assignment_admin.TicketAssignmentTarget(target)
+                if clean_assignee_id
+                else None
+            ),
+        ),
     )
-    db.add(rule)
-    db.commit()
-    db.refresh(rule)
-    return rule
 
 
 def delete_assignment_rule(db: Session, rule_id: str) -> None:
     clean_id = _normalize_uuid(rule_id)
     if not clean_id:
         raise ValueError("Assignment rule ID is invalid.")
-    rule = db.get(TicketAssignmentRule, UUID(clean_id))
-    if rule is None:
-        raise ValueError("Assignment rule not found.")
-    db.delete(rule)
-    db.commit()
+    from app.services.ticket_assignment import admin as assignment_admin
+
+    assignment_admin.delete_rule(db, UUID(clean_id))
 
 
 def list_status_options(db: Session) -> list[str]:
@@ -563,6 +624,7 @@ def ticket_type_sla_policy(db: Session) -> dict[str, int]:
     return policy
 
 
+@_configuration_command("update_ticket_configuration")
 def update_options(
     db: Session,
     *,
@@ -700,7 +762,7 @@ def update_options(
     else:
         members = service_team_members(db)
     _sync_service_team_tables(db, teams=teams, members=members)
-    db.commit()
+    db.flush()
     if sla_priorities is not None:
         policy: dict[str, dict[str, int]] = {}
         for index, priority_raw in enumerate(sla_priorities):

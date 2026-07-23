@@ -52,7 +52,7 @@ from app.models.enforcement_lock import (
     EnforcementReason,
 )
 from app.models.subscriber import Subscriber, SubscriberStatus
-from app.services.events import emit_event as _emit_event
+from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.prepaid_enforcement_state import clear_prepaid_enforcement_timers
 
@@ -60,11 +60,6 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
-
-
-def emit_event(db, event_type, payload, **kwargs):  # noqa: ANN001, ANN201
-    kwargs.setdefault("defer_until_commit", False)
-    return _emit_event(db, event_type, payload, **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +126,22 @@ def is_terminal_status(status: SubscriptionStatus | None) -> bool:
     return status in _TERMINAL
 
 
+def _require_billing_approval(
+    db: Session,
+    *,
+    subscriber_id: str,
+) -> Subscriber:
+    """Fail closed before any transition that would provide active service."""
+    subscriber = db.get(Subscriber, subscriber_id)
+    if subscriber is None:
+        raise ValueError(f"Subscriber {subscriber_id} not found")
+    if not subscriber.billing_enabled:
+        raise ValueError(
+            "Account billing approval is required before service activation"
+        )
+    return subscriber
+
+
 def set_account_lifecycle_override(
     db: Session,
     subscriber_id: str,
@@ -195,6 +206,7 @@ def apply_requested_account_status(
             db, subscriber_id, reason=reason, source=source
         )
     if status == SubscriberStatus.active:
+        _require_billing_approval(db, subscriber_id=subscriber_id)
         has_subscription = (
             db.scalars(
                 select(Subscription.id)
@@ -450,6 +462,11 @@ def restore_subscription(
         )
         return False
 
+    _require_billing_approval(
+        db,
+        subscriber_id=str(subscription.subscriber_id),
+    )
+
     resolved_count, remaining = resolve_locks_for_trigger(
         db,
         subscription,
@@ -534,6 +551,45 @@ def restore_subscription(
     return restored
 
 
+def resolve_stale_lock_without_restoration(
+    db: Session,
+    subscription_id: str,
+    *,
+    trigger: str,
+    resolved_by: str,
+    reason: EnforcementReason,
+    notes: str | None = None,
+    emit: bool = True,
+) -> int:
+    """Resolve an obsolete reason lock without activating a non-service.
+
+    Financial reconciliation uses this only when its locked preview proves the
+    linked subscription is no longer restorable service (for example terminal
+    after leaving the prepaid cohort). Suspended services must use
+    ``restore_subscription`` so status and access consequences stay atomic.
+    """
+    subscription = db.execute(
+        select(Subscription).where(Subscription.id == subscription_id).with_for_update()
+    ).scalar_one_or_none()
+    if subscription is None:
+        raise ValueError(f"Subscription {subscription_id} not found")
+    if subscription.status in SUSPENDED_EQUIVALENT:
+        raise ValueError(
+            "A suspended subscription lock must be resolved through restoration"
+        )
+    resolved_count, _remaining = resolve_locks_for_trigger(
+        db,
+        subscription,
+        trigger=trigger,
+        resolved_by=resolved_by,
+        reason=reason,
+        notes=notes,
+        emit=emit,
+    )
+    compute_account_status(db, str(subscription.subscriber_id))
+    return resolved_count
+
+
 def activate_subscription(
     db: Session,
     subscription_id: str,
@@ -560,6 +616,11 @@ def activate_subscription(
         raise ValueError(
             f"Cannot activate subscription in status {subscription.status.value}"
         )
+
+    _require_billing_approval(
+        db,
+        subscriber_id=str(subscription.subscriber_id),
+    )
 
     # Sales-created service contracts are gated by the canonical provisioning
     # result.  Billing settlement may fund the pending Subscription, but it may
@@ -788,6 +849,7 @@ def disable_subscription(
     reason: str,
     source: str,
     emit: bool = True,
+    preserve_locks: bool = False,
 ) -> bool:
     """Pause billing and access while preserving service assignments.
 
@@ -806,7 +868,9 @@ def disable_subscription(
             f"Cannot disable subscription already in {subscription.status.value}"
         )
 
-    resolved_count = resolve_all_locks(db, subscription, "disabled")
+    resolved_count = (
+        0 if preserve_locks else resolve_all_locks(db, subscription, "disabled")
+    )
     previous_status = subscription.status
     subscription.status = SubscriptionStatus.disabled
     db.flush()
@@ -852,6 +916,39 @@ def enable_subscription(
     if subscription is None:
         raise ValueError(f"Subscription {subscription_id} not found")
     if subscription.status != SubscriptionStatus.disabled:
+        return False
+    _require_billing_approval(
+        db,
+        subscriber_id=str(subscription.subscriber_id),
+    )
+    active_locks = get_active_locks(db, subscription_id=str(subscription.id))
+    if active_locks:
+        subscription.status = SubscriptionStatus.suspended
+        db.flush()
+        compute_account_status(db, str(subscription.subscriber_id))
+        if emit:
+            emit_event(
+                db,
+                EventType.subscription_suspended,
+                {
+                    "subscription_id": str(subscription.id),
+                    "reason": "active_enforcement_lock",
+                    "source": source,
+                    "from_status": SubscriptionStatus.disabled.value,
+                    "to_status": SubscriptionStatus.suspended.value,
+                    "offer_name": (
+                        subscription.offer.name if subscription.offer else None
+                    ),
+                },
+                subscription_id=subscription.id,
+                account_id=subscription.subscriber_id,
+            )
+        logger.info(
+            "Subscription %s remains suspended after enable request because "
+            "%d enforcement locks are active",
+            subscription_id,
+            len(active_locks),
+        )
         return False
     if reactivation_blocked_by_active_login(db, subscription):
         compute_account_status(db, str(subscription.subscriber_id))
@@ -983,11 +1080,14 @@ def transition_account_status(
     reason: str,
     source: str,
     emit: bool = True,
+    preserve_locks: bool = False,
 ) -> SubscriberStatus:
     """Apply an account-level command and align all owned subscription facts."""
     subscriber = db.get(Subscriber, subscriber_id)
     if subscriber is None:
         raise ValueError(f"Subscriber {subscriber_id} not found")
+    if target_status == SubscriberStatus.active:
+        _require_billing_approval(db, subscriber_id=subscriber_id)
     subscriptions = list(
         db.scalars(
             select(Subscription).where(Subscription.subscriber_id == subscriber.id)
@@ -1039,6 +1139,7 @@ def transition_account_status(
                     reason=reason,
                     source=source,
                     emit=emit,
+                    preserve_locks=preserve_locks,
                 )
     elif target_status == SubscriberStatus.canceled:
         for subscription in subscriptions:
@@ -1162,6 +1263,56 @@ def derive_account_status(db: Session, subscriber_id: str) -> SubscriberStatus:
     return SubscriberStatus.canceled
 
 
+def _stage_subscription_access_projection(
+    db: Session,
+    subscriber: Subscriber,
+) -> int:
+    """Stage every child service's canonical desired access state.
+
+    ``Subscriber.status`` is a projection of lifecycle facts, so it must not be
+    persisted independently from the access decisions that consume it.  Keeping
+    both projections in this owner transaction prevents a stale parent status
+    from being fed back into RADIUS policy after a payment or restoration.
+    External RADIUS remains eventual and is reconciled only after commit.
+    """
+    from app.services.access_resolution import resolve_customer_access
+    from app.services.walled_garden_policy import resolve_subscription_restriction
+
+    changed = 0
+    subscriptions = list(
+        db.scalars(
+            select(Subscription).where(Subscription.subscriber_id == subscriber.id)
+        ).all()
+    )
+    for subscription in subscriptions:
+        restriction = resolve_subscription_restriction(
+            db,
+            subscription,
+            account=subscriber,
+        )
+        decision = resolve_customer_access(
+            subscription,
+            subscriber=subscriber,
+            access_restriction_mode=(
+                restriction.effective_mode if restriction is not None else None
+            ),
+        )
+        state = decision.radius_access_state
+        projected = state.value if state is not None else None
+        if subscription.access_state == projected:
+            continue
+        subscription.access_state = projected
+        changed += 1
+    if changed:
+        db.flush()
+        logger.info(
+            "Account access projection staged: subscriber=%s subscriptions_changed=%s",
+            subscriber.id,
+            changed,
+        )
+    return changed
+
+
 def compute_account_status(db: Session, subscriber_id: str) -> SubscriberStatus:
     """Derive and persist subscriber status from subscription states.
 
@@ -1223,6 +1374,7 @@ def compute_account_status(db: Session, subscriber_id: str) -> SubscriberStatus:
     if new_status in {SubscriberStatus.disabled, SubscriberStatus.canceled}:
         clear_prepaid_enforcement_timers(db, subscriber_id)
 
+    _stage_subscription_access_projection(db, subscriber)
     db.flush()
 
     return new_status

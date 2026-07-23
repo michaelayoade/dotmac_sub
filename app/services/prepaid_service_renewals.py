@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import enum
 import hashlib
+from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -28,14 +30,20 @@ from app.models.billing import (
     LedgerEntry,
     ServiceEntitlement,
     ServiceEntitlementStatus,
+    TaxApplication,
+    TaxRate,
 )
 from app.models.catalog import (
     BillingCycle,
     BillingMode,
     CatalogOffer,
+    OfferPrice,
+    OfferVersionPrice,
+    PriceType,
     Subscription,
     SubscriptionStatus,
 )
+from app.models.subscriber import Address, Subscriber
 from app.schemas.billing import AccountAdjustmentPreviewRequest
 from app.services.billing._common import lock_account
 from app.services.billing.adjustments import (
@@ -103,47 +111,183 @@ def resolve_prepaid_monthly_charge(
     subscription: Subscription,
     effective_at: datetime,
 ) -> tuple[Decimal, str, BillingCycle] | None:
-    """Resolve the one canonical taxed monthly renewal amount."""
-    from app.models.billing import TaxApplication, TaxRate
+    """Resolve one canonical taxed monthly renewal amount."""
+    return resolve_prepaid_monthly_charges(
+        db,
+        [subscription],
+        effective_at,
+    )[subscription.id]
+
+
+def _newest_price(rows: Sequence[OfferPrice | OfferVersionPrice]):
+    return max(rows, key=lambda row: (row.created_at, str(row.id))) if rows else None
+
+
+def _matching_catalog_tax_rate_id(
+    rates: Sequence[TaxRate], vat_percent: Decimal | None
+) -> UUID | None:
+    if vat_percent is None:
+        return None
+    percent = Decimal(str(vat_percent))
+    if percent <= Decimal("0.00"):
+        return None
+    candidates = {percent}
+    if percent > Decimal("1.00"):
+        candidates.add(percent / Decimal("100"))
+    else:
+        candidates.add(percent * Decimal("100"))
+    for rate in rates:
+        if Decimal(str(rate.rate)) in candidates:
+            return rate.id
+    return None
+
+
+def resolve_prepaid_monthly_charges(
+    db: Session,
+    subscriptions: Sequence[Subscription],
+    effective_at: datetime,
+) -> dict[UUID, tuple[Decimal, str, BillingCycle] | None]:
+    """Resolve exact contracted renewal charges with bounded query cost.
+
+    Both renewal and enforcement consume this owner. Contract amount lives on
+    ``Subscription.unit_price``; catalog rows provide currency/cadence metadata
+    only. Tax precedence exactly matches recurring invoice billing: service
+    address, account, then offer/default.
+    """
     from app.services.billing._common import _calculate_tax_amount
     from app.services.billing_automation import (
         _default_tax_application,
+        _default_tax_rate_id,
         _effective_unit_price,
-        _resolve_price,
-        _resolve_tax_rate_id,
     )
 
-    # A recurring prepaid debit consumes the customer's money immediately, so
-    # the contracted price must be structural evidence on the subscription.
-    # Falling back to the current catalog price can turn an incomplete import
-    # into an overcharge (the retained source has negotiated prices far below
-    # today's offer price). Missing/zero terms are an operator blocker, not a
-    # pricing decision for the renewal owner.
-    if subscription.unit_price is None or subscription.unit_price <= 0:
-        return None
-    amount, currency, cycle = _resolve_price(db, subscription)
-    if amount is None:
-        return None
-    effective_cycle = cycle or BillingCycle.monthly
-    if effective_cycle != BillingCycle.monthly:
-        return None
-    base = _effective_unit_price(subscription, amount, effective_at)
-    tax_rate_id = _resolve_tax_rate_id(db, subscription)
-    if not tax_rate_id:
-        return base, currency or "NGN", effective_cycle
-    tax_rate = db.get(TaxRate, tax_rate_id)
-    if tax_rate is None:
-        return base, currency or "NGN", effective_cycle
+    rows = list(subscriptions)
+    result: dict[UUID, tuple[Decimal, str, BillingCycle] | None] = {
+        subscription.id: None for subscription in rows
+    }
+    eligible = [
+        subscription
+        for subscription in rows
+        if subscription.unit_price is not None and subscription.unit_price > 0
+    ]
+    if not eligible:
+        return result
+
+    version_ids = {
+        subscription.offer_version_id
+        for subscription in eligible
+        if subscription.offer_version_id is not None
+    }
+    offer_ids = {subscription.offer_id for subscription in eligible}
+    version_prices: dict[UUID, list[OfferVersionPrice]] = defaultdict(list)
+    if version_ids:
+        for version_price in db.scalars(
+            select(OfferVersionPrice).where(
+                OfferVersionPrice.offer_version_id.in_(version_ids),
+                OfferVersionPrice.price_type == PriceType.recurring,
+                OfferVersionPrice.is_active.is_(True),
+            )
+        ).all():
+            version_prices[version_price.offer_version_id].append(version_price)
+    offer_prices: dict[UUID, list[OfferPrice]] = defaultdict(list)
+    if offer_ids:
+        for offer_price in db.scalars(
+            select(OfferPrice).where(
+                OfferPrice.offer_id.in_(offer_ids),
+                OfferPrice.price_type == PriceType.recurring,
+                OfferPrice.is_active.is_(True),
+            )
+        ).all():
+            offer_prices[offer_price.offer_id].append(offer_price)
+
+    offers = {
+        offer.id: offer
+        for offer in db.scalars(
+            select(CatalogOffer).where(CatalogOffer.id.in_(offer_ids))
+        ).all()
+    }
+    account_ids = {subscription.subscriber_id for subscription in eligible}
+    account_tax_ids: dict[UUID, UUID | None] = {
+        account_id: tax_rate_id
+        for account_id, tax_rate_id in db.execute(
+            select(Subscriber.id, Subscriber.tax_rate_id).where(
+                Subscriber.id.in_(account_ids)
+            )
+        ).all()
+    }
+    address_ids = {
+        subscription.service_address_id
+        for subscription in eligible
+        if subscription.service_address_id is not None
+    }
+    address_tax_ids: dict[UUID, UUID | None] = (
+        {
+            address_id: tax_rate_id
+            for address_id, tax_rate_id in db.execute(
+                select(Address.id, Address.tax_rate_id).where(
+                    Address.id.in_(address_ids)
+                )
+            ).all()
+        }
+        if address_ids
+        else {}
+    )
+    active_rates = list(
+        db.scalars(select(TaxRate).where(TaxRate.is_active.is_(True))).all()
+    )
+    rates_by_id = {rate.id: rate for rate in active_rates}
+    default_tax_rate_id = _default_tax_rate_id(db)
     tax_application = _default_tax_application(db)
-    tax_amount = _calculate_tax_amount(
-        base, Decimal(str(tax_rate.rate)), tax_application
-    )
-    total = (
-        base
-        if tax_application == TaxApplication.inclusive
-        else round_money(base + tax_amount)
-    )
-    return total, currency or "NGN", effective_cycle
+
+    for subscription in eligible:
+        price: OfferPrice | OfferVersionPrice | None = None
+        if subscription.offer_version_id is not None:
+            price = _newest_price(version_prices.get(subscription.offer_version_id, []))
+        if price is None:
+            price = _newest_price(offer_prices.get(subscription.offer_id, []))
+        if price is None:
+            continue
+        cycle = (
+            subscription.billing_cycle or price.billing_cycle or BillingCycle.monthly
+        )
+        if cycle != BillingCycle.monthly:
+            continue
+        base = _effective_unit_price(subscription, price.amount, effective_at)
+        tax_rate_id = (
+            address_tax_ids.get(subscription.service_address_id)
+            if subscription.service_address_id is not None
+            else None
+        )
+        if tax_rate_id not in rates_by_id:
+            tax_rate_id = account_tax_ids.get(subscription.subscriber_id)
+        if tax_rate_id not in rates_by_id:
+            offer = offers.get(subscription.offer_id)
+            tax_rate_id = None
+            if offer is not None:
+                tax_rate_id = _matching_catalog_tax_rate_id(
+                    active_rates, offer.vat_percent
+                )
+                if tax_rate_id is None and (
+                    bool(offer.with_vat)
+                    or Decimal(str(offer.vat_percent or "0")) > Decimal("0.00")
+                ):
+                    tax_rate_id = default_tax_rate_id
+        tax_rate = rates_by_id.get(tax_rate_id) if tax_rate_id is not None else None
+        if tax_rate is None or tax_application == TaxApplication.exempt:
+            total = base
+        else:
+            tax_amount = _calculate_tax_amount(
+                base,
+                Decimal(str(tax_rate.rate)),
+                tax_application,
+            )
+            total = (
+                base
+                if tax_application == TaxApplication.inclusive
+                else round_money(base + tax_amount)
+            )
+        result[subscription.id] = (total, price.currency or "NGN", cycle)
+    return result
 
 
 @dataclass(frozen=True)
@@ -723,6 +867,15 @@ def apply_due_prepaid_service_after_funding_change(
     treatment_decisions = resolve_subscription_billing_treatments(
         db, due_subscriptions, as_of=evaluated_at
     )
+    charges = resolve_prepaid_monthly_charges(
+        db,
+        [
+            subscription
+            for subscription in due_subscriptions
+            if not treatment_decisions[subscription.id].suppress_customer_billing
+        ],
+        evaluated_at,
+    )
     for subscription in due_subscriptions:
         treatment = treatment_decisions[subscription.id]
         if treatment.suppress_customer_billing:
@@ -750,7 +903,7 @@ def apply_due_prepaid_service_after_funding_change(
                 continue
             non_cash_granted += 1
             continue
-        charge = resolve_prepaid_monthly_charge(db, subscription, evaluated_at)
+        charge = charges[subscription.id]
         if charge is None:
             missing_price += 1
             continue
@@ -956,6 +1109,11 @@ def run_due_prepaid_service_renewals(
         {subscription.subscriber_id for subscription in chargeable_subscriptions},
     )
     authority_at = _utc(authority.position_at)
+    charges = resolve_prepaid_monthly_charges(
+        db,
+        chargeable_subscriptions,
+        effective_at,
+    )
     for subscription in chargeable_subscriptions:
         if subscription.subscriber_id in quarantined_account_ids:
             summary["prepaid_renewals_quarantined"] = (
@@ -972,7 +1130,7 @@ def run_due_prepaid_service_renewals(
                 int(summary["prepaid_renewals_stale_anchor"]) + 1
             )
             continue
-        charge = resolve_prepaid_monthly_charge(db, subscription, effective_at)
+        charge = charges[subscription.id]
         if charge is None:
             summary["prepaid_renewals_missing_price"] = (
                 int(summary["prepaid_renewals_missing_price"]) + 1
@@ -1072,6 +1230,7 @@ __all__ = [
     "preview_prepaid_service_renewal",
     "renewal_outcomes_for_payment",
     "resolve_prepaid_monthly_charge",
+    "resolve_prepaid_monthly_charges",
     "run_due_prepaid_service_renewals",
     "stage_prepaid_service_renewed_outcome",
 ]

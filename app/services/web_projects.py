@@ -922,7 +922,12 @@ def update_project_from_form(
     # Template can be cleared from the edit form (CRM parity).
     data["project_template_id"] = parse_uuid_or_none(form.get("project_template_id"))
     payload = ProjectUpdate.model_validate(data)
-    return projects_service.projects.update(db, project_id, payload)
+    return projects_service.projects.update(
+        db,
+        project_id,
+        payload,
+        actor_id=parse_uuid_or_none(actor_id),
+    )
 
 
 def quick_update_project(
@@ -940,13 +945,22 @@ def quick_update_project(
         payload = ProjectUpdate.model_validate({field: str(value or "").strip()})
     except ValidationError as exc:
         raise _projection_error("invalid_filter", f"Invalid {field}") from exc
-    return projects_service.projects.update(db, project_id, payload)
+    return projects_service.projects.update(
+        db,
+        project_id,
+        payload,
+        actor_id=parse_uuid_or_none(actor_id),
+    )
 
 
 def delete_project(
     db: Session, *, request, project_id: str, actor_id: str | None
 ) -> None:
-    projects_service.projects.delete(db, project_id)
+    projects_service.projects.delete(
+        db,
+        project_id,
+        actor_id=parse_uuid_or_none(actor_id),
+    )
 
 
 # ── project detail ───────────────────────────────────────────────────────────
@@ -1254,7 +1268,12 @@ def update_task_from_form(
 ) -> ProjectTask:
     data = _task_payload_data(**form)
     payload = ProjectTaskUpdate.model_validate(data)
-    return projects_service.project_tasks.update(db, task_id, payload)
+    return projects_service.project_tasks.update(
+        db,
+        task_id,
+        payload,
+        actor_id=parse_uuid_or_none(actor_id),
+    )
 
 
 def quick_update_task_status(
@@ -1266,11 +1285,20 @@ def quick_update_task_status(
         )
     except ValidationError as exc:
         raise _projection_error("invalid_filter", "Invalid status") from exc
-    return projects_service.project_tasks.update(db, task_id, payload)
+    return projects_service.project_tasks.update(
+        db,
+        task_id,
+        payload,
+        actor_id=parse_uuid_or_none(actor_id),
+    )
 
 
 def delete_task(db: Session, *, request, task_id: str, actor_id: str | None) -> None:
-    projects_service.project_tasks.delete(db, task_id)
+    projects_service.project_tasks.delete(
+        db,
+        task_id,
+        actor_id=parse_uuid_or_none(actor_id),
+    )
 
 
 def _task_dependency_rows(db: Session, task: ProjectTask) -> dict[str, list[dict]]:

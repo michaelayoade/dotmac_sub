@@ -25,6 +25,7 @@ from app.schemas.service_status import ServiceStatusActionKind
 from app.services import billing as billing_service
 from app.services.collections.grace_policy import resolve_grace_decision
 from app.services.service_status import build_service_status
+from tests.prepaid_funding_helpers import ensure_test_prepaid_contract
 
 
 def _n(dt):
@@ -36,6 +37,12 @@ def _n(dt):
 def _activate(db, subscription, mode):
     subscription.status = SubscriptionStatus.active
     subscription.billing_mode = mode
+    if mode == BillingMode.prepaid:
+        ensure_test_prepaid_contract(
+            db,
+            subscription,
+            amount=subscription.unit_price or Decimal("100.00"),
+        )
     db.commit()
 
 

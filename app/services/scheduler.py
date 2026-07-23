@@ -29,10 +29,18 @@ PERMANENT_CUSTOMER_LIFECYCLE_TASKS = frozenset(
         "app.tasks.catalog.apply_due_subscription_changes",
         "app.tasks.catalog.apply_due_subscription_status_commands",
         "app.tasks.vacation_holds.resume_expired_holds",
+        "app.tasks.enforcement.reconcile_billing_approval_drift",
         "app.tasks.notifications.deliver_notification_queue",
         "app.tasks.events.dispatch_pending_events",
         "app.tasks.events.retry_failed_events",
         "app.tasks.events.mark_stale_processing_events",
+        "app.tasks.radius.run_enforcement_reconciler",
+    }
+)
+
+EVENT_DRIVEN_TRANSPORT_TASKS = frozenset(
+    {
+        "app.tasks.radius_population.refresh_radius_from_subs",
     }
 )
 
@@ -41,10 +49,25 @@ def is_permanent_customer_lifecycle_task(task_name: str) -> bool:
     return task_name in PERMANENT_CUSTOMER_LIFECYCLE_TASKS
 
 
+def is_event_driven_transport_task(task_name: str) -> bool:
+    """Return whether a task may be requested but not scheduled independently."""
+    return task_name in EVENT_DRIVEN_TRANSPORT_TASKS
+
+
 def _reject_permanent_task_mutation() -> None:
     raise HTTPException(
         status_code=409,
         detail="Core customer-financial lifecycle tasks cannot be disabled, renamed, or deleted",
+    )
+
+
+def _reject_event_driven_transport_schedule() -> None:
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            "Event-driven transport tasks cannot be scheduled independently; "
+            "their owning reconciler requests delivery when authoritative drift exists"
+        ),
     )
 
 
@@ -64,6 +87,8 @@ class ScheduledTasks(ListResponseMixin):
     def create(db: Session, payload: ScheduledTaskCreate):
         if payload.interval_seconds < 1:
             raise HTTPException(status_code=400, detail="interval_seconds must be >= 1")
+        if is_event_driven_transport_task(payload.task_name):
+            _reject_event_driven_transport_schedule()
         if (
             is_permanent_customer_lifecycle_task(payload.task_name)
             and not payload.enabled
@@ -113,6 +138,10 @@ class ScheduledTasks(ListResponseMixin):
                 _reject_permanent_task_mutation()
             if "task_name" in data and data["task_name"] != task.task_name:
                 _reject_permanent_task_mutation()
+        resulting_task_name = data.get("task_name", task.task_name)
+        resulting_enabled = data.get("enabled", task.enabled)
+        if is_event_driven_transport_task(resulting_task_name) and resulting_enabled:
+            _reject_event_driven_transport_schedule()
         if "schedule_type" in data:
             data["schedule_type"] = _validate_schedule_type(data["schedule_type"])
         if "interval_seconds" in data and data["interval_seconds"] is not None:

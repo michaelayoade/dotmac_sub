@@ -1420,6 +1420,7 @@ def person_update(
             )
             if metadata is not None
             else None,
+            actor_id=_get_actor_id(request),
         )
         metadata_payload = build_changes_metadata(before, after)
         from app.web.admin import get_current_user
@@ -1516,6 +1517,7 @@ def business_update(
             captive_redirect_enabled=captive_redirect_enabled,
             tax_rate_id=tax_rate_id,
             payment_method=payment_method,
+            actor_id=_get_actor_id(request),
         )
         metadata_payload = build_changes_metadata(before, after)
         from app.web.admin import get_current_user
@@ -2335,7 +2337,9 @@ def bulk_update_customers(
     """Bulk update supported customer fields."""
     try:
         return web_customer_actions_service.bulk_update_customers_from_payload(
-            db=db, payload=data
+            db=db,
+            payload=data,
+            actor_id=_get_actor_id(request),
         )
     except HTTPException:
         raise

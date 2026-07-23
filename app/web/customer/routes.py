@@ -30,7 +30,7 @@ from app.services import auth_flow as auth_flow_service
 from app.services import autopay as autopay_service
 from app.services import billing_payment_receipts as payment_receipts_service
 from app.services import chat_session as chat_session_service
-from app.services import crm_portal, customer_portal
+from app.services import crm_portal, customer_portal, team_inbox_widget
 from app.services import customer_portal_bandwidth as customer_portal_bandwidth_service
 from app.services import customer_portal_contacts as customer_portal_contacts_service
 from app.services import customer_portal_flow_payment_methods as customer_cards
@@ -43,6 +43,7 @@ from app.services.bandwidth import add_directions_to_series, bandwidth_samples
 from app.services.customer_context import (
     optional_customer_account_id,
     optional_customer_subscriber_id,
+    require_customer_account_id,
 )
 from app.services.customer_portal_context import (
     emit_customer_event,
@@ -52,6 +53,9 @@ from app.services.customer_portal_context import (
     resolve_customer_subscription,
 )
 from app.services.nin_matching import mask_nin
+from app.services.prepaid_funding_reconstruction import (
+    PrepaidFundingBaselineMissingError,
+)
 from app.web.customer.auth import get_current_customer_from_request
 from app.web.customer.branding import get_customer_templates
 
@@ -79,6 +83,10 @@ CARD_SAVE_ERROR_MESSAGE = (
     "from Payment Methods."
 )
 READ_ONLY_MUTATION_MESSAGE = "View-only sessions cannot make changes."
+SERVICE_CHANGE_FINANCIAL_POSITION_MESSAGE = (
+    "Your verified prepaid funding position is still under review. "
+    "Contact support before changing this service."
+)
 
 
 def _is_read_only_customer(customer: dict | None) -> bool:
@@ -351,7 +359,11 @@ def customer_portal_chat_session(
     subscriber_id = optional_customer_subscriber_id(db, customer)
     if not subscriber_id:
         raise HTTPException(status_code=409, detail="Customer account is incomplete")
-    return chat_session_service.broker_customer_session(db, str(subscriber_id))
+    try:
+        return chat_session_service.broker_customer_session(db, str(subscriber_id))
+    except team_inbox_widget.TeamInboxWidgetError as exc:
+        status_code = 404 if exc.code.endswith("_not_found") else 503
+        raise HTTPException(status_code=status_code, detail=exc.message) from exc
 
 
 @router.get("/support", response_class=HTMLResponse)
@@ -1182,20 +1194,42 @@ def customer_reboot_service_ont(
     if _is_read_only_customer(customer):
         return _read_only_response(request, customer, active_page="services")
 
-    from app.services.customer_portal_flow_services import (
-        reboot_customer_subscription_ont,
+    from app.services.customer_device_commands import (
+        CustomerDeviceCommandError,
+        reboot_subscription_device,
     )
 
-    ok, message = reboot_customer_subscription_ont(db, customer, str(subscription_id))
-    if ok:
+    account_id = require_customer_account_id(db, customer)
+    try:
+        outcome = reboot_subscription_device(
+            db,
+            subscriber_id=UUID(str(account_id)),
+            subscription_id=subscription_id,
+            actor_id=str(customer.get("id") or account_id),
+        )
+        ok, message = outcome.success, outcome.message
+    except CustomerDeviceCommandError as exc:
+        outcome = None
+        ok, message = False, str(exc)
+    if outcome is not None and outcome.success:
         _emit_customer_event(
             db,
             "customer_service_reboot_requested",
             {"subscription_id": str(subscription_id)},
         )
     status = "rebooted" if ok else "reboot_error"
+    evidence = ""
+    if outcome is not None:
+        evidence = (
+            f"&command={outcome.command.value}&command_status={outcome.status.value}"
+            f"&device_id={outcome.device_id}"
+            f"&operation_id={outcome.operation_id or ''}"
+        )
     return RedirectResponse(
-        url=f"/portal/services/{subscription_id}?{status}=true&message={quote_plus(message)}",
+        url=(
+            f"/portal/services/{subscription_id}?{status}=true"
+            f"&message={quote_plus(message)}{evidence}"
+        ),
         status_code=303,
     )
 
@@ -1216,27 +1250,48 @@ def customer_update_service_wifi(
     if _is_read_only_customer(customer):
         return _read_only_response(request, customer, active_page="services")
 
-    from app.services.customer_portal_flow_services import (
-        update_customer_subscription_wifi,
+    from app.services.customer_device_commands import (
+        CustomerDeviceCommandError,
+        update_subscription_wifi,
     )
 
-    ok, message = update_customer_subscription_wifi(
-        db,
-        customer,
-        str(subscription_id),
-        ssid=ssid,
-        password=password,
-        password_confirm=password_confirm,
-    )
-    if ok:
+    account_id = require_customer_account_id(db, customer)
+    try:
+        if password.strip() != password_confirm.strip():
+            raise CustomerDeviceCommandError(
+                "wifi_password_mismatch", "WiFi passwords do not match"
+            )
+        outcome = update_subscription_wifi(
+            db,
+            subscriber_id=UUID(str(account_id)),
+            subscription_id=subscription_id,
+            actor_id=str(customer.get("id") or account_id),
+            ssid=ssid,
+            password=password.strip() or None,
+        )
+        ok, message = outcome.success, outcome.message
+    except CustomerDeviceCommandError as exc:
+        outcome = None
+        ok, message = False, str(exc)
+    if outcome is not None and outcome.success:
         _emit_customer_event(
             db,
             "customer_wifi_updated",
             {"subscription_id": str(subscription_id), "ssid_updated": True},
         )
     status = "wifi_updated" if ok else "wifi_error"
+    evidence = ""
+    if outcome is not None:
+        evidence = (
+            f"&command={outcome.command.value}&command_status={outcome.status.value}"
+            f"&device_id={outcome.device_id}"
+            f"&operation_id={outcome.operation_id or ''}"
+        )
     return RedirectResponse(
-        url=f"/portal/services/{subscription_id}?{status}=true&message={quote_plus(message)}",
+        url=(
+            f"/portal/services/{subscription_id}?{status}=true"
+            f"&message={quote_plus(message)}{evidence}"
+        ),
         status_code=303,
     )
 
@@ -2643,13 +2698,22 @@ def customer_change_plan_quote(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return JSONResponse({"error": "unauthorized"}, status_code=401)
-    quote = customer_portal.get_plan_change_quote(
-        db,
-        customer,
-        str(subscription_id),
-        offer_id,
-        target_service_address_id=target_service_address_id,
-    )
+    try:
+        quote = customer_portal.get_plan_change_quote(
+            db,
+            customer,
+            str(subscription_id),
+            offer_id,
+            target_service_address_id=target_service_address_id,
+        )
+    except PrepaidFundingBaselineMissingError:
+        return JSONResponse(
+            {
+                "error": "financial_position_unavailable",
+                "detail": SERVICE_CHANGE_FINANCIAL_POSITION_MESSAGE,
+            },
+            status_code=409,
+        )
     if quote is None:
         return JSONResponse({"error": "not_found"}, status_code=404)
     return JSONResponse({"quote": quote})
@@ -2746,6 +2810,21 @@ def customer_submit_change_plan(
                 "active_page": "services",
             },
             status_code=exc.status_code,
+        )
+    except PrepaidFundingBaselineMissingError:
+        error_ctx = customer_portal.get_change_plan_error_context(
+            db, str(subscription_id), selected_offer_id=offer_id
+        )
+        return templates.TemplateResponse(
+            "customer/services/change_plan.html",
+            {
+                "request": request,
+                "customer": customer,
+                **error_ctx,
+                "error": SERVICE_CHANGE_FINANCIAL_POSITION_MESSAGE,
+                "active_page": "services",
+            },
+            status_code=409,
         )
     except ValueError as exc:
         message = str(exc)

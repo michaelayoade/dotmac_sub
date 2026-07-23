@@ -19,7 +19,7 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
-from app.models.enforcement_lock import EnforcementLock
+from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.idempotency import IdempotencyKey
 from app.models.lifecycle import SubscriptionLifecycleEvent
 from app.models.subscription_change import (
@@ -190,6 +190,37 @@ def test_admin_workflow_returns_structured_validation_error(
     assert payload["status"] == "rejected"
     assert payload["error_code"] == "invalid_lifecycle_command"
     assert "target_offer_id" in str(payload["message"])
+
+
+def test_admin_workflow_maps_missing_funding_to_unavailable(db_session, monkeypatch):
+    from app.services import web_catalog_subscription_workflows as workflows
+    from app.services.prepaid_funding_reconstruction import (
+        PrepaidFundingBaselineMissingError,
+    )
+
+    def missing_funding(*_args, **_kwargs):
+        raise PrepaidFundingBaselineMissingError("baseline missing")
+
+    monkeypatch.setattr(
+        workflows,
+        "execute_subscription_command",
+        missing_funding,
+    )
+
+    payload, status_code = execute_lifecycle_command_response(
+        db_session,
+        subscription_id="00000000-0000-0000-0000-000000000001",
+        kind=SubscriptionCommandKind.change_plan,
+        actor_id="operator-2",
+        target_offer_id="00000000-0000-0000-0000-000000000002",
+        preview_fingerprint="a" * 64,
+        expected_head="b" * 64,
+        idempotency_key="missing-funding",
+    )
+
+    assert status_code == 409
+    assert payload["status"] == "unavailable"
+    assert payload["error_code"] == "financial_position_unavailable"
 
 
 def test_execution_requires_reviewed_head_and_idempotency_key(
@@ -820,6 +851,123 @@ def test_next_cycle_rejects_an_explicit_custom_date() -> None:
             effective_timing=SubscriptionEffectiveTiming.next_cycle,
             effective_at=datetime(2026, 8, 1, tzinfo=UTC),
         )
+
+
+def test_vacation_hold_and_resume_use_exact_customer_lock(
+    db_session, subscriber, catalog_offer, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.services.settings_spec.resolve_value",
+        lambda db, domain, key: {
+            "max_suspend_days": 30,
+            "max_suspend_holds_per_year": 2,
+            "suspend_cooldown_days": 0,
+        }.get(key),
+    )
+    subscription = _subscription(db_session, subscriber, catalog_offer)
+    db_session.commit()
+    reviewed = resolve_subscription_lifecycle(db_session, str(subscription.id))
+    held = execute_subscription_command(
+        db_session,
+        SubscriptionLifecycleCommand(
+            subscription_id=str(subscription.id),
+            kind=SubscriptionCommandKind.vacation_hold,
+            source=f"customer:{subscriber.id}:vacation_hold",
+            expected_head=reviewed.head,
+            idempotency_key="vacation-owner:hold",
+            vacation_hold_days=7,
+        ),
+    )
+    assert held.status == SubscriptionCommandOutcomeStatus.applied
+    assert len(held.artifact_ids) == 1
+    lock = db_session.get(EnforcementLock, held.artifact_ids[0])
+    assert lock is not None
+    assert lock.reason == EnforcementReason.customer_hold
+    assert lock.resume_at is not None
+    assert subscription.status == SubscriptionStatus.suspended
+    held_replay = execute_subscription_command(
+        db_session,
+        SubscriptionLifecycleCommand(
+            subscription_id=str(subscription.id),
+            kind=SubscriptionCommandKind.vacation_hold,
+            source=f"customer:{subscriber.id}:vacation_hold",
+            expected_head=reviewed.head,
+            idempotency_key="vacation-owner:hold",
+            vacation_hold_days=7,
+        ),
+    )
+    assert held_replay.replayed is True
+    assert held_replay.artifact_ids == (str(lock.id),)
+
+    held_head = resolve_subscription_lifecycle(db_session, str(subscription.id)).head
+    resumed = execute_subscription_command(
+        db_session,
+        SubscriptionLifecycleCommand(
+            subscription_id=str(subscription.id),
+            kind=SubscriptionCommandKind.vacation_resume,
+            source=f"customer:{subscriber.id}:vacation_resume",
+            expected_head=held_head,
+            idempotency_key=f"vacation-owner:resume:{lock.id}",
+        ),
+    )
+    db_session.refresh(lock)
+    db_session.refresh(subscription)
+    assert resumed.status == SubscriptionCommandOutcomeStatus.applied
+    assert resumed.artifact_ids == (str(lock.id),)
+    assert lock.is_active is False
+    assert subscription.status == SubscriptionStatus.active
+    resumed_replay = execute_subscription_command(
+        db_session,
+        SubscriptionLifecycleCommand(
+            subscription_id=str(subscription.id),
+            kind=SubscriptionCommandKind.vacation_resume,
+            source=f"customer:{subscriber.id}:vacation_resume",
+            expected_head=held_head,
+            idempotency_key=f"vacation-owner:resume:{lock.id}",
+        ),
+    )
+    assert resumed_replay.replayed is True
+    assert resumed_replay.artifact_ids == (str(lock.id),)
+
+
+def test_vacation_hold_policy_rejects_annual_limit_inside_owner(
+    db_session, subscriber, catalog_offer, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.services.settings_spec.resolve_value",
+        lambda db, domain, key: {
+            "max_suspend_days": 30,
+            "max_suspend_holds_per_year": 1,
+            "suspend_cooldown_days": 0,
+        }.get(key),
+    )
+    subscription = _subscription(db_session, subscriber, catalog_offer)
+    db_session.add(
+        EnforcementLock(
+            subscription_id=subscription.id,
+            subscriber_id=subscriber.id,
+            reason=EnforcementReason.customer_hold,
+            source="historical-hold",
+            is_active=False,
+            resolved_at=datetime.now(UTC),
+            resolved_by="test",
+        )
+    )
+    db_session.commit()
+    reviewed = resolve_subscription_lifecycle(db_session, str(subscription.id))
+    outcome = execute_subscription_command(
+        db_session,
+        SubscriptionLifecycleCommand(
+            subscription_id=str(subscription.id),
+            kind=SubscriptionCommandKind.vacation_hold,
+            source=f"customer:{subscriber.id}:vacation_hold",
+            expected_head=reviewed.head,
+            idempotency_key="vacation-owner:annual-limit",
+            vacation_hold_days=7,
+        ),
+    )
+    assert outcome.status == SubscriptionCommandOutcomeStatus.rejected
+    assert outcome.error_code == "vacation_hold_annual_limit_reached"
 
 
 def test_owner_failure_rolls_back_idempotency_reservation(

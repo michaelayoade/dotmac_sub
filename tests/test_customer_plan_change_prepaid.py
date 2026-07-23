@@ -7,39 +7,55 @@ from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from app.models.audit import AuditEvent
 from app.models.billing import (
     AccountAdjustment,
     Invoice,
+    InvoiceStatus,
     LedgerEntry,
     LedgerEntryType,
     LedgerSource,
+    Payment,
+    PaymentAllocation,
+    PaymentStatus,
 )
 from app.models.catalog import (
+    AccessCredential,
     AccessType,
     BillingCycle,
     BillingMode,
     CatalogOffer,
     OfferPrice,
+    OfferRadiusProfile,
     OfferStatus,
     PriceBasis,
     PriceType,
+    RadiusProfile,
     ServiceType,
     Subscription,
     SubscriptionStatus,
 )
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.qualification import BuildoutStatus, CoverageArea
+from app.models.radius import RadiusUser
 from app.models.subscriber import Address, AddressType
-from app.models.subscription_change import SubscriptionChangeRequest
+from app.models.subscription_change import (
+    SubscriptionChangeExecutionState,
+    SubscriptionChangeRequest,
+)
 from app.models.subscription_engine import SettingValueType
 from app.services.billing._common import get_account_credit_balance
 from app.services.customer_portal_context import get_available_portal_offers
 from app.services.customer_portal_flow_changes import (
     confirm_service_change,
     get_plan_change_quote,
+)
+from app.services.subscription_change_execution import (
+    SubscriptionChangeExecutionError,
+    finalize_verified_remote_reprovision,
+    settle_relocation_payment,
 )
 
 
@@ -351,6 +367,26 @@ def test_confirm_service_change_queues_delivery_without_ticket_or_plan_swap(
         next_billing_at=datetime(2026, 6, 1, tzinfo=UTC),
         start_at=datetime(2026, 5, 1, tzinfo=UTC),
     )
+    if expected_mode == "remote_reprovision":
+        profile = RadiusProfile(
+            name="Target remote profile",
+            download_speed=target_speed * 1000,
+            upload_speed=target_speed * 1000,
+        )
+        db_session.add(profile)
+        db_session.flush()
+        db_session.add(
+            OfferRadiusProfile(offer_id=target_offer.id, profile_id=profile.id)
+        )
+        db_session.add(
+            AccessCredential(
+                subscriber_id=subscriber.id,
+                subscription_id=subscription.id,
+                username=f"remote-{subscription.id}",
+                is_active=True,
+            )
+        )
+        db_session.commit()
 
     confirmation = _confirmation_kwargs(db_session, subscription, target_offer)
     result = confirm_service_change(
@@ -379,6 +415,90 @@ def test_confirm_service_change_queues_delivery_without_ticket_or_plan_swap(
     assert request.status.value == "pending"
     assert request.confirmation_snapshot["delivery_mode"] == expected_mode
     assert request.confirmation_snapshot["delivery_state"] == "awaiting_verification"
+    if expected_mode == "remote_reprovision":
+        assert request.execution_state == SubscriptionChangeExecutionState.provisioning
+        assert request.remote_radius_profile_id == profile.id
+
+
+def test_remote_reprovision_finalizes_only_after_exact_fresh_radius_observation(
+    db_session, subscriber, monkeypatch
+):
+    _stub_plan_change_side_effects(monkeypatch)
+    current_offer = _make_offer(
+        db_session,
+        name="Remote Current",
+        amount=Decimal("100.00"),
+        plan_family="fiber",
+        speed_download_mbps=50,
+    )
+    target_offer = _make_offer(
+        db_session,
+        name="Remote Target",
+        amount=Decimal("150.00"),
+        plan_family="fiber",
+        speed_download_mbps=100,
+    )
+    profile = RadiusProfile(
+        name="Remote 100M",
+        download_speed=100000,
+        upload_speed=100000,
+    )
+    db_session.add(profile)
+    db_session.flush()
+    db_session.add(OfferRadiusProfile(offer_id=target_offer.id, profile_id=profile.id))
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current_offer,
+        next_billing_at=datetime(2026, 6, 1, tzinfo=UTC),
+        start_at=datetime(2026, 5, 1, tzinfo=UTC),
+    )
+    credential = AccessCredential(
+        subscriber_id=subscriber.id,
+        subscription_id=subscription.id,
+        username=f"remote-verify-{subscription.id}",
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    result = confirm_service_change(
+        db_session,
+        {"account_id": str(subscriber.id), "subscriber_id": str(subscriber.id)},
+        str(subscription.id),
+        str(target_offer.id),
+        **_confirmation_kwargs(db_session, subscription, target_offer),
+    )
+    request = db_session.get(SubscriptionChangeRequest, result["change_request_id"])
+    assert request is not None
+    with pytest.raises(
+        SubscriptionChangeExecutionError,
+        match="exact target RADIUS profile has not been observed",
+    ):
+        finalize_verified_remote_reprovision(
+            db_session, request_id=request.id, actor_id="radius-reconciler"
+        )
+
+    observed_at = request.remote_reprovision_requested_at + timedelta(seconds=1)
+    radius_user = RadiusUser(
+        subscriber_id=subscriber.id,
+        subscription_id=subscription.id,
+        access_credential_id=credential.id,
+        username=credential.username,
+        radius_profile_id=profile.id,
+        is_active=True,
+        last_sync_at=observed_at,
+    )
+    db_session.add(radius_user)
+    db_session.commit()
+
+    finalized = finalize_verified_remote_reprovision(
+        db_session, request_id=request.id, actor_id="radius-reconciler"
+    )
+    db_session.refresh(subscription)
+    assert finalized.execution_state == SubscriptionChangeExecutionState.completed
+    assert finalized.remote_radius_user_id == radius_user.id
+    assert subscription.offer_id == target_offer.id
 
 
 def test_wireless_address_relocation_is_qualified_priced_and_awaits_payment(
@@ -506,7 +626,53 @@ def test_wireless_address_relocation_is_qualified_priced_and_awaits_payment(
     assert request.service_qualification_id is not None
     assert request.field_fee_offer_id == fee_offer.id
     assert request.field_fee_amount == Decimal("25000.00")
+    assert request.execution_state == SubscriptionChangeExecutionState.awaiting_payment
+    assert request.field_fee_invoice_id is not None
+    invoice = db_session.get(Invoice, request.field_fee_invoice_id)
+    assert invoice is not None
+    assert invoice.total == Decimal("25000.00")
+    assert invoice.currency == "NGN"
+    assert invoice.metadata_["payment_flow"] == "subscription_relocation"
+    assert invoice.metadata_["subscription_change_request_id"] == str(request.id)
     assert request.confirmation_snapshot["delivery_state"] == "awaiting_payment"
+    assert subscription.service_address_id == current_address.id
+    assert subscription.offer_id == offer.id
+
+    payment = Payment(
+        account_id=subscriber.id,
+        amount=Decimal("25000.00"),
+        currency="NGN",
+        status=PaymentStatus.succeeded,
+        paid_at=datetime.now(UTC),
+        is_active=True,
+    )
+    db_session.add(payment)
+    db_session.flush()
+    db_session.add(
+        PaymentAllocation(
+            payment_id=payment.id,
+            invoice_id=invoice.id,
+            amount=Decimal("25000.00"),
+            is_active=True,
+        )
+    )
+    invoice.status = InvoiceStatus.paid
+    invoice.balance_due = Decimal("0.00")
+    db_session.commit()
+
+    fulfillment = settle_relocation_payment(
+        db_session, request_id=request.id, payment_id=payment.id
+    )
+    db_session.commit()
+    db_session.refresh(request)
+    db_session.refresh(subscription)
+    assert fulfillment.replayed is False
+    assert request.execution_state == (
+        SubscriptionChangeExecutionState.fulfillment_released
+    )
+    assert request.field_fee_payment_id == payment.id
+    assert request.service_order_id == fulfillment.service_order_id
+    assert request.work_order_id == fulfillment.work_order_id
     assert subscription.service_address_id == current_address.id
     assert subscription.offer_id == offer.id
 
@@ -1093,6 +1259,143 @@ def test_change_plan_page_does_not_price_catalog_upfront(
     assert page is not None
     assert page["available_offer_change_quotes"] == {}
     assert calls == []  # no upfront per-offer quote computation
+
+
+def test_change_plan_page_surfaces_missing_funding_baseline_without_guessing(
+    db_session, subscriber, monkeypatch
+):
+    from app.services import customer_portal_flow_changes as flow
+    from app.services.prepaid_funding_reconstruction import (
+        PrepaidFundingBaselineMissingError,
+    )
+
+    current_offer = _make_offer(
+        db_session,
+        name="Baseline Review Plan",
+        amount=Decimal("100.00"),
+        plan_family="unlimited",
+    )
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current_offer,
+        next_billing_at=datetime(2026, 6, 1, tzinfo=UTC),
+        start_at=datetime(2026, 5, 1, tzinfo=UTC),
+    )
+    monkeypatch.setattr(
+        flow,
+        "_customer_financial_position",
+        Mock(side_effect=PrepaidFundingBaselineMissingError("baseline missing")),
+    )
+
+    page = flow.get_change_plan_page(
+        db_session,
+        {"account_id": str(subscriber.id)},
+        str(subscription.id),
+    )
+
+    assert page is not None
+    assert page["financial_position_unavailable"] is True
+    assert page["prepaid_funding"] is None
+    assert page["postpaid_receivables"] is None
+    assert page["collection_blocking_balance"] is None
+    assert page["form_contract"]["submittable"] is False
+    assert {item.key for item in page["form_contract"]["unmet_prerequisites"]} == {
+        "financial_position_available"
+    }
+
+
+def test_customer_change_quote_maps_missing_funding_baseline_to_conflict(
+    db_session, monkeypatch
+):
+    from app.services.prepaid_funding_reconstruction import (
+        PrepaidFundingBaselineMissingError,
+    )
+    from app.web.customer import routes
+
+    monkeypatch.setattr(
+        routes,
+        "get_current_customer_from_request",
+        lambda _request, _db: {"account_id": str(uuid4())},
+    )
+    monkeypatch.setattr(
+        routes.customer_portal,
+        "get_plan_change_quote",
+        Mock(side_effect=PrepaidFundingBaselineMissingError("baseline missing")),
+    )
+
+    response = routes.customer_change_plan_quote(
+        Request({"type": "http", "method": "GET", "path": "/", "headers": []}),
+        uuid4(),
+        str(uuid4()),
+        db=db_session,
+    )
+
+    assert response.status_code == 409
+    assert b'"error":"financial_position_unavailable"' in response.body
+
+
+def test_reseller_change_quote_maps_missing_funding_baseline_to_conflict(
+    db_session, monkeypatch
+):
+    from app.services import web_reseller_routes as routes
+    from app.services.prepaid_funding_reconstruction import (
+        PrepaidFundingBaselineMissingError,
+    )
+
+    reseller = Mock(id=uuid4())
+    account = Mock(id=uuid4())
+    monkeypatch.setattr(
+        routes,
+        "_require_reseller_context",
+        lambda _request, _db: {"reseller": reseller},
+    )
+    monkeypatch.setattr(
+        routes.reseller_portal,
+        "owned_account",
+        lambda _db, _reseller_id, _account_id: account,
+    )
+    monkeypatch.setattr(
+        routes.customer_portal_flow_changes,
+        "get_plan_change_quote",
+        Mock(side_effect=PrepaidFundingBaselineMissingError("baseline missing")),
+    )
+
+    response = routes.reseller_service_change_quote(
+        Request({"type": "http", "method": "GET", "path": "/", "headers": []}),
+        db_session,
+        str(account.id),
+        str(uuid4()),
+        str(uuid4()),
+        None,
+    )
+
+    assert response.status_code == 409
+    assert b'"error":"financial_position_unavailable"' in response.body
+
+
+def test_admin_change_quote_maps_missing_funding_baseline_to_conflict(
+    db_session, monkeypatch
+):
+    from app.services.prepaid_funding_reconstruction import (
+        PrepaidFundingBaselineMissingError,
+    )
+    from app.web.admin import catalog as routes
+
+    monkeypatch.setattr(
+        routes.web_catalog_subscription_workflows_service,
+        "change_plan_quote_response",
+        Mock(side_effect=PrepaidFundingBaselineMissingError("baseline missing")),
+    )
+
+    response = routes.subscription_change_plan_quote(
+        str(uuid4()),
+        str(uuid4()),
+        db=db_session,
+    )
+
+    assert response.status_code == 409
+    assert b'"error_code":"financial_position_unavailable"' in response.body
 
 
 def test_get_plan_change_quote_returns_single_quote(
@@ -2151,3 +2454,223 @@ def test_admin_change_plan_quote_unknown_offer_404(db_session, subscriber):
             db_session, subscription_id=str(sub.id), target_offer_id=str(uuid4())
         )
     assert exc.value.status_code == 404
+
+
+def test_execution_reconciliation_inspection_has_reviewed_head(db_session, subscriber):
+    from app.models.subscription_change import (
+        SubscriptionChangeExecutionState,
+        SubscriptionChangeRequest,
+        SubscriptionChangeStatus,
+    )
+    from app.services.subscription_change_execution import (
+        inspect_execution_chain_reconciliation,
+    )
+
+    current = _make_offer(
+        db_session,
+        name="Reconcile Current",
+        amount=Decimal("100.00"),
+        plan_family="reconciliation",
+    )
+    target = _make_offer(
+        db_session,
+        name="Reconcile Target",
+        amount=Decimal("150.00"),
+        plan_family="reconciliation",
+    )
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current,
+        start_at=datetime.now(UTC) - timedelta(days=1),
+        next_billing_at=datetime.now(UTC) + timedelta(days=29),
+    )
+    change = SubscriptionChangeRequest(
+        subscription_id=subscription.id,
+        current_offer_id=current.id,
+        requested_offer_id=target.id,
+        effective_date=datetime.now(UTC).date(),
+        status=SubscriptionChangeStatus.applied,
+        execution_state=SubscriptionChangeExecutionState.completed,
+        is_active=True,
+    )
+    db_session.add(change)
+    db_session.commit()
+
+    inspection = inspect_execution_chain_reconciliation(db_session)
+
+    item = next(value for value in inspection.items if value.request_id == change.id)
+    assert len(item.reviewed_head) == 64
+    assert [finding.code for finding in item.findings] == [
+        "completed_subscription_drift"
+    ]
+    assert item.findings[0].repairable is False
+
+
+def test_execution_reconciliation_replays_durable_operator_evidence(
+    db_session, subscriber
+):
+    import hashlib
+
+    from app.models.subscription_change import (
+        SubscriptionChangeExecutionState,
+        SubscriptionChangeRequest,
+        SubscriptionChangeStatus,
+    )
+    from app.services.subscription_change_execution import reconcile_execution_chain
+
+    current = _make_offer(
+        db_session,
+        name="Replay Current",
+        amount=Decimal("100.00"),
+        plan_family="reconciliation",
+    )
+    target = _make_offer(
+        db_session,
+        name="Replay Target",
+        amount=Decimal("150.00"),
+        plan_family="reconciliation",
+    )
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current,
+        start_at=datetime.now(UTC) - timedelta(days=1),
+        next_billing_at=datetime.now(UTC) + timedelta(days=29),
+    )
+    key = "service-change-repair-replay-key"
+    head = "a" * 64
+    change = SubscriptionChangeRequest(
+        subscription_id=subscription.id,
+        current_offer_id=current.id,
+        requested_offer_id=target.id,
+        effective_date=datetime.now(UTC).date(),
+        status=SubscriptionChangeStatus.applied,
+        execution_state=SubscriptionChangeExecutionState.completed,
+        reconciliation_idempotency_key_hash=hashlib.sha256(key.encode()).hexdigest(),
+        reconciliation_reviewed_head=head,
+        reconciliation_actor_id="operator-1",
+        reconciliation_reason="Reviewed canonical execution evidence",
+        reconciled_at=datetime.now(UTC),
+        is_active=True,
+    )
+    db_session.add(change)
+    db_session.commit()
+
+    outcome = reconcile_execution_chain(
+        db_session,
+        request_id=change.id,
+        expected_head=head,
+        idempotency_key=key,
+        actor_id="operator-1",
+        reason="Reviewed canonical execution evidence",
+    )
+
+    assert outcome.replayed is True
+    assert outcome.request_id == change.id
+
+
+def test_execution_reconciliation_repairs_settled_before_fulfillment(
+    db_session, subscriber
+):
+    from app.models.billing import (
+        Invoice,
+        InvoiceStatus,
+        Payment,
+        PaymentAllocation,
+        PaymentStatus,
+    )
+    from app.models.subscription_change import (
+        SubscriptionChangeExecutionState,
+        SubscriptionChangeRequest,
+        SubscriptionChangeStatus,
+    )
+    from app.services.subscription_change_execution import (
+        inspect_execution_chain_reconciliation,
+        reconcile_execution_chain,
+    )
+
+    current = _make_offer(
+        db_session,
+        name="Interrupted Current",
+        amount=Decimal("100.00"),
+        plan_family="reconciliation",
+    )
+    target = _make_offer(
+        db_session,
+        name="Interrupted Target",
+        amount=Decimal("150.00"),
+        plan_family="reconciliation",
+    )
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current,
+        start_at=datetime.now(UTC) - timedelta(days=1),
+        next_billing_at=datetime.now(UTC) + timedelta(days=29),
+    )
+    invoice = Invoice(
+        account_id=subscriber.id,
+        status=InvoiceStatus.paid,
+        currency="NGN",
+        subtotal=Decimal("25000.00"),
+        total=Decimal("25000.00"),
+        balance_due=Decimal("0.00"),
+    )
+    payment = Payment(
+        account_id=subscriber.id,
+        amount=Decimal("25000.00"),
+        currency="NGN",
+        status=PaymentStatus.succeeded,
+        paid_at=datetime.now(UTC),
+        is_active=True,
+    )
+    db_session.add_all([invoice, payment])
+    db_session.flush()
+    db_session.add(
+        PaymentAllocation(
+            payment_id=payment.id,
+            invoice_id=invoice.id,
+            amount=Decimal("25000.00"),
+            is_active=True,
+        )
+    )
+    change = SubscriptionChangeRequest(
+        subscription_id=subscription.id,
+        current_offer_id=current.id,
+        requested_offer_id=target.id,
+        effective_date=datetime.now(UTC).date(),
+        status=SubscriptionChangeStatus.pending,
+        execution_state=SubscriptionChangeExecutionState.payment_settled,
+        field_fee_amount=Decimal("25000.00"),
+        field_fee_currency="NGN",
+        field_fee_invoice_id=invoice.id,
+        field_fee_payment_id=payment.id,
+        confirmation_snapshot={"delivery_mode": "field_migration"},
+        is_active=True,
+    )
+    db_session.add(change)
+    db_session.commit()
+    inspection = inspect_execution_chain_reconciliation(db_session)
+    item = next(value for value in inspection.items if value.request_id == change.id)
+    assert [(finding.code, finding.repairable) for finding in item.findings] == [
+        ("settled_not_released", True)
+    ]
+
+    outcome = reconcile_execution_chain(
+        db_session,
+        request_id=change.id,
+        expected_head=item.reviewed_head,
+        idempotency_key="repair-settled-before-fulfillment",
+        actor_id="operator-1",
+        reason="Payment settled before worker interruption",
+    )
+
+    db_session.refresh(change)
+    assert outcome.replayed is False
+    assert change.service_order_id is not None
+    assert change.work_order_id is not None
+    assert change.execution_state == (
+        SubscriptionChangeExecutionState.fulfillment_released
+    )
+    assert change.reconciliation_reviewed_head == item.reviewed_head

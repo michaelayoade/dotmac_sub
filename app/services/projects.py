@@ -2107,19 +2107,25 @@ class Projects(ListResponseMixin):
         db: Session,
         project_id: str,
         *,
+        actor_id: UUID | None = None,
         context: CommandContext | None = None,
     ):
         """Soft delete a project."""
         if context is None:
             context = _project_command_context(
-                action="delete_project", actor=None, aggregate_id=project_id
+                action="delete_project", actor=actor_id, aggregate_id=project_id
             )
             db_session_adapter.release_read_transaction(db)
             return execute_owner_command(
                 db,
                 definition=_PROJECT_MUTATION,
                 context=context,
-                operation=lambda: Projects.delete(db, project_id, context=context),
+                operation=lambda: Projects.delete(
+                    db,
+                    project_id,
+                    actor_id=actor_id,
+                    context=context,
+                ),
             )
         project = db.scalar(
             select(Project)
@@ -2145,12 +2151,13 @@ class Projects(ListResponseMixin):
         project_id: str,
         payload: ProjectUpdate,
         *,
+        actor_id: UUID | None = None,
         context: CommandContext | None = None,
     ):
         if context is None:
             context = _project_command_context(
                 action="update_project",
-                actor=payload.created_by_person_id,
+                actor=actor_id or payload.created_by_person_id,
                 aggregate_id=project_id,
             )
             db_session_adapter.release_read_transaction(db)
@@ -2159,7 +2166,11 @@ class Projects(ListResponseMixin):
                 definition=_PROJECT_MUTATION,
                 context=context,
                 operation=lambda: Projects.update(
-                    db, project_id, payload, context=context
+                    db,
+                    project_id,
+                    payload,
+                    actor_id=actor_id,
+                    context=context,
                 ),
             )
         project = db.scalar(
@@ -2795,12 +2806,13 @@ class ProjectTasks(ListResponseMixin):
         task_id: str,
         payload: ProjectTaskUpdate,
         *,
+        actor_id: UUID | None = None,
         context: CommandContext | None = None,
     ):
         if context is None:
             context = _project_command_context(
                 action="update_project_task",
-                actor=payload.created_by_person_id,
+                actor=actor_id or payload.created_by_person_id,
                 aggregate_id=task_id,
             )
             db_session_adapter.release_read_transaction(db)
@@ -2809,7 +2821,11 @@ class ProjectTasks(ListResponseMixin):
                 definition=_PROJECT_MUTATION,
                 context=context,
                 operation=lambda: ProjectTasks.update(
-                    db, task_id, payload, context=context
+                    db,
+                    task_id,
+                    payload,
+                    actor_id=actor_id,
+                    context=context,
                 ),
             )
         task = db.scalar(
@@ -2918,18 +2934,26 @@ class ProjectTasks(ListResponseMixin):
         db: Session,
         task_id: str,
         *,
+        actor_id: UUID | None = None,
         context: CommandContext | None = None,
     ):
         if context is None:
             context = _project_command_context(
-                action="delete_project_task", actor=None, aggregate_id=task_id
+                action="delete_project_task",
+                actor=actor_id,
+                aggregate_id=task_id,
             )
             db_session_adapter.release_read_transaction(db)
             return execute_owner_command(
                 db,
                 definition=_PROJECT_MUTATION,
                 context=context,
-                operation=lambda: ProjectTasks.delete(db, task_id, context=context),
+                operation=lambda: ProjectTasks.delete(
+                    db,
+                    task_id,
+                    actor_id=actor_id,
+                    context=context,
+                ),
             )
         task = db.scalar(
             select(ProjectTask)

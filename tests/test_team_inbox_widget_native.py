@@ -4,7 +4,6 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from fastapi import HTTPException
 
 from app.models.subscriber import Subscriber
 from app.models.team_inbox import (
@@ -168,7 +167,7 @@ def test_chat_disabled_returns_503(db_session):
     sub = _subscriber(db_session)
 
     with _chat_enabled(False):
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(team_inbox_widget.TeamInboxWidgetError) as exc:
             team_inbox_widget.broker_customer_session(db_session, str(sub.id))
 
-    assert exc.value.status_code == 503
+    assert exc.value.code == "communications.team_inbox_widget.disabled"

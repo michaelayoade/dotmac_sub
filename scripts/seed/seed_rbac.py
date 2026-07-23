@@ -27,6 +27,7 @@ ADMIN_ONLY_PERMISSION_KEYS = {
     "catalog:write",
     "network:read",
     "network:operation:redrive",
+    "provisioning:service_change_reconcile",
     "network:write",
     "rbac:assign",
     "rbac:permissions:delete",
@@ -137,6 +138,10 @@ DEFAULT_PERMISSIONS = [
     ("subscription:activate", "Activate suspended subscriptions"),
     ("subscription:suspend", "Suspend subscriptions"),
     ("subscription:cancel", "Cancel subscriptions"),
+    (
+        "provisioning:service_change_reconcile",
+        "Review and repair interrupted service-change execution chains",
+    ),
     # Network - Devices
     ("network:hub:read", "View the network operations hub"),
     ("network:admin", "Perform restricted network administration"),

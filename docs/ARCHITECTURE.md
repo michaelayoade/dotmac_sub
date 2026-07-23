@@ -1078,7 +1078,9 @@ celery_app = Celery("dotmac_sm")
 **Billing Tasks**
 - `run_monthly_billing` - Generate invoices (1st of month)
 - `process_scheduled_payments` - Process pending payments (daily)
-- `run_billing_enforcement` - Execute unified billing enforcement (daily)
+- `run_billing_enforcement` - Invoke the permanent postpaid collections owner;
+  current financial-access behavior is documented only in
+  `docs/FINANCIAL_ACCESS_ENFORCEMENT.md`
 - `apply_usage_charges` - Rate usage at period end
 
 **Usage & Network Tasks**

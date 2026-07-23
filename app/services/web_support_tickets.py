@@ -37,6 +37,8 @@ from app.services import (
 )
 from app.services import support as support_service
 from app.services import support_ticket_settings as support_ticket_settings_service
+from app.services.db_session_adapter import db_session_adapter
+from app.services.domain_errors import DomainError
 from app.services.file_storage import file_uploads
 from app.services.list_query import (
     ListDefinition,
@@ -48,6 +50,11 @@ from app.services.list_query import (
 from app.services.status_presentation import ticket_status_presentation
 
 logger = logging.getLogger(__name__)
+
+
+class WebSupportTicketInputError(DomainError):
+    """Transport-neutral validation error from the admin Ticket adapter service."""
+
 
 ALLOWED_ATTACHMENT_TYPES = {
     "image/png",
@@ -323,6 +330,7 @@ def _resolve_uploaded_by_subscriber_id(db: Session, actor_id: str | None) -> str
     return str(uid) if db.get(Subscriber, uid) else None
 
 
+@support_service.ticket_owner_command("stage_attachment_uploads")
 def upload_ticket_attachments(
     db: Session,
     *,
@@ -331,7 +339,6 @@ def upload_ticket_attachments(
     entity_type: str,
     actor_id: str | None,
 ) -> list[dict]:
-    uploaded_records = []
     uploaded_metadata = []
     uploaded_by = _resolve_uploaded_by_subscriber_id(db, actor_id)
     try:
@@ -351,7 +358,7 @@ def upload_ticket_attachments(
             if content_type not in ALLOWED_ATTACHMENT_TYPES:
                 raise ValueError(f"{filename}: unsupported file type")
 
-            record = file_uploads.upload(
+            record = file_uploads.stage_upload(
                 db=db,
                 domain="attachments",
                 entity_type=entity_type,
@@ -362,7 +369,6 @@ def upload_ticket_attachments(
                 uploaded_by=uploaded_by,
                 owner_subscriber_id=None,
             )
-            uploaded_records.append(record)
             uploaded_metadata.append(
                 {
                     "file_name": record.original_filename,
@@ -374,15 +380,9 @@ def upload_ticket_attachments(
             )
         return uploaded_metadata
     except Exception:
-        for record in uploaded_records:
-            try:
-                file_uploads.soft_delete(db=db, file=record, hard_delete_object=True)
-            except Exception:
-                logger.warning(
-                    "Failed to clean up uploaded support ticket attachment %s",
-                    getattr(record, "id", None),
-                    exc_info=True,
-                )
+        # Database metadata is rolled back by the Ticket owner. Object keys are
+        # content-addressed; an interrupted command is repaired by the storage
+        # orphan reconciler described in the Support lifecycle runbook.
         raise
 
 
@@ -591,7 +591,11 @@ def build_ticket_update_payload(**kwargs) -> TicketUpdate:
 
 
 def build_ticket_comment_payload(
-    *, body: str, is_internal: bool, actor_id: str | None, uploaded: list[dict]
+    *,
+    body: str,
+    is_internal: bool,
+    actor_id: str | None,
+    uploaded: list[dict],
 ) -> TicketCommentCreate:
     return TicketCommentCreate(
         body=body,
@@ -664,6 +668,7 @@ def create_ticket_from_form(
             for match in duplicate_result.matches
         ]
         payload.metadata_ = metadata
+    db_session_adapter.release_read_transaction(db)
     ticket = support_service.tickets.create(
         db, payload, actor_id=actor_id, request=request
     )
@@ -688,6 +693,7 @@ def update_ticket_from_form(
     **form,
 ):
     payload = build_ticket_update_payload(**form)
+    db_session_adapter.release_read_transaction(db)
     return support_service.tickets.update(
         db,
         ticket_id,
@@ -710,7 +716,6 @@ def quick_update_ticket(
     Surfaces invalid client input as HTTP 400 rather than a 500 from a bare
     ValueError / pydantic ValidationError.
     """
-    from fastapi import HTTPException
     from pydantic import ValidationError
 
     uuid_fields = {
@@ -728,8 +733,9 @@ def quick_update_ticket(
             try:
                 payload_data[key] = UUID(str(value))
             except ValueError as exc:
-                raise HTTPException(
-                    status_code=400, detail=f"{key} must be a valid UUID"
+                raise WebSupportTicketInputError(
+                    code="support_ticket_form_invalid",
+                    message=f"{key} must be a valid UUID",
                 ) from exc
         elif key in ("status", "priority"):
             payload_data[key] = str(value).strip()
@@ -738,7 +744,12 @@ def quick_update_ticket(
     try:
         payload = TicketUpdate(**payload_data)
     except ValidationError as exc:
-        raise HTTPException(status_code=400, detail=exc.errors()) from exc
+        raise WebSupportTicketInputError(
+            code="support_ticket_form_invalid",
+            message="Ticket update fields are invalid",
+            details={"validation_error_count": len(exc.errors())},
+        ) from exc
+    db_session_adapter.release_read_transaction(db)
     return support_service.tickets.update(
         db,
         ticket_id,
@@ -759,6 +770,7 @@ def add_ticket_comment_from_form(
     attachments: list,
     mentions: str | None = None,
 ):
+    db_session_adapter.release_read_transaction(db)
     uploaded = upload_ticket_attachments(
         db,
         ticket_id=ticket_id,
@@ -766,36 +778,26 @@ def add_ticket_comment_from_form(
         entity_type="support_ticket_comment_attachment",
         actor_id=actor_id,
     )
+    mentioned_agent_ids = [
+        value
+        for item in _parse_mentions_payload(mentions)
+        if (value := parse_uuid_or_none(item)) is not None
+    ]
     payload = build_ticket_comment_payload(
         body=body,
         is_internal=is_internal,
         actor_id=actor_id,
         uploaded=uploaded,
     )
+    db_session_adapter.release_read_transaction(db)
     comment = support_service.tickets.create_comment(
         db,
         ticket_id,
         payload,
         actor_id=actor_id,
         request=request,
+        mentioned_agent_ids=mentioned_agent_ids,
     )
-    mentioned_agent_ids = _parse_mentions_payload(mentions)
-    if mentioned_agent_ids:
-        try:
-            ticket = support_service.tickets.get(db, ticket_id)
-            ticket_mentions.notify_ticket_comment_mentions(
-                db,
-                ticket_id=str(ticket.id),
-                ticket_number=ticket.number,
-                ticket_title=ticket.title,
-                comment_preview=body[:300],
-                mentioned_agent_ids=mentioned_agent_ids,
-                actor_person_id=actor_id,
-            )
-            db.commit()
-        except Exception:
-            db.rollback()
-            logger.debug("ticket_comment_staff_mention_failed", exc_info=True)
     return comment
 
 
@@ -808,11 +810,13 @@ def update_ticket_comment_from_form(
     actor_id: str | None,
     body: str,
 ):
-    from fastapi import HTTPException
-
     comment = support_service.ticket_comments.get(db, comment_id)
     if str(comment.ticket_id) != str(ticket_id):
-        raise HTTPException(status_code=404, detail="Ticket comment not found")
+        raise WebSupportTicketInputError(
+            code="ticket_comment_not_found",
+            message="Ticket comment not found",
+        )
+    db_session_adapter.release_read_transaction(db)
     return support_service.ticket_comments.update(
         db,
         comment=comment,
@@ -851,6 +855,7 @@ def auto_assign_ticket(
     ticket_id: str,
     actor_id: str | None,
 ):
+    db_session_adapter.release_read_transaction(db)
     return support_service.tickets.manual_auto_assign(
         db,
         ticket_id,
@@ -872,6 +877,7 @@ def link_ticket_from_form(
     if not to_ticket_uuid:
         raise ValueError("Target ticket must be a valid ticket UUID.")
     payload = TicketLinkCreate(to_ticket_id=to_ticket_uuid, link_type=link_type)
+    db_session_adapter.release_read_transaction(db)
     return support_service.tickets.link_ticket(
         db,
         from_ticket_id=ticket_id,
@@ -894,6 +900,7 @@ def merge_ticket_from_form(
     target_uuid = parse_uuid_or_none(target_ticket_id)
     if not target_uuid:
         raise ValueError("Target ticket must be a valid ticket UUID.")
+    db_session_adapter.release_read_transaction(db)
     return support_service.tickets.merge(
         db,
         ticket_id,
@@ -910,6 +917,7 @@ def delete_ticket(
     ticket_id: str,
     actor_id: str | None,
 ) -> None:
+    db_session_adapter.release_read_transaction(db)
     support_service.tickets.soft_delete(
         db,
         ticket_id,

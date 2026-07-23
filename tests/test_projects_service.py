@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from app.models.audit import AuditEvent
+from app.models.audit import AuditActorType, AuditEvent
 from app.models.notification import Notification, NotificationChannel
 from app.models.project import (
     ProjectTask,
@@ -72,6 +72,43 @@ def test_project_owner_command_is_atomic_and_stages_audit(db_session, subscriber
         .one()
     )
     assert audit.request_id
+
+
+def test_project_mutation_audits_preserve_authenticated_actor(db_session, subscriber):
+    actor_id = uuid.uuid4()
+    project = _create_fiber_project(db_session, subscriber)
+    task = _tasks_for(db_session, project)[0]
+
+    projects.update(
+        db_session,
+        str(project.id),
+        ProjectUpdate(name="Authenticated project update"),
+        actor_id=actor_id,
+    )
+    project_tasks.update(
+        db_session,
+        str(task.id),
+        ProjectTaskUpdate(title="Authenticated task update"),
+        actor_id=actor_id,
+    )
+    project_tasks.delete(db_session, str(task.id), actor_id=actor_id)
+    projects.delete(db_session, str(project.id), actor_id=actor_id)
+
+    mutation_audits = (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.actor_id == str(actor_id))
+        .filter(AuditEvent.entity_type.in_(("project", "project_task")))
+        .filter(AuditEvent.action.in_(("update", "delete")))
+        .all()
+    )
+
+    assert {(audit.entity_type, audit.action) for audit in mutation_audits} == {
+        ("project", "update"),
+        ("project", "delete"),
+        ("project_task", "update"),
+        ("project_task", "delete"),
+    }
+    assert all(audit.actor_type == AuditActorType.user for audit in mutation_audits)
 
 
 def test_reconcile_project_projection_repairs_missing_sla_clock(db_session, subscriber):

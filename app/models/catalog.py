@@ -186,7 +186,7 @@ class SubscriptionStatus(enum.Enum):
       active   → active (service running, can connect)
       blocked  → blocked (temporarily blocked — non-payment)
       stopped  → stopped (manually paused by admin, different from block)
-      disabled → disabled (service terminated by admin)
+      disabled → disabled (administratively paused; explicit re-enable required)
       hidden   → hidden (historical, not visible to customer)
       deleted  → canceled (soft-deleted, record preserved)
 
@@ -201,7 +201,7 @@ class SubscriptionStatus(enum.Enum):
     blocked = "blocked"  # Temporarily blocked
     suspended = "suspended"  # Generic suspension (DotMac-native)
     stopped = "stopped"  # Manually paused by admin
-    disabled = "disabled"  # Terminated by admin
+    disabled = "disabled"  # Administratively paused; explicit re-enable required
     hidden = "hidden"  # Not visible to customer
     archived = "archived"  # Generic archive (DotMac-native)
     canceled = "canceled"  # Soft-deleted / fully terminated
