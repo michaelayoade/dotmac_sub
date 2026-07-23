@@ -11,7 +11,7 @@ from functools import wraps
 from typing import Any, ParamSpec, TypeVar
 from uuid import UUID
 
-from sqlalchemy import or_
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.domain_settings import SettingDomain
@@ -818,15 +818,29 @@ class Tickets:
 
     @staticmethod
     def _resolve_ticket_number(db: Session) -> str | None:
-        return numbering_service.generate_number(
-            db=db,
-            domain=SettingDomain.workflow,
-            sequence_key="support_ticket",
-            enabled_key="support_ticket_numbering_enabled",
-            prefix_key="support_ticket_number_prefix",
-            padding_key="support_ticket_number_padding",
-            start_key="support_ticket_number_start",
-        )
+        # Imported tickets can legitimately be ahead of the local document
+        # sequence.  Keep advancing the locked canonical sequence until its
+        # candidate is actually free instead of failing the customer request on
+        # support_tickets_number_key.  All local creators delegate here, so the
+        # sequence lock serializes concurrent reservations.
+        for _attempt in range(10_000):
+            candidate = numbering_service.generate_number(
+                db=db,
+                domain=SettingDomain.workflow,
+                sequence_key="support_ticket",
+                enabled_key="support_ticket_numbering_enabled",
+                prefix_key="support_ticket_number_prefix",
+                padding_key="support_ticket_number_padding",
+                start_key="support_ticket_number_start",
+            )
+            if candidate is None:
+                return None
+            occupied = db.scalar(
+                select(Ticket.id).where(Ticket.number == candidate).limit(1)
+            )
+            if occupied is None:
+                return candidate
+        raise RuntimeError("support ticket number sequence could not find a free value")
 
     @staticmethod
     def _assert_ticket_exists(db: Session, ticket_id: UUID) -> Ticket:

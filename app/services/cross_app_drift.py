@@ -311,10 +311,10 @@ class ServiceEnforcementCheck:
 
     def _active_but_blocked(self, db: Session) -> Iterable[Finding]:
         from app.services.account_status_reconcile import (
-            find_blocked_all_active_account_ids,
+            find_account_projection_drift_ids,
         )
 
-        for account_id in find_blocked_all_active_account_ids(db):
+        for account_id in find_account_projection_drift_ids(db):
             yield Finding(
                 check_name=self.name,
                 entity_type="subscriber",
@@ -325,12 +325,12 @@ class ServiceEnforcementCheck:
                     "billing_status": "active",
                     "subscriber_status": "blocked",
                     "radius_authorized": False,
-                    "note": "all subscriptions active but subscriber walled-gardened",
+                    "note": "active service with a blocking account projection",
                 },
                 details={
                     "suggested_owner": (
-                        "account-status reconciler "
-                        "(app.tasks.enforcement.reconcile_account_status_drift)"
+                        "access-control reconciler "
+                        "(app.tasks.radius.run_enforcement_reconciler)"
                     ),
                     "suggested_action": (
                         "Re-derive the subscriber status from its subscriptions "

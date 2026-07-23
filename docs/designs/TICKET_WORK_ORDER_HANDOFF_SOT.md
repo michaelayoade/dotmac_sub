@@ -62,7 +62,7 @@ both sides of the retired native automation evidence, clears that overloaded
 native UUID value, and removes the duplicate ticket/work-order metadata keys.
 It deliberately leaves imported `WorkOrder.crm_ticket_id` provenance intact.
 
-Migration `405_support_ticket_work_order_provenance` then joins preserved CRM
+Migration `406_support_ticket_work_order_provenance` then joins preserved CRM
 Work-Order provenance to the exact imported Ticket provenance in
 `Ticket.metadata.crm_ticket_id`, requires subscriber agreement, fails on
 duplicate or conflicting identity, and fills `origin_ticket_id` without

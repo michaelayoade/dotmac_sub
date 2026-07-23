@@ -5,7 +5,7 @@
 Historical provenance is preserved. `WorkOrder.crm_ticket_id` remains the
 external CRM observation and never becomes a lifecycle authority.
 `WorkOrder.origin_ticket_id` is the native, authoritative Ticket relationship.
-Migration `405_support_ticket_work_order_provenance` links the two only through
+Migration `406_support_ticket_work_order_provenance` links the two only through
 the exact imported Ticket provenance at
 `support_tickets.metadata.crm_ticket_id`; it does not erase the CRM value.
 

@@ -319,11 +319,7 @@
                             {{ (dev.temperature | string + '°C') if dev.temperature is not none else '—' }}
                         </td>
                         <td class="px-4 py-3 text-right text-sm text-slate-700 dark:text-slate-300">
-                            {% if dev.uptime is not none %}
-                                {% set days = (dev.uptime / 8640000) | int %}
-                                {% set hours = ((dev.uptime % 8640000) / 360000) | int %}
-                                {{ days }}d {{ hours }}h
-                            {% else %}—{% endif %}
+                            {{ dev.uptime if dev.uptime is not none else '—' }}
                         </td>
                     </tr>
                     {% endfor %}

@@ -11,6 +11,13 @@
 {% endblock %}
 
 {% block content %}
+{% if financial_position_unavailable %}
+<section data-testid="reseller-service-change-financial-unavailable" class="mt-6 rounded-2xl border border-amber-200 bg-amber-50 p-6 dark:border-amber-900/50 dark:bg-amber-900/20">
+    <h2 class="font-semibold text-amber-900 dark:text-amber-100">Service change temporarily unavailable</h2>
+    <p class="mt-2 text-sm text-amber-800 dark:text-amber-200">This account has no verified prepaid funding baseline. The amount cannot be inferred or treated as zero. Finance must complete the reviewed reconstruction before a reseller can change this service.</p>
+    <a href="/reseller/accounts/{{ account.id }}" class="mt-4 inline-flex rounded-xl border border-amber-300 bg-white px-4 py-2 text-sm font-semibold text-amber-900">Return to account</a>
+</section>
+{% else %}
 <form class="mt-6 space-y-6" method="post" x-data="resellerServiceChange()" @submit.prevent="submitReviewed($event)">
     {% include "components/forms/csrf_input.html" %}
     <input type="hidden" name="preview_fingerprint" :value="quote?.preview_fingerprint || ''">
@@ -82,4 +89,5 @@ function resellerServiceChange() {
     };
 }
 </script>
+{% endif %}
 {% endblock %}

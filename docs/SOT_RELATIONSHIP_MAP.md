@@ -263,6 +263,7 @@ do not hand-edit these rows.
 | `support.ticket_automation_evaluation` | ticket automation-rule evaluation | `policy` | canonical automation rules ← `support.ticket_automation_rule_configuration`<br>ticket automation facts ← `support.ticket_lifecycle` | `read_only` | `complete` | support operations | `docs/designs/SUPPORT_TICKET_LIFECYCLE_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_support_automation.py`<br>`tests/architecture/test_support_ticket_sot_boundary.py` |
 | `support.ticket_lifecycle` | ticket lifecycle mutations | `command_writer` | typed ticket command ← `support.ticket_lifecycle`<br>canonical ticket state ← `support.ticket_lifecycle`<br>ticket configuration ← `support.ticket_configuration`<br>customer identity evidence ← `customer.identity_scope`<br>assignment policy proposal ← `support.ticket_assignment_evaluation`<br>automation policy proposal ← `support.ticket_automation_evaluation` | `owner_managed` | `complete` | support operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/SUPPORT_TICKET_LIFECYCLE_SOT.md`<br>`docs/designs/SUPPORT_UX_POLISH_AUDIT.md`<br>`tests/test_support_services.py`<br>`tests/test_ticket_status_transition.py`<br>`tests/test_support_automation.py`<br>`tests/test_ticket_assignment_engine.py`<br>`tests/architecture/test_support_ticket_sot_boundary.py` |
 | `support.ticket_lifecycle` | ticket creation and identity | `authoritative_record` | typed ticket command ← `support.ticket_lifecycle`<br>canonical ticket state ← `support.ticket_lifecycle`<br>ticket configuration ← `support.ticket_configuration`<br>customer identity evidence ← `customer.identity_scope`<br>assignment policy proposal ← `support.ticket_assignment_evaluation`<br>automation policy proposal ← `support.ticket_automation_evaluation` | `owner_managed` | `complete` | support operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/SUPPORT_TICKET_LIFECYCLE_SOT.md`<br>`docs/designs/SUPPORT_UX_POLISH_AUDIT.md`<br>`tests/test_support_services.py`<br>`tests/test_ticket_status_transition.py`<br>`tests/test_support_automation.py`<br>`tests/test_ticket_assignment_engine.py`<br>`tests/architecture/test_support_ticket_sot_boundary.py` |
+| `support.ticket_lifecycle` | support ticket human-readable number allocation | `command_writer` | typed ticket command ← `support.ticket_lifecycle`<br>canonical ticket state ← `support.ticket_lifecycle`<br>ticket configuration ← `support.ticket_configuration`<br>customer identity evidence ← `customer.identity_scope`<br>assignment policy proposal ← `support.ticket_assignment_evaluation`<br>automation policy proposal ← `support.ticket_automation_evaluation` | `owner_managed` | `complete` | support operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/SUPPORT_TICKET_LIFECYCLE_SOT.md`<br>`docs/designs/SUPPORT_UX_POLISH_AUDIT.md`<br>`tests/test_support_services.py`<br>`tests/test_ticket_status_transition.py`<br>`tests/test_support_automation.py`<br>`tests/test_ticket_assignment_engine.py`<br>`tests/architecture/test_support_ticket_sot_boundary.py` |
 | `support.ticket_lifecycle` | ticket status vocabulary | `authoritative_record` | typed ticket command ← `support.ticket_lifecycle`<br>canonical ticket state ← `support.ticket_lifecycle`<br>ticket configuration ← `support.ticket_configuration`<br>customer identity evidence ← `customer.identity_scope`<br>assignment policy proposal ← `support.ticket_assignment_evaluation`<br>automation policy proposal ← `support.ticket_automation_evaluation` | `owner_managed` | `complete` | support operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/SUPPORT_TICKET_LIFECYCLE_SOT.md`<br>`docs/designs/SUPPORT_UX_POLISH_AUDIT.md`<br>`tests/test_support_services.py`<br>`tests/test_ticket_status_transition.py`<br>`tests/test_support_automation.py`<br>`tests/test_ticket_assignment_engine.py`<br>`tests/architecture/test_support_ticket_sot_boundary.py` |
 | `support.ticket_lifecycle` | guarded ticket status transitions | `authoritative_record` | typed ticket command ← `support.ticket_lifecycle`<br>canonical ticket state ← `support.ticket_lifecycle`<br>ticket configuration ← `support.ticket_configuration`<br>customer identity evidence ← `customer.identity_scope`<br>assignment policy proposal ← `support.ticket_assignment_evaluation`<br>automation policy proposal ← `support.ticket_automation_evaluation` | `owner_managed` | `complete` | support operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/SUPPORT_TICKET_LIFECYCLE_SOT.md`<br>`docs/designs/SUPPORT_UX_POLISH_AUDIT.md`<br>`tests/test_support_services.py`<br>`tests/test_ticket_status_transition.py`<br>`tests/test_support_automation.py`<br>`tests/test_ticket_assignment_engine.py`<br>`tests/architecture/test_support_ticket_sot_boundary.py` |
 | `support.ticket_lifecycle` | ticket lifecycle timestamps and consequences | `authoritative_record` | typed ticket command ← `support.ticket_lifecycle`<br>canonical ticket state ← `support.ticket_lifecycle`<br>ticket configuration ← `support.ticket_configuration`<br>customer identity evidence ← `customer.identity_scope`<br>assignment policy proposal ← `support.ticket_assignment_evaluation`<br>automation policy proposal ← `support.ticket_automation_evaluation` | `owner_managed` | `complete` | support operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/SUPPORT_TICKET_LIFECYCLE_SOT.md`<br>`docs/designs/SUPPORT_UX_POLISH_AUDIT.md`<br>`tests/test_support_services.py`<br>`tests/test_ticket_status_transition.py`<br>`tests/test_support_automation.py`<br>`tests/test_ticket_assignment_engine.py`<br>`tests/architecture/test_support_ticket_sot_boundary.py` |
@@ -849,7 +850,12 @@ detailed security and delivery boundary is
    profile validity, payment-arrangement/proof/extension shields, canonical
    receivables or prepaid funding, and billing enforcement health immediately
    before acting. `access.subscription_lifecycle` is the sole writer of
-   enforcement locks and subscription/account access status.
+   enforcement locks and subscription/account access status. It persists the
+   derived account status and every child service's desired access state in one
+   transaction. The mandatory access-control reconciler invokes that owner,
+   compares the exact per-login projection consumed by the RADIUS writer in
+   both directions, requests one idempotent projection refresh when needed,
+   and reports a degraded outcome until the external rows converge.
 16. `financial.payment_arrangements` owns arrangement eligibility, lifecycle,
    installment schedule, payment application, and active-arrangement shield
    state. Dunning consumes the shield; it does not reimplement arrangement
@@ -1775,10 +1781,14 @@ confirmation, tracking, or rating eligibility from raw statuses.
 ## Support Operations
 
 1. `support.ticket_lifecycle` is the canonical owner of Ticket creation and
-   identity, guarded status transitions, timestamps, team/person assignment,
-   comments/mentions/attachments, links/duplicates/merges, resolution
-   confirmation/disputes, CSAT, audit, official timeline, and transactional
-   events. The retired lifecycle-owner alias is not a registered service.
+   identity, human-readable number allocation, guarded status transitions,
+   timestamps, team/person assignment, comments/mentions/attachments,
+   links/duplicates/merges, resolution confirmation/disputes, CSAT, audit,
+   official timeline, and transactional events. Local ticket creation reserves
+   numbers through the locked `support_ticket` document sequence and advances
+   past occupied imported numbers; portal, API, automation, and admin adapters
+   never allocate numbers. The retired lifecycle-owner alias is not a
+   registered service.
 2. `support.ticket_configuration` owns the operator-visible status subset,
    priority/type choices, routing, and SLA policy. A configured status must be
    part of the lifecycle vocabulary.
@@ -3027,8 +3037,9 @@ reinterpret its presentation.
 
 ## Support Control Plane
 
-1. `support.ticket_lifecycle` owns ticket lifecycle, assignment, comments, satisfaction,
-   and both signed-link and authenticated resolution confirmation/dispute.
+1. `support.ticket_lifecycle` owns ticket number allocation, lifecycle, assignment,
+    comments, satisfaction, and both signed-link and authenticated resolution
+    confirmation/dispute.
 2. `support.ticket_configuration` owns the operator-managed priority and ticket-
    type SLA targets shown at `/admin/system/ticket-settings`. Ticket types have
    no fixed code default: zero or no override falls through to the configured
@@ -3046,7 +3057,7 @@ reinterpret its presentation.
    infers its project. `work_order.origin_ticket_id` is the only ticket-to-work
    native link; `Ticket.metadata.work_order_id` and native uses of
    `WorkOrder.crm_ticket_id` are retired. Imported CRM values remain external
-   provenance. Migration `405_support_ticket_work_order_provenance` backfills
+   provenance. Migration `406_support_ticket_work_order_provenance` backfills
    exact native links from preserved Ticket CRM provenance, verifies ambiguity
    and subscriber alignment, and retains the external value. `field_visit`
    remains a descriptive tag and has no decision authority.

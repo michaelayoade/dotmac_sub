@@ -1,7 +1,7 @@
 """Backfill preserved CRM Ticket-to-Work-Order provenance.
 
-Revision ID: 405_support_ticket_work_order_provenance
-Revises: 404_team_inbox_sot_completion
+Revision ID: 406_support_ticket_work_order_provenance
+Revises: 405_restore_wireless_masts
 
 Migration 382 expanded the native ``origin_ticket_id`` relationship and moved
 only corroborated legacy native UUID links. Imported CRM work orders correctly
@@ -21,8 +21,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "405_support_ticket_work_order_provenance"
-down_revision = "404_team_inbox_sot_completion"
+revision = "406_support_ticket_work_order_provenance"
+down_revision = "405_restore_wireless_masts"
 branch_labels = None
 depends_on = None
 

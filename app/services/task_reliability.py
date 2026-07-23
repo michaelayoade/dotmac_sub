@@ -271,13 +271,6 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.enforcement.detect_stale_overdue_locks": _c(
         "enforcement", SWEEP, IDEMP, STATUS, "Dry-run detector; writes nothing."
     ),
-    "app.tasks.enforcement.reconcile_account_status_drift": _c(
-        "enforcement",
-        SWEEP,
-        GUARDED,
-        STATUS,
-        "Beat-rerun self-heals; all-active cohort filter is the guard.",
-    ),
     "app.tasks.events.cleanup_old_events": _c("events", SWEEP, IDEMP, LOG),
     "app.tasks.events.dispatch_pending_events": _c(
         "events",
@@ -488,7 +481,15 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.radius.connectivity_shadow_audit": _c("radius", SWEEP, IDEMP, HEALTH),
     "app.tasks.radius.reap_radacct_ghosts": _c("radius", SWEEP, IDEMP, HEALTH),
     "app.tasks.radius.reconcile_active_sessions": _c("radius", SWEEP, IDEMP, HEALTH),
-    "app.tasks.radius.run_enforcement_reconciler": _c("radius", STATE, GUARDED, STATUS),
+    "app.tasks.radius.run_enforcement_reconciler": _c(
+        "radius",
+        STATE,
+        GUARDED,
+        STATUS,
+        "Mandatory owner-driven recovery loop; isolates account errors, caps "
+        "disconnects, requests one idempotent projection refresh, and records "
+        "a degraded outcome until desired and observed access converge.",
+    ),
     "app.tasks.radius.run_radius_sync_job": _c("radius", SWEEP, IDEMP, STATUS),
     "app.tasks.radius_population.refresh_radius_from_subs": _c(
         "radius", SWEEP, IDEMP, STATUS

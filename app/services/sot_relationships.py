@@ -5217,9 +5217,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 notes=(
                     "One read-only policy owner resolves customer-impact, billing, "
                     "prepaid funding, and RADIUS answers from the same account and "
-                    "subscription evidence. The former access.control_resolution "
-                    "registry alias and customer_service_state implementation are "
-                    "retired."
+                    "subscription evidence."
                 ),
                 contract=ServiceContract(
                     concerns=(
@@ -9569,6 +9567,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "ticket lifecycle mutations",
                     "ticket creation and identity",
+                    "support ticket human-readable number allocation",
                     "ticket status vocabulary",
                     "guarded ticket status transitions",
                     "ticket lifecycle timestamps and consequences",
@@ -9583,9 +9582,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     concerns=tuple(
                         ConcernContract(
                             name=name,
-                            role=OwnerRole.AUTHORITATIVE_RECORD
-                            if name != "ticket lifecycle mutations"
-                            else OwnerRole.COMMAND_WRITER,
+                            role=(
+                                OwnerRole.COMMAND_WRITER
+                                if name
+                                in {
+                                    "ticket lifecycle mutations",
+                                    "support ticket human-readable number allocation",
+                                }
+                                else OwnerRole.AUTHORITATIVE_RECORD
+                            ),
                             input_names=(
                                 "typed ticket command",
                                 "canonical ticket state",
@@ -9599,6 +9604,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         for name in (
                             "ticket lifecycle mutations",
                             "ticket creation and identity",
+                            "support ticket human-readable number allocation",
                             "ticket status vocabulary",
                             "guarded ticket status transitions",
                             "ticket lifecycle timestamps and consequences",
@@ -14574,6 +14580,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "effective scheduled-task registration",
                     "permanent customer-financial lifecycle task registration",
+                    "mandatory account-access reconciliation registration",
                     "optional capability task synchronization",
                     "Celery runtime schedule config",
                 ),
@@ -14614,6 +14621,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "persisted access restriction intent",
                     "subscription access-status transitions",
                     "subscriber access-status projection",
+                    "atomic account and child-service access projection",
                 ),
                 depends_on=(
                     "events.dispatcher",
@@ -14969,10 +14977,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 name="access.radius_projection",
                 module="app.services.radius_population",
                 owns=(
+                    "canonical per-login RADIUS projection plan",
                     "radcheck/radreply/radusergroup customer projection",
                     "radcheck_admin/radreply_admin device-login projection",
                     "idempotent per-target advisory-locked RADIUS auth projection",
                     "walled-garden/reject radreply on blocked/suspended access",
+                    "bidirectional desired-versus-observed projection drift",
                 ),
                 depends_on=(
                     "access.radius_state",
@@ -14983,7 +14993,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "Single writer of the FreeRADIUS auth tables across every "
                     "configured runtime target. Event-time and per-user callers "
                     "request a full or scoped projection; they do not write auth "
-                    "tables directly."
+                    "tables directly. The writer and reconciler consume the same "
+                    "per-login plan and therefore cannot reinterpret lifecycle "
+                    "statuses independently."
                 ),
             ),
             SOTService(

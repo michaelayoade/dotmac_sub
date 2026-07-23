@@ -96,7 +96,7 @@ def test_ticket_work_order_field_results_cannot_close_ticket() -> None:
 
 
 def test_historical_crm_provenance_has_gated_backfill_and_runbook() -> None:
-    migration = _source("alembic/versions/405_support_ticket_work_order_provenance.py")
+    migration = _source("alembic/versions/406_support_ticket_work_order_provenance.py")
     assert "crm_ticket_id" in migration
     assert "origin_ticket_id" in migration
     assert "raise RuntimeError" in migration
