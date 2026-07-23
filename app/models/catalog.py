@@ -1120,8 +1120,8 @@ class RadiusProfile(Base):
     """
     RADIUS profile defining authentication and authorization attributes.
 
-    Profiles define speed limits, VLAN assignments, and other settings
-    sent to NAS devices via RADIUS reply attributes.
+    Profiles define speed limits, VLAN assignments, session controls, and other
+    settings projected to the appropriate RADIUS check or reply tables.
     """
 
     __tablename__ = "radius_profiles"

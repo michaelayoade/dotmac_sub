@@ -753,6 +753,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "access.radius_state",
         "access.radius_reject",
         "access.radius_target_registry",
+        "control.settings_spec",
     )
     assert sot_relationships.dependencies_for("communications.intents") == (
         "communications.channel_policy",
