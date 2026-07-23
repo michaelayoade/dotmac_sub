@@ -97,8 +97,13 @@ before committing.
 **Support load.** This is the point. The 6,544 outage conversations and 1,877
 status chases are the cost being targeted.
 
-**Reversibility.** Setting `OUTAGE_AUTO_NOTIFY_ENABLED=false` returns the system
-to operator-only dispatch with no code change and no data migration.
+**Reversibility.** Every gate is a database-authoritative setting under
+`SettingDomain.network_monitoring`, so an operator can disarm automation, widen
+the settling window or raise the minimum affected count **from the admin UI
+during an incident**. An env-var-only flag would need a deploy to flip, which is
+the wrong control for something that contacts customers. Turning
+`outage_auto_notify_enabled` off returns the system to operator-only dispatch
+with no code change and no data migration.
 
 **Rejected — leave it manual.** Tried for 17 days across 3,723 incidents; zero
 dispatches. Rejected on evidence.
@@ -114,7 +119,7 @@ classifier's own lifecycle treats `suspected` as unconfirmed, and a false
 - **Old owner and paths:** operator-only, `POST /admin/network/detected-outages/notify`. Retained, unchanged.
 - **New owner and paths:** `app.services.topology.outage_auto_notify.auto_dispatch_due_outage_notifications`, scheduled by `app.tasks.outage_auto_notify`.
 - **Backfill/repair:** none. Historical incidents are not retro-notified — a notification about a resolved outage is noise.
-- **Shadow/verification phase:** `OUTAGE_AUTO_NOTIFY_DRY_RUN=true` (the default) plans and logs recipients without sending. Run it for several days and read `outage_auto_notify_dry_run` log lines against the incidents the NOC saw.
+- **Shadow/verification phase:** `outage_auto_notify_dry_run` true (the default) plans and logs recipients without sending. Run it for several days and read `outage_auto_notify_dry_run` log lines against the incidents the NOC saw.
 - **Cutover gate:** dry-run output shows no incident that the NOC would not have notified about manually, and per-run recipient counts are within expectation.
 - **Fallback retirement:** none. The manual path stays as the way to notify about incidents automation deliberately excludes (`radio_cluster`, operator-declared, below-threshold).
 - **Schema contract step:** none. No migration; `actor_id` already carries no FK.

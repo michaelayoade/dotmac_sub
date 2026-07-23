@@ -64,14 +64,14 @@ class _Session:
 
 @pytest.fixture
 def enabled(monkeypatch):
-    monkeypatch.setattr(outage_auto_notify, "_auto_enabled", lambda: True)
-    monkeypatch.setattr(outage_auto_notify, "_dry_run", lambda: False)
+    monkeypatch.setattr(outage_auto_notify, "_auto_enabled", lambda _s: True)
+    monkeypatch.setattr(outage_auto_notify, "_dry_run", lambda _s: False)
 
 
 def _eligible(rows, monkeypatch, **overrides):
     """Run eligibility with the real gates, only the query stubbed."""
     for name, value in overrides.items():
-        monkeypatch.setattr(outage_auto_notify, name, lambda v=value: v)
+        monkeypatch.setattr(outage_auto_notify, name, lambda _s, v=value: v)
     return outage_auto_notify.eligible_incidents(_Session(rows), now=NOW)
 
 
@@ -114,7 +114,7 @@ def test_naive_timestamp_is_treated_as_utc(monkeypatch):
 
 
 def test_disabled_is_a_no_op(monkeypatch):
-    monkeypatch.setattr(outage_auto_notify, "_auto_enabled", lambda: False)
+    monkeypatch.setattr(outage_auto_notify, "_auto_enabled", lambda _s: False)
     result = outage_auto_notify.auto_dispatch_due_outage_notifications(
         _Session([_Incident()]), now=NOW
     )
@@ -123,7 +123,7 @@ def test_disabled_is_a_no_op(monkeypatch):
 
 def test_scheduling_is_safe_before_the_decision(monkeypatch):
     """The beat entry may be enabled while the feature decision is open."""
-    monkeypatch.setattr(outage_auto_notify, "_auto_enabled", lambda: False)
+    monkeypatch.setattr(outage_auto_notify, "_auto_enabled", lambda _s: False)
     called = []
     monkeypatch.setattr(
         outage_auto_notify,
@@ -140,8 +140,8 @@ def test_scheduling_is_safe_before_the_decision(monkeypatch):
 
 
 def test_dry_run_plans_but_never_dispatches(monkeypatch):
-    monkeypatch.setattr(outage_auto_notify, "_auto_enabled", lambda: True)
-    monkeypatch.setattr(outage_auto_notify, "_dry_run", lambda: True)
+    monkeypatch.setattr(outage_auto_notify, "_auto_enabled", lambda _s: True)
+    monkeypatch.setattr(outage_auto_notify, "_dry_run", lambda _s: True)
     dispatched = []
     monkeypatch.setattr(
         outage_auto_notify,
@@ -209,7 +209,7 @@ def test_incident_with_no_affected_subscriptions_is_skipped(monkeypatch, enabled
 
 
 def test_per_run_incident_cap_bounds_blast_radius(monkeypatch, enabled):
-    monkeypatch.setattr(outage_auto_notify, "_max_incidents_per_run", lambda: 2)
+    monkeypatch.setattr(outage_auto_notify, "_max_incidents_per_run", lambda _s: 2)
     calls = []
     monkeypatch.setattr(
         outage_auto_notify,
@@ -239,6 +239,59 @@ def test_automation_adds_no_second_send_path():
 
 def test_operator_source_incidents_are_left_to_operators(monkeypatch):
     assert _eligible([_Incident(detection_source=OPERATOR_SOURCE)], monkeypatch) == []
+
+
+# --- the gates are operator-controllable ------------------------------------
+
+_GATE_KEYS = (
+    "outage_auto_notify_enabled",
+    "outage_auto_notify_dry_run",
+    "outage_auto_notify_settle_minutes",
+    "outage_auto_notify_min_affected",
+    "outage_auto_notify_max_incidents_per_run",
+    "outage_auto_notify_interval_seconds",
+)
+
+
+@pytest.mark.parametrize("key", _GATE_KEYS)
+def test_every_gate_is_a_registered_setting(key):
+    """Database-authoritative, so arming/disarming is an admin toggle rather
+    than a deploy."""
+    from app.models.domain_settings import SettingDomain
+    from app.services import settings_spec
+
+    spec = settings_spec.get_spec(SettingDomain.network_monitoring, key)
+    assert spec is not None, f"{key} is not a registered setting"
+    assert spec.env_var, f"{key} needs an env var for bootstrap materialization"
+
+
+def test_automation_is_off_and_dry_by_default():
+    from app.models.domain_settings import SettingDomain
+    from app.services import settings_spec
+
+    enabled = settings_spec.get_spec(
+        SettingDomain.network_monitoring, "outage_auto_notify_enabled"
+    )
+    dry_run = settings_spec.get_spec(
+        SettingDomain.network_monitoring, "outage_auto_notify_dry_run"
+    )
+    assert enabled.default is False
+    assert dry_run.default is True
+
+
+def test_gates_are_not_read_from_app_config():
+    """An env-var-only flag needs a deploy to flip — the wrong control for
+    something that contacts customers."""
+    import inspect
+
+    from app.config import Settings
+
+    assert "from app.config import settings" not in inspect.getsource(
+        outage_auto_notify
+    )
+    config_source = inspect.getsource(Settings)
+    for key in _GATE_KEYS:
+        assert f"{key}: " not in config_source, f"{key} is back in app.config"
 
 
 # --- transaction ownership --------------------------------------------------

@@ -35,8 +35,9 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.orm import Session
 
-from app.config import settings
+from app.models.domain_settings import SettingDomain
 from app.models.network_monitoring import OutageIncident
+from app.services import settings_spec
 from app.services.topology.outage import (
     CLASSIFIER_CUSTOMER_VISIBLE_STATUSES,
     CLASSIFIER_SOURCE,
@@ -61,26 +62,38 @@ AUTOMATABLE_CLASSIFICATION = "node_outage"
 ADVISORY_LOCK_KEY = 0x6F_61_6E
 
 
-def _auto_enabled() -> bool:
-    return bool(getattr(settings, "outage_auto_notify_enabled", False))
+def _gate(session: Session, key: str, fallback: object) -> object:
+    """Read one automation gate.
+
+    Database-authoritative via ``settings_spec`` so an operator can arm, disarm
+    or re-tighten automation from the admin UI mid-incident. An env-var-only
+    flag would need a deploy to flip, which is the wrong control for something
+    that contacts customers.
+    """
+    value = settings_spec.resolve_value(session, SettingDomain.network_monitoring, key)
+    return fallback if value is None else value
 
 
-def _dry_run() -> bool:
-    return bool(getattr(settings, "outage_auto_notify_dry_run", False))
+def _auto_enabled(session: Session) -> bool:
+    return bool(_gate(session, "outage_auto_notify_enabled", False))
 
 
-def _settle_period() -> timedelta:
+def _dry_run(session: Session) -> bool:
+    return bool(_gate(session, "outage_auto_notify_dry_run", True))
+
+
+def _settle_period(session: Session) -> timedelta:
     return timedelta(
-        minutes=int(getattr(settings, "outage_auto_notify_settle_minutes", 15))
+        minutes=int(_gate(session, "outage_auto_notify_settle_minutes", 15))  # type: ignore[call-overload]
     )
 
 
-def _min_affected() -> int:
-    return int(getattr(settings, "outage_auto_notify_min_affected", 5))
+def _min_affected(session: Session) -> int:
+    return int(_gate(session, "outage_auto_notify_min_affected", 5))  # type: ignore[call-overload]
 
 
-def _max_incidents_per_run() -> int:
-    return int(getattr(settings, "outage_auto_notify_max_incidents_per_run", 10))
+def _max_incidents_per_run(session: Session) -> int:
+    return int(_gate(session, "outage_auto_notify_max_incidents_per_run", 10))  # type: ignore[call-overload]
 
 
 def eligible_incidents(
@@ -93,7 +106,7 @@ def eligible_incidents(
     scheduler cannot.
     """
     now = now or datetime.now(UTC)
-    cutoff = now - _settle_period()
+    cutoff = now - _settle_period(session)
 
     candidates = (
         session.query(OutageIncident)
@@ -115,7 +128,7 @@ def eligible_incidents(
             continue
         if incident.classification != AUTOMATABLE_CLASSIFICATION:
             continue
-        if (incident.affected_count or 0) < _min_affected():
+        if (incident.affected_count or 0) < _min_affected(session):
             continue
         # Settling: use the moment the incident became customer-visible when we
         # have it, else when it was first seen. A fault that clears inside the
@@ -172,7 +185,7 @@ def _run_auto_dispatch(
 ) -> dict:
     now = now or datetime.now(UTC)
 
-    if not _auto_enabled():
+    if not _auto_enabled(session):
         return {"dispatched": False, "reason": "auto_disabled", "incidents": []}
 
     if subscription_ids_for is None:
@@ -181,8 +194,8 @@ def _run_auto_dispatch(
         subscription_ids_for = incident_subscription_ids
 
     results: list[dict] = []
-    cap = _max_incidents_per_run()
-    dry_run = _dry_run()
+    cap = _max_incidents_per_run(session)
+    dry_run = _dry_run(session)
 
     for incident in eligible_incidents(session, now=now)[:cap]:
         sub_ids = subscription_ids_for(session, incident)
