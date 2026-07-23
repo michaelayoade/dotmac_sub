@@ -31,6 +31,9 @@ from app.services.auth_dependencies import (
 )
 from app.services.domain_errors import DomainError
 from app.services.owner_commands import CommandContext
+from app.services.prepaid_funding_reconstruction import (
+    PrepaidFundingBaselineMissingError,
+)
 from app.services.subscription_lifecycle import (
     SubscriptionCommandKind,
     SubscriptionEffectiveTiming,
@@ -1211,13 +1214,24 @@ def subscription_change_plan_quote(
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Proration preview for the change-plan modal (no side effects)."""
-    return JSONResponse(
-        web_catalog_subscription_workflows_service.change_plan_quote_response(
+    try:
+        payload = web_catalog_subscription_workflows_service.change_plan_quote_response(
             db,
             subscription_id=subscription_id,
             target_offer_id=target_offer_id,
         )
-    )
+    except PrepaidFundingBaselineMissingError:
+        return JSONResponse(
+            {
+                "status": "unavailable",
+                "message": (
+                    web_catalog_subscription_workflows_service.SERVICE_CHANGE_FINANCIAL_POSITION_MESSAGE
+                ),
+                "error_code": "financial_position_unavailable",
+            },
+            status_code=409,
+        )
+    return JSONResponse(payload)
 
 
 @router.post(

@@ -192,6 +192,37 @@ def test_admin_workflow_returns_structured_validation_error(
     assert "target_offer_id" in str(payload["message"])
 
 
+def test_admin_workflow_maps_missing_funding_to_unavailable(db_session, monkeypatch):
+    from app.services import web_catalog_subscription_workflows as workflows
+    from app.services.prepaid_funding_reconstruction import (
+        PrepaidFundingBaselineMissingError,
+    )
+
+    def missing_funding(*_args, **_kwargs):
+        raise PrepaidFundingBaselineMissingError("baseline missing")
+
+    monkeypatch.setattr(
+        workflows,
+        "execute_subscription_command",
+        missing_funding,
+    )
+
+    payload, status_code = execute_lifecycle_command_response(
+        db_session,
+        subscription_id="00000000-0000-0000-0000-000000000001",
+        kind=SubscriptionCommandKind.change_plan,
+        actor_id="operator-2",
+        target_offer_id="00000000-0000-0000-0000-000000000002",
+        preview_fingerprint="a" * 64,
+        expected_head="b" * 64,
+        idempotency_key="missing-funding",
+    )
+
+    assert status_code == 409
+    assert payload["status"] == "unavailable"
+    assert payload["error_code"] == "financial_position_unavailable"
+
+
 def test_execution_requires_reviewed_head_and_idempotency_key(
     db_session, subscriber, catalog_offer
 ):

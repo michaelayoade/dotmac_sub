@@ -41,6 +41,9 @@ from app.services.form_contracts import (
 from app.services.form_contracts import (
     register as register_form_contract,
 )
+from app.services.prepaid_funding_reconstruction import (
+    PrepaidFundingBaselineMissingError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -291,11 +294,28 @@ PLAN_CHANGE_FORM = register_form_contract(
 
 
 def _plan_change_prerequisites(
-    subscription, available_offers, arrears_amount
+    subscription,
+    available_offers,
+    arrears_amount,
+    *,
+    financial_position_available: bool = True,
 ) -> list[FormPrerequisite]:
     """Evaluate the plan-change preconditions the submit command enforces."""
     status_value = getattr(subscription.status, "value", subscription.status)
     return [
+        FormPrerequisite(
+            key="financial_position_available",
+            label="Your verified billing position is available",
+            met=financial_position_available,
+            reason=(
+                None
+                if financial_position_available
+                else (
+                    "Your verified prepaid funding position is still under review. "
+                    "Contact support before changing this service."
+                )
+            ),
+        ),
         FormPrerequisite(
             key="subscription_active",
             label="Your subscription is active",
@@ -309,7 +329,7 @@ def _plan_change_prerequisites(
         FormPrerequisite(
             key="no_arrears",
             label="No overdue balance",
-            met=arrears_amount <= Decimal("0.00"),
+            met=(not financial_position_available or arrears_amount <= Decimal("0.00")),
             reason=(
                 None
                 if arrears_amount <= Decimal("0.00")
@@ -352,13 +372,22 @@ def get_change_plan_page(
         current_offer = db.get(CatalogOffer, subscription.offer_id)
     next_billing_date = _resolve_next_billing_date(db, subscription)
     copy = get_plan_change_copy(subscription)
-    financial_position = _customer_financial_position(
-        db, str(subscription.subscriber_id)
-    )
+    financial_position_available = True
+    try:
+        financial_position = _customer_financial_position(
+            db, str(subscription.subscriber_id)
+        )
+    except PrepaidFundingBaselineMissingError:
+        # A missing reviewed opening position is a valid fail-closed domain
+        # state for pre-cutover accounts.  Preserve it instead of returning an
+        # HTTP 500 or presenting the unknown amount as zero.
+        logger.warning("service_change_financial_position_unavailable")
+        financial_position = None
+        financial_position_available = False
     prepaid_funding = (
         financial_position.prepaid_available_balance
         if financial_position is not None
-        else Decimal("0.00")
+        else None
     )
     # Surface arrears up-front: a self-service plan change is blocked at submit
     # while the account has overdue invoices (block-until-settled, #30). Showing
@@ -396,16 +425,24 @@ def get_change_plan_page(
         "postpaid_receivables": (
             financial_position.open_invoice_balance
             if financial_position is not None
-            else Decimal("0.00")
+            else None
         ),
-        "collection_blocking_balance": arrears_amount,
+        "collection_blocking_balance": (
+            arrears_amount if financial_position_available else None
+        ),
+        "financial_position_unavailable": not financial_position_available,
         "selected_offer_id": None,
         "insufficient_funding": None,
         "next_billing_date": next_billing_date,
         "arrears_amount": _to_float(arrears_amount),
         "in_arrears": arrears_amount > Decimal("0.00"),
         "form_contract": PLAN_CHANGE_FORM.state(
-            _plan_change_prerequisites(subscription, available_offers, arrears_amount)
+            _plan_change_prerequisites(
+                subscription,
+                available_offers,
+                arrears_amount,
+                financial_position_available=financial_position_available,
+            )
         ),
         **copy,
     }
@@ -537,7 +574,7 @@ def get_change_plan_error_context(
     selected_offer_id: str | None = None,
     insufficient_funding: dict[str, object] | None = None,
 ) -> dict:
-    """Get context data for re-rendering the change plan form after an error."""
+    """Reuse the canonical page projection when re-rendering an error."""
     subscription = catalog_service.subscriptions.get(
         db=db, subscription_id=subscription_id
     )
@@ -550,69 +587,37 @@ def get_change_plan_error_context(
         if subscription
         else None
     )
-    available_offers = get_available_portal_offers(db, subscription)
-    current_offer = (
-        db.get(CatalogOffer, subscription.offer_id)
-        if subscription and subscription.offer_id
-        else None
-    )
-    next_billing_date = _resolve_next_billing_date(db, subscription)
-    copy = get_plan_change_copy(subscription)
-    error_position = (
-        _customer_financial_position(db, str(subscription.subscriber_id))
-        if subscription
-        else None
-    )
+    if page_data is not None:
+        return {
+            **page_data,
+            "selected_offer_id": selected_offer_id,
+            "insufficient_funding": insufficient_funding,
+        }
 
+    # A concurrent deletion can invalidate the already-resolved subscription.
+    # Return a safe, non-financial shell rather than maintaining a second page
+    # projection or deriving an amount from incomplete evidence.
     return {
         "subscription": subscription,
-        "current_offer": current_offer,
-        "current_offer_summary": get_offer_price_summary(current_offer),
-        "available_offer_summaries": {
-            str(offer.id): get_offer_price_summary(offer) for offer in available_offers
-        },
-        "available_offers": available_offers,
-        "available_offer_delivery_modes": _offer_delivery_modes(
-            current_offer, available_offers
-        ),
-        "available_offer_change_quotes": (
-            page_data.get("available_offer_change_quotes", {})
-            if page_data is not None
-            else {}
-        ),
-        "service_addresses": (
-            _service_address_options(db, subscription) if subscription else []
-        ),
-        "current_service_address_id": (
-            str(subscription.service_address_id)
-            if subscription and subscription.service_address_id
-            else None
-        ),
-        "prepaid_funding": (
-            error_position.prepaid_available_balance
-            if error_position is not None
-            else Decimal("0.00")
-        ),
-        "postpaid_receivables": (
-            error_position.open_invoice_balance
-            if error_position is not None
-            else Decimal("0.00")
-        ),
-        "collection_blocking_balance": (
-            error_position.collection_blocking_balance
-            if error_position is not None
-            else Decimal("0.00")
-        ),
+        "current_offer": None,
+        "current_offer_summary": {},
+        "available_offer_summaries": {},
+        "available_offers": [],
+        "available_offer_delivery_modes": {},
+        "available_offer_change_quotes": {},
+        "service_addresses": [],
+        "current_service_address_id": None,
+        "prepaid_funding": None,
+        "postpaid_receivables": None,
+        "collection_blocking_balance": None,
+        "financial_position_unavailable": True,
         "selected_offer_id": selected_offer_id,
         "insufficient_funding": insufficient_funding,
-        "next_billing_date": next_billing_date,
-        "arrears_amount": (
-            page_data.get("arrears_amount", 0.0) if page_data is not None else 0.0
-        ),
-        "in_arrears": (
-            bool(page_data.get("in_arrears", False)) if page_data is not None else False
-        ),
-        **copy,
+        "next_billing_date": None,
+        "arrears_amount": 0.0,
+        "in_arrears": False,
+        "form_contract": PLAN_CHANGE_FORM.state([]),
+        **get_plan_change_copy(subscription),
     }
 
 
@@ -720,7 +725,7 @@ def get_offer_price_summary(offer: CatalogOffer | None) -> SimpleNamespace:
     )
 
 
-def get_plan_change_copy(subscription: Subscription) -> dict[str, str]:
+def get_plan_change_copy(subscription: Subscription | None) -> dict[str, str]:
     """Return billing-mode-aware customer copy for plan changes."""
     billing_mode = getattr(subscription, "billing_mode", None)
     billing_mode_value = (

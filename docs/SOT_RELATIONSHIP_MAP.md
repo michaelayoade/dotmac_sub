@@ -1738,8 +1738,11 @@ confirmation, tracking, or rating eligibility from raw statuses.
 
 ## Support Operations
 
-1. `support.ticket_lifecycle` owns the ticket status vocabulary, guarded status
-   transitions, lifecycle timestamps, and transition consequences.
+1. `support.ticket_lifecycle` owns the support ticket's human-readable number,
+   status vocabulary, guarded status transitions, lifecycle timestamps, and
+   transition consequences. Local ticket creation reserves numbers through the
+   locked `support_ticket` document sequence and advances past occupied imported
+   numbers; portal, API, automation, and admin adapters never allocate numbers.
 2. `support.ticket_configuration` owns the operator-visible status subset,
    priority/type choices, routing, and SLA policy. A configured status must be
    part of the lifecycle vocabulary.
@@ -2976,8 +2979,9 @@ reinterpret its presentation.
 
 ## Support Control Plane
 
-1. `support.tickets` owns ticket lifecycle, assignment, comments, satisfaction,
-   and both signed-link and authenticated resolution confirmation/dispute.
+1. `support.ticket_lifecycle` owns ticket number allocation, lifecycle, assignment,
+   comments, satisfaction, and both signed-link and authenticated resolution
+   confirmation/dispute.
 2. `support.ticket_configuration` owns the operator-managed priority and ticket-
    type SLA targets shown at `/admin/system/ticket-settings`. Ticket types have
    no fixed code default: zero or no override falls through to the configured

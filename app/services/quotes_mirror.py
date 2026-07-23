@@ -10,7 +10,9 @@ estimate/feasibility/deposit are computed by the CRM; this is a faithful copy.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -22,10 +24,23 @@ from app.services.common import coerce_uuid
 from app.services.crm_client import CRMClientError
 from app.services.crm_portal import resolve_crm_subscriber_id
 from app.services.integrations.crm_capability import capability_client
+from app.services.integrations.installations import InstallationError
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_REFRESH_TTL_SECONDS = 300  # quotes change slowly; refresh on view
+
+
+class QuoteReadState(StrEnum):
+    current = "current"
+    stale = "stale"
+    unavailable = "unavailable"
+
+
+@dataclass(frozen=True)
+class QuoteReadResult:
+    payload: dict[str, object]
+    state: QuoteReadState
 
 
 def _to_dt(value: object) -> datetime | None:
@@ -61,7 +76,9 @@ def _to_int(value: object) -> int | None:
         return None
 
 
-def _upsert_row(db: Session, *, subscriber_id, item: dict) -> QuoteMirror | None:
+def _upsert_row(
+    db: Session, *, subscriber_id, item: dict[str, object]
+) -> QuoteMirror | None:
     crm_quote_id = str(item.get("id") or "").strip()
     if not crm_quote_id:
         return None
@@ -105,7 +122,7 @@ def _upsert_row(db: Session, *, subscriber_id, item: dict) -> QuoteMirror | None
     return row
 
 
-def _local_subscriber(db: Session, body: dict) -> Subscriber | None:
+def _local_subscriber(db: Session, body: dict[str, object]) -> Subscriber | None:
     local_id = str(body.get("subscriber_id") or "").strip()
     if local_id:
         try:
@@ -159,7 +176,7 @@ def reconcile_all(db: Session, *, stale_after_seconds: int = 3600) -> int:
         try:
             if reconcile_subscriber(db, str(subscriber_id)):
                 done += 1
-        except CRMClientError as exc:
+        except (CRMClientError, InstallationError) as exc:
             db.rollback()
             logger.warning(
                 "quote_reconcile_failed subscriber=%s: %s", subscriber_id, exc
@@ -167,7 +184,7 @@ def reconcile_all(db: Session, *, stale_after_seconds: int = 3600) -> int:
     return done
 
 
-def _row_to_item(row: QuoteMirror) -> dict:
+def _row_to_item(row: QuoteMirror) -> dict[str, object]:
     if isinstance(row.payload, dict) and row.payload:
         item = dict(row.payload)
         item["id"] = row.crm_quote_id
@@ -216,21 +233,39 @@ def read_for_subscriber(
     subscriber_id: str,
     *,
     refresh_ttl_seconds: int = _DEFAULT_REFRESH_TTL_SECONDS,
-) -> dict:
-    """Build the quotes payload from the mirror, lazily refreshing from the CRM
-    when the cache is missing or stale (best-effort)."""
+) -> dict[str, object]:
+    """Return the stable mobile/API payload without transport-state fields."""
+    return read_for_subscriber_result(
+        db,
+        subscriber_id,
+        refresh_ttl_seconds=refresh_ttl_seconds,
+    ).payload
+
+
+def read_for_subscriber_result(
+    db: Session,
+    subscriber_id: str,
+    *,
+    refresh_ttl_seconds: int = _DEFAULT_REFRESH_TTL_SECONDS,
+) -> QuoteReadResult:
+    """Build quotes plus explicit CRM projection freshness for web renderers."""
     sub_uuid = coerce_uuid(str(subscriber_id))
     sync = db.get(QuoteSyncState, sub_uuid)
     cutoff = datetime.now(UTC) - timedelta(seconds=max(0, refresh_ttl_seconds))
     synced = _as_utc(sync.synced_at) if sync else None
+    state = QuoteReadState.current
     if sync is None or synced is None:
         # Cold cache — fetch synchronously so the first load is populated.
         try:
             reconcile_subscriber(db, str(subscriber_id))
-        except CRMClientError as exc:
+        except (CRMClientError, InstallationError) as exc:
             db.rollback()
-            logger.warning("quote_lazy_refresh_failed subscriber=%s: %s", sub_uuid, exc)
+            state = QuoteReadState.unavailable
+            logger.warning(
+                "quote_lazy_refresh_unavailable error_type=%s", type(exc).__name__
+            )
     elif synced < cutoff:
+        state = QuoteReadState.stale
         # Warm but stale — serve the stale copy now and refresh in the background.
         # Optimistically stamp synced_at so concurrent reads within the TTL don't
         # each enqueue (debounce); the refresh task re-stamps after pulling.
@@ -247,7 +282,10 @@ def read_for_subscriber(
     open_count = sum(
         1 for r in rows if r.status not in ("accepted", "rejected", "expired")
     )
-    return {"quotes": items, "total": len(items), "open": open_count}
+    return QuoteReadResult(
+        payload={"quotes": items, "total": len(items), "open": open_count},
+        state=state,
+    )
 
 
 def request_quote(
@@ -259,7 +297,7 @@ def request_quote(
     address: str | None = None,
     region: str | None = None,
     note: str | None = None,
-) -> dict:
+) -> dict[str, object]:
     """Write-through: request a map-pinned installation quote from the CRM, mirror
     the result locally, and return it. Raises 400 if the account isn't CRM-linked."""
     crm_subscriber_id = resolve_crm_subscriber_id(db, str(subscriber_id))

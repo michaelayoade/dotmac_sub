@@ -53,6 +53,9 @@ from app.services.customer_portal_context import (
     resolve_customer_subscription,
 )
 from app.services.nin_matching import mask_nin
+from app.services.prepaid_funding_reconstruction import (
+    PrepaidFundingBaselineMissingError,
+)
 from app.web.customer.auth import get_current_customer_from_request
 from app.web.customer.branding import get_customer_templates
 
@@ -80,6 +83,10 @@ CARD_SAVE_ERROR_MESSAGE = (
     "from Payment Methods."
 )
 READ_ONLY_MUTATION_MESSAGE = "View-only sessions cannot make changes."
+SERVICE_CHANGE_FINANCIAL_POSITION_MESSAGE = (
+    "Your verified prepaid funding position is still under review. "
+    "Contact support before changing this service."
+)
 
 
 def _is_read_only_customer(customer: dict | None) -> bool:
@@ -2691,13 +2698,22 @@ def customer_change_plan_quote(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return JSONResponse({"error": "unauthorized"}, status_code=401)
-    quote = customer_portal.get_plan_change_quote(
-        db,
-        customer,
-        str(subscription_id),
-        offer_id,
-        target_service_address_id=target_service_address_id,
-    )
+    try:
+        quote = customer_portal.get_plan_change_quote(
+            db,
+            customer,
+            str(subscription_id),
+            offer_id,
+            target_service_address_id=target_service_address_id,
+        )
+    except PrepaidFundingBaselineMissingError:
+        return JSONResponse(
+            {
+                "error": "financial_position_unavailable",
+                "detail": SERVICE_CHANGE_FINANCIAL_POSITION_MESSAGE,
+            },
+            status_code=409,
+        )
     if quote is None:
         return JSONResponse({"error": "not_found"}, status_code=404)
     return JSONResponse({"quote": quote})
@@ -2794,6 +2810,21 @@ def customer_submit_change_plan(
                 "active_page": "services",
             },
             status_code=exc.status_code,
+        )
+    except PrepaidFundingBaselineMissingError:
+        error_ctx = customer_portal.get_change_plan_error_context(
+            db, str(subscription_id), selected_offer_id=offer_id
+        )
+        return templates.TemplateResponse(
+            "customer/services/change_plan.html",
+            {
+                "request": request,
+                "customer": customer,
+                **error_ctx,
+                "error": SERVICE_CHANGE_FINANCIAL_POSITION_MESSAGE,
+                "active_page": "services",
+            },
+            status_code=409,
         )
     except ValueError as exc:
         message = str(exc)

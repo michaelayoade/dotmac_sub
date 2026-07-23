@@ -30,6 +30,9 @@ from app.services.list_query import (
 )
 from app.services.owner_commands import CommandContext
 from app.services.portal_account_health import build_portal_account_health
+from app.services.prepaid_funding_reconstruction import (
+    PrepaidFundingBaselineMissingError,
+)
 from app.web.reseller.branding import get_reseller_templates
 
 logger = logging.getLogger(__name__)
@@ -70,6 +73,11 @@ RESELLER_INVOICE_LIST_DEFINITION = ListDefinition(
 )
 
 templates = get_reseller_templates()
+
+SERVICE_CHANGE_FINANCIAL_POSITION_MESSAGE = (
+    "The verified prepaid funding position is still under review. "
+    "Finance must complete reconstruction before this service can change."
+)
 
 
 RESELLER_LOGIN_URL = "/reseller/auth/login"
@@ -437,13 +445,22 @@ def reseller_service_change_quote(
     account = reseller_portal.owned_account(db, str(context["reseller"].id), account_id)
     if account is None:
         return JSONResponse({"error": "not_found"}, status_code=404)
-    quote = customer_portal_flow_changes.get_plan_change_quote(
-        db,
-        {"account_id": str(account.id)},
-        subscription_id,
-        offer_id,
-        target_service_address_id=target_service_address_id,
-    )
+    try:
+        quote = customer_portal_flow_changes.get_plan_change_quote(
+            db,
+            {"account_id": str(account.id)},
+            subscription_id,
+            offer_id,
+            target_service_address_id=target_service_address_id,
+        )
+    except PrepaidFundingBaselineMissingError:
+        return JSONResponse(
+            {
+                "error": "financial_position_unavailable",
+                "detail": SERVICE_CHANGE_FINANCIAL_POSITION_MESSAGE,
+            },
+            status_code=409,
+        )
     if quote is None:
         return JSONResponse({"error": "not_found"}, status_code=404)
     return JSONResponse({"quote": quote})
@@ -488,12 +505,16 @@ def reseller_service_change_confirm(
         )
         if not result.get("success", False):
             raise ValueError("Additional prepaid funding is required")
-    except (HTTPException, ValueError) as exc:
+    except (HTTPException, PrepaidFundingBaselineMissingError, ValueError) as exc:
         db.rollback()
+        message = (
+            SERVICE_CHANGE_FINANCIAL_POSITION_MESSAGE
+            if isinstance(exc, PrepaidFundingBaselineMissingError)
+            else str(getattr(exc, "detail", exc))
+        )
         return RedirectResponse(
             url=(
-                f"/reseller/accounts/{account_id}?status_error="
-                + quote_plus(str(getattr(exc, "detail", exc)))
+                f"/reseller/accounts/{account_id}?status_error=" + quote_plus(message)
             ),
             status_code=303,
         )

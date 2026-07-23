@@ -1,5 +1,9 @@
 import logging
+import uuid
 
+from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import SettingDomain
@@ -18,16 +22,44 @@ def _format_number(prefix: str | None, padding: int | None, value: int) -> str:
 
 
 def _next_sequence_value(db: Session, key: str, start_value: int) -> int:
-    sequence = (
-        db.query(DocumentSequence)
-        .filter(DocumentSequence.key == key)
-        .with_for_update()
-        .first()
+    """Atomically reserve the next value for one document sequence.
+
+    The row must exist before it can be locked.  A query-then-insert race let
+    two first-time callers both conclude that a sequence was absent.  Use the
+    database's conflict arbiter to establish the row, then lock it before
+    advancing the value.
+    """
+    bind = db.get_bind()
+    values = {
+        "id": uuid.uuid4(),
+        "key": key,
+        "next_value": start_value,
+    }
+    if bind.dialect.name == "postgresql":
+        db.execute(
+            postgresql_insert(DocumentSequence)
+            .values(**values)
+            .on_conflict_do_nothing(index_elements=[DocumentSequence.key])
+        )
+    elif bind.dialect.name == "sqlite":
+        db.execute(
+            sqlite_insert(DocumentSequence)
+            .values(**values)
+            .on_conflict_do_nothing(index_elements=[DocumentSequence.key])
+        )
+    else:  # pragma: no cover - production and tests use PostgreSQL/SQLite
+        sequence = db.scalar(
+            select(DocumentSequence).where(DocumentSequence.key == key)
+        )
+        if sequence is None:
+            db.add(DocumentSequence(**values))
+            db.flush()
+
+    sequence = db.scalar(
+        select(DocumentSequence).where(DocumentSequence.key == key).with_for_update()
     )
-    if not sequence:
-        sequence = DocumentSequence(key=key, next_value=start_value)
-        db.add(sequence)
-        db.flush()
+    if sequence is None:  # pragma: no cover - the insert/select invariant failed
+        raise RuntimeError(f"document sequence {key!r} could not be established")
     value = sequence.next_value
     sequence.next_value = value + 1
     db.flush()
