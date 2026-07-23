@@ -7720,6 +7720,29 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="network.outage_auto_notify",
+                module="app.services.topology.outage_auto_notify",
+                owns=(
+                    "automation eligibility for customer outage notification",
+                    "automated dispatch trigger and its transaction",
+                ),
+                depends_on=(
+                    "network.outage_lifecycle",
+                    "network.outage_impact",
+                ),
+                notes=(
+                    "ADR 0004. Owns WHICH incidents automation may notify "
+                    "about and the trigger, never the send itself: "
+                    "outage_notifications.dispatch_outage_notifications stays "
+                    "the only writer of a customer outage notification and "
+                    "keeps its confidence gate, debounce, opt-out and caps. "
+                    "Channel selection belongs to "
+                    "communications.channel_policy. Automated sends are "
+                    "stamped with AUTO_ACTOR_ID so the audit separates them "
+                    "from operator dispatches."
+                ),
+            ),
+            SOTService(
                 name="network.connection_health",
                 module="app.services.topology.connection_status",
                 owns=(
