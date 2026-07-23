@@ -809,8 +809,23 @@ def resolve_subscription_topology_trace(
     if subscription_obj is None:
         raise ValueError("subscription not found")
 
-    evaluated_at = as_of or datetime.now(UTC)
     path = resolve_customer_path(db, subscription_obj)
+    return build_topology_trace(subscription_obj, path, as_of=as_of)
+
+
+def build_topology_trace(
+    subscription: Subscription,
+    path: CustomerPath,
+    *,
+    as_of: datetime | None = None,
+) -> SubscriberTopologyTrace:
+    """Build a trace from an already-resolved path.
+
+    Callers that render the endpoint and the chain together resolve the path
+    once and project it twice, rather than paying for resolution per surface.
+    """
+
+    evaluated_at = as_of or datetime.now(UTC)
     nodes = _trace_nodes_for_path(path)
 
     breaks: list[TopologyTraceBreak] = []
@@ -843,8 +858,8 @@ def resolve_subscription_topology_trace(
         )
 
     return SubscriberTopologyTrace(
-        subscription_id=subscription_obj.id,
-        subscriber_id=subscription_obj.subscriber_id,
+        subscription_id=subscription.id,
+        subscriber_id=subscription.subscriber_id,
         access_kind=path.access_device_kind,
         nodes=tuple(nodes),
         breaks=tuple(breaks),

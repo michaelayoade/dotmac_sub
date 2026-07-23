@@ -84,6 +84,10 @@ from app.services.invoice_collectibility import (
     overdue_debt_filters_for_accounts,
 )
 from app.services.network._common import decode_huawei_hex_serial
+from app.services.network.access_path import (
+    build_topology_trace,
+    summarize_customer_path,
+)
 from app.services.network.radius_sessions import (
     SubscriptionSessionSnapshot,
     subscription_session_snapshots,
@@ -101,6 +105,7 @@ from app.services.subscription_lifecycle_policy import (
     is_customer_impact_service_status,
     is_mrr_countable_service_status,
 )
+from app.services.topology.customer_path import resolve_customer_path
 
 logger = logging.getLogger(__name__)
 
@@ -1277,14 +1282,58 @@ def _active_additional_routes_by_subscriber(
     return routes_by_subscriber
 
 
+def _build_access_endpoint_projection(
+    db: Session, subscription
+) -> tuple[dict[str, object], dict[str, object] | None]:
+    """Serving endpoint + active-path trace for one subscription.
+
+    Resolves the customer path once and projects it twice. Failures degrade to
+    an unresolved endpoint rather than breaking the page: an unavailable trace
+    must not take the customer record with it.
+    """
+
+    try:
+        path = resolve_customer_path(db, subscription)
+    except Exception:
+        logger.warning(
+            "Access path resolution failed for subscription %s",
+            getattr(subscription, "id", None),
+            exc_info=True,
+        )
+        return ({"endpoint_source": "unresolved"}, None)
+
+    summary = summarize_customer_path(subscription, path)
+    trace = build_topology_trace(subscription, path)
+    return (
+        {
+            "endpoint_display": summary.endpoint_display,
+            "endpoint_source": summary.endpoint_source,
+            "access_device_name": summary.access_device_name,
+            "access_device_id": str(summary.access_device_id)
+            if summary.access_device_id
+            else None,
+            "access_kind": summary.access_kind,
+            "pon_port_label": summary.pon_port_label,
+            "ont_serial": summary.ont_serial,
+            "basestation_name": summary.basestation_name,
+            "gap": summary.gap,
+        },
+        trace.to_dict(),
+    )
+
+
 def _build_network_access_cards(
     subscriptions: list,
     connection_by_subscription: dict[str, dict[str, object]],
     additional_routes_by_subscriber: dict[UUID, list[dict[str, object]]] | None = None,
+    endpoints_by_subscription: dict[str, dict[str, object]] | None = None,
+    traces_by_subscription: dict[str, dict[str, object] | None] | None = None,
 ) -> list[dict]:
     """Build network access info cards from subscriptions with live access."""
     cards = []
     additional_routes_by_subscriber = additional_routes_by_subscriber or {}
+    endpoints_by_subscription = endpoints_by_subscription or {}
+    traces_by_subscription = traces_by_subscription or {}
     for sub in subscriptions:
         raw_status = getattr(sub, "status", None)
         status_value = getattr(raw_status, "value", None)
@@ -1314,7 +1363,13 @@ def _build_network_access_cards(
                 "mac_address": getattr(sub, "mac_address", None),
                 "nas_name": nas.name if nas else None,
                 "nas_id": str(nas.id) if nas else None,
+                # Where provisioning *intends* this subscription to sit. Kept,
+                # but no longer presented as the serving location.
                 "pop_site_name": pop_site.name if pop_site else None,
+                # Where the subscription is actually served, resolved from the
+                # access path rather than inferred from the provisioning NAS.
+                "access_endpoint": endpoints_by_subscription.get(sub_id, {}),
+                "topology_trace": traces_by_subscription.get(sub_id),
             }
         )
     return cards
@@ -1745,10 +1800,20 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
     additional_routes_by_subscriber = _active_additional_routes_by_subscriber(
         db, account_ids
     )
+    endpoints_by_subscription: dict[str, dict[str, object]] = {}
+    traces_by_subscription: dict[str, dict[str, object] | None] = {}
+    for sub in subscriptions:
+        if not sub.login and not sub.ipv4_address:
+            continue
+        endpoint, trace = _build_access_endpoint_projection(db, sub)
+        endpoints_by_subscription[str(sub.id)] = endpoint
+        traces_by_subscription[str(sub.id)] = trace
     network_access_cards = _build_network_access_cards(
         subscriptions,
         connection_by_subscription,
         additional_routes_by_subscriber,
+        endpoints_by_subscription,
+        traces_by_subscription,
     )
     account_health = build_portal_account_health(db, customer.id)
     pending_location_request = (

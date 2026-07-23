@@ -1766,9 +1766,26 @@
                                     <a href="/admin/nas/{{ card.nas_id }}" class="font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400">{{ card.nas_name }}</a>
                                 </div>
                                 {% endif %}
+                                {% if card.access_endpoint and card.access_endpoint.endpoint_display %}
+                                <div>
+                                    <p class="text-xs text-slate-500 dark:text-slate-400">Serving Endpoint</p>
+                                    <p class="font-medium text-slate-900 dark:text-white">{{ card.access_endpoint.endpoint_display }}</p>
+                                    <p class="text-xs {% if card.access_endpoint.endpoint_source == 'live_session' %}text-emerald-600 dark:text-emerald-400{% else %}text-slate-500 dark:text-slate-400{% endif %}">
+                                        {% if card.access_endpoint.endpoint_source == 'live_session' %}Live session{% else %}Provisioned{% endif %}
+                                    </p>
+                                </div>
+                                {% elif card.access_endpoint and card.access_endpoint.endpoint_source == 'unresolved' %}
+                                <div>
+                                    <p class="text-xs text-slate-500 dark:text-slate-400">Serving Endpoint</p>
+                                    <p class="font-medium text-amber-600 dark:text-amber-400">Unresolved</p>
+                                    {% if card.access_endpoint.gap %}
+                                    <p class="text-xs text-slate-500 dark:text-slate-400">{{ card.access_endpoint.gap }}</p>
+                                    {% endif %}
+                                </div>
+                                {% endif %}
                                 {% if card.pop_site_name %}
                                 <div>
-                                    <p class="text-xs text-slate-500 dark:text-slate-400">Location</p>
+                                    <p class="text-xs text-slate-500 dark:text-slate-400">Provisioned Site</p>
                                     <p class="font-medium text-slate-700 dark:text-slate-300">{{ card.pop_site_name }}</p>
                                 </div>
                                 {% endif %}
@@ -1779,6 +1796,29 @@
                                 </div>
                                 {% endif %}
                             </div>
+                            {% if card.topology_trace and (card.topology_trace.nodes or card.topology_trace.breaks) %}
+                            <div class="mt-4 border-t border-slate-200 pt-3 dark:border-slate-700">
+                                <p class="mb-2 text-xs text-slate-500 dark:text-slate-400">Active Path</p>
+                                <div class="flex flex-wrap items-center gap-x-1.5 gap-y-1">
+                                    {% for node in card.topology_trace.nodes %}
+                                    <span class="inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-xs
+                                        {% if node.state == 'down' %}border-red-300 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300
+                                        {% elif node.state == 'up' %}border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300
+                                        {% elif node.state == 'degraded' %}border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300
+                                        {% else %}border-slate-300 bg-slate-50 text-slate-600 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300{% endif %}"
+                                        title="{{ node.kind }}{% if node.observed_at %} · seen {{ node.observed_at }}{% endif %}{% if node.source %} · {{ node.source }}{% endif %}">
+                                        {{ node.label }}
+                                    </span>
+                                    {% if not loop.last %}<span class="text-slate-400 dark:text-slate-500">&rarr;</span>{% endif %}
+                                    {% endfor %}
+                                </div>
+                                {% for gap in card.topology_trace.breaks %}
+                                <p class="mt-2 text-xs text-amber-600 dark:text-amber-400">
+                                    <span class="font-medium">{{ gap.code }}</span> &mdash; {{ gap.message }}
+                                </p>
+                                {% endfor %}
+                            </div>
+                            {% endif %}
                         </div>
                         {% endfor %}
                     </div>
