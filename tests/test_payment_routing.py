@@ -85,6 +85,23 @@ def test_multiple_active_rows_make_provider_ambiguous(db_session):
     assert gateway_options(db_session) == []
 
 
+def test_manifest_pin_drift_makes_gateway_unavailable(db_session):
+    _provider(db_session, PaymentProviderType.paystack)
+    bindings = enable_payment_provider(db_session, "paystack")
+    installation = bindings["payments.intent.v1"].installation
+    installation.manifest_digest = "0" * 64
+    db_session.flush()
+
+    health = {row.provider_type: row for row in provider_health(db_session)}
+
+    paystack = health[PaymentProviderType.paystack]
+    assert paystack.health == "misconfigured"
+    assert paystack.health_label == "Installation definition changed"
+    assert paystack.readiness_errors == ("definition_mismatch",)
+    assert not paystack.capability_ready
+    assert gateway_options(db_session) == []
+
+
 def test_intent_provider_is_authoritative_after_checkout(db_session, subscriber):
     intent = TopupIntent(
         account_id=subscriber.id,
