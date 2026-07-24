@@ -60,11 +60,11 @@ def test_dunning_and_routing_actions_confirm_before_state_changes():
     # flow (impact preview + fingerprinted confirmation) instead. The safeguard
     # is that the list action cannot change state directly — it opens /review.
     assert "/payment-configuration/payment_channel/" in channels
-    assert "/deactivate/review" in channels or "/activate/review" in channels
+    assert "'deactivate' if channel.is_active else 'activate' }}/review" in channels
     assert "/payment-configuration/collection_account/" in collection_accounts
     assert (
-        "/deactivate/review" in collection_accounts
-        or "/activate/review" in collection_accounts
+        "'deactivate' if account.is_active else 'activate' }}/review"
+        in collection_accounts
     )
 
 
