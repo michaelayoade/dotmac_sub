@@ -12,9 +12,9 @@ from alembic.operations import Operations
 def _load_migration():
     path = (
         Path(__file__).resolve().parents[1]
-        / "alembic/versions/414_customer_wht_policy_and_direct_targets.py"
+        / "alembic/versions/418_customer_wht_policy_and_direct_targets.py"
     )
-    spec = importlib.util.spec_from_file_location("migration_414", path)
+    spec = importlib.util.spec_from_file_location("migration_418", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -94,8 +94,8 @@ def test_customer_wht_policy_revision_is_linear_and_constrained() -> None:
     migration = _load_migration()
     source = Path(migration.__file__).read_text(encoding="utf-8")
 
-    assert migration.revision == "414_customer_wht_policy_and_direct_targets"
-    assert migration.down_revision == "413_audit_actor_label"
+    assert migration.revision == "418_customer_wht_policy_and_direct_targets"
+    assert migration.down_revision == "417_service_extension_grant_intervals"
     assert "customer_tax_policies" in source
     assert "ck_withholding_tax_records_exactly_one_target" in source
     assert "cannot downgrade while direct-customer withholding tax records exist" in (
