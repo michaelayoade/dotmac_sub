@@ -15,18 +15,31 @@ from app.services.network.tr069_paths import Tr069PathResolver
 
 
 class _FakeAcs:
-    """Records what was asked of the device, and answers with canned values."""
+    """Records what was asked of the device, and answers with canned values.
+
+    Signatures mirror GenieACSClient exactly and are pinned by
+    ``test_the_fake_matches_the_real_client_signature`` below — an earlier fake
+    accepted an invented ``timeout_sec`` keyword, so every test passed while the
+    first real call raised TypeError.
+    """
 
     def __init__(self, values: dict | None = None):
         self.values = values or {}
         self.refreshed: list[tuple[str, str]] = []
         self.written: list[dict] = []
 
-    def refresh_object(self, device_id, path, *, timeout_sec):
-        self.refreshed.append((device_id, path))
+    def refresh_object(
+        self,
+        device_id,
+        object_path,
+        allow_broad_refresh=False,
+        allow_when_pending=False,
+    ):
+        self.refreshed.append((device_id, object_path))
+        return {}
 
-    def get_parameter_values(self, device_id, paths):
-        return {path: self.values.get(path) for path in paths}
+    def get_parameter_values(self, device_id, parameters, allow_when_pending=False):
+        return {path: self.values.get(path) for path in parameters}
 
 
 TR098 = {
@@ -214,3 +227,44 @@ def test_the_portal_test_says_what_it_actually_measures():
 
     assert "over your Wi-Fi" in page
     assert "not the Dotmac line" in page
+
+
+# ---------------------------------------------------------------------------
+# Conformance: the fake and the protocol must match the real client
+# ---------------------------------------------------------------------------
+
+
+def test_the_fake_matches_the_real_client_signature():
+    """A fake shaped to fit the caller hides integration breakage.
+
+    The original AcsReader invented a ``timeout_sec`` keyword. Unit tests passed
+    against a fake that accepted it; the first call against GenieACSClient
+    raised TypeError. Pinning the fake to the concrete client makes that class
+    of bug fail here rather than on a customer's device.
+    """
+    import inspect
+
+    from app.services.genieacs_client import GenieACSClient
+
+    for name in ("refresh_object", "get_parameter_values"):
+        real = inspect.signature(getattr(GenieACSClient, name))
+        fake = inspect.signature(getattr(_FakeAcs, name))
+        real_params = [p for p in real.parameters if p != "self"]
+        fake_params = [p for p in fake.parameters if p != "self"]
+        assert fake_params == real_params, (
+            f"{name}: fake{tuple(fake_params)} does not match "
+            f"client{tuple(real_params)}"
+        )
+
+
+def test_the_module_only_calls_the_client_with_real_arguments():
+    """prepare_diagnostic_object must not pass keywords the client lacks."""
+    import inspect
+
+    from app.services.genieacs_client import GenieACSClient
+
+    accepted = set(inspect.signature(GenieACSClient.refresh_object).parameters)
+    source = inspect.getsource(lst.prepare_diagnostic_object)
+
+    assert "timeout_sec" not in source
+    assert "allow_when_pending" in accepted  # sanity: we read the right method

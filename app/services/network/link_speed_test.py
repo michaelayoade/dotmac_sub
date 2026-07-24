@@ -33,7 +33,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Protocol
 
 from app.services.network.reconcile.actions import AcsArmDiagnostic
 
@@ -47,12 +47,14 @@ STATE_COMPLETE = "Completed"
 #: loop — a CPE that cannot run the test will not start being able to.
 TERMINAL_ERROR_PREFIX = "Error_"
 
-#: A test that never completes must not pin a slot forever.
-DEFAULT_ARM_TIMEOUT_SEC = 300
-
 
 class AcsReader(Protocol):
     """The read slice of the ACS client this module needs.
+
+    These signatures mirror ``GenieACSClient`` exactly. They previously did not:
+    an invented ``timeout_sec`` keyword type-checked and passed against a
+    hand-written fake, then raised TypeError on the first real call. A
+    conformance test now pins this protocol to the concrete client.
 
     Reads only. Every ACS *write* goes through reconcile/applier.py — the
     ownership contract in tests/architecture/test_huawei_control_plane_writes.py
@@ -60,11 +62,20 @@ class AcsReader(Protocol):
     that wrote to the NBI directly would be a second, unaudited one.
     """
 
-    def refresh_object(self, device_id: str, path: str, *, timeout_sec: int) -> Any: ...
+    def refresh_object(
+        self,
+        device_id: str,
+        object_path: str,
+        allow_broad_refresh: bool = False,
+        allow_when_pending: bool = False,
+    ) -> dict: ...
 
     def get_parameter_values(
-        self, device_id: str, paths: list[str]
-    ) -> dict[str, Any]: ...
+        self,
+        device_id: str,
+        parameters: list[str],
+        allow_when_pending: bool = False,
+    ) -> dict: ...
 
 
 @dataclass(frozen=True)
@@ -170,7 +181,6 @@ def prepare_diagnostic_object(
     tree: dict[str, str],
     *,
     direction: str = "download",
-    timeout_sec: int = DEFAULT_ARM_TIMEOUT_SEC,
 ) -> str:
     """Enumerate the diagnostics object's children. Returns its path.
 
@@ -178,13 +188,15 @@ def prepare_diagnostic_object(
     these objects as ``{"_object": true, "_writable": true}`` with no children,
     so a setParameterValues issued first has nothing to write to. This is a
     read/refresh, not a mutation.
+
+    The client owns its own timeout; this call deliberately passes none.
     """
     paths = _paths(tree, direction)
     if not paths:
         raise ValueError(f"No TR-143 {direction} paths in this parameter tree")
 
     object_path = paths["state"].rsplit(".", 1)[0]
-    client.refresh_object(device_id, object_path, timeout_sec=timeout_sec)
+    client.refresh_object(device_id, object_path)
     logger.info(
         "tr143_object_refreshed",
         extra={
