@@ -90,6 +90,23 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
         subject="About your connection",
         body="Dear {subscriber_name},\n\n{message}",
     ),
+    # Ticket acknowledgement. `customer_ticket_created` was already emitted by
+    # the portal (app/web/customer/routes.py) but no spec consumed it, so a
+    # customer raising a ticket got silence — the top driver of "did you get
+    # my message?" follow-ups. Later movements are notified from
+    # app.services.support (staff reply, status change, resolution).
+    EventType.customer_ticket_created: EventNotificationSpec(
+        template_code="customer_ticket_created",
+        category="support",
+        channels=(NotificationChannel.email,),
+        subject="We received your request ({ticket_number})",
+        body=(
+            "Dear {subscriber_name},\n\n"
+            "We've logged your request as ticket {ticket_number} and the "
+            "support team has it.\n\n"
+            "You can follow it in the portal at any time."
+        ),
+    ),
     EventType.subscriber_created: EventNotificationSpec(
         template_code="subscriber_created",
         category="account",
@@ -499,6 +516,46 @@ EVENT_TYPE_TO_TEMPLATE = {
     event_type: spec.template_code
     for event_type, spec in EVENT_NOTIFICATION_SPECS.items()
 }
+
+
+@dataclass(frozen=True)
+class EventCatalogueEntry:
+    """One configurable event, as presented to an operator."""
+
+    event_type: str
+    template_code: str
+    category: str
+    default_channels: tuple[str, ...]
+    subject: str
+
+
+def event_catalogue() -> tuple[EventCatalogueEntry, ...]:
+    """Describe every event whose channels an operator can configure.
+
+    The channel policy owner resolves by ``template_code``/``category``; this
+    exposes the spec defaults so the admin surface can show what a given event
+    falls back to when no override is set.
+    """
+    return tuple(
+        sorted(
+            (
+                EventCatalogueEntry(
+                    event_type=event_type.value,
+                    template_code=spec.template_code,
+                    category=spec.category,
+                    default_channels=tuple(channel.value for channel in spec.channels),
+                    subject=spec.subject,
+                )
+                for event_type, spec in EVENT_NOTIFICATION_SPECS.items()
+            ),
+            key=lambda entry: (entry.category, entry.template_code),
+        )
+    )
+
+
+def event_categories() -> tuple[str, ...]:
+    """Distinct categories, for the category-level override rows."""
+    return tuple(sorted({spec.category for spec in EVENT_NOTIFICATION_SPECS.values()}))
 
 
 class NotificationHandler:

@@ -477,9 +477,11 @@ def get_tax_config_context(db: Session) -> dict:
 # ---------------------------------------------------------------------------
 # 8.16 Billing Reminders
 # ---------------------------------------------------------------------------
+# Delivery channels are NOT configured here. ``notification_channel_policy`` is
+# the single owner of channel selection; these keys only carry scheduling,
+# copy and filtering.
 REMINDER_KEYS = [
     "reminders_enabled",
-    "reminder_channel",
     "reminder_send_time",
     "wave1_days",
     "wave1_subject",
@@ -513,21 +515,20 @@ def save_reminders(db: Session, data: Mapping[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 # 8.17 Billing Notifications
 # ---------------------------------------------------------------------------
+# As with REMINDER_KEYS: no channel keys here. See
+# ``app.services.notification_channel_policy``.
 BILLING_NOTIF_KEYS = [
     "billing_notif_send_hour",
     "blocking_wave_enabled",
-    "blocking_wave_channel",
     "blocking_wave_email_template",
     "blocking_wave_sms_template",
     "blocking_wave_bcc",
     "pre_block_wave1_enabled",
     "pre_block_wave1_days",
-    "pre_block_wave1_channel",
     "pre_block_wave1_email_template",
     "pre_block_wave1_sms_template",
     "pre_block_wave2_enabled",
     "pre_block_wave2_days",
-    "pre_block_wave2_channel",
     "pre_block_wave2_email_template",
     "pre_block_wave2_sms_template",
 ]

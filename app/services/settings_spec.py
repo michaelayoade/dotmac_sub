@@ -2058,6 +2058,15 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.catalog,
+        key="expiry_reminder_interval_seconds",
+        env_var="EXPIRY_REMINDER_INTERVAL_SECONDS",
+        value_type=SettingValueType.integer,
+        default=86400,  # Daily
+        min_value=3600,  # Minimum 1 hour
+        label="Subscription Expiry Reminder Interval (seconds)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.catalog,
         key="default_billing_cycle",
         env_var="CATALOG_DEFAULT_BILLING_CYCLE",
         value_type=SettingValueType.string,

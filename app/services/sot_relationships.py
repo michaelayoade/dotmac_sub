@@ -8048,7 +8048,18 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             SOTService(
                 name="communications.channel_policy",
                 module="app.services.notification_channel_policy",
-                owns=("channel eligibility", "channel preference resolution"),
+                owns=(
+                    "channel eligibility",
+                    "channel preference resolution",
+                    "stored channel policy (default/category/event overrides)",
+                ),
+                notes=(
+                    "Channel selection for customer notifications happens here "
+                    "and nowhere else. Feature areas must not carry their own "
+                    "channel setting; they state intent (template code, event "
+                    "type, category) and the policy resolves the channels. "
+                    "Operator surface: /admin/notifications/channels."
+                ),
             ),
             SOTService(
                 name="communications.customer_policy",

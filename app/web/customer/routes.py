@@ -30,7 +30,12 @@ from app.services import auth_flow as auth_flow_service
 from app.services import autopay as autopay_service
 from app.services import billing_payment_receipts as payment_receipts_service
 from app.services import chat_session as chat_session_service
-from app.services import crm_portal, customer_portal, team_inbox_widget
+from app.services import (
+    crm_portal,
+    customer_portal,
+    portal_ticket_deflection,
+    team_inbox_widget,
+)
 from app.services import customer_portal_bandwidth as customer_portal_bandwidth_service
 from app.services import customer_portal_contacts as customer_portal_contacts_service
 from app.services import customer_portal_flow_payment_methods as customer_cards
@@ -396,6 +401,11 @@ def customer_support_new(
             url="/portal/auth/login?next=/portal/support/new", status_code=303
         )
     context = crm_portal.ticket_create_context(request, customer)
+    # Tell the customer what we already know before asking them to describe it.
+    # Informational only — the form still accepts the report.
+    context.update(
+        portal_ticket_deflection.assess_ticket_deflection(db, customer).as_context()
+    )
     if title or description:
         context["form_values"] = {
             "title": title or "",
@@ -444,6 +454,9 @@ def customer_support_create(
             {
                 "ticket_id": str(ticket_id),
                 "subscriber_id": subscriber_lookup,
+                # The acknowledgement template renders {ticket_number}; fall
+                # back to the id so the message never ships an empty ref.
+                "ticket_number": str(ticket.get("number") or ticket_id),
             },
         )
         return RedirectResponse(url=f"/portal/support/{ticket_id}", status_code=303)

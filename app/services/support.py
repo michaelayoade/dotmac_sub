@@ -208,6 +208,28 @@ def transition_ticket_status(
 
 MENTION_EMAIL_RE = re.compile(r"@([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})")
 
+# Ticket states worth interrupting a customer for, and what to say. Everything
+# else (triage churn, internal reassignment) stays silent — a notification the
+# customer cannot act on trains them to ignore the next one.
+CUSTOMER_NOTIFIED_TICKET_STATUSES: dict[str, dict[str, str]] = {
+    TicketStatus.open.value: {
+        "label": "we're on it",
+        "body": "is now being worked on. We'll update you as it progresses.",
+    },
+    TicketStatus.waiting_on_customer.value: {
+        "label": "we need your input",
+        "body": ("is waiting on you. Please reply on the ticket so we can continue."),
+    },
+    TicketStatus.on_hold.value: {
+        "label": "on hold",
+        "body": "has been placed on hold. We'll let you know when it resumes.",
+    },
+    TicketStatus.closed.value: {
+        "label": "closed",
+        "body": "has been closed. Reply if the problem is still there.",
+    },
+}
+
 SUPPORT_NOTIFICATION_TOGGLE_KEY = "support_ticket_notifications_enabled"
 SUPPORT_AUTO_ASSIGN_ENABLED_KEY = "support_ticket_auto_assign_enabled"
 SUPPORT_REGION_ASSIGNMENT_RULES_KEY = "support_region_assignment_rules"
@@ -1196,6 +1218,132 @@ class Tickets:
             )
 
     @staticmethod
+    def _queue_customer_ticket_update(
+        db: Session,
+        ticket: Ticket,
+        *,
+        event_type: str,
+        subject: str,
+        body: str,
+        dedupe_key: str,
+        extra_metadata: dict[str, object] | None = None,
+    ) -> None:
+        """Tell the customer their ticket moved.
+
+        Channels are NOT chosen here — the defaults below are a fallback and
+        ``notification_channel_policy`` resolves the actual channels (see
+        ``docs/designs/NOTIFICATION_CHANNEL_POLICY.md``). Silence on a ticket is
+        the single largest driver of "any update?" contacts, so every
+        customer-visible movement gets one message.
+        """
+        if not Tickets._notifications_enabled(db):
+            return
+
+        subscriber_id = ticket.subscriber_id or ticket.customer_account_id
+        if not subscriber_id:
+            return
+        subscriber = db.get(Subscriber, subscriber_id)
+        if not subscriber:
+            return
+
+        from app.services import customer_experience_communications
+
+        customer_experience_communications.request_update(
+            db,
+            subscriber_id=subscriber.id,
+            event_type=event_type,
+            subject=subject,
+            body=body,
+            metadata={
+                "type": "ticket",
+                "ticket_id": str(ticket.id),
+                "ticket_number": ticket.number,
+                **(extra_metadata or {}),
+            },
+            dedupe_key=dedupe_key,
+            default_channels=(
+                NotificationChannel.email,
+                NotificationChannel.whatsapp,
+                NotificationChannel.push,
+            ),
+        )
+
+    @staticmethod
+    def _notify_customer_of_comment(
+        db: Session, ticket: Ticket, comment: TicketComment
+    ) -> None:
+        """Notify the customer when staff reply visibly on their ticket.
+
+        Internal notes and the customer's own comments are never echoed back.
+        """
+        if comment.is_internal:
+            return
+        if comment.author_type != TicketCommentAuthorType.staff.value:
+            return
+
+        ticket_ref = ticket.number or str(ticket.id)[:8]
+        preview = " ".join((comment.body or "").split())[:400]
+        Tickets._queue_customer_ticket_update(
+            db,
+            ticket,
+            event_type="support_ticket_comment_added",
+            subject=f"Update on support ticket {ticket_ref}",
+            body=f"There is a new update on ticket {ticket_ref}:\n\n{preview}",
+            dedupe_key=f"ticket-comment:{comment.id}",
+            extra_metadata={"comment_id": str(comment.id)},
+        )
+
+    @staticmethod
+    def _notify_customer_of_status_change(
+        db: Session, ticket: Ticket, previous_status: str
+    ) -> None:
+        """Notify the customer when their ticket reaches a state they care about.
+
+        Deliberately narrow: intermediate triage churn is noise to a customer,
+        while "we're working on it", "we need you", and "it's closed" are not.
+        """
+        current = ticket.status
+        if current == previous_status:
+            return
+        if current not in CUSTOMER_NOTIFIED_TICKET_STATUSES:
+            return
+
+        ticket_ref = ticket.number or str(ticket.id)[:8]
+        message = CUSTOMER_NOTIFIED_TICKET_STATUSES[current]
+        Tickets._queue_customer_ticket_update(
+            db,
+            ticket,
+            event_type="support_ticket_status_changed",
+            subject=f"Support ticket {ticket_ref}: {message['label']}",
+            body=f"Ticket {ticket_ref} ({ticket.title}) {message['body']}",
+            dedupe_key=Tickets._status_change_dedupe_key(
+                ticket, previous_status, current
+            ),
+            extra_metadata={"from_status": previous_status, "to_status": current},
+        )
+
+    @staticmethod
+    def _status_change_dedupe_key(
+        ticket: Ticket, previous_status: str, current: str
+    ) -> str:
+        """Identify one *transition*, not one status.
+
+        Intent dedupe is permanent and global (``communication_intents.submit``
+        looks the key up with ``one_or_none()`` over all time), so keying on the
+        status alone silences every later re-entry into it. A ticket parked
+        on_hold is told "we'll let you know when it resumes" and then never
+        hears the resume; a ticket that bounces back to waiting_on_customer asks
+        for input once and then stalls silently. Both are the "any update?"
+        contact this notification exists to prevent.
+
+        The minute bucket keeps genuine idempotency — a retry or double submit
+        of the same transition still collapses — while letting a later,
+        distinct transition through.
+        """
+        stamp = _now().strftime("%Y%m%d%H%M")
+        return f"ticket-status:{ticket.id}:{previous_status}->{current}:{stamp}"
+
+    @staticmethod
     def _queue_resolution_confirmation_notifications(
         db: Session, ticket: Ticket, token_row: TicketAccessToken
     ) -> None:
@@ -1945,11 +2093,13 @@ class Tickets:
 
         _validate_ticket_lead_alignment(db, data, existing=ticket)
 
+        previous_status = ticket.status
         if "status" in data:
             # Admin edit may legitimately reopen, but it's validated + audited.
             transition_ticket_status(
                 ticket, data.pop("status"), source="admin_update", allow_reopen=True
             )
+            Tickets._notify_customer_of_status_change(db, ticket, previous_status)
 
         for key, value in data.items():
             setattr(ticket, key, value)
@@ -2161,6 +2311,7 @@ class Tickets:
             db, ticket=ticket, payload=payload, actor_id=actor_id, request=request
         )
         Tickets._queue_mention_notifications(db, ticket, payload.body, actor_id)
+        Tickets._notify_customer_of_comment(db, ticket, comment)
         if mentioned_agent_ids:
             from app.services import ticket_mentions
 

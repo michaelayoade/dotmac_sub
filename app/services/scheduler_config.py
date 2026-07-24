@@ -1159,6 +1159,28 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=subscription_expiration_interval_seconds,
         )
+        # Warn BEFORE the expiry runner above cuts service. `send_expiry_reminders`
+        # and the `expiry_reminder_days` setting have both existed for a long
+        # time, but the task was never scheduled — so subscriptions expired and
+        # suspended on time while nobody was warned first, which is the single
+        # largest source of "I paid, why am I off?" contacts. Daily is right:
+        # the task reminds on a days-before window, so a shorter interval would
+        # re-send to the same customers.
+        expiry_reminder_interval_seconds = _effective_int(
+            session,
+            SettingDomain.catalog,
+            "expiry_reminder_interval_seconds",
+            "EXPIRY_REMINDER_INTERVAL_SECONDS",
+            86400,  # Daily
+        )
+        expiry_reminder_interval_seconds = max(expiry_reminder_interval_seconds, 3600)
+        _sync_scheduled_task(
+            session,
+            name="subscription_expiry_reminder_runner",
+            task_name="app.tasks.catalog.send_expiry_reminders",
+            enabled=True,
+            interval_seconds=expiry_reminder_interval_seconds,
+        )
         # Apply admin-scheduled next-cycle plan changes once their effective
         # (next-billing) date arrives. Hourly so a change lands promptly after
         # the boundary; the applier is idempotent (only picks up approved,
