@@ -34,6 +34,83 @@ class ConnectorRegistryEntry:
     file_size_bytes: int
 
 
+def _paystack_manifest(
+    *,
+    version: str,
+    include_safe_defaults: bool,
+    require_public_key: bool,
+) -> ConnectorManifest:
+    """Build one immutable Paystack manifest retained by exact version/digest.
+
+    Paystack 1.0.0 was changed in place by the payment control-plane cutover.
+    Both deployed 1.0.0 digests remain executable during the bounded adoption
+    window; 1.0.1 is the first correctly versioned definition.
+    """
+
+    base_url: dict[str, object] = {
+        "type": "string",
+        **({"default": "https://api.paystack.co"} if include_safe_defaults else {}),
+    }
+    timeout_seconds: dict[str, object] = {
+        "type": "integer",
+        **({"default": 30} if include_safe_defaults else {}),
+    }
+    default_currency: dict[str, object] = {
+        "type": "string",
+        **({"default": "NGN"} if include_safe_defaults else {}),
+    }
+    return ConnectorManifest(
+        key="paystack",
+        name="Paystack",
+        version=version,
+        connector_type="payment",
+        description="Online payment gateway integration.",
+        runtime=RuntimeManifest(
+            type=ConnectorRuntimeType.builtin_worker,
+            module="app.services.integrations.connectors.payment_gateway",
+        ),
+        capabilities=(
+            CapabilityManifest(
+                id="payments.intent.v1",
+                modes=(CapabilityMode.interactive, CapabilityMode.event),
+            ),
+            CapabilityManifest(
+                id="payments.webhook.v1",
+                modes=(CapabilityMode.inbound,),
+            ),
+            CapabilityManifest(
+                id="payments.reconcile.v1",
+                modes=(CapabilityMode.scheduled, CapabilityMode.reconcile),
+            ),
+            CapabilityManifest(
+                id="payments.refund.v1",
+                modes=(CapabilityMode.event, CapabilityMode.manual),
+            ),
+        ),
+        config_schema={
+            "type": "object",
+            "properties": {
+                "base_url": base_url,
+                "timeout_seconds": timeout_seconds,
+                "default_currency": default_currency,
+            },
+            "required": ["base_url"],
+            "additionalProperties": False,
+        },
+        secrets=(
+            SecretBindingManifest(name="gateway_credentials"),
+            SecretBindingManifest(name="public_key", required=require_public_key),
+        ),
+        data_access=DataAccessManifest(
+            reads=("financial.payment_intent",),
+            emits=("financial.payment_provider_observation",),
+            classifications=("financial", "customer_contact"),
+        ),
+        egress=EgressManifest(hosts=("api.paystack.co",)),
+        health=HealthManifest(operation="connection.validate.v1"),
+    )
+
+
 _DEFINITIONS: tuple[ConnectorManifest, ...] = (
     ConnectorManifest(
         key="lead.capture.http",
@@ -294,58 +371,10 @@ _DEFINITIONS: tuple[ConnectorManifest, ...] = (
         egress=EgressManifest(hosts=("erp.dotmac.io",)),
         health=HealthManifest(operation="connection.validate.v1"),
     ),
-    ConnectorManifest(
-        key="paystack",
-        name="Paystack",
-        version="1.0.0",
-        connector_type="payment",
-        description="Online payment gateway integration.",
-        runtime=RuntimeManifest(
-            type=ConnectorRuntimeType.builtin_worker,
-            module="app.services.integrations.connectors.payment_gateway",
-        ),
-        capabilities=(
-            CapabilityManifest(
-                id="payments.intent.v1",
-                modes=(CapabilityMode.interactive, CapabilityMode.event),
-            ),
-            CapabilityManifest(
-                id="payments.webhook.v1",
-                modes=(CapabilityMode.inbound,),
-            ),
-            CapabilityManifest(
-                id="payments.reconcile.v1",
-                modes=(CapabilityMode.scheduled, CapabilityMode.reconcile),
-            ),
-            CapabilityManifest(
-                id="payments.refund.v1",
-                modes=(CapabilityMode.event, CapabilityMode.manual),
-            ),
-        ),
-        config_schema={
-            "type": "object",
-            "properties": {
-                "base_url": {
-                    "type": "string",
-                    "default": "https://api.paystack.co",
-                },
-                "timeout_seconds": {"type": "integer", "default": 30},
-                "default_currency": {"type": "string", "default": "NGN"},
-            },
-            "required": ["base_url"],
-            "additionalProperties": False,
-        },
-        secrets=(
-            SecretBindingManifest(name="gateway_credentials"),
-            SecretBindingManifest(name="public_key"),
-        ),
-        data_access=DataAccessManifest(
-            reads=("financial.payment_intent",),
-            emits=("financial.payment_provider_observation",),
-            classifications=("financial", "customer_contact"),
-        ),
-        egress=EgressManifest(hosts=("api.paystack.co",)),
-        health=HealthManifest(operation="connection.validate.v1"),
+    _paystack_manifest(
+        version="1.0.1",
+        include_safe_defaults=True,
+        require_public_key=True,
     ),
     ConnectorManifest(
         key="flutterwave",
@@ -419,15 +448,47 @@ _DEFINITIONS: tuple[ConnectorManifest, ...] = (
     ),
 )
 
+_HISTORICAL_DEFINITIONS: tuple[ConnectorManifest, ...] = (
+    # Pre-#1567 Paystack 1.0.0. Production installations created before the
+    # payment control-plane cutover pin this exact digest.
+    _paystack_manifest(
+        version="1.0.0",
+        include_safe_defaults=False,
+        require_public_key=False,
+    ),
+    # #1567 changed 1.0.0 in place. Retain the transitional digest too so a
+    # reviewed emergency adoption made before 1.0.1 remains executable.
+    _paystack_manifest(
+        version="1.0.0",
+        include_safe_defaults=True,
+        require_public_key=True,
+    ),
+)
+
 _DEFINITION_BY_KEY = {definition.key: definition for definition in _DEFINITIONS}
 if len(_DEFINITION_BY_KEY) != len(_DEFINITIONS):  # pragma: no cover - import guard
     raise RuntimeError("connector definition keys must be unique")
+_SUPPORTED_DEFINITIONS = _DEFINITIONS + _HISTORICAL_DEFINITIONS
+_DEFINITION_BY_PIN = {
+    (definition.key, definition.version, definition.digest): definition
+    for definition in _SUPPORTED_DEFINITIONS
+}
+if len(_DEFINITION_BY_PIN) != len(
+    _SUPPORTED_DEFINITIONS
+):  # pragma: no cover - import guard
+    raise RuntimeError("connector definition pins must be unique")
 
 
 def connector_definitions() -> tuple[ConnectorManifest, ...]:
-    """Return the deterministic, validated deployed connector catalogue."""
+    """Return the deterministic current connector catalogue."""
 
     return _DEFINITIONS
+
+
+def supported_connector_definitions() -> tuple[ConnectorManifest, ...]:
+    """Return current and bounded historical executable definitions."""
+
+    return _SUPPORTED_DEFINITIONS
 
 
 def connector_definition(key: str) -> ConnectorManifest | None:
@@ -438,6 +499,42 @@ def require_connector_definition(key: str) -> ConnectorManifest:
     definition = connector_definition(key)
     if definition is None:
         raise KeyError(f"unknown connector definition: {key}")
+    return definition
+
+
+def pinned_connector_definition(
+    key: str,
+    *,
+    version: str,
+    manifest_digest: str,
+) -> ConnectorManifest | None:
+    """Resolve only an exact deployed version/digest installation pin."""
+
+    return _DEFINITION_BY_PIN.get(
+        (
+            key.strip().lower(),
+            version.strip(),
+            manifest_digest.strip().lower(),
+        )
+    )
+
+
+def require_pinned_connector_definition(
+    key: str,
+    *,
+    version: str,
+    manifest_digest: str,
+) -> ConnectorManifest:
+    definition = pinned_connector_definition(
+        key,
+        version=version,
+        manifest_digest=manifest_digest,
+    )
+    if definition is None:
+        raise KeyError(
+            "unknown connector definition pin: "
+            f"{key.strip().lower()}@{version.strip()}#{manifest_digest.strip().lower()}"
+        )
     return definition
 
 

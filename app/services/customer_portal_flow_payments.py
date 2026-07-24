@@ -48,9 +48,15 @@ from app.services.customer_portal_context import (
     get_invoice_billing_contact,
 )
 from app.services.db_session_adapter import db_session_adapter
+from app.services.integrations import payment_capability
+from app.services.integrations.runtime_execution import RuntimeExecutionError
 from app.services.owner_commands import CommandContext
-from app.services.payment_gateway_adapter import payment_gateway_adapter
+from app.services.payment_gateway_adapter import (
+    PaymentGatewayContext,
+    payment_gateway_adapter,
+)
 from app.services.payment_routing import (
+    GatewayOption,
     gateway_options,
     provider_for_intent,
     select_checkout_provider,
@@ -157,6 +163,62 @@ def _default_online_route(db: Session):
         return select_checkout_provider(db)
     except ValueError:
         return None
+
+
+def _runtime_ready_gateway_contexts(
+    db: Session,
+    *,
+    invoice_number: str | None = None,
+) -> list[tuple[GatewayOption, PaymentGatewayContext]]:
+    """Map runtime-unavailable gateways to an honest UI availability state."""
+
+    contexts: list[tuple[GatewayOption, PaymentGatewayContext]] = []
+    for route in gateway_options(db):
+        try:
+            context = payment_gateway_adapter.build_context(
+                db,
+                provider_type=route.provider_type.value,
+                capability_binding_id=route.capability_binding_id,
+                invoice_number=invoice_number,
+            )
+        except (
+            RuntimeExecutionError,
+            payment_capability.PaymentCapabilityError,
+        ) as exc:
+            logger.warning(
+                "Payment gateway unavailable for customer presentment",
+                extra={
+                    "event": "payment_gateway_presentment_unavailable",
+                    "provider_type": route.provider_type.value,
+                    "capability_binding_id": str(route.capability_binding_id),
+                    "error_type": type(exc).__name__,
+                },
+            )
+            continue
+        contexts.append((route, context))
+    return contexts
+
+
+def _payment_options_for_runtime_ready_routes(
+    routes: list[tuple[GatewayOption, PaymentGatewayContext]],
+    *,
+    direct_transfer_enabled: bool,
+) -> list[dict[str, str]]:
+    options = [
+        {
+            "provider_type": route.provider_type.value,
+            "label": _ONLINE_PROVIDER_LABELS[route.provider_type.value],
+        }
+        for route, _context in routes
+    ]
+    if direct_transfer_enabled:
+        options.append(
+            {
+                "provider_type": DIRECT_TRANSFER_PROVIDER,
+                "label": _DIRECT_TRANSFER_LABEL,
+            }
+        )
+    return options
 
 
 def _topup_payment_options(
@@ -642,15 +704,11 @@ def get_payment_page(
     # (``initiate_payment``) instead consumes a single pre-minted gateway
     # context, so keep ``provider_public_key``/``payment_reference`` for it.
     dbt_enabled = direct_bank_transfer_enabled(db)
-    default_route = _default_online_route(db)
-    gateway_context = None
-    if default_route:
-        gateway_context = payment_gateway_adapter.build_context(
-            db,
-            provider_type=default_route.provider_type.value,
-            capability_binding_id=default_route.capability_binding_id,
-            invoice_number=getattr(invoice, "invoice_number", None),
-        )
+    runtime_ready_gateways = _runtime_ready_gateway_contexts(
+        db,
+        invoice_number=getattr(invoice, "invoice_number", None),
+    )
+    gateway_context = runtime_ready_gateways[0][1] if runtime_ready_gateways else None
     return {
         "invoice": invoice,
         "amount": amount_due,
@@ -666,8 +724,9 @@ def get_payment_page(
         if gateway_context and gateway_context.provider_type == "paystack"
         else None,
         "payment_reference": gateway_context.reference if gateway_context else None,
-        "payment_options": _topup_payment_options(
-            db, direct_transfer_enabled=dbt_enabled
+        "payment_options": _payment_options_for_runtime_ready_routes(
+            runtime_ready_gateways,
+            direct_transfer_enabled=dbt_enabled,
         ),
         "payment_methods": payment_methods,
         "direct_bank_transfer_enabled": dbt_enabled,
@@ -1256,12 +1315,14 @@ def get_topup_page(
 ) -> dict:
     """Build context for the customer top-up page."""
     account_id = optional_customer_account_id(db, customer)
-    default_route = _default_online_route(db)
+    direct_transfer_available = direct_bank_transfer_enabled(db)
+    runtime_ready_gateways = _runtime_ready_gateway_contexts(db)
+    gateway_context = runtime_ready_gateways[0][1] if runtime_ready_gateways else None
     provider_type = (
-        default_route.provider_type.value
-        if default_route
+        gateway_context.provider_type
+        if gateway_context
         else DIRECT_TRANSFER_PROVIDER
-        if direct_bank_transfer_enabled(db)
+        if direct_transfer_available
         else None
     )
 
@@ -1293,7 +1354,10 @@ def get_topup_page(
     payable_invoices = eligible_invoices(db, str(account_id)) if account_id else []
     context = {
         "provider_type": provider_type,
-        "payment_options": _topup_payment_options(db),
+        "payment_options": _payment_options_for_runtime_ready_routes(
+            runtime_ready_gateways,
+            direct_transfer_enabled=direct_transfer_available,
+        ),
         "customer_email": email,
         "prepaid_balance": prepaid_balance,
         "account_credit": prepaid_balance,
@@ -1334,12 +1398,7 @@ def get_topup_page(
             "currency": pending_direct.currency,
         }
 
-    if default_route:
-        gateway_context = payment_gateway_adapter.build_context(
-            db,
-            provider_type=default_route.provider_type.value,
-            capability_binding_id=default_route.capability_binding_id,
-        )
+    if gateway_context:
         context["provider_public_key"] = gateway_context.public_key
         if gateway_context.provider_type == "paystack":
             context["paystack_public_key"] = gateway_context.public_key
