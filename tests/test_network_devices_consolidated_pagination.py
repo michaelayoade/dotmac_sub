@@ -80,6 +80,7 @@ def test_consolidated_page_data_includes_core_table_maps(db_session):
         role=DeviceRole.core,
         status=DeviceStatus.online,
         live_status="up",
+        live_status_at=datetime.now(UTC),
         is_active=True,
     )
     db_session.add(device)
@@ -108,7 +109,7 @@ def test_consolidated_page_data_includes_core_table_maps(db_session):
     key = str(device.id)
 
     displayed = next(item for item in payload["core_devices"] if str(item.id) == key)
-    assert displayed.operational_status == "up"
+    assert displayed.operational_status == "working"
     assert displayed.status_presentation.tone.value == "positive"
     assert payload["uptime_map"][key] == "1h 1m"
     assert payload["ping_history_map"][key][0]["ok"] is True

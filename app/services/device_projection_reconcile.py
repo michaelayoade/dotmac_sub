@@ -154,7 +154,7 @@ def _reconcile(
         key = (device_type, source_id)
         seen.add(key)
 
-        status = str(device.get("status") or "unknown")
+        status = str(device.get("status") or "not_working")
         subscriber_id = _subscriber_id(device.get("subscriber"))
 
         row = existing.get(key)

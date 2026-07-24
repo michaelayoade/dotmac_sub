@@ -1,29 +1,22 @@
-"""Derived device operational status — the NOC-facing truth.
+"""Binary device-operation resolver owned by ``network.device_state``.
 
-`device.status` is administrative/lifecycle *intent*; `live_status` is the raw
-monitoring *observation*. Neither alone is what an operator should read off the
-Network Devices page: admin status goes stale, and raw live_status turns
-monitoring gaps (no warm, stale warmer, no path) into fake outages.
+Collectors write timestamped observations. Their age is an internal lifecycle
+input that makes another verification due; it is not a third device state and
+must never leak into UI filters, badges, or KPIs.
 
-`operational_status` is a derived *projection* over both — computed on read,
-never persisted. See docs/designs/DEVICE_OPERATIONAL_STATUS.md.
+The public projection therefore has exactly two values:
 
-Precedence (first match wins):
-    admin maintenance/decommissioned  -> maintenance   (intentional; never alarm)
-    no live_status row                -> down           (reason: not_warmed_retry_pending)
-    warmer heartbeat stale            -> retain state   (reason: stale_retry_pending)
-    live_status == unknown            -> down           (reason: monitoring_unknown_retry_pending)
-    live_status == problem            -> degraded      (legacy cached status)
-    live_status == down               -> down
-    live_status == up                 -> up
-    else                              -> unknown
+``working``
+    Current verification proves operation, including operation with a separate
+    impairment/alarm.
 
-Current scope: warmer-fed `live_status`, warmer-heartbeat freshness, and
-lifecycle override. Per-type ACS/OLT-poll sources and cached VPN-path coverage
-(the real ``no_path`` distinction) are not yet inputs; until then a no-path device
-reads ``down(monitoring_unknown_retry_pending)`` while the poller retries. A
-retry-pending state is binary for operators but does not alarm without negative
-device evidence.
+``not_working``
+    Verification proves failure or the permanent verification lifecycle cannot
+    currently confirm operation. ``reason`` distinguishes physical negative
+    evidence from a verifier/path failure without inventing a freshness state.
+
+Administrative maintenance/decommissioning remains separate source state. It
+prevents alarms, but the operational answer is still ``not_working``.
 """
 
 from __future__ import annotations
@@ -35,21 +28,42 @@ from enum import StrEnum
 
 # Derived UI buckets (keep small — reasons live in `reason`, not extra pills).
 class DeviceOperationalState(StrEnum):
-    """Authoritative vocabulary for the derived NOC-facing projection."""
+    """Complete public vocabulary for the NOC-facing projection."""
 
-    up = "up"
-    degraded = "degraded"
-    down = "down"
-    maintenance = "maintenance"
+    working = "working"
+    not_working = "not_working"
 
 
 DEVICE_OPERATIONAL_STATE_VALUES = tuple(state.value for state in DeviceOperationalState)
 
-# Compatibility aliases for existing decision and policy callers.
-UP = DeviceOperationalState.up.value
-DEGRADED = DeviceOperationalState.degraded.value
-DOWN = DeviceOperationalState.down.value
-MAINTENANCE = DeviceOperationalState.maintenance.value
+WORKING = DeviceOperationalState.working.value
+NOT_WORKING = DeviceOperationalState.not_working.value
+
+_VERIFICATION_FAILURE_REASONS = frozenset(
+    {
+        "verification_error",
+        "verification_expired",
+        "verification_inconclusive",
+        "verification_not_configured",
+        "verification_not_started",
+        "verification_path_unavailable",
+    }
+)
+_IMPAIRMENT_REASON_PREFIXES = ("active_trigger", "health_degraded", "poll_")
+_REASON_LABELS = {
+    "active_trigger": "Working with an active alarm",
+    "health_degraded": "Working with an impairment",
+    "health_unhealthy": "Health verification confirmed failure",
+    "observed_not_working": "Verification confirmed failure",
+    "observed_working": "Verification confirmed operation",
+    "ping_failed": "Ping verification confirmed failure",
+    "verification_error": "Unable to verify — verifier error",
+    "verification_expired": "Unable to verify — confirmation expired",
+    "verification_inconclusive": "Unable to verify — inconclusive result",
+    "verification_not_configured": "Unable to verify — verifier not configured",
+    "verification_not_started": "Unable to verify — verification not completed",
+    "verification_path_unavailable": "Unable to verify — verification path unavailable",
+}
 
 # Reuse the customer-facing warmer staleness threshold (selfcare uses the same).
 _WARM_STALE_SECONDS = 600
@@ -79,31 +93,62 @@ class OperationalStatus:
 
     @property
     def alarming(self) -> bool:
-        """Retry gaps are visible but do not become outages without evidence."""
-        return self.status in (DOWN, DEGRADED) and not self.retry_pending
+        """Only confirmed device-negative evidence opens a device alarm."""
+
+        return (
+            self.status == NOT_WORKING
+            and not self.verification_failed
+            and not self.reason.startswith("admin_")
+        )
 
     @property
-    def retry_pending(self) -> bool:
-        return self.reason.endswith("_retry_pending")
+    def verification_failed(self) -> bool:
+        """Internal verifier outcome; never a public device-state branch."""
+
+        return self.reason in _VERIFICATION_FAILURE_REASONS
+
+    @property
+    def impaired(self) -> bool:
+        """Working with a separate impairment that may require attention."""
+
+        return self.status == WORKING and self.reason.startswith(
+            _IMPAIRMENT_REASON_PREFIXES
+        )
+
+    @property
+    def reason_label(self) -> str:
+        """Human explanation without creating another public state."""
+
+        exact = _REASON_LABELS.get(self.reason)
+        if exact:
+            return exact
+        if self.reason.startswith("admin_"):
+            lifecycle = self.reason.removeprefix("admin_").replace("_", " ")
+            return f"Administrative lifecycle: {lifecycle}"
+        if self.reason.startswith("poll_"):
+            poll = self.reason.removeprefix("poll_").replace("_", " ")
+            return f"Working; secondary poll {poll}"
+        if self.reason.endswith("_linked"):
+            base = self.reason.removesuffix("_linked")
+            return _REASON_LABELS.get(base, base.replace("_", " ").capitalize())
+        return self.reason.replace("_", " ").capitalize()
 
 
 def warmer_is_stale(now: datetime | None = None) -> bool:
-    """True only when the warmer heartbeat is present but older than the
-    staleness window. A *missing* heartbeat is NOT stale (transient Redis hiccup
-    shouldn't blank every device) — same rule as topology.selfcare."""
+    """Internal verification-due input derived from the warmer heartbeat."""
     try:
         from app.services.app_cache import get_json
         from app.services.topology.live_status import WARM_HEARTBEAT_KEY
 
         raw = get_json(WARM_HEARTBEAT_KEY)
     except Exception:
-        return False
+        return True
     if not raw:
-        return False
+        return True
     try:
         warmed_at = datetime.fromisoformat(str(raw))
     except (TypeError, ValueError):
-        return False
+        return True
     if warmed_at.tzinfo is None:
         warmed_at = warmed_at.replace(tzinfo=UTC)
     now = now or datetime.now(UTC)
@@ -136,16 +181,18 @@ _OLT_FRESH_SECONDS = 3600  # 1 hour
 
 
 def _live_status_to_operational(live: str | None, reason_suffix: str):
-    """Map a warmer-fed live_status string to an operational bucket."""
+    """Map an internal warmer observation to the binary public projection."""
     if live == "up":
-        return OperationalStatus(UP, f"observed_up{reason_suffix}", None, False, None)
+        return OperationalStatus(
+            WORKING, f"observed_working{reason_suffix}", None, False, None
+        )
     if live == "down":
         return OperationalStatus(
-            DOWN, f"observed_down{reason_suffix}", None, False, None
+            NOT_WORKING, f"observed_not_working{reason_suffix}", None, False, None
         )
     if live == "problem":
         return OperationalStatus(
-            DEGRADED, f"active_trigger{reason_suffix}", None, False, None
+            WORKING, f"active_trigger{reason_suffix}", None, False, None
         )
     return None
 
@@ -161,10 +208,8 @@ def derive_olt_operational_status(
     fall-back to the linked monitored device's live_status (reachable if any
     source).
 
-    up   = pinged OK and last poll succeeded
-    degraded = pinged OK but SNMP/poll failing (reachable, partial telemetry)
-    down = ping failed
-    down + retry_pending = no fresh telemetry from either source
+    working = current positive ping or linked positive reachability
+    not_working = current negative evidence or verification failure
 
     The fall-back matters in practice: OLT direct polling can be stale/dead while
     the OLT is still observed via its linked NetworkDevice.
@@ -177,10 +222,10 @@ def derive_olt_operational_status(
     direct_fresh = _is_fresh(last_ping_at, now, _OLT_FRESH_SECONDS)
     if direct_fresh and last_ping_ok is True:
         if poll == "success":
-            return OperationalStatus(UP, "observed_up", None, False, None)
-        return OperationalStatus(DEGRADED, f"poll_{poll or 'none'}", None, False, None)
+            return OperationalStatus(WORKING, "observed_working", None, False, None)
+        return OperationalStatus(WORKING, f"poll_{poll or 'none'}", None, False, None)
     if direct_fresh and last_ping_ok is False:
-        return OperationalStatus(DOWN, "ping_failed", None, False, None)
+        return OperationalStatus(NOT_WORKING, "ping_failed", None, False, None)
 
     # Direct telemetry missing/stale — fall back to the linked observation.
     if linked_live_status and not warm_stale:
@@ -189,24 +234,38 @@ def derive_olt_operational_status(
             return mapped
 
     if last_ping_ok is None and last_ping_at is None:
-        return OperationalStatus(DOWN, "not_warmed_retry_pending", None, False, None)
-    retained = UP if last_ping_ok is True else DOWN
-    return OperationalStatus(retained, "stale_retry_pending", None, False, None)
+        return OperationalStatus(
+            NOT_WORKING, "verification_not_started", None, False, None
+        )
+    return OperationalStatus(NOT_WORKING, "verification_expired", None, False, None)
 
 
 def derive_ont_operational_status(ont, *, now: datetime | None = None):
     """Operational status for an ONT, reconciling the OLT-reported state with
     ACS informs and last-seen — reachable if *any* source confirms recently.
 
-    This closes the real gap: an ONT the OLT last reported ``offline`` but which
-    informed ACS minutes ago is actually up. A never-seen ONT (no OLT-online, no
-    ACS, no last-seen) is ``offline`` with a retry pending.
+    This closes the real gap: an ONT the OLT last reported offline but which
+    informed ACS minutes ago is working. A due/inconclusive verification is
+    not working rather than a third public state.
     """
     from app.services.network.ont_status import resolve_effective_ont_status
 
     effective = resolve_effective_ont_status(ont, now=now)
+    if effective.retry_pending:
+        reason = (
+            "verification_not_started"
+            if effective.reason == "never_seen_retry_pending"
+            else "verification_expired"
+        )
+        return OperationalStatus(
+            NOT_WORKING,
+            reason,
+            None,
+            False,
+            None,
+        )
     return OperationalStatus(
-        UP if effective.is_online else DOWN,
+        WORKING if effective.is_online else NOT_WORKING,
         effective.reason,
         None,
         False,
@@ -220,18 +279,18 @@ _LIFECYCLE_OVERRIDE = {"maintenance", "decommissioned", "retired"}
 
 
 _ROUTER_STATE_MAP = {
-    "online": UP,
-    "degraded": DEGRADED,
-    "offline": DOWN,
-    "unreachable": DOWN,
-    "maintenance": MAINTENANCE,
+    "online": WORKING,
+    "degraded": WORKING,
+    "offline": NOT_WORKING,
+    "unreachable": NOT_WORKING,
+    "maintenance": NOT_WORKING,
 }
 
 
 def derive_nas_operational_status(
     nas, *, linked_device=None, warm_stale: bool = False
 ) -> OperationalStatus:
-    """Derive a NAS/BNG operational status into the shared 4-bucket vocabulary.
+    """Derive a NAS/BNG operational status into the binary vocabulary.
 
     Ownership: when the NAS links a monitored ``NetworkDevice`` (``network_device_id``),
     that device's real liveness is authoritative and we delegate to
@@ -242,44 +301,66 @@ def derive_nas_operational_status(
         return derive_operational_status(linked_device, warm_stale=warm_stale)
     admin = _enum_value(getattr(nas, "status", None))
     if admin in ("maintenance", "decommissioned"):
-        return OperationalStatus(MAINTENANCE, f"admin_{admin}", admin, False, None)
+        return OperationalStatus(NOT_WORKING, f"admin_{admin}", admin, False, None)
     if admin == "offline":
-        return OperationalStatus(DOWN, "admin_offline", admin, False, None)
+        return OperationalStatus(NOT_WORKING, "admin_offline", admin, False, None)
     health = _enum_value(getattr(nas, "health_status", None))
     if health == "unhealthy":
-        return OperationalStatus(DOWN, "health_unhealthy", admin, False, None)
+        return OperationalStatus(NOT_WORKING, "health_unhealthy", admin, False, None)
     if health == "degraded":
-        return OperationalStatus(DEGRADED, "health_degraded", admin, False, None)
+        return OperationalStatus(WORKING, "health_degraded", admin, False, None)
     if admin == "active":
-        return OperationalStatus(UP, "admin_active", admin, False, None)
-    return OperationalStatus(DOWN, "nas_status_unknown", admin, False, None)
+        return OperationalStatus(
+            NOT_WORKING, "verification_not_configured", admin, False, None
+        )
+    return OperationalStatus(
+        NOT_WORKING, "verification_inconclusive", admin, False, None
+    )
 
 
-def derive_router_operational_status(router) -> OperationalStatus:
+def derive_router_operational_status(
+    router, *, now: datetime | None = None
+) -> OperationalStatus:
     """Derive a MikroTik router status from the synced ``RouterStatus`` field."""
     admin = _enum_value(getattr(router, "status", None))
-    state = _ROUTER_STATE_MAP.get(admin or "", DOWN)
-    reason = f"router_{admin}" if admin else "router_status_unknown"
+    last_seen = getattr(router, "last_seen_at", None)
+    current = now or datetime.now(UTC)
+    if admin in {"online", "degraded"} and not _is_fresh(
+        last_seen, current, _WARM_STALE_SECONDS
+    ):
+        return OperationalStatus(
+            NOT_WORKING,
+            "verification_expired",
+            admin,
+            False,
+            None,
+        )
+    state = _ROUTER_STATE_MAP.get(admin or "", NOT_WORKING)
+    reason = f"router_{admin}" if admin else "verification_not_started"
     return OperationalStatus(state, reason, admin, False, None)
 
 
 def derive_operational_status(
-    device, *, warm_stale: bool, coverage=None
+    device,
+    *,
+    warm_stale: bool,
+    coverage=None,
+    now: datetime | None = None,
 ) -> OperationalStatus:
     """Derive the operational status for one device-like object.
 
     ``device`` needs ``status`` / ``live_status`` (and ``mgmt_ip`` when coverage
     is supplied), read defensively. ``warm_stale`` is computed once per request.
-    ``coverage`` is an optional MonitoringCoverage: when loaded, a
-    device whose mgmt IP no live tunnel reaches retains its last binary state
-    with a retry-pending reason. Omitted/unloaded coverage = Phase-1 behaviour.
+    ``coverage`` is an internal verification-path observation. When loaded, a
+    device whose management IP has no reachable path is not working because the
+    lifecycle cannot confirm operation.
     """
     admin = _enum_value(getattr(device, "status", None))
     live = _enum_value(getattr(device, "live_status", None))
 
     # 1. Lifecycle intent wins — intentional states never become alarms.
     if admin in _LIFECYCLE_OVERRIDE:
-        return OperationalStatus(MAINTENANCE, f"admin_{admin}", admin, False, None)
+        return OperationalStatus(NOT_WORKING, f"admin_{admin}", admin, False, None)
 
     # 2. No monitoring path (and not positively observed up) -> blind spot, not
     # an outage. Positive 'up' wins (it proves a path), so only gate non-up.
@@ -289,57 +370,57 @@ def derive_operational_status(
         and live != "up"
         and not coverage.covers(getattr(device, "mgmt_ip", None))
     ):
-        retained = DOWN if live != "up" else UP
-        return _maybe_mismatch(retained, "no_path_retry_pending", admin)
+        return _maybe_mismatch(NOT_WORKING, "verification_path_unavailable", admin)
 
-    # 3/4/5. No trustworthy observation remains binary and schedules retries.
+    # 3/4/5. Observation time decides whether verification has expired. A
+    # current per-device timestamp is stronger than a missing global heartbeat;
+    # rows without their own timestamp fall back to the warmer heartbeat.
     if live is None:
-        return _maybe_mismatch(DOWN, "not_warmed_retry_pending", admin)
-    if warm_stale:
-        retained = UP if live == "up" else DOWN
-        return _maybe_mismatch(retained, "stale_retry_pending", admin)
+        return _maybe_mismatch(NOT_WORKING, "verification_not_started", admin)
+    observation_at = getattr(device, "live_status_at", None)
+    current = now or datetime.now(UTC)
+    verification_expired = (
+        not _is_fresh(observation_at, current, _WARM_STALE_SECONDS)
+        if observation_at is not None
+        else warm_stale
+    )
+    if verification_expired:
+        return _maybe_mismatch(NOT_WORKING, "verification_expired", admin)
     if live == "unknown":
-        # Disabled / in-maintenance in monitoring, or no availability data.
-        return _maybe_mismatch(DOWN, "monitoring_unknown_retry_pending", admin)
+        return _maybe_mismatch(NOT_WORKING, "verification_inconclusive", admin)
 
     # 5. Live observation maps to the UI bucket. "problem" is kept for legacy
     # cached rows from the older warmer that folded active triggers into status.
     if live == "problem":
-        return _maybe_mismatch(DEGRADED, "active_trigger", admin)
+        return _maybe_mismatch(WORKING, "active_trigger", admin)
     if live == "down":
-        return _maybe_mismatch(DOWN, "observed_down", admin)
+        return _maybe_mismatch(NOT_WORKING, "observed_not_working", admin)
     if live == "up":
-        return _maybe_mismatch(UP, "observed_up", admin)
-    return _maybe_mismatch(DOWN, "indeterminate_retry_pending", admin)
+        return _maybe_mismatch(WORKING, "observed_working", admin)
+    return _maybe_mismatch(NOT_WORKING, "verification_inconclusive", admin)
 
 
 def _maybe_mismatch(status: str, reason: str, admin: str | None) -> OperationalStatus:
     """Flag inventory-hygiene conflicts between admin intent and observation."""
     mismatch = False
     mreason: str | None = None
-    if admin in ("online", "offline") and reason.endswith("_retry_pending"):
-        mismatch, mreason = True, "active_retry_pending"
-    elif admin == "online" and status in (DOWN, DEGRADED):
-        mismatch, mreason = True, "admin_online_observed_down"
-    elif admin == "offline" and status in (UP, DEGRADED):
-        mismatch, mreason = True, "admin_offline_observed_up"
+    if admin == "online" and status == NOT_WORKING:
+        mismatch, mreason = True, "admin_online_not_working"
+    elif admin == "offline" and status == WORKING:
+        mismatch, mreason = True, "admin_offline_working"
     return OperationalStatus(status, reason, admin, mismatch, mreason)
 
 
 # Mismatch reason -> (operator-facing label, owning team). The worklist groups
 # by this so inventory-hygiene conflicts route to whoever can fix them.
 _MISMATCH_OWNERS = {
-    "admin_online_observed_down": (
-        "Admin says online, monitoring sees down/degraded",
+    "admin_online_not_working": (
+        "Admin says online, device is not working",
         "Field ops",
     ),
-    "admin_offline_observed_up": (
-        "Admin says offline, monitoring sees it up",
+    "admin_offline_working": (
+        "Admin says offline, device is working",
         "Inventory hygiene",
-    ),
-    "active_retry_pending": (
-        "Active in inventory, awaiting monitoring confirmation",
-        "Net-eng / VPN",
     ),
 }
 
@@ -457,13 +538,16 @@ def annotate_operational_status(devices, *, now: datetime | None = None) -> None
     for device in devices:
         try:
             operational = derive_operational_status(
-                device, warm_stale=warm_stale, coverage=coverage
+                device,
+                warm_stale=warm_stale,
+                coverage=coverage,
+                now=now,
             )
         except Exception:
             # Never let status derivation break a page render.
             operational = OperationalStatus(
-                DOWN,
-                "derivation_error_retry_pending",
+                NOT_WORKING,
+                "verification_error",
                 _enum_value(getattr(device, "status", None)),
                 False,
                 None,
@@ -476,5 +560,4 @@ def _attach_operational_projection(device, operational: OperationalStatus) -> No
     device.operational = operational
     device.operational_status = operational.status
     device.operational_reason = operational.reason
-    device.operational_retry_pending = operational.retry_pending
     device.status_presentation = operational.presentation

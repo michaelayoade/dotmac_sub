@@ -23,6 +23,7 @@ from app.models.comms_campaign import (
     CampaignStep,
     CampaignType,
 )
+from app.models.domain_settings import SettingDomain
 from app.models.notification import (
     CommunicationSuppression,
     NotificationChannel,
@@ -48,6 +49,7 @@ from app.services.communication_intents import (
     submit,
 )
 from app.services.customer_identity_normalization import normalize_phone_identifier
+from app.services.settings_spec import resolve_boolean
 
 NON_CONTACTABLE_STATUSES = {
     SubscriberStatus.disabled.value,
@@ -106,6 +108,20 @@ class RenderedCampaignMessage:
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _assert_periodic_campaign_admission_enabled(db: Session) -> None:
+    """Reject new scheduled intent while the rollout admission gate is closed."""
+
+    if resolve_boolean(db, SettingDomain.comms, "campaign_processing_enabled"):
+        return
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            "Scheduled campaign admission is disabled. Draft and manual-send "
+            "workflows remain available."
+        ),
+    )
 
 
 def _campaign_or_404(db: Session, campaign_id: str | UUID) -> Campaign:
@@ -499,6 +515,8 @@ def within_send_window(campaign: Campaign, now: datetime) -> bool:
 def create_campaign(
     db: Session, payload, *, created_by_system_user_id: str | UUID | None = None
 ) -> Campaign:
+    if payload.scheduled_at is not None:
+        _assert_periodic_campaign_admission_enabled(db)
     campaign = Campaign(
         name=payload.name,
         campaign_type=payload.campaign_type,
@@ -537,7 +555,13 @@ def update_campaign(db: Session, campaign_id: str | UUID, payload) -> Campaign:
         raise HTTPException(
             status_code=409, detail="Sending campaigns cannot be edited"
         )
-    for field_name, value in payload.model_dump(exclude_unset=True).items():
+    changes = payload.model_dump(exclude_unset=True)
+    if (
+        changes.get("status") == CampaignStatus.scheduled.value
+        and campaign.status != CampaignStatus.scheduled.value
+    ):
+        _assert_periodic_campaign_admission_enabled(db)
+    for field_name, value in changes.items():
         if field_name == "metadata":
             campaign.metadata_ = value or {}
         elif field_name == "campaign_sender_id" and value is not None:

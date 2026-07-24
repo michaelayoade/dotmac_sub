@@ -496,7 +496,7 @@ class TestGisTask:
 
         with patch("app.tasks.gis.SessionLocal", return_value=mock_session):
             with patch(
-                "app.tasks.gis._effective_bool",
+                "app.tasks.gis.resolve_boolean",
                 side_effect=[
                     True,
                     True,
@@ -526,7 +526,7 @@ class TestGisTask:
 
         with patch("app.tasks.gis.SessionLocal", return_value=mock_session):
             with patch(
-                "app.tasks.gis._effective_bool",
+                "app.tasks.gis.resolve_boolean",
                 side_effect=[
                     True,
                     False,
@@ -555,7 +555,7 @@ class TestGisTask:
 
         with patch("app.tasks.gis.SessionLocal", return_value=mock_session):
             with patch(
-                "app.tasks.gis._effective_bool",
+                "app.tasks.gis.resolve_boolean",
                 side_effect=[
                     False,
                     True,
@@ -583,7 +583,7 @@ class TestGisTask:
 
         with patch("app.tasks.gis.SessionLocal", return_value=mock_session):
             with patch(
-                "app.tasks.gis._effective_bool",
+                "app.tasks.gis.resolve_boolean",
                 side_effect=[True, True, False],
             ):
                 with patch(

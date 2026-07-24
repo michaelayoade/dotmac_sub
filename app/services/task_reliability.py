@@ -164,9 +164,8 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         SWEEP,
         IDEMP,
         HEALTH,
-        "Publishes per-channel silence/freshness gauges from team-inbox facts; "
-        "every run recomputes the full snapshot, so a missed or repeated run "
-        "only affects staleness.",
+        "Permanent verification input: publishes per-channel silence gauges "
+        "from team-inbox facts and recomputes the full snapshot on every run.",
     ),
     "app.tasks.campaigns.process_due_campaigns": _c(
         "campaigns",
@@ -174,7 +173,8 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         PER_ITEM,
         STATUS,
         "Builds recipients and sends due campaigns through native inbox channels; "
-        "recipient rows gate repeat sends.",
+        "recipient rows gate repeat sends. The runner is permanent after scheduling "
+        "admission so accepted campaigns cannot be stranded.",
     ),
     "app.tasks.campaigns.process_due_campaign_steps": _c(
         "campaigns",
@@ -182,7 +182,8 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         PER_ITEM,
         STATUS,
         "Materializes and sends the next due step of a nurture sequence; a step "
-        "that already has recipient rows is never materialized twice.",
+        "that already has recipient rows is never materialized twice. Accepted "
+        "sequence intent drains independently of the scheduling admission gate.",
     ),
     "app.tasks.campaigns.send_campaign_batch": _c(
         "campaigns",
@@ -218,8 +219,8 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         SWEEP,
         IDEMP,
         HEALTH,
-        "Idempotent projection rebuild; the next reconcile repairs a stale or "
-        "partial device_projections table and prunes orphans.",
+        "Permanent idempotent projection rebuild; the next reconcile repairs a "
+        "stale or partial device_projections table and prunes orphans.",
     ),
     "app.tasks.dotmac_erp_outbox.deliver_erp_sync_events": _c(
         "integration",
@@ -338,13 +339,21 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "monitoring", SWEEP, IDEMP, LOG
     ),
     "app.tasks.monitoring_cleanup.sync_inventory_to_monitoring": _c(
-        "monitoring", SWEEP, IDEMP, STATUS
+        "monitoring",
+        SWEEP,
+        IDEMP,
+        STATUS,
+        "Permanent inventory projection repair for device verification.",
     ),
     "app.tasks.monitoring_cleanup.sync_nas_to_monitoring": _c(
         "monitoring", SWEEP, IDEMP, STATUS
     ),
     "app.tasks.monitoring_coverage.refresh_monitoring_coverage": _c(
-        "monitoring", SWEEP, IDEMP, HEALTH
+        "monitoring",
+        SWEEP,
+        IDEMP,
+        HEALTH,
+        "Permanent verification-path observation; recomputes reachable CIDRs.",
     ),
     "app.tasks.mrr.snapshot_mrr": _c("billing", SWEEP, IDEMP, HEALTH),
     "app.tasks.nas.check_nas_health": _c("network", SWEEP, IDEMP, HEALTH),
@@ -469,7 +478,12 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "provisioning", SWEEP, IDEMP, STATUS
     ),
     "app.tasks.provisioning.retry_pending_compensation_failures": _c(
-        "provisioning", STATE, STATEFUL, REDRIVE
+        "provisioning",
+        STATE,
+        STATEFUL,
+        REDRIVE,
+        "Permanent bounded redrive for durable failed compensations; feature and "
+        "module controls cannot strand rollback obligations.",
     ),
     "app.tasks.provisioning.run_bulk_activation_job": _c(
         "provisioning", ITEMS, PER_ITEM, STATUS
@@ -489,7 +503,13 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.radius.audit_suspension_enforcement": _c("radius", SWEEP, IDEMP, HEALTH),
     "app.tasks.radius.connectivity_shadow_audit": _c("radius", SWEEP, IDEMP, HEALTH),
     "app.tasks.radius.reap_radacct_ghosts": _c("radius", SWEEP, IDEMP, HEALTH),
-    "app.tasks.radius.reconcile_active_sessions": _c("radius", SWEEP, IDEMP, HEALTH),
+    "app.tasks.radius.reconcile_active_sessions": _c(
+        "radius",
+        SWEEP,
+        IDEMP,
+        HEALTH,
+        "Permanent rebuild of the live-session projection from external accounting.",
+    ),
     "app.tasks.radius.run_enforcement_reconciler": _c(
         "radius",
         STATE,
@@ -503,7 +523,13 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.radius_population.refresh_radius_from_subs": _c(
         "radius", SWEEP, IDEMP, STATUS
     ),
-    "app.tasks.radius_population.sync_device_login": _c("radius", SWEEP, IDEMP, STATUS),
+    "app.tasks.radius_population.sync_device_login": _c(
+        "radius",
+        SWEEP,
+        IDEMP,
+        STATUS,
+        "Permanent security projection repair from active staff device-login state.",
+    ),
     "app.tasks.referrals.reconcile_referral_mirror": _c(
         "referrals", NONE, IDEMP, LOG, "Retired CRM mirror task tombstone."
     ),
@@ -680,7 +706,14 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.tr069.wait_for_ont_bootstrap": _c("tr069", STATE, STATEFUL, STATUS),
     "app.tasks.usage.evaluate_fup_rules": _c("usage", STATE, GUARDED, HEALTH),
     "app.tasks.usage.import_radius_accounting": _c("usage", SWEEP, PER_ITEM, HEALTH),
-    "app.tasks.usage.lift_expired_fup_enforcement": _c("usage", SWEEP, GUARDED, HEALTH),
+    "app.tasks.usage.lift_expired_fup_enforcement": _c(
+        "usage",
+        SWEEP,
+        GUARDED,
+        HEALTH,
+        "Permanent reset drainage; disabling new usage/FUP decisions cannot leave "
+        "expired throttles or blocks applied.",
+    ),
     "app.tasks.usage.meter_usage_into_quota": _c("usage", STATE, GUARDED, HEALTH),
     "app.tasks.usage.notify_expiring_data_bundles": _c("usage", STATE, GUARDED, STATUS),
     "app.tasks.usage.reap_stale_radius_sessions": _c("usage", SWEEP, IDEMP, HEALTH),

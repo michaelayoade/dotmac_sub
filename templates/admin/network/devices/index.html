@@ -52,12 +52,9 @@
     </div>
 
     {# Status Summary #}
-    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 animate-fade-in-up" style="animation-delay: 100ms;">
-        {{ stats_card("Up", device_kpis.up.value.value if device_kpis.up.value.is_present else device_kpis.up.value.placeholder, icon='<span class="relative flex h-3 w-3"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-current opacity-40"></span><span class="relative inline-flex h-3 w-3 rounded-full bg-current"></span></span>', tone=device_kpis.up.tone, href=device_kpis.up.cohort_url) }}
-        {{ stats_card("Down", device_kpis.down.value.value if device_kpis.down.value.is_present else device_kpis.down.value.placeholder, icon='<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>', tone=device_kpis.down.tone, href=device_kpis.down.cohort_url) }}
-        {{ stats_card("Degraded", device_kpis.degraded.value.value if device_kpis.degraded.value.is_present else device_kpis.degraded.value.placeholder, icon=icon_warning(), tone=device_kpis.degraded.tone, href=device_kpis.degraded.cohort_url) }}
-        {{ stats_card("Maintenance", device_kpis.maintenance.value.value if device_kpis.maintenance.value.is_present else device_kpis.maintenance.value.placeholder, icon='<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8 8-4-4"/></svg>', tone=device_kpis.maintenance.tone, href=device_kpis.maintenance.cohort_url) }}
-        {{ stats_card("Unknown", device_kpis.unknown.value.value if device_kpis.unknown.value.is_present else device_kpis.unknown.value.placeholder, icon='<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8h.01M11 12h1v4h1m8-4a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', tone=device_kpis.unknown.tone, href=device_kpis.unknown.cohort_url) }}
+    <div class="grid gap-4 sm:grid-cols-2 animate-fade-in-up" style="animation-delay: 100ms;">
+        {{ stats_card("Working", device_kpis.working.value.value if device_kpis.working.value.is_present else device_kpis.working.value.placeholder, icon='<span class="relative flex h-3 w-3"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-current opacity-40"></span><span class="relative inline-flex h-3 w-3 rounded-full bg-current"></span></span>', tone=device_kpis.working.tone, href=device_kpis.working.cohort_url) }}
+        {{ stats_card("Not working", device_kpis.not_working.value.value if device_kpis.not_working.value.is_present else device_kpis.not_working.value.placeholder, icon='<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>', tone=device_kpis.not_working.tone, href=device_kpis.not_working.cohort_url) }}
     </div>
 
     <div id="discovery-status"></div>
@@ -73,11 +70,8 @@
         <div class="w-full lg:w-44">
             {{ filter_select("status", [
                 {"value": "", "label": "All Status"},
-                {"value": "up", "label": "Up"},
-                {"value": "down", "label": "Down"},
-                {"value": "degraded", "label": "Degraded"},
-                {"value": "maintenance", "label": "Maintenance"},
-                {"value": "unknown", "label": "Unknown"}
+                {"value": "working", "label": "Working"},
+                {"value": "not_working", "label": "Not working"}
             ], status or '', "Status", "cyan", {"hx-get": "/admin/network/devices/filter", "hx-trigger": "change", "hx-target": "#devices-table-body", "hx-include": "#devices-filter-form"}) }}
         </div>
         <div class="w-full lg:w-44">
@@ -95,12 +89,6 @@
         {% endif %}
     </form>
     {% endcall %}
-
-    {% if devices_refreshed_at %}
-    <p class="mb-3 text-xs text-slate-400 dark:text-slate-500">
-        Operational status as of {{ devices_refreshed_at | app_datetime }} (last inventory refresh) — open a device for live status.
-    </p>
-    {% endif %}
 
     {# Devices Table #}
     <div id="devices-content" class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800" style="animation-delay: 200ms;">

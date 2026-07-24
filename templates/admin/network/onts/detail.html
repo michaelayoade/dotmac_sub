@@ -1,5 +1,5 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import card, data_table, table_head, empty_state %}
+{% from "components/ui/macros.html" import card, data_table, table_head, empty_state, status_presentation_badge %}
 
 {% block title %}{{ display_serial_label }} - ONT - Admin{% endblock %}
 
@@ -9,8 +9,6 @@
 {%- set authorized_for_configuration = authorization_status == 'authorized' -%}
 {%- set show_provision_cta = authorized_for_configuration and (inventory_ready or provisioning_status != 'provisioned') -%}
 {%- set fsp = (assignment.pon_port.name if assignment and assignment.pon_port else ('0/' ~ (ont.board or '0') ~ '/' ~ (ont.port or '0') if ont.board or ont.port else '')) -%}
-{%- set is_online = signal_info and signal_info.online_status == 'online' -%}
-{%- set is_offline = signal_info and signal_info.online_status == 'offline' -%}
 <div
     class="space-y-4"
     x-data="{ activeTab: '{{ ont_active_tab | default('overview') }}' }"

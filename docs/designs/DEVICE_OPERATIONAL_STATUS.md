@@ -1,145 +1,124 @@
-# Spec: Device Operational Status (derived NOC truth, not a field swap)
+# Binary device operational lifecycle
 
-Date: 2026-06-26 · Updated: 2026-07-14 · Status: implemented, coverage follow-up open · Owner: NOC/Network ops
+Status: implemented contract
 
-## 1. Problem
+Owner: `network.device_state`
 
-The Network Devices page (`/admin/network/network-devices`) renders
-`device.status` — an **administrative/inventory** field set by admins and
-lifecycle automation. It does not reflect reality. In prod right now, admin
-status disagrees with live monitoring on hundreds of rows: 146 devices
-admin-marked `offline` are observably `problem` (up, with a trigger); 4
-admin-`online` are observably `down`; 30 admin-`online` read `unknown`.
+## Decision
 
-The obvious fix — "show `live_status` instead" — is wrong, because a naive swap
-trades one inaccuracy for three new ones (measured on live prod data):
+The public device operational result has exactly two values:
 
-1. **89 of 493 active devices have no `live_status` at all** (never warmed —
-   not Zabbix-reconciled; 72 are CPE-role whose truth is ACS/OLT-poll, not
-   Zabbix). They'd render blank.
-2. **~162 "unreachable" devices have no monitoring path** (their IP isn't routed
-   by the one live WireGuard tunnel). `live_status=down` there means "we can't
-   see it," not "it's offline." A swap lights up ~160 false red alarms.
-3. **Maintenance/decommissioned intent is lost** — a deliberately disabled
-   device would flip to "down" and start alarming.
+- `working`: current verification confirms operation.
+- `not_working`: verification confirms failure, administrative lifecycle
+  prevents operation, or the verification lifecycle cannot currently confirm
+  operation.
 
-## 2. Strategy — three separate concepts
+Fresh, stale, retry-pending, unknown, degraded, and maintenance are not public
+device states. Observation age is an internal input that makes verification
+due. The permanent verifier attempts confirmation and the resolver publishes
+one binary result.
 
-Keep these distinct; never collapse them into one field.
+The reason is required because `not_working` does not always mean physical
+failure:
 
-| Concept | Meaning | Examples |
-|---------|---------|----------|
-| `device.status` | **administrative / lifecycle intent** | active, inactive, maintenance, (decommissioned) |
-| `live_status` | **raw monitoring observation** | up, down, problem, unknown |
-| **`operational_status`** | **derived, UI-facing NOC truth** (a *projection*, not a stored column) | up, degraded, down, maintenance |
+- `observed_not_working`, `ping_failed`, and device-specific offline reasons
+  identify confirmed negative evidence.
+- `verification_not_started`, `verification_expired`,
+  `verification_inconclusive`, `verification_path_unavailable`, and
+  `verification_error` identify inability to verify.
+- `admin_maintenance`, `admin_decommissioned`, and `admin_retired` identify an
+  administrative lifecycle cause and suppress operational alarms.
+- `active_trigger`, `health_degraded`, and `poll_*` identify a separate
+  impairment while the device remains `working`.
 
-`operational_status` is a pure function of:
-`lifecycle intent + monitoring coverage + live state + freshness + trigger severity`.
+Only confirmed negative device evidence is alarming. Verification
+infrastructure failures are operationally `not_working` but must not be
+reported as proof that the physical device is down.
 
-### Precedence ladder (first match wins)
+## Inputs and precedence
+
+Administrative lifecycle, verification-path coverage, and timestamped
+observations remain distinct authoritative inputs. The resolver applies this
+precedence:
+
+```text
+administrative maintenance/decommission/retirement
+  -> not_working(admin_*)
+
+no usable verification path
+  -> not_working(verification_path_unavailable)
+
+missing, expired, or inconclusive confirmation
+  -> not_working(verification_not_started|expired|inconclusive)
+
+current negative observation
+  -> not_working(confirmed device-specific reason)
+
+current positive observation with impairment
+  -> working(active_trigger|health_degraded|poll_*)
+
+current positive observation
+  -> working(confirmed device-specific reason)
 ```
-if admin intent is maintenance / decommissioned / retired:  -> maintenance (intentional; never alarm)
-elif no monitoring target / no monitoring path:             -> retain state or down (reason: no_path_retry_pending)
-elif no live_status row:                                    -> down (reason: not_warmed_retry_pending)
-elif warmer heartbeat is stale:                             -> retain state (reason: stale_retry_pending)
-elif live_status == unknown:                                -> down (reason: monitoring_unknown_retry_pending)
-elif live_status == problem:                                -> degraded
-elif live_status == down:                                   -> down
-elif live_status == up:                                     -> up
-else:                                                       -> down (reason: indeterminate_retry_pending)
-```
 
-Key rule: **every device is binary, but retry-pending telemetry gaps do not
-alarm.** Alarm on explicit negative evidence or after a retry policy reaches
-its terminal threshold. This lets the NOC use live truth without turning
-monitoring gaps into fake outages.
+Per-device verification sources differ:
 
-## 3. Non-negotiable refinements (from how this lands in the codebase)
+- core devices: native infrastructure polling and warmed live observations;
+- OLTs: direct ping/poll observations, with linked monitored-device evidence as
+  a fallback;
+- ONTs: current OLT status, ACS informs, and last-seen observations;
+- linked NAS devices: their canonical `NetworkDevice` observation;
+- unlinked NAS devices: explicit health evidence; administrative `active`
+  alone is not proof of operation;
+- routers: synchronized router state plus current last-seen evidence;
+- CPE without an approved verifier: `not_working(verification_not_configured)`.
 
-1. **Observation is per device type.** The authoritative live source differs:
-   NAS/router → Zabbix (+RADIUS sessions); OLT → OLT polling
-   (`last_ping_ok`/`last_poll_status`) + Zabbix; ONT/CPE → ACS
-   (`acs_last_inform_at`) + OLT `olt_status`. The 72 not-warmed CPEs are
-   *monitored* — just not by Zabbix. The deriver must select source(s) by type,
-   resolving "reachable if **any** authoritative source confirms recently."
-   *(Phase 1 ships the Zabbix path; per-type ACS/OLT sources land Phase 2.)*
-2. **`monitoring_path` is a cached signal, not a per-row computation.** A job
-   materializes a reachable-CIDR set (up-tunnel `wg` allowed-IPs + routes) and
-   caches it; the deriver does a cheap IP-membership check. This is the
-   highest-effort piece and is also the VPN-restoration worklist input.
-   *(Phase 3.)*
-3. **`operational_status` is a projection — do NOT persist a 4th column.**
-   Compute on read (cache the result if render cost shows up). There are already
-   three status-ish fields; a durable fourth just becomes the next thing to
-   reconcile.
-4. **Share the coverage predicate with the SLA bridge.** The availability →
-   uptime-alert bridge (already live) must not log downtime for
-   stale/retry-pending devices, or the SLA numbers inherit the same blind-spot
-   pollution. One coverage predicate, used by this page *and* the bridge.
-5. **Render a small set of pills.** UI buckets: **Up / Degraded / Down /
-   Maintenance**. The fine-grained reason
-   (`no_path`, `stale`, `not_warmed`, `monitoring_unknown`) lives in the tooltip
-   and the filter values, not as competing pills.
+## Permanent verification
 
-## 4. UI
+The following lifecycle inputs and projections cannot be disabled:
 
-- **Primary pill:** derived `operational_status`.
-- **Secondary text:** admin status, shown only when it differs.
-- **Tooltip:** source + reason ("Zabbix unreachable", "No monitoring path",
-  "Admin: maintenance", "Warmer stale").
-- **Filters:** Operational status · Admin status · Retry pending · Status mismatch.
-- **Mismatch worklist** (inventory-hygiene engine; each reason routes to an owner):
-  - `admin_online + observed down/problem`  → field ops
-  - `admin_offline + observed up/problem`   → inventory hygiene
-  - `active + retry_pending`                → net-eng / VPN
-  - `monitored + stale`                     → monitoring infra
-  - `monitored + down >30d + 0 customers`   → decommission candidate (the 171 dead Zabbix hosts)
+- native infrastructure polling and topology warming;
+- Huawei ONT status polling and TR-069 runtime reconciliation;
+- monitoring-path coverage refresh;
+- monitoring inventory synchronization;
+- channel-health observation; and
+- device-projection reconciliation.
 
-### Semantic presentation cutover
+Settings may tune cadence, thresholds, windows, and bounded retry. They cannot
+disable verification or projection repair. Migration
+`416_binary_device_operational_lifecycle` removes the retired observer controls,
+re-enables their scheduled tasks, backfills the projection, and adds the
+database vocabulary constraint.
 
-`network.device_state` owns derivation and the
-`up/degraded/down/maintenance` vocabulary. `ui.status_presentation` owns only
-the cross-client label, semantic tone, and non-color icon:
+## Projection and UI
 
-| Operational state | Label | Tone | Icon |
-|---|---|---|---|
-| `up` | Up | positive | check |
-| `degraded` | Degraded | warning | alert |
-| `down` with negative evidence | Down | negative | x |
-| `down` with `retry_pending` | Down | warning | clock |
-| `maintenance` | Maintenance | neutral | minus |
+`network.device_projection` is the sole writer of the rebuildable
+`device_projections` read model. It persists only `working` or `not_working`.
+`refreshed_at` is repair evidence: it can trigger reconciliation and support
+diagnostics, but UI/API clients do not turn it into freshness, pending, or
+unknown device states.
 
-The retry-pending override is presentation of the resolver's existing
-non-alarming classification; it does not change the derived state. NOC
-inventory, core-device detail, monitoring, mismatch worklist, map, OLT/ONT
-lists, compatibility inventory, and network-device API projections consume the
-shared contract. Administrative status remains secondary intent, and ping/SNMP
-health dots remain raw observations.
+Web, API, mobile, maps, dashboards, ONT/OLT inventory, wallboards, filters, and
+KPIs consume the shared binary presentation:
 
-CPE rows without an approved live operational resolver render neutral Unknown.
-Record existence or `is_active` must not be promoted to an online decision.
+| Value | Label | Tone | Icon |
+| --- | --- | --- | --- |
+| `working` | Working | positive | check |
+| `not_working` | Not working | negative | x |
 
-## 5. Phasing
+The UI may show the owner-supplied reason and raw timestamped observations at
+investigation/evidence depth. It must not derive a different status from them.
+Administrative lifecycle and impairments remain separately labeled facts, not
+extra operational badges.
 
-1. **Phase 1 (this PR — read-only, no schema):** `derive_operational_status()`
-   pure function (lifecycle override + not_warmed/stale/unknown → binary retry-pending +
-   live mapping + mismatch flag), reusing the warmer-heartbeat staleness reader.
-   Network Devices page renders the derived pill primary, admin secondary,
-   reason tooltip. Tests on the pure function.
-2. **Phase 2:** per-type observation (ACS/OLT-poll/RADIUS), filters + mismatch
-   worklist, one-reader rollout to device API + monitoring KPIs + the
-   performance wallboard.
-3. **Phase 3:** cached reachable-CIDR coverage job (real `no_path`
-   distinction); gate the SLA bridge with the shared coverage predicate; daily
-   mismatch-by-reason report.
+## Drift repair and enforcement
 
-## 6. Key files
-| Thing | Path |
-|-------|------|
-| Network Devices page route | `app/web/admin/network_core_devices.py:64` |
-| Page data builder (`core_devices`) | `app/services/web_network_core_devices_views.py:2951` |
-| Template status pill | `templates/admin/network/network-devices/index.html:187` |
-| Warmer heartbeat staleness (reuse) | `app/services/topology/selfcare.py:40` (`_warm_is_stale`) |
-| live_status warmer + heartbeat key | `app/services/topology/live_status.py` |
-| SLA bridge to gate (Phase 3) | `app/services/topology/availability_log.py` |
-| Models (`status`, `live_status`) | `app/models/network_monitoring.py` |
+- `reconcile_device_projections` deterministically rebuilds binary status from
+  authoritative inputs and prunes orphan rows.
+- the database check constraint rejects any projection value outside the
+  binary vocabulary;
+- architecture tests reject public freshness/retry fields and labels;
+- architecture tests require every verification task to remain permanent and
+  literally enabled; and
+- focused resolver tests cover positive, negative, unavailable-verifier,
+  impairment, administrative, and per-device-type cases.

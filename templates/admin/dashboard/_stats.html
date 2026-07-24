@@ -19,22 +19,20 @@
 </a>
 {% endmacro %}
 
-{% set dev_online = monitoring_summary.devices_online if monitoring_summary else 0 %}
+{% set dev_working = monitoring_summary.devices_working if monitoring_summary else 0 %}
 {% set dev_total = monitoring_summary.devices_total if monitoring_summary else 0 %}
-{% set dev_offline = monitoring_summary.devices_offline if monitoring_summary else 0 %}
-{% set ont_on = ont_service_summary.online if ont_service_summary else 0 %}
+{% set dev_not_working = monitoring_summary.devices_not_working if monitoring_summary else 0 %}
+{% set ont_working = ont_service_summary.working if ont_service_summary else 0 %}
 {% set ont_total = ont_service_summary.total if ont_service_summary else 0 %}
 {% set ont_low_signal = ont_service_summary.low_signal if ont_service_summary else 0 %}
-{% set ont_olt_on = ont_olt_link_summary.online if ont_olt_link_summary else 0 %}
-{% set ont_olt_off = ont_olt_link_summary.offline if ont_olt_link_summary else 0 %}
 {% set pon_up = pon_interface_summary.up if pon_interface_summary else 0 %}
 {% set pon_down = pon_interface_summary.down if pon_interface_summary else 0 %}
 {% set pon_unknown = pon_interface_summary.unknown if pon_interface_summary else 0 %}
 {% set pon_total = pon_interface_summary.total if pon_interface_summary else 0 %}
 {% set total_alarms_count = stats.alarms_critical + stats.alarms_major + stats.alarms_minor + stats.alarms_warning %}
 {% set active_pct = ((stats.active_subscribers / stats.total_subscribers * 100) if stats.total_subscribers > 0 else 0) | round(1) %}
-{% set dev_pct = ((dev_online / dev_total * 100) if dev_total > 0 else 0) | round(1) %}
-{% set ont_pct = ((ont_on / ont_total * 100) if ont_total > 0 else 0) | round(1) %}
+{% set dev_pct = ((dev_working / dev_total * 100) if dev_total > 0 else 0) | round(1) %}
+{% set ont_pct = ((ont_working / ont_total * 100) if ont_total > 0 else 0) | round(1) %}
 
 {# Headline values, tone, and drill-down cohort come from dashboard_kpis
    (app.services.web_admin_dashboard); this template only reads the contract and
@@ -69,7 +67,7 @@
         dashboard_kpis.network_devices.value.value,
         dashboard_kpis.network_devices.cohort_url,
         "blue",
-        "%d offline" % dev_offline if dev_offline else "All reachable",
+        "%d not working" % dev_not_working if dev_not_working else "All working",
         progress=dev_pct
     ) }}
     {% endif %}

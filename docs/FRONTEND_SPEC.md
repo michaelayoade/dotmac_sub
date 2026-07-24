@@ -188,8 +188,10 @@ Admin outage consoles consume the same badge macro, and CRM outage rows carry
 Payment list/detail/customer/reseller projections use the same contract without
 reinterpreting settlement or refund state. NOC inventory, core-device detail,
 monitoring, worklist, and map projections
-consume the same contract. `NetworkDeviceRead` carries `operational_status`,
-`operational_reason`, `operational_retry_pending`, and `status_presentation`.
+consume the same contract. `NetworkDeviceRead` carries the binary
+`operational_status`, its `operational_reason`, and `status_presentation`.
+Freshness and retry-pending evidence stay inside the verification lifecycle and
+are not client-visible device states.
 Customer connection API/portal/reseller projections carry
 `status_presentation` beside the raw verdict; customer web and mobile map only
 its tone/icon to platform-native visuals. Raw RADIUS session indicators remain
@@ -207,11 +209,12 @@ fields are read-only UI metadata. Support status settings may expose a subset of
 the ticket lifecycle vocabulary, but they do not configure semantic tones or
 platform colors.
 
-Device operational presentation does not re-derive state. `up` is positive,
-`degraded` is warning, evidenced `down` is negative, and `maintenance` is
-neutral. A retry-pending `down` remains labeled Down under the binary NOC model
-but is warning/clock and non-alarming, so missing or stale monitoring evidence
-cannot look like a confirmed failure.
+Device operational presentation does not re-derive state. `working` is
+positive and `not_working` is negative. Administrative lifecycle, impairment,
+and verification outcomes are separate reason/evidence fields; they never add
+another device badge. A `not_working` verification-failure reason is
+non-alarming and must say that operation could not be confirmed rather than
+claiming a physical failure.
 
 ---
 
@@ -558,9 +561,9 @@ Each spec documents: URL, template path, context dict shape, and HTMX partials.
         "orders_in_progress": int,
         "orders_pending_activation": int,
         "orders_completed_today": int,
-        "olts_online": int,
+        "olts_working": int,
         "olts_total": int,
-        "onts_active": int,
+        "onts_working": int,
         "onts_total": int,
         "alarms_critical": int,
         "alarms_major": int,
@@ -583,9 +586,8 @@ Each spec documents: URL, template path, context dict shape, and HTMX partials.
     # ── Supporting Operational Summaries ──
     "online_count": int,                    # active RADIUS sessions
     "monitoring_summary": {
-        "devices_online": int,
-        "devices_offline": int,
-        "devices_degraded": int,
+        "devices_working": int,
+        "devices_not_working": int,
         "devices_total": int,
     },
     "onu_summary": {

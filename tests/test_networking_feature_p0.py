@@ -103,6 +103,7 @@ from app.services import web_network_core_runtime as core_runtime
 from app.services import web_network_cpes as web_network_cpes_service
 from app.services import web_network_dns_threats as web_network_dns_threats_service
 from app.services import web_network_ip as web_network_ip_service
+from app.services import web_network_monitoring as web_network_monitoring_service
 from app.services import web_network_olts as web_network_olts_service
 from app.services import web_network_speedtests as web_network_speedtests_service
 from app.services import web_network_tr069 as web_network_tr069_service
@@ -756,12 +757,12 @@ def test_core_devices_list_page_data_prefers_live_status(db_session, monkeypatch
     payload = core_devices_forms.list_page_data(db_session, role=None, status="active")
 
     displayed_child = next(item for item in payload["devices"] if item.id == child.id)
-    assert displayed_child.operational_status == "up"
+    assert displayed_child.operational_status == "working"
     assert displayed_child.status_presentation.tone.value == "positive"
     assert payload["child_impacts"][str(parent.id)]["impacted"] is False
 
 
-def test_core_devices_list_page_data_marks_stale_live_status_retry_pending(
+def test_core_devices_list_page_data_maps_expired_verification_to_not_working(
     db_session, monkeypatch
 ):
     monkeypatch.setattr(
@@ -781,9 +782,10 @@ def test_core_devices_list_page_data_marks_stale_live_status_retry_pending(
     payload = core_devices_forms.list_page_data(db_session, role=None, status="active")
 
     displayed = next(item for item in payload["devices"] if item.id == device.id)
-    assert displayed.operational_status == "up"
-    assert displayed.operational_retry_pending is True
-    assert displayed.status_presentation.tone.value == "positive"
+    assert displayed.operational_status == "not_working"
+    assert displayed.operational.reason == "verification_expired"
+    assert not hasattr(displayed, "operational_retry_pending")
+    assert displayed.status_presentation.tone.value == "negative"
 
 
 def test_create_bandwidth_graph_add_source_clone_and_public_toggle(db_session):
@@ -1171,8 +1173,9 @@ def test_collect_devices_excludes_system_owned_inventory_cpes(
         for device in devices
         if device.get("serial_number") == "VISIBLE-CORE-CPE"
     )
-    assert visible_cpe["status"] == "unknown"
-    assert visible_cpe["status_presentation"].tone.value == "neutral"
+    assert visible_cpe["status"] == "not_working"
+    assert visible_cpe["operational_reason"] == "verification_not_configured"
+    assert visible_cpe["status_presentation"].tone.value == "negative"
 
 
 def test_web_network_home_excludes_system_owned_inventory_cpes(
@@ -1583,6 +1586,7 @@ def test_network_map_context_includes_network_device_markers(db_session):
             role=DeviceRole.core,
             status=DeviceStatus.online,
             live_status="up",
+            live_status_at=datetime.now(UTC),
             is_active=True,
         )
     )
@@ -1596,13 +1600,13 @@ def test_network_map_context_includes_network_device_markers(db_session):
     ]
     assert len(device_features) == 1
     assert device_features[0]["properties"]["name"] == "Core Router 1"
-    assert device_features[0]["properties"]["status"] == "up"
+    assert device_features[0]["properties"]["status"] == "working"
     assert device_features[0]["properties"]["status_presentation"]["tone"] == "positive"
     assert context["stats"]["network_devices"] == 1
-    assert context["stats"]["network_devices_online"] == 1
+    assert context["stats"]["network_devices_working"] == 1
 
 
-def test_network_map_context_uses_effective_ont_status(db_session):
+def test_network_map_context_uses_operational_ont_status(db_session):
     ont = OntUnit(
         serial_number="ONT-MAP-1",
         name="Map ONT",
@@ -1611,6 +1615,7 @@ def test_network_map_context_uses_effective_ont_status(db_session):
         gps_latitude=9.07,
         gps_longitude=7.51,
         olt_status=OnuOnlineStatus.online,
+        olt_status_seen_at=datetime.now(UTC),
     )
     db_session.add(ont)
     db_session.commit()
@@ -1623,9 +1628,10 @@ def test_network_map_context_uses_effective_ont_status(db_session):
     ]
 
     assert len(ont_features) == 1
-    assert ont_features[0]["properties"]["status"] == "online"
-    assert context["stats"]["onts_online"] == 1
-    assert context["stats"]["onts_offline"] == 0
+    assert ont_features[0]["properties"]["status"] == "working"
+    assert ont_features[0]["properties"]["status_reason"] == "olt_online"
+    assert context["stats"]["onts_working"] == 1
+    assert context["stats"]["onts_not_working"] == 0
 
 
 def test_monitoring_dashboard_stats_use_operational_state(db_session, monkeypatch):
@@ -1677,29 +1683,73 @@ def test_monitoring_dashboard_stats_use_operational_state(db_session, monkeypatc
 
     assert payload["stats"] == {
         "devices_total": 5,
-        "devices_online": 1,
-        "devices_offline": 1,
-        "devices_degraded": 1,
-        "devices_maintenance": 1,
-        "devices_retry_pending": 1,
+        "devices_working": 2,
+        "devices_not_working": 3,
+        "devices_impaired": 1,
         "alarms_open": 0,
         "subscribers_online": 0,
     }
     assert payload["device_status_chart"]["labels"] == [
-        "Up",
-        "Degraded",
-        "Down",
-        "Refresh pending",
-        "Maintenance",
+        "Working",
+        "Not working",
     ]
     assert payload["device_status_chart"]["tones"] == [
         "positive",
-        "warning",
         "negative",
-        "warning",
-        "neutral",
     ]
     assert "colors" not in payload["device_status_chart"]
+
+
+def test_site_reachability_uses_binary_operation_and_separate_impairment(
+    db_session, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.services.device_operational_status.warmer_is_stale", lambda now=None: False
+    )
+    monkeypatch.setattr("app.services.monitoring_coverage.get_coverage", lambda: None)
+    now = datetime.now(UTC)
+    db_session.add_all(
+        [
+            NetworkDevice(
+                name="Site Working",
+                mgmt_ip="172.16.1.1",
+                status=DeviceStatus.online,
+                live_status="up",
+                live_status_at=now,
+                is_active=True,
+            ),
+            NetworkDevice(
+                name="Site Impaired",
+                mgmt_ip="172.16.1.2",
+                status=DeviceStatus.online,
+                live_status="problem",
+                live_status_at=now,
+                is_active=True,
+            ),
+            NetworkDevice(
+                name="Site Unverified",
+                mgmt_ip="172.16.1.3",
+                status=DeviceStatus.online,
+                live_status=None,
+                is_active=True,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    sites = web_network_monitoring_service.get_site_reachability(db_session)
+
+    assert sites == [
+        {
+            "subnet": "172.16.0.0/16",
+            "name": "Abuja Management",
+            "total": 3,
+            "working": 2,
+            "not_working": 1,
+            "impaired": 1,
+            "working_pct": 67,
+        }
+    ]
 
 
 def test_speedtest_form_parse_and_validate():
@@ -2311,9 +2361,9 @@ def test_consolidated_page_data_includes_ont_signal_data(db_session):
     )
 
     signal_data = payload["signal_data"][str(ont.id)]
-    assert signal_data["operational"] == "up"
-    assert signal_data["status_presentation"].label == "Up"
-    assert signal_data["operational_reason"] == "last_confirmed_online_retry_pending"
+    assert signal_data["operational"] == "not_working"
+    assert signal_data["status_presentation"].label == "Not working"
+    assert signal_data["operational_reason"] == "verification_expired"
 
 
 def test_consolidated_page_data_moves_network_devices_ending_in_olt_to_olt_bucket(
@@ -2488,9 +2538,9 @@ def test_devices_list_page_data_filters_core_network_devices(db_session):
     assert payload["type"] == "core"
 
 
-def test_network_devices_legacy_probe_statuses_are_refresh_pending():
+def test_network_devices_legacy_probe_statuses_fail_closed():
     """The Zabbix probe source was retired: every core-device row degrades to
-    a fixed refresh-pending placeholder (native reachability lives on the
+    a fixed not-working result (native reachability lives on the
     poll columns / operational status)."""
     statuses = core_devices_inventory_service._build_legacy_probe_statuses(
         [
@@ -2502,10 +2552,10 @@ def test_network_devices_legacy_probe_statuses_are_refresh_pending():
 
     assert set(statuses) == {"device-a", "device-b"}
     for status in statuses.values():
-        assert status["ping_label"] == "Refresh pending"
-        assert status["ping_state"] == "unknown"
-        assert status["snmp_label"] == "Refresh pending"
-        assert status["snmp_state"] == "unknown"
+        assert status["ping_label"] == "Not working"
+        assert status["ping_state"] == "fail"
+        assert status["snmp_label"] == "Not working"
+        assert status["snmp_state"] == "fail"
         assert status["ping_reason"] == "Legacy probe source is not configured"
 
 
@@ -2551,7 +2601,7 @@ def test_consolidated_nas_inventory_inherits_linked_monitoring_status(
     )
     assert included.live_status == "up"
     assert included.zabbix_hostid == "10736"
-    assert included.operational.status == "up"
+    assert included.operational.status == "working"
 
 
 def test_consolidated_nas_inventory_uses_direct_router_status_without_link(
@@ -2594,7 +2644,7 @@ def test_consolidated_nas_inventory_uses_direct_router_status_without_link(
     )
     assert included.zabbix_hostid is None
     assert included.live_status == "up"
-    assert included.operational.status == "up"
+    assert included.operational.status == "working"
 
 
 def test_olts_list_page_data_includes_network_devices_ending_in_olt(
@@ -2668,33 +2718,32 @@ def test_olts_list_page_data_uses_binary_operational_status(db_session):
     payload = web_network_core_devices_service.olts_list_page_data(db_session)
     rows = {item["name"]: item for item in payload["olts"]}
 
-    assert rows["OLT Online"]["operational_status"] == "up"
+    assert rows["OLT Online"]["operational_status"] == "working"
     assert rows["OLT Online"]["status_presentation"].tone.value == "positive"
-    assert rows["OLT Online"]["runtime_retry_pending"] is False
-    assert rows["OLT Offline"]["operational_status"] == "down"
+    assert "runtime_retry_pending" not in rows["OLT Online"]
+    assert rows["OLT Offline"]["operational_status"] == "not_working"
     assert rows["OLT Offline"]["runtime_health_state"] == "attention"
     assert rows["OLT Offline"]["status_presentation"].tone.value == "negative"
-    assert rows["OLT Pending"]["operational_status"] == "down"
-    assert rows["OLT Pending"]["runtime_health_state"] == "retry_pending"
-    assert rows["OLT Pending"]["runtime_retry_pending"] is True
-    assert rows["OLT Pending"]["status_presentation"].tone.value == "warning"
-    assert payload["stats"]["up"] == 1
-    assert payload["stats"]["down"] == 2
-    assert payload["stats"]["retry_pending"] == 1
+    assert rows["OLT Pending"]["operational_status"] == "not_working"
+    assert rows["OLT Pending"]["runtime_health_state"] == "not_working"
+    assert "runtime_retry_pending" not in rows["OLT Pending"]
+    assert rows["OLT Pending"]["status_presentation"].tone.value == "negative"
+    assert payload["stats"]["working"] == 1
+    assert payload["stats"]["not_working"] == 2
     assert payload["stats"]["attention"] == 1
 
-    offline_payload = web_network_core_devices_service.olts_list_page_data(
-        db_session, status="down"
+    not_working_payload = web_network_core_devices_service.olts_list_page_data(
+        db_session, status="not_working"
     )
-    assert {item["name"] for item in offline_payload["olts"]} == {
+    assert {item["name"] for item in not_working_payload["olts"]} == {
         "OLT Offline",
         "OLT Pending",
     }
 
-    online_payload = web_network_core_devices_service.olts_list_page_data(
-        db_session, status="up"
+    working_payload = web_network_core_devices_service.olts_list_page_data(
+        db_session, status="working"
     )
-    assert [item["name"] for item in online_payload["olts"]] == ["OLT Online"]
+    assert [item["name"] for item in working_payload["olts"]] == ["OLT Online"]
 
 
 def test_olts_list_page_data_paginates_and_clamps_out_of_range_page(db_session):
