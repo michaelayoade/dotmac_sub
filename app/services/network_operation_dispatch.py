@@ -68,6 +68,7 @@ class NetworkOperationCommand(StrEnum):
     ont_firmware_upgrade_v1 = "ont_firmware_upgrade.v1"
     olt_firmware_upgrade_v1 = "olt_firmware_upgrade.v1"
     ont_desired_reconcile_v1 = "ont_desired_reconcile.v1"
+    cpe_tr069_command_v1 = "cpe_tr069_command.v1"
 
 
 class NetworkOperationDispatchError(ValueError):
@@ -296,6 +297,36 @@ def _ont_reconcile_invocation(
     )
 
 
+def _cpe_tr069_invocation(
+    operation: NetworkOperation,
+    _dispatch_key: str,
+) -> DispatchInvocation:
+    payload = operation.input_payload or {}
+    job_id = _required_payload_id(operation, "job_id")
+    device_id = _required_payload_id(operation, "device_id")
+    if device_id != str(operation.target_id):
+        raise NetworkOperationDispatchError(
+            "invalid_operation_payload",
+            "TR-069 command device does not match its operation target.",
+        )
+    if str(payload.get("command") or "") not in {
+        "refreshObject",
+        "reboot",
+        "factoryReset",
+        "setParameterValues",
+        "download",
+    }:
+        raise NetworkOperationDispatchError(
+            "invalid_operation_payload",
+            "TR-069 operation contains an unsupported command.",
+        )
+    return DispatchInvocation(
+        args=[str(operation.id), job_id],
+        kwargs={},
+        queue="acs",
+    )
+
+
 _COMMAND_SPECS: dict[NetworkOperationCommand, _CommandSpec] = {
     NetworkOperationCommand.ont_status_refresh_v1: _CommandSpec(
         task_name="app.tasks.ont_runtime_status.refresh_single_ont_status",
@@ -343,6 +374,12 @@ _COMMAND_SPECS: dict[NetworkOperationCommand, _CommandSpec] = {
         operation_type=NetworkOperationType.olt_ont_sync,
         target_types=frozenset({NetworkOperationTargetType.ont}),
         invocation=_ont_reconcile_invocation,
+    ),
+    NetworkOperationCommand.cpe_tr069_command_v1: _CommandSpec(
+        task_name="app.tasks.tr069.execute_network_operation_job",
+        operation_type=NetworkOperationType.cpe_tr069_command,
+        target_types=frozenset({NetworkOperationTargetType.cpe}),
+        invocation=_cpe_tr069_invocation,
     ),
 }
 
@@ -441,9 +478,25 @@ def stage_dispatch(
         ),
     )
     try:
-        with db.begin_nested():
-            db.add(dispatch)
-            db.flush()
+        from app.services.owner_commands import (
+            execute_owner_savepoint,
+            owner_command_active,
+        )
+
+        if owner_command_active(db):
+
+            def _persist_dispatch() -> None:
+                db.add(dispatch)
+                db.flush()
+
+            execute_owner_savepoint(
+                db,
+                _persist_dispatch,
+            )
+        else:
+            with db.begin_nested():
+                db.add(dispatch)
+                db.flush()
     except IntegrityError:
         winner = db.scalars(
             select(NetworkOperationDispatch).where(

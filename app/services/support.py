@@ -45,6 +45,7 @@ from app.schemas.support import (
 from app.services import domain_settings as domain_settings_service
 from app.services import notification as notification_service
 from app.services import numbering as numbering_service
+from app.services import service_address as service_address_service
 from app.services import support_ticket_filters, ticket_validation
 from app.services import support_ticket_settings as support_ticket_settings_service
 from app.services.audit_helpers import log_audit_event
@@ -2643,7 +2644,10 @@ class TicketAccessTokens:
 def _person_option(row) -> dict[str, str]:
     full_name = " ".join(filter(None, [row.first_name, row.last_name])).strip()
     label = row.display_name or full_name or row.email or str(row.id)
-    address = ", ".join([p for p in [row.address_line1, row.city, row.region] if p])
+    parts = service_address_service.address_parts(row)
+    address = ", ".join(
+        [p for p in [parts.address_line1, parts.city, parts.region] if p]
+    )
     return {
         "id": str(row.id),
         "label": label,
@@ -2725,6 +2729,7 @@ def list_people(
 
     rows = (
         db.query(Subscriber)
+        .options(selectinload(Subscriber.addresses))
         .filter(Subscriber.is_active.is_(True))
         .order_by(Subscriber.first_name.asc(), Subscriber.last_name.asc())
         .limit(limit)

@@ -496,50 +496,18 @@ def _actor_id(request: Request):
 
 
 def _incident_boundary_and_subscription_ids(db: Session, incident_id: str | None):
-    """Resolve a notifiable classifier incident + affected subscription ids."""
-    import uuid as _uuid
+    """Resolve a notifiable classifier incident + affected subscription ids.
 
-    from app.models.network import FdhCabinet
-    from app.models.network_monitoring import NetworkDevice, OutageIncident, PopSite
-    from app.services.topology.affected import affected_customers
-    from app.services.topology.outage import (
-        CLASSIFIER_CUSTOMER_VISIBLE_STATUSES,
-        CLASSIFIER_SOURCE,
+    Thin pass-through: the resolution lives in
+    ``app.services.topology.outage_targets`` so the automated dispatcher
+    (ADR 0004) and this preview cannot drift into notifying different people
+    from the same incident.
+    """
+    from app.services.topology.outage_targets import (
+        incident_boundary_and_subscription_ids,
     )
 
-    try:
-        incident = (
-            db.get(OutageIncident, _uuid.UUID(incident_id)) if incident_id else None
-        )
-    except (ValueError, TypeError):
-        incident = None
-    if (
-        incident is None
-        or incident.detection_source != CLASSIFIER_SOURCE
-        or incident.status not in CLASSIFIER_CUSTOMER_VISIBLE_STATUSES
-    ):
-        return None, None, []
-    node = (
-        db.get(NetworkDevice, incident.root_node_id)
-        if incident.root_node_id is not None
-        else None
-    )
-    basestation = (
-        db.get(PopSite, incident.basestation_id)
-        if incident.basestation_id is not None
-        else None
-    )
-    fdh = (
-        db.get(FdhCabinet, incident.fdh_cabinet_id)
-        if incident.fdh_cabinet_id is not None
-        else None
-    )
-    if node is None and basestation is None and fdh is None:
-        return incident, None, []
-    impact = affected_customers(db, node=node, basestation=basestation, fdh=fdh)
-    sub_ids = [s.id for s in impact["subscriptions"]]
-    boundary = node or basestation or fdh
-    return incident, boundary, sub_ids
+    return incident_boundary_and_subscription_ids(db, incident_id)
 
 
 @router.get(

@@ -63,13 +63,13 @@ celery_app.autodiscover_tasks(["app.tasks"])
 # This prevents ACS work from being starved by slow SNMP/polling/default tasks.
 celery_app.conf.task_routes = {
     "app.tasks.tr069.sync_all_acs_devices": {"queue": "acs"},
-    "app.tasks.tr069.execute_pending_jobs": {"queue": "acs"},
+    "app.tasks.tr069.reconcile_command_outcomes": {"queue": "acs"},
+    "app.tasks.tr069.execute_network_operation_job": {"queue": "acs"},
     "app.tasks.tr069.check_device_health": {"queue": "acs"},
     "app.tasks.tr069.refresh_ont_runtime_data": {"queue": "acs"},
     "app.tasks.tr069.cleanup_tr069_records": {"queue": "acs"},
     "app.tasks.tr069.cleanup_stale_genieacs_tasks": {"queue": "acs"},
     "app.tasks.tr069.scrape_genieacs_metrics": {"queue": "acs"},
-    "app.tasks.tr069.execute_bulk_action": {"queue": "acs"},
     "app.tasks.tr069.wait_for_ont_bootstrap": {"queue": "acs"},
     "app.tasks.tr069.apply_saved_ont_service_config": {"queue": "acs"},
     "app.tasks.tr069.apply_acs_config": {"queue": "acs"},
@@ -94,6 +94,9 @@ celery_app.conf.task_routes = {
         "queue": "ingestion"
     },
     "app.tasks.topology_outage.reconcile_detected_outages": {"queue": "ingestion"},
+    "app.tasks.outage_auto_notify.auto_dispatch_outage_notifications": {
+        "queue": "ingestion"
+    },
     "app.tasks.topology_uisp.run_uisp_topology_sync": {"queue": "ingestion"},
     "app.tasks.uisp_ip_backfill.run_uisp_mgmt_ip_backfill": {"queue": "ingestion"},
     # Operator-triggered writes must not wait behind long inventory and

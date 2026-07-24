@@ -13,13 +13,22 @@ class TestDeriveAccessStateActive:
     def test_active_maps_to_active(self):
         assert derive_access_state(SubscriptionStatus.active) == AccessState.active
 
-    def test_active_ignores_captive_restriction(self):
+    def test_active_service_with_captive_lock_maps_to_captive(self):
         assert (
             derive_access_state(
                 SubscriptionStatus.active,
                 restriction_mode=AccessRestrictionMode.captive,
             )
-            == AccessState.active
+            == AccessState.captive
+        )
+
+    def test_active_service_with_hard_reject_lock_maps_to_suspended(self):
+        assert (
+            derive_access_state(
+                SubscriptionStatus.active,
+                restriction_mode=AccessRestrictionMode.hard_reject,
+            )
+            == AccessState.suspended
         )
 
 

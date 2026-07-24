@@ -19,6 +19,7 @@ from app.models.sales import SalesOrder, SalesOrderStatus
 from app.models.subscriber import Subscriber
 from app.models.vendor_routes import InstallationProject, InstallationProjectStatus
 from app.services import installation_projects, projects, settings_spec
+from app.services import service_address as service_address_service
 from app.services.events import EventType, emit_event
 
 
@@ -69,7 +70,8 @@ def _customer_address(order: SalesOrder, subscriber: Subscriber) -> str | None:
             value = str(install.get("address") or "").strip()
             if value:
                 return value
-    parts = [subscriber.address_line1, subscriber.address_line2, subscriber.city]
+    addr = service_address_service.address_parts(subscriber)
+    parts = [addr.address_line1, addr.address_line2, addr.city]
     return (
         ", ".join(str(part).strip() for part in parts if str(part or "").strip())
         or None
@@ -118,7 +120,7 @@ def ensure_implementation_scope(
             name=f"Installation — {order.order_number or order.id}",
             project_type=_project_type(db, order),
             customer_address=_customer_address(order, subscriber),
-            region=subscriber.region,
+            region=service_address_service.address_parts(subscriber).region,
             actor_id=actor,
         )
         installation = installation_projects.ensure_for_project(

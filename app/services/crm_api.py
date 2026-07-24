@@ -33,6 +33,7 @@ from app.models.service_extension import ServiceExtension, ServiceExtensionEntry
 from app.models.subscriber import Address, Subscriber, SubscriberStatus
 from app.models.system_user import SystemUser
 from app.models.usage import AccountingStatus, RadiusAccountingSession
+from app.services import service_address as service_address_service
 from app.services.account_lifecycle import (
     cancel_subscription,
     transition_account_status,
@@ -108,11 +109,7 @@ def subscriber_name(subscriber: Subscriber) -> str:
 def address_text(
     subscriber: Subscriber, addresses: list[Address] | None = None
 ) -> str | None:
-    address = None
-    if addresses:
-        address = (
-            next((item for item in addresses if item.is_primary), None) or addresses[0]
-        )
+    address = service_address_service.pick_service_address(addresses)
     if address is not None:
         parts = [
             address.address_line1,

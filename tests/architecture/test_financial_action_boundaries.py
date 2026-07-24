@@ -396,6 +396,9 @@ def test_deposit_adapters_compose_named_credit_owners() -> None:
     deposit_owner = _source("app/services/account_credit_deposits.py")
     application_owner = _source("app/services/billing/account_credit.py")
     portal = _source("app/services/customer_portal_flow_payments.py")
+    customer_route = _source("app/web/customer/routes.py")
+    customer_template = _source("templates/customer/billing/topup.html")
+    customer_api = _source("app/api/me.py")
     gateway_intent_owner = _source("app/services/gateway_topup_intents.py")
     webhook = _source("app/services/payment_webhook_commands.py")
     proofs = _source("app/services/payment_proofs.py")
@@ -409,7 +412,15 @@ def test_deposit_adapters_compose_named_credit_owners() -> None:
     assert "PaymentAllocations.stage_confirm(" in application_owner
     assert "PaymentAllocation(" not in application_owner
     assert "LedgerEntry(" not in application_owner
+    assert '"/billing/topup/preview"' in customer_route
+    assert "preview_topup(db, customer, amount_value)" in customer_route
+    assert "preview_fingerprint: str = Field(min_length=64, max_length=64)" in _source(
+        "app/schemas/billing.py"
+    )
+    assert "preview_fingerprint=payload.preview_fingerprint" in customer_api
+    assert "preview_fingerprint: this.previewFingerprint" in customer_template
     assert "create_customer_gateway_topup_intent(" in portal
+    assert "preview_topup(" in portal
     assert "AccountCreditDeposits.stage_intent(" in gateway_intent_owner
     assert "AccountCreditDeposits.create_intent(" not in portal
     assert "AccountCreditDeposits.settle_verified(" in portal

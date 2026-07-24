@@ -1,0 +1,63 @@
+from __future__ import annotations
+
+import inspect
+
+from app.services import prepaid_draft_reconciliation, prepaid_service_renewals
+from app.services.sot_manifest import (
+    AuthorityMigrationState,
+    OwnerRole,
+    TransactionMode,
+)
+from app.services.sot_relationships import service_relationship
+
+
+def test_prepaid_draft_reconciliation_has_one_contracted_owner():
+    service = service_relationship("financial.prepaid_draft_reconciliation")
+
+    assert service.module == "app.services.prepaid_draft_reconciliation"
+    assert service.contract is not None
+    assert service.contract.transaction.mode is TransactionMode.OWNER_MANAGED
+    assert service.contract.migration.state is AuthorityMigrationState.CUT_OVER
+    concern = next(
+        item
+        for item in service.contract.concerns
+        if item.name == "stranded prepaid draft invoice reconciliation"
+    )
+    assert concern.role is OwnerRole.RECONCILER
+    assert concern.canonical_writer == service.name
+
+
+def test_funding_change_checks_draft_before_invoice_less_renewal():
+    source = inspect.getsource(
+        prepaid_service_renewals.apply_due_prepaid_service_after_funding_change
+    )
+
+    draft_check = source.index("stage_prepaid_draft_after_funding_change(")
+    direct_renewal = source.index("preview_prepaid_service_renewal(")
+    assert draft_check < direct_renewal
+    assert "draft_invoice_pending" in source
+
+
+def test_reconciler_has_no_rounding_tolerance_or_raw_money_writes():
+    source = inspect.getsource(prepaid_draft_reconciliation)
+
+    assert "tolerance" not in source.lower()
+    assert "PaymentAllocation(" not in source
+    assert "LedgerEntry(" not in source
+    assert "AccountAdjustment(" not in source
+    assert "execute_owner_command(" in source
+    assert "AccountCreditApplications.apply_invoice_fully(" in source
+    assert "Invoices.void_pristine_draft_for_owner(" in source
+
+
+def test_reconciliation_cli_is_dry_run_first():
+    with open(
+        "scripts/billing/reconcile_prepaid_drafts.py",
+        encoding="utf-8",
+    ) as handle:
+        source = handle.read()
+
+    assert 'parser.add_argument("--apply", action="store_true")' in source
+    assert "if args.apply:" in source
+    assert "owner_command_session()" in source
+    assert "read_session()" in source

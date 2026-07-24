@@ -32,6 +32,7 @@ from app.models.network import (
 from app.models.network_monitoring import NetworkDevice, PopSite
 from app.models.radius_active_session import RadiusActiveSession
 from app.models.subscriber import Address
+from app.services import service_address as service_address_service
 from app.services.network.forwarding_topology import (
     ForwardingGraph,
     project_authoritative_forwarding_graph,
@@ -400,6 +401,11 @@ def _subscriber_address(subscription: Subscription) -> str | None:
     subscriber = getattr(subscription, "subscriber", None)
     if subscriber is None:
         return None
+    canonical = service_address_service.pick_service_address(
+        getattr(subscriber, "addresses", None)
+    )
+    if canonical is not None:
+        return _format_address(canonical)
     parts = [
         subscriber.address_line1,
         subscriber.address_line2,

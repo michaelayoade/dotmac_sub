@@ -85,6 +85,30 @@ def test_record_celery_task_success_records_money_job_result(monkeypatch):
     assert result_kwargs["detail"] == {"processed": 7}
 
 
+def test_reconciliation_success_with_rejections_records_partial_result(monkeypatch):
+    calls: dict[str, object] = {}
+    task_name = "app.tasks.payment_reconciliation.reconcile_topups"
+    monkeypatch.setattr(
+        "app.services.observability.job_heartbeat.record_success",
+        lambda name, **kwargs: calls.setdefault("success", (name, kwargs)),
+    )
+    monkeypatch.setattr(
+        "app.services.observability.job_heartbeat.record_result",
+        lambda name, **kwargs: calls.setdefault("result", (name, kwargs)),
+    )
+
+    observability.record_celery_task_success(
+        task_name,
+        result={"checked": 8, "recovered": 0, "errors": 3},
+    )
+
+    assert calls["success"][0] == task_name
+    result_name, result_kwargs = calls["result"]
+    assert result_name == task_name
+    assert result_kwargs["status"] == "partial"
+    assert result_kwargs["detail"]["errors"] == 3
+
+
 def test_record_celery_task_success_skips_non_money_result(monkeypatch):
     calls: list[tuple[str, object]] = []
 
@@ -98,11 +122,11 @@ def test_record_celery_task_success_skips_non_money_result(monkeypatch):
     )
 
     observability.record_celery_task_success(
-        "app.tasks.tr069.execute_pending_jobs",
+        "app.tasks.tr069.reconcile_command_outcomes",
         result={"processed": 7},
     )
 
-    assert calls == [("success", "app.tasks.tr069.execute_pending_jobs")]
+    assert calls == [("success", "app.tasks.tr069.reconcile_command_outcomes")]
 
 
 def test_record_celery_task_failure_records_money_job_error(monkeypatch):

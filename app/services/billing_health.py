@@ -52,7 +52,11 @@ from app.services.billing_statuses import (
     BILLABLE_SUBSCRIBER_STATUSES,
 )
 from app.services.customer_financial_position import prepaid_available_balances
-from app.services.job_heartbeat import get_last_result, get_last_success
+from app.services.job_heartbeat import (
+    PAYMENT_RECONCILIATION_TASK,
+    get_last_result,
+    get_last_success,
+)
 
 # Alert thresholds. Conservative defaults; tune via ops experience.
 SCAN_MIN_RATIO = 0.5  # alert if a run scanned < 50% of active subs
@@ -69,6 +73,7 @@ _CRITICAL_RUNNERS = (
     "app.tasks.collections.run_billing_enforcement",
     "app.tasks.billing.mark_invoices_overdue",
     "app.tasks.billing.check_billing_switch",
+    PAYMENT_RECONCILIATION_TASK,
 )
 
 BILLING_HEALTH_OBSERVABILITY_DOMAIN = "billing_health"
@@ -130,6 +135,11 @@ class RunnerHeartbeat:
         if status == "error":
             msg = detail.get("error")
             return f"errored: {msg}" if msg else "errored"
+        if status == "partial":
+            if not detail:
+                return "partial"
+            counts = ", ".join(f"{k}={v}" for k, v in detail.items())
+            return f"partial — {counts}" if counts else "partial"
         if not detail:
             return "ok"
         counts = ", ".join(f"{k}={v}" for k, v in detail.items())

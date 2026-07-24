@@ -33,10 +33,12 @@ def test_access_decision_modules_do_not_consume_raw_captive_flag():
 def test_radius_and_connectivity_writers_consume_canonical_restriction():
     for relative in (
         "app/services/radius_projection_planner.py",
-        "app/services/events/handlers/enforcement.py",
         "app/services/connectivity_reconciler.py",
     ):
         assert "resolve_subscription_restriction" in _read(relative), relative
+    enforcement_adapter = _read("app/services/events/handlers/enforcement.py")
+    assert "compute_account_status" in enforcement_adapter
+    assert "resolve_subscription_restriction" not in enforcement_adapter
     assert "plan_login_radius_projections" in _read("app/services/radius_population.py")
 
 
@@ -59,8 +61,7 @@ def test_admin_policy_form_has_no_parallel_suspension_action_control():
 def test_checked_in_specs_declare_hard_reject_default():
     for relative in (
         "docs/SOT_RELATIONSHIP_MAP.md",
-        "docs/designs/CONNECTIVITY_STATE_MACHINE.md",
-        "docs/radius_state_refactor/phase0_state_model.md",
+        "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
     ):
         content = _read(relative).lower()
         assert "hard reject" in content, relative

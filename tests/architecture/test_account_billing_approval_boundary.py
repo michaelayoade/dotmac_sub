@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from app.services.scheduler import PERMANENT_CUSTOMER_LIFECYCLE_TASKS
+from app.services.scheduler import PERMANENT_LIFECYCLE_TASKS
 from app.services.task_reliability import (
     TASK_RELIABILITY_CONTRACTS,
     FailureVisibility,
@@ -37,7 +37,7 @@ def test_active_transitions_require_billing_approval() -> None:
 
 def test_drift_reconciler_is_permanent_and_not_flag_gated() -> None:
     task_name = "app.tasks.enforcement.reconcile_billing_approval_drift"
-    assert task_name in PERMANENT_CUSTOMER_LIFECYCLE_TASKS
+    assert task_name in PERMANENT_LIFECYCLE_TASKS
     scheduler = _source("app/services/scheduler_config.py")
     task_index = scheduler.index(f'task_name="{task_name}"')
     block = scheduler[task_index - 200 : task_index + 200]

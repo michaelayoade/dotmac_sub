@@ -515,6 +515,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     assert sot_relationships.dependencies_for("financial.prepaid_service_renewals") == (
         "financial.account_adjustments",
         "financial.invoices",
+        "financial.payments",
         "financial.prepaid_funding_reconstruction",
         "financial.subscription_billing_grants",
         "financial.subscription_billing_treatments",
@@ -703,8 +704,10 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "runtime.db_sessions",
     )
     assert sot_relationships.dependencies_for("operations.project_lifecycle") == (
+        "auth.permission_gate",
         "events.dispatcher",
         "communications.staff_notifications",
+        "operations.work_order_commands",
     )
     assert sot_relationships.dependencies_for("operations.work_order_commands") == (
         "customer.identity_scope",
@@ -741,13 +744,16 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "runtime.db_sessions",
     )
     assert sot_relationships.dependencies_for("access.radius_state") == (
-        "financial.access_resolution",
+        "access.subscription_lifecycle",
         "access.walled_garden_policy",
+        "financial.access_resolution",
     )
     assert sot_relationships.dependencies_for("access.radius_projection") == (
+        "access.subscription_lifecycle",
         "access.radius_state",
         "access.radius_reject",
         "access.radius_target_registry",
+        "control.settings_spec",
     )
     assert sot_relationships.dependencies_for("communications.intents") == (
         "communications.channel_policy",
@@ -1074,7 +1080,7 @@ def test_domain_sot_relationships_resolve_owning_service_by_concern():
     assert cadence_owner.module == "app.services.catalog.subscriptions"
 
     project_service = sot_relationships.owning_service_for(
-        "native project field and status mutations"
+        "Project and ProjectTask identity and lifecycle"
     )
 
     assert project_service is not None

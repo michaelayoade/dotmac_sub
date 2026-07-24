@@ -1,0 +1,879 @@
+"""Evidence-first owner for stranded prepaid draft invoices.
+
+Preview is read-only and classifies one exact invoice. Confirmation locks the
+account and invoice, recomputes the preview fingerprint, and performs only one
+of two safe repairs:
+
+* exact native payment-backed funding issues and fully settles the draft; or
+* an exact direct-renewal debit/entitlement voids the duplicate draft without
+  charging the customer again.
+
+Insufficient funding, legacy/unbacked credit, mixed invoices, and ambiguous
+coverage remain unchanged for manual review.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from decimal import Decimal
+from enum import StrEnum
+from typing import NoReturn
+from uuid import UUID
+
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from app.models.billing import (
+    AccountAdjustment,
+    CreditNoteApplication,
+    Invoice,
+    InvoiceLine,
+    InvoiceStatus,
+    LedgerEntry,
+    PaymentAllocation,
+    ServiceEntitlement,
+    ServiceEntitlementStatus,
+)
+from app.models.catalog import BillingMode, Subscription
+from app.models.idempotency import IdempotencyKey
+from app.schemas.audit import AuditEventCreate
+from app.services.audit import AuditEvents
+from app.services.billing._common import lock_account
+from app.services.billing.account_credit import (
+    AccountCreditApplicationError,
+    AccountCreditApplications,
+    AccountCreditInvoiceFundingPreview,
+)
+from app.services.billing.adjustments import AccountAdjustmentOrigin
+from app.services.billing.invoices import InvoiceOwnerError, Invoices
+from app.services.common import round_money, to_decimal
+from app.services.domain_errors import DomainError
+from app.services.events import emit_event
+from app.services.events.types import EventType
+from app.services.locking import lock_for_update
+from app.services.owner_commands import (
+    CommandContext,
+    OwnerCommandDefinition,
+    execute_owner_command,
+)
+
+_OWNER = "financial.prepaid_draft_reconciliation"
+_CONCERN = "stranded prepaid draft invoice reconciliation"
+_COMMAND = OwnerCommandDefinition(
+    owner=_OWNER,
+    concern=_CONCERN,
+    name="reconcile_prepaid_draft_invoice",
+)
+_IDEMPOTENCY_SCOPE = "prepaid_draft_reconcile"
+_METADATA_KEY = "prepaid_draft_reconciliation"
+_RENEWAL_ORIGIN = AccountAdjustmentOrigin.prepaid_service_renewal
+
+
+class PrepaidDraftDisposition(StrEnum):
+    exact_payment_fundable = "exact_payment_fundable"
+    already_renewed = "already_renewed"
+    insufficient_funding = "insufficient_funding"
+    legacy_unbacked_funding = "legacy_unbacked_funding"
+    manual_review = "manual_review"
+    already_reconciled = "already_reconciled"
+
+
+class PrepaidDraftAction(StrEnum):
+    settle_paid = "settle_paid"
+    void_duplicate = "void_duplicate"
+    none = "none"
+
+
+class PrepaidDraftReconciliationError(DomainError):
+    """Stable fail-closed reconciliation error."""
+
+
+@dataclass(frozen=True, slots=True)
+class PrepaidDraftReconciliationPreview:
+    invoice_id: UUID
+    account_id: UUID
+    invoice_number: str | None
+    disposition: PrepaidDraftDisposition
+    recommended_action: PrepaidDraftAction
+    currency: str
+    invoice_total: Decimal
+    balance_due: Decimal
+    payment_backed_credit: Decimal
+    unbacked_credit: Decimal
+    shortfall: Decimal
+    subscription_ids: tuple[UUID, ...]
+    entitlement_ids: tuple[UUID, ...]
+    renewal_adjustment_ids: tuple[UUID, ...]
+    reason: str
+    fingerprint: str
+
+    @property
+    def actionable(self) -> bool:
+        return (
+            self.disposition is not PrepaidDraftDisposition.already_reconciled
+            and self.recommended_action is not PrepaidDraftAction.none
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ReconcilePrepaidDraftCommand:
+    context: CommandContext
+    invoice_id: UUID
+    preview_fingerprint: str
+    effective_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class PrepaidDraftReconciliationResult:
+    invoice_id: UUID
+    disposition: PrepaidDraftDisposition
+    action: PrepaidDraftAction
+    final_status: InvoiceStatus
+    applied_amount: Decimal
+    preview_fingerprint: str
+    replayed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class FundingChangeDraftResult:
+    drafts_found: int
+    drafts_settled: int
+    drafts_blocked: int
+    invoice_ids: tuple[UUID, ...]
+
+
+def _error(suffix: str, message: str, **details: object) -> NoReturn:
+    raise PrepaidDraftReconciliationError(
+        code=f"{_OWNER}.{suffix}",
+        message=message,
+        details=details,
+    )
+
+
+def _utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def _hash(payload: object) -> str:
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=lambda value: (
+            value.value
+            if isinstance(value, StrEnum)
+            else value.isoformat()
+            if isinstance(value, datetime)
+            else f"{value:.2f}"
+            if isinstance(value, Decimal)
+            else str(value)
+        ),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _active_positive_lines(db: Session, invoice_id: UUID) -> list[InvoiceLine]:
+    return list(
+        db.scalars(
+            select(InvoiceLine)
+            .where(
+                InvoiceLine.invoice_id == invoice_id,
+                InvoiceLine.is_active.is_(True),
+                InvoiceLine.amount > Decimal("0.00"),
+            )
+            .order_by(InvoiceLine.id)
+        ).all()
+    )
+
+
+def _funding_preview(
+    db: Session,
+    invoice: Invoice,
+) -> AccountCreditInvoiceFundingPreview:
+    return AccountCreditApplications.preview_invoice_funding(db, invoice)
+
+
+def _direct_renewal_evidence(
+    db: Session,
+    *,
+    invoice: Invoice,
+    line: InvoiceLine,
+    subscription: Subscription,
+) -> tuple[tuple[ServiceEntitlement, AccountAdjustment], ...]:
+    if invoice.billing_period_start is None or invoice.billing_period_end is None:
+        return ()
+    entitlements = list(
+        db.scalars(
+            select(ServiceEntitlement)
+            .where(
+                ServiceEntitlement.account_id == invoice.account_id,
+                ServiceEntitlement.subscription_id == subscription.id,
+                ServiceEntitlement.status == ServiceEntitlementStatus.active,
+                ServiceEntitlement.starts_at < invoice.billing_period_end,
+                ServiceEntitlement.ends_at > invoice.billing_period_start,
+            )
+            .order_by(ServiceEntitlement.id)
+        ).all()
+    )
+    evidence: list[tuple[ServiceEntitlement, AccountAdjustment]] = []
+    for entitlement in entitlements:
+        if (
+            entitlement.source_invoice_id is not None
+            or entitlement.source_invoice_line_id is not None
+            or entitlement.source_billing_grant_id is not None
+            or entitlement.source_ledger_entry_id is None
+        ):
+            continue
+        adjustment = db.scalar(
+            select(AccountAdjustment).where(
+                AccountAdjustment.ledger_entry_id == entitlement.source_ledger_entry_id,
+                AccountAdjustment.account_id == invoice.account_id,
+                AccountAdjustment.origin == _RENEWAL_ORIGIN,
+                AccountAdjustment.reversed_at.is_(None),
+            )
+        )
+        expected_origin = (
+            f"{subscription.id}:{_utc(entitlement.starts_at).isoformat()}:"
+            f"{_utc(entitlement.ends_at).isoformat()}"
+        )
+        if (
+            adjustment is None
+            or adjustment.origin_ref != expected_origin
+            or adjustment.currency.upper() != (invoice.currency or "NGN").upper()
+            or round_money(to_decimal(adjustment.amount))
+            != round_money(to_decimal(invoice.total))
+            or round_money(to_decimal(entitlement.amount_funded))
+            != round_money(to_decimal(line.amount))
+            or entitlement.currency.upper() != (invoice.currency or "NGN").upper()
+        ):
+            continue
+        evidence.append((entitlement, adjustment))
+    return tuple(evidence)
+
+
+def _build_preview(
+    *,
+    invoice: Invoice,
+    disposition: PrepaidDraftDisposition,
+    action: PrepaidDraftAction,
+    funding: AccountCreditInvoiceFundingPreview,
+    subscription_ids: tuple[UUID, ...],
+    entitlement_ids: tuple[UUID, ...] = (),
+    adjustment_ids: tuple[UUID, ...] = (),
+    reason: str,
+) -> PrepaidDraftReconciliationPreview:
+    payload = {
+        "invoice_id": invoice.id,
+        "account_id": invoice.account_id,
+        "status": invoice.status.value,
+        "is_active": invoice.is_active,
+        "is_proforma": invoice.is_proforma,
+        "updated_at": invoice.updated_at,
+        "currency": (invoice.currency or "NGN").upper(),
+        "total": round_money(to_decimal(invoice.total)),
+        "balance_due": round_money(to_decimal(invoice.balance_due)),
+        "period_start": invoice.billing_period_start,
+        "period_end": invoice.billing_period_end,
+        "disposition": disposition,
+        "action": action,
+        "funding_fingerprint": funding.fingerprint,
+        "subscription_ids": subscription_ids,
+        "entitlement_ids": entitlement_ids,
+        "adjustment_ids": adjustment_ids,
+        "reason": reason,
+    }
+    return PrepaidDraftReconciliationPreview(
+        invoice_id=invoice.id,
+        account_id=invoice.account_id,
+        invoice_number=invoice.invoice_number,
+        disposition=disposition,
+        recommended_action=action,
+        currency=(invoice.currency or "NGN").upper(),
+        invoice_total=round_money(to_decimal(invoice.total)),
+        balance_due=round_money(to_decimal(invoice.balance_due)),
+        payment_backed_credit=funding.payment_backed_credit,
+        unbacked_credit=funding.unbacked_credit,
+        shortfall=funding.shortfall,
+        subscription_ids=subscription_ids,
+        entitlement_ids=entitlement_ids,
+        renewal_adjustment_ids=adjustment_ids,
+        reason=reason,
+        fingerprint=_hash(payload),
+    )
+
+
+def preview_prepaid_draft_reconciliation(
+    db: Session,
+    invoice_id: UUID,
+) -> PrepaidDraftReconciliationPreview:
+    """Classify one invoice from canonical invoice, funding, and coverage facts."""
+
+    invoice = db.get(Invoice, invoice_id)
+    if invoice is None:
+        _error(
+            "invoice_not_found", "Invoice was not found.", invoice_id=str(invoice_id)
+        )
+    funding = _funding_preview(db, invoice)
+    metadata = dict(invoice.metadata_ or {}).get(_METADATA_KEY)
+    if isinstance(metadata, dict) and invoice.status in {
+        InvoiceStatus.paid,
+        InvoiceStatus.void,
+    }:
+        action_value = str(metadata.get("action") or PrepaidDraftAction.none.value)
+        try:
+            action = PrepaidDraftAction(action_value)
+        except ValueError:
+            action = PrepaidDraftAction.none
+        return _build_preview(
+            invoice=invoice,
+            disposition=PrepaidDraftDisposition.already_reconciled,
+            action=action,
+            funding=funding,
+            subscription_ids=(),
+            reason="invoice carries durable prepaid draft reconciliation evidence",
+        )
+    if (
+        not invoice.is_active
+        or invoice.status != InvoiceStatus.draft
+        or invoice.is_proforma
+        or round_money(to_decimal(invoice.balance_due)) <= Decimal("0.00")
+    ):
+        return _build_preview(
+            invoice=invoice,
+            disposition=PrepaidDraftDisposition.manual_review,
+            action=PrepaidDraftAction.none,
+            funding=funding,
+            subscription_ids=(),
+            reason="invoice is not an active financial prepaid draft",
+        )
+    if (
+        invoice.billing_period_start is None
+        or invoice.billing_period_end is None
+        or _utc(invoice.billing_period_end) <= _utc(invoice.billing_period_start)
+    ):
+        return _build_preview(
+            invoice=invoice,
+            disposition=PrepaidDraftDisposition.manual_review,
+            action=PrepaidDraftAction.none,
+            funding=funding,
+            subscription_ids=(),
+            reason="invoice has no exact positive billing period",
+        )
+
+    lines = _active_positive_lines(db, invoice.id)
+    if len(lines) != 1 or lines[0].subscription_id is None:
+        return _build_preview(
+            invoice=invoice,
+            disposition=PrepaidDraftDisposition.manual_review,
+            action=PrepaidDraftAction.none,
+            funding=funding,
+            subscription_ids=tuple(
+                sorted(
+                    {
+                        line.subscription_id
+                        for line in lines
+                        if line.subscription_id is not None
+                    },
+                    key=str,
+                )
+            ),
+            reason="automatic repair requires one exact positive subscription line",
+        )
+    line = lines[0]
+    subscription_id = line.subscription_id
+    assert subscription_id is not None
+    subscription = db.get(Subscription, subscription_id)
+    if (
+        subscription is None
+        or subscription.subscriber_id != invoice.account_id
+        or subscription.billing_mode != BillingMode.prepaid
+    ):
+        return _build_preview(
+            invoice=invoice,
+            disposition=PrepaidDraftDisposition.manual_review,
+            action=PrepaidDraftAction.none,
+            funding=funding,
+            subscription_ids=(subscription_id,),
+            reason="invoice line is not owned by one matching prepaid subscription",
+        )
+
+    has_activity = (
+        db.scalar(
+            select(PaymentAllocation.id)
+            .where(
+                PaymentAllocation.invoice_id == invoice.id,
+                PaymentAllocation.is_active.is_(True),
+            )
+            .limit(1)
+        )
+        is not None
+        or db.scalar(
+            select(CreditNoteApplication.id)
+            .where(CreditNoteApplication.invoice_id == invoice.id)
+            .limit(1)
+        )
+        is not None
+        or db.scalar(
+            select(LedgerEntry.id).where(LedgerEntry.invoice_id == invoice.id).limit(1)
+        )
+        is not None
+    )
+    if has_activity:
+        return _build_preview(
+            invoice=invoice,
+            disposition=PrepaidDraftDisposition.manual_review,
+            action=PrepaidDraftAction.none,
+            funding=funding,
+            subscription_ids=(subscription.id,),
+            reason="draft already has financial activity",
+        )
+
+    direct_evidence = _direct_renewal_evidence(
+        db,
+        invoice=invoice,
+        line=line,
+        subscription=subscription,
+    )
+    if len(direct_evidence) == 1:
+        entitlement, adjustment = direct_evidence[0]
+        return _build_preview(
+            invoice=invoice,
+            disposition=PrepaidDraftDisposition.already_renewed,
+            action=PrepaidDraftAction.void_duplicate,
+            funding=funding,
+            subscription_ids=(subscription.id,),
+            entitlement_ids=(entitlement.id,),
+            adjustment_ids=(adjustment.id,),
+            reason="exact direct-renewal debit and entitlement already fund this cycle",
+        )
+    if len(direct_evidence) > 1:
+        return _build_preview(
+            invoice=invoice,
+            disposition=PrepaidDraftDisposition.manual_review,
+            action=PrepaidDraftAction.none,
+            funding=funding,
+            subscription_ids=(subscription.id,),
+            entitlement_ids=tuple(item[0].id for item in direct_evidence),
+            adjustment_ids=tuple(item[1].id for item in direct_evidence),
+            reason="multiple direct-renewal evidence pairs overlap the draft",
+        )
+
+    other_overlap = db.scalar(
+        select(ServiceEntitlement.id)
+        .where(
+            ServiceEntitlement.subscription_id == subscription.id,
+            ServiceEntitlement.status == ServiceEntitlementStatus.active,
+            ServiceEntitlement.starts_at < invoice.billing_period_end,
+            ServiceEntitlement.ends_at > invoice.billing_period_start,
+        )
+        .limit(1)
+    )
+    if other_overlap is not None:
+        return _build_preview(
+            invoice=invoice,
+            disposition=PrepaidDraftDisposition.manual_review,
+            action=PrepaidDraftAction.none,
+            funding=funding,
+            subscription_ids=(subscription.id,),
+            entitlement_ids=(other_overlap,),
+            reason="overlapping coverage is not exact direct-renewal evidence",
+        )
+    if funding.fully_funded:
+        return _build_preview(
+            invoice=invoice,
+            disposition=PrepaidDraftDisposition.exact_payment_fundable,
+            action=PrepaidDraftAction.settle_paid,
+            funding=funding,
+            subscription_ids=(subscription.id,),
+            reason="exact native payment-backed credit fully covers the draft",
+        )
+    if funding.unbacked_credit > Decimal("0.00"):
+        return _build_preview(
+            invoice=invoice,
+            disposition=PrepaidDraftDisposition.legacy_unbacked_funding,
+            action=PrepaidDraftAction.none,
+            funding=funding,
+            subscription_ids=(subscription.id,),
+            reason="visible credit is not fully backed by canonical payment evidence",
+        )
+    return _build_preview(
+        invoice=invoice,
+        disposition=PrepaidDraftDisposition.insufficient_funding,
+        action=PrepaidDraftAction.none,
+        funding=funding,
+        subscription_ids=(subscription.id,),
+        reason="exact payment-backed credit is below the full invoice balance",
+    )
+
+
+def preview_prepaid_draft_cohort(
+    db: Session,
+    *,
+    account_id: UUID | None = None,
+    limit: int | None = None,
+) -> tuple[PrepaidDraftReconciliationPreview, ...]:
+    """Return the deterministic active prepaid-draft cohort without writes."""
+
+    statement = (
+        select(Invoice.id)
+        .join(InvoiceLine, InvoiceLine.invoice_id == Invoice.id)
+        .join(Subscription, Subscription.id == InvoiceLine.subscription_id)
+        .where(
+            Invoice.is_active.is_(True),
+            Invoice.status == InvoiceStatus.draft,
+            Invoice.is_proforma.is_(False),
+            Invoice.balance_due > Decimal("0.00"),
+            InvoiceLine.is_active.is_(True),
+            InvoiceLine.amount > Decimal("0.00"),
+            Subscription.billing_mode == BillingMode.prepaid,
+        )
+        .group_by(Invoice.id, Invoice.created_at)
+        .order_by(Invoice.created_at, Invoice.id)
+    )
+    if account_id is not None:
+        statement = statement.where(Invoice.account_id == account_id)
+    if limit is not None:
+        statement = statement.limit(limit)
+    invoice_ids = tuple(db.scalars(statement).all())
+    return tuple(
+        preview_prepaid_draft_reconciliation(db, invoice_id)
+        for invoice_id in invoice_ids
+    )
+
+
+def _record_metadata(
+    invoice: Invoice,
+    *,
+    preview: PrepaidDraftReconciliationPreview,
+    action: PrepaidDraftAction,
+    context: CommandContext | None,
+    effective_at: datetime,
+) -> None:
+    metadata = dict(invoice.metadata_ or {})
+    metadata[_METADATA_KEY] = {
+        "action": action.value,
+        "source_disposition": preview.disposition.value,
+        "preview_fingerprint": preview.fingerprint,
+        "idempotency_key": context.idempotency_key if context else None,
+        "command_id": str(context.command_id) if context else None,
+        "reconciled_at": _utc(effective_at).isoformat(),
+        "entitlement_ids": [str(value) for value in preview.entitlement_ids],
+        "renewal_adjustment_ids": [
+            str(value) for value in preview.renewal_adjustment_ids
+        ],
+    }
+    invoice.metadata_ = metadata
+
+
+def _stage_action(
+    db: Session,
+    *,
+    preview: PrepaidDraftReconciliationPreview,
+    effective_at: datetime,
+    context: CommandContext | None,
+) -> tuple[Invoice, Decimal]:
+    invoice = lock_for_update(db, Invoice, str(preview.invoice_id))
+    if invoice is None:
+        _error("invoice_not_found", "Invoice was not found.")
+    if preview.recommended_action is PrepaidDraftAction.settle_paid:
+        try:
+            Invoices.issue_draft_for_owner(
+                db,
+                str(invoice.id),
+                issued_at=_utc(effective_at),
+                due_at=_utc(effective_at),
+                reason="reconcile_exactly_funded_prepaid_draft",
+                apply_available_credit=False,
+            )
+            funding = _funding_preview(db, invoice)
+            result = AccountCreditApplications.apply_invoice_fully(
+                db,
+                invoice,
+                preview_fingerprint=funding.fingerprint,
+            )
+        except (AccountCreditApplicationError, InvoiceOwnerError) as exc:
+            _error(
+                "participant_rejected",
+                "Invoice or account-credit owner rejected the reviewed settlement.",
+                participant_error=getattr(exc, "code", type(exc).__name__),
+            )
+        applied = result.applied
+    elif preview.recommended_action is PrepaidDraftAction.void_duplicate:
+        try:
+            Invoices.void_pristine_draft_for_owner(
+                db,
+                str(invoice.id),
+                reason="Duplicate of exact direct-renewal service evidence",
+                idempotency_key=f"prepaid-draft-overlap-{invoice.id}",
+            )
+        except InvoiceOwnerError as exc:
+            _error(
+                "participant_rejected",
+                "Invoice owner rejected the reviewed duplicate closure.",
+                participant_error=type(exc).__name__,
+            )
+        applied = Decimal("0.00")
+    else:
+        _error(
+            "not_actionable",
+            "This draft requires more funding or manual evidence review.",
+            disposition=preview.disposition.value,
+        )
+    _record_metadata(
+        invoice,
+        preview=preview,
+        action=preview.recommended_action,
+        context=context,
+        effective_at=effective_at,
+    )
+    AuditEvents.stage(
+        db,
+        AuditEventCreate(
+            action="reconcile_prepaid_draft_invoice",
+            entity_type="invoice",
+            entity_id=str(invoice.id),
+            metadata_={
+                "action": preview.recommended_action.value,
+                "source_disposition": preview.disposition.value,
+                "preview_fingerprint": preview.fingerprint,
+                "applied_amount": str(applied),
+                "economic_delta": (
+                    str(applied)
+                    if preview.recommended_action is PrepaidDraftAction.settle_paid
+                    else "0.00"
+                ),
+                "entitlement_ids": [str(value) for value in preview.entitlement_ids],
+                "renewal_adjustment_ids": [
+                    str(value) for value in preview.renewal_adjustment_ids
+                ],
+            },
+        ),
+    )
+    emit_event(
+        db,
+        EventType.prepaid_draft_reconciled,
+        {
+            "invoice_id": str(invoice.id),
+            "invoice_number": invoice.invoice_number,
+            "action": preview.recommended_action.value,
+            "source_disposition": preview.disposition.value,
+            "final_status": invoice.status.value,
+            "applied_amount": str(applied),
+            "currency": invoice.currency,
+            "preview_fingerprint": preview.fingerprint,
+        },
+        account_id=invoice.account_id,
+        invoice_id=invoice.id,
+    )
+    db.flush()
+    return invoice, applied
+
+
+def _replay_result(
+    db: Session,
+    *,
+    command: ReconcilePrepaidDraftCommand,
+    reservation: IdempotencyKey,
+) -> PrepaidDraftReconciliationResult:
+    if reservation.ref_id != str(command.invoice_id):
+        _error(
+            "idempotency_conflict",
+            "Idempotency key belongs to another invoice.",
+        )
+    invoice = db.get(Invoice, command.invoice_id)
+    metadata = (
+        dict(invoice.metadata_ or {}).get(_METADATA_KEY)
+        if invoice is not None
+        else None
+    )
+    if invoice is None or not isinstance(metadata, dict):
+        _error(
+            "idempotency_conflict",
+            "Idempotency evidence is incomplete.",
+        )
+    if metadata.get("idempotency_key") != command.context.idempotency_key:
+        _error(
+            "idempotency_conflict",
+            "Invoice reconciliation evidence does not match the idempotency key.",
+        )
+    action = PrepaidDraftAction(str(metadata["action"]))
+    source = PrepaidDraftDisposition(str(metadata["source_disposition"]))
+    return PrepaidDraftReconciliationResult(
+        invoice_id=invoice.id,
+        disposition=source,
+        action=action,
+        final_status=invoice.status,
+        applied_amount=(
+            round_money(to_decimal(invoice.total))
+            if action is PrepaidDraftAction.settle_paid
+            else Decimal("0.00")
+        ),
+        preview_fingerprint=str(metadata["preview_fingerprint"]),
+        replayed=True,
+    )
+
+
+def reconcile_prepaid_draft_invoice(
+    db: Session,
+    command: ReconcilePrepaidDraftCommand,
+) -> PrepaidDraftReconciliationResult:
+    """Confirm one reviewed, actionable draft reconciliation atomically."""
+
+    def operation() -> PrepaidDraftReconciliationResult:
+        key = (command.context.idempotency_key or "").strip()
+        if not key or len(key) > 120:
+            _error(
+                "missing_idempotency_key",
+                "A bounded idempotency key is required.",
+            )
+        reservation = db.scalar(
+            select(IdempotencyKey)
+            .where(
+                IdempotencyKey.scope == _IDEMPOTENCY_SCOPE,
+                IdempotencyKey.key == key,
+            )
+            .with_for_update()
+        )
+        if reservation is not None:
+            return _replay_result(db, command=command, reservation=reservation)
+
+        invoice = db.get(Invoice, command.invoice_id)
+        if invoice is None:
+            _error("invoice_not_found", "Invoice was not found.")
+        lock_account(db, str(invoice.account_id))
+        locked = lock_for_update(db, Invoice, str(invoice.id))
+        if locked is None:
+            _error("invoice_not_found", "Invoice was not found.")
+        current = preview_prepaid_draft_reconciliation(db, locked.id)
+        if current.fingerprint != command.preview_fingerprint:
+            _error(
+                "stale_preview",
+                "Draft evidence changed after preview; preview again.",
+            )
+        if not current.actionable:
+            _error(
+                "not_actionable",
+                "This draft requires more funding or manual evidence review.",
+                disposition=current.disposition.value,
+                shortfall=str(current.shortfall),
+            )
+
+        reservation = IdempotencyKey(
+            scope=_IDEMPOTENCY_SCOPE,
+            key=key,
+            account_id=current.account_id,
+            ref_id=str(current.invoice_id),
+        )
+        db.add(reservation)
+        try:
+            db.flush()
+        except IntegrityError:
+            _error(
+                "idempotency_conflict",
+                "Idempotency key was concurrently reserved by another command.",
+            )
+        changed_invoice, applied = _stage_action(
+            db,
+            preview=current,
+            effective_at=command.effective_at,
+            context=command.context,
+        )
+        return PrepaidDraftReconciliationResult(
+            invoice_id=changed_invoice.id,
+            disposition=current.disposition,
+            action=current.recommended_action,
+            final_status=changed_invoice.status,
+            applied_amount=applied,
+            preview_fingerprint=current.fingerprint,
+            replayed=False,
+        )
+
+    return execute_owner_command(
+        db,
+        definition=_COMMAND,
+        context=command.context,
+        operation=operation,
+    )
+
+
+def stage_prepaid_draft_after_funding_change(
+    db: Session,
+    *,
+    account_id: UUID,
+    currency: str,
+    effective_at: datetime,
+) -> FundingChangeDraftResult:
+    """Settle one exact existing draft before any invoice-less renewal.
+
+    This is a flush-only participant for the existing funding-change
+    transaction. Any draft, including an underfunded one, blocks the parallel
+    direct-renewal path. Multiple drafts are intentionally left for reviewed
+    reconciliation.
+    """
+
+    lock_account(db, str(account_id))
+    invoice_ids = tuple(
+        dict.fromkeys(
+            db.scalars(
+                select(Invoice.id)
+                .join(InvoiceLine, InvoiceLine.invoice_id == Invoice.id)
+                .join(Subscription, Subscription.id == InvoiceLine.subscription_id)
+                .where(
+                    Invoice.account_id == account_id,
+                    Invoice.is_active.is_(True),
+                    Invoice.status == InvoiceStatus.draft,
+                    Invoice.is_proforma.is_(False),
+                    Invoice.balance_due > Decimal("0.00"),
+                    Invoice.currency == currency,
+                    InvoiceLine.is_active.is_(True),
+                    InvoiceLine.amount > Decimal("0.00"),
+                    Subscription.billing_mode == BillingMode.prepaid,
+                )
+                .order_by(Invoice.created_at, Invoice.id)
+            ).all()
+        )
+    )
+    if not invoice_ids:
+        return FundingChangeDraftResult(0, 0, 0, ())
+    if len(invoice_ids) != 1:
+        return FundingChangeDraftResult(
+            len(invoice_ids),
+            0,
+            len(invoice_ids),
+            invoice_ids,
+        )
+
+    preview = preview_prepaid_draft_reconciliation(db, invoice_ids[0])
+    if preview.recommended_action is not PrepaidDraftAction.settle_paid:
+        return FundingChangeDraftResult(1, 0, 1, invoice_ids)
+    invoice, _applied = _stage_action(
+        db,
+        preview=preview,
+        effective_at=effective_at,
+        context=None,
+    )
+    if invoice.status != InvoiceStatus.paid:
+        _error(
+            "incomplete_repair",
+            "Funding-change draft settlement did not produce a paid invoice.",
+        )
+    return FundingChangeDraftResult(1, 1, 0, invoice_ids)
+
+
+__all__ = [
+    "FundingChangeDraftResult",
+    "PrepaidDraftAction",
+    "PrepaidDraftDisposition",
+    "PrepaidDraftReconciliationError",
+    "PrepaidDraftReconciliationPreview",
+    "PrepaidDraftReconciliationResult",
+    "ReconcilePrepaidDraftCommand",
+    "preview_prepaid_draft_cohort",
+    "preview_prepaid_draft_reconciliation",
+    "reconcile_prepaid_draft_invoice",
+    "stage_prepaid_draft_after_funding_change",
+]

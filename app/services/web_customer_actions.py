@@ -88,8 +88,7 @@ from app.services.notification_template_conditions import (
 from app.services.notification_template_renderer import render_template_text
 from app.services.owner_commands import CommandContext
 from app.services.radius_access_state import (
-    derive_access_state,
-    set_subscription_access_state,
+    derive_subscriber_access_state,
 )
 from app.services.whatsapp_notification_templates import (
     build_provider_template_body,
@@ -307,21 +306,8 @@ def repair_customer_access_state(db: Session, customer_id: str) -> dict[str, Any
     computed_status = compute_account_status(db, str(account_uuid))
     radius_group_rows_written = 0
     radius_group_rows_deleted = 0
-    aggregate_state: str | None = None
-    for subscription in active_subscriptions:
-        state = derive_access_state(subscription.status)
-        access_result = set_subscription_access_state(
-            db,
-            str(subscription.id),
-            state,
-        )
-        radius_group_rows_written += int(
-            access_result.get("external_rows_written") or 0
-        )
-        radius_group_rows_deleted += int(
-            access_result.get("external_rows_deleted") or 0
-        )
-        aggregate_state = cast(str | None, access_result.get("aggregate_state"))
+    aggregate = derive_subscriber_access_state(db, account_uuid)
+    aggregate_state = aggregate.value if aggregate is not None else None
 
     reject_rows_removed = radius_service.unblock_external_radius_credentials(
         db, account_uuid
@@ -335,14 +321,15 @@ def repair_customer_access_state(db: Session, customer_id: str) -> dict[str, Any
         reconcile_result = radius_service.reconcile_subscription_connectivity(
             db, str(subscription.id)
         )
-        radius_users_changed += int(reconcile_result.get("radius_users_changed") or 0)
-        radius_clients_changed += int(
-            reconcile_result.get("radius_clients_changed") or 0
-        )
-        external_credentials_synced += int(
-            reconcile_result.get("external_credentials_synced") or 0
-        )
-        external_nas_synced += int(reconcile_result.get("external_nas_synced") or 0)
+        if not reconcile_result.ok:
+            raise RuntimeError(
+                "RADIUS connectivity reconciliation failed: "
+                f"{reconcile_result.disposition.value}"
+            )
+        radius_users_changed += reconcile_result.radius_users_changed
+        radius_clients_changed += reconcile_result.radius_clients_changed
+        external_credentials_synced += reconcile_result.external_credentials_synced
+        external_nas_synced += reconcile_result.external_nas_synced
 
     db.commit()
     db.refresh(subscriber)

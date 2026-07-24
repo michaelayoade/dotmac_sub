@@ -11,37 +11,36 @@ locking the hot accounting table for a normal index build.
 from __future__ import annotations
 
 from alembic import op
+from scripts.migration.radius_session_latest_index import (
+    DROP_POSTGRES_SQL,
+    INDEX_EXPRESSION,
+    INDEX_NAME,
+    TABLE_NAME,
+    ensure_postgres_index,
+)
 
 revision = "408_radius_session_latest_projection"
 down_revision = "407_retire_parallel_radius_refresh"
 branch_labels = None
 depends_on = None
 
-_INDEX = "ix_radius_accounting_sessions_subscription_latest"
-_TABLE = "radius_accounting_sessions"
-_EXPRESSION = (
-    "subscription_id, "
-    "(COALESCE(last_update_at, session_start, created_at)) DESC, "
-    "id DESC"
-)
-
 
 def upgrade() -> None:
     bind = op.get_bind()
     if bind.dialect.name == "postgresql":
         with op.get_context().autocommit_block():
-            op.execute(
-                f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {_INDEX} "
-                f"ON {_TABLE} ({_EXPRESSION})"
-            )
+            ensure_postgres_index(bind, op.execute)
     else:
-        op.execute(f"CREATE INDEX IF NOT EXISTS {_INDEX} ON {_TABLE} ({_EXPRESSION})")
+        op.execute(
+            f"CREATE INDEX IF NOT EXISTS {INDEX_NAME} "
+            f"ON {TABLE_NAME} ({INDEX_EXPRESSION})"
+        )
 
 
 def downgrade() -> None:
     bind = op.get_bind()
     if bind.dialect.name == "postgresql":
         with op.get_context().autocommit_block():
-            op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {_INDEX}")
+            op.execute(DROP_POSTGRES_SQL)
     else:
-        op.execute(f"DROP INDEX IF EXISTS {_INDEX}")
+        op.execute(f"DROP INDEX IF EXISTS {INDEX_NAME}")

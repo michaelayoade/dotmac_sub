@@ -49,7 +49,8 @@ def test_payment_reconciliation_has_complete_coordinator_contract() -> None:
     assert service.contract is not None
     assert service.contract.transaction.mode is TransactionMode.COORDINATOR_MANAGED
     assert {concern.role for concern in service.contract.concerns} == {
-        OwnerRole.APPLICATION_COORDINATOR
+        OwnerRole.APPLICATION_COORDINATOR,
+        OwnerRole.RESOLVER,
     }
     assert (
         contract_validation_errors(

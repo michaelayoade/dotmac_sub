@@ -19,13 +19,13 @@ SessionLocal = db_session_adapter.create_session
 
 TR069_TASK_QUEUE_NAMES = {
     "app.tasks.tr069.sync_all_acs_devices",
-    "app.tasks.tr069.execute_pending_jobs",
+    "app.tasks.tr069.reconcile_command_outcomes",
     "app.tasks.tr069.check_device_health",
     "app.tasks.tr069.refresh_ont_runtime_data",
     "app.tasks.tr069.cleanup_tr069_records",
     "app.tasks.tr069.cleanup_stale_genieacs_tasks",
     "app.tasks.tr069.scrape_genieacs_metrics",
-    "app.tasks.tr069.execute_bulk_action",
+    "app.tasks.tr069.execute_network_operation_job",
     "app.tasks.tr069.wait_for_ont_bootstrap",
     "app.tasks.tr069.apply_saved_ont_service_config",
     "app.tasks.tr069.apply_acs_config",
@@ -710,9 +710,10 @@ def build_beat_schedule() -> dict:
         # PPPoE session survives it, so a suspended/terminated subscriber can stay
         # online for days (revenue leak). run_enforcement_reconciler CoA-kicks open
         # sessions whose user has no radcheck row or sits in a reject pool, and
-        # repairs walled-garden radreply drift. It caps kicks per run so systemic
-        # drift degrades to alerts rather than a mass disconnect — hence safe to
-        # run continuously as a mandatory lifecycle task.
+        # repairs exact RADIUS row drift. It caps disconnect attempts per run so
+        # transport failure or systemic drift degrades to alerts rather than an
+        # unbounded retry or mass disconnect — hence safe to run continuously as
+        # a mandatory lifecycle task.
         enforcement_reconciler_interval_seconds = max(
             _effective_int(
                 session,
@@ -1764,6 +1765,27 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(outage_reconcile_seconds, 120),
         )
+        # Automated customer outage notification (ADR 0004). Scheduling this is
+        # safe while the decision to enable it is still open: the service is
+        # gated on OUTAGE_AUTO_NOTIFY_ENABLED (off) and defaults to dry-run, so
+        # an enabled beat entry is a no-op until both are flipped. Cadence is
+        # deliberately slower than the reconcile above — the settle window, not
+        # the poll rate, decides how fast a customer hears.
+        outage_auto_notify_seconds = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "outage_auto_notify_interval_seconds",
+            300,
+        )
+        _sync_scheduled_task(
+            session,
+            name="outage_auto_notify",
+            task_name=(
+                "app.tasks.outage_auto_notify.auto_dispatch_outage_notifications"
+            ),
+            enabled=True,
+            interval_seconds=max(outage_auto_notify_seconds, 120),
+        )
         # UISP topology sync: import the wireless/UFiber customer-device
         # relationship layer (radios -> APs, ONUs -> UF-OLTs) into sub's
         # tables. Association churn is faster than the device graph, so it
@@ -2062,26 +2084,20 @@ def build_beat_schedule() -> dict:
             interval_seconds=tr069_sync_interval,
         )
 
-        # TR-069 job execution - executes queued jobs and retries failed
-        tr069_jobs_enabled = _effective_bool(
-            session,
-            SettingDomain.network,
-            "tr069_job_execution_enabled",
-            "TR069_JOB_EXECUTION_ENABLED",
-            True,
-        )
+        # Permanent lifecycle drainage: adopted commands must reach a terminal
+        # state even when new command admission is disabled.
         tr069_jobs_interval = _resolve_int(
             session,
             SettingDomain.network,
-            "tr069_job_execution_interval_seconds",
+            "tr069_command_reconciliation_interval_seconds",
             60,  # 1 minute
         )
         tr069_jobs_interval = max(tr069_jobs_interval, 30)  # Min: 30 seconds
         _sync_scheduled_task(
             session,
-            name="tr069_job_executor",
-            task_name="app.tasks.tr069.execute_pending_jobs",
-            enabled=tr069_jobs_enabled,
+            name="tr069_command_reconciler",
+            task_name="app.tasks.tr069.reconcile_command_outcomes",
+            enabled=True,
             interval_seconds=tr069_jobs_interval,
         )
 

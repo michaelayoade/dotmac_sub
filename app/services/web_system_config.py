@@ -879,3 +879,78 @@ def get_templates_context(db: Session) -> dict:
         "templates_list": templates,
         "channels": [channel.value for channel in NotificationChannel],
     }
+
+
+# ---------------------------------------------------------------------------
+# Automated outage notification (ADR 0004)
+# ---------------------------------------------------------------------------
+# One consolidated config: the master enable/disable first, then the tuning
+# knobs it governs. Presenting them together is the point — the thresholds are
+# meaningless without knowing whether automation is armed, and an operator
+# reaching for the kill switch mid-incident should not have to hunt for it.
+OUTAGE_AUTO_NOTIFY_KEYS = [
+    "outage_auto_notify_enabled",
+    "outage_auto_notify_dry_run",
+    "outage_auto_notify_settle_minutes",
+    "outage_auto_notify_min_affected",
+    "outage_auto_notify_max_incidents_per_run",
+    "outage_auto_notify_interval_seconds",
+]
+
+
+def get_outage_auto_notify_context(db: Session) -> dict:
+    """Resolved values plus the operating state the page leads with."""
+    resolved = {
+        key: settings_spec.resolve_value(db, SettingDomain.network_monitoring, key)
+        for key in OUTAGE_AUTO_NOTIFY_KEYS
+    }
+    enabled = bool(resolved.get("outage_auto_notify_enabled"))
+    dry_run = bool(resolved.get("outage_auto_notify_dry_run"))
+    if not enabled:
+        state, tone = "Disabled", "muted"
+        summary = "Automation is off. Outage notifications are operator-only."
+    elif dry_run:
+        state, tone = "Dry run", "warning"
+        summary = (
+            "Automation selects and logs recipients but sends nothing. "
+            "This is the verification phase from ADR 0004."
+        )
+    else:
+        state, tone = "Live", "active"
+        summary = "Automation is sending outage notifications to customers."
+    return {
+        "outage_auto_notify": resolved,
+        "outage_auto_notify_state": state,
+        "outage_auto_notify_tone": tone,
+        "outage_auto_notify_summary": summary,
+    }
+
+
+def save_outage_auto_notify(db: Session, data: Mapping[str, Any]) -> None:
+    """Persist the consolidated config through the registered specs.
+
+    Every key has a spec, so bounds (minimum settling window, minimum interval)
+    are enforced by ``settings_spec`` rather than re-implemented here. Unchecked
+    HTML checkboxes are absent from the payload, so they are normalized to
+    ``false`` instead of being read as "leave as-is".
+    """
+    payload = dict(data)
+    for key in ("outage_auto_notify_enabled", "outage_auto_notify_dry_run"):
+        payload[key] = (
+            "true"
+            if str(payload.get(key, "")).lower()
+            in {
+                "true",
+                "1",
+                "on",
+                "yes",
+            }
+            else "false"
+        )
+    _save_settings(
+        db,
+        SettingDomain.network_monitoring,
+        payload,
+        OUTAGE_AUTO_NOTIFY_KEYS,
+        use_specs=True,
+    )

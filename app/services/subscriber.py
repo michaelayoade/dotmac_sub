@@ -758,6 +758,13 @@ class Subscribers(ListResponseMixin):
                     Subscriber.account_number.ilike(like),
                     Subscriber.address_line1.ilike(like),
                     Subscriber.city.ilike(like),
+                    Subscriber.addresses.any(
+                        or_(
+                            Address.address_line1.ilike(like),
+                            Address.city.ilike(like),
+                            Address.region.ilike(like),
+                        )
+                    ),
                     Subscriber.notes.ilike(like),
                 )
                 active_subscription = Subscription.status == SubscriptionStatus.active
@@ -1247,6 +1254,13 @@ class Subscribers(ListResponseMixin):
                         Subscriber.account_number.ilike(like),
                         Subscriber.address_line1.ilike(like),
                         Subscriber.city.ilike(like),
+                        Subscriber.addresses.any(
+                            or_(
+                                Address.address_line1.ilike(like),
+                                Address.city.ilike(like),
+                                Address.region.ilike(like),
+                            )
+                        ),
                         Subscriber.notes.ilike(like),
                         subscription_match,
                         Subscriber.id.in_(

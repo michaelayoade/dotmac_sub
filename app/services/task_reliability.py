@@ -560,6 +560,18 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.topology_metrics.export_topology_metrics": _c(
         "network", SWEEP, IDEMP, HEALTH
     ),
+    "app.tasks.outage_auto_notify.auto_dispatch_outage_notifications": _c(
+        "network",
+        SWEEP,
+        GUARDED,
+        STATUS,
+        "Customer-facing send, so it must never be blindly retried: the "
+        "persisted dispatch audit is also the debounce source, and a failed "
+        "pass rolls back so no boundary is muted by a send that never "
+        "happened. The next beat run re-attempts; a single-flight advisory "
+        "lock stops two passes double-notifying. Outcomes surface as dispatch "
+        "rows and outage_auto_notify_* log events.",
+    ),
     "app.tasks.topology_outage.reconcile_detected_outages": _c(
         "network",
         SWEEP,
@@ -642,8 +654,16 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.tr069.check_device_health": _c("tr069", SWEEP, IDEMP, HEALTH),
     "app.tasks.tr069.cleanup_stale_genieacs_tasks": _c("tr069", SWEEP, IDEMP, LOG),
     "app.tasks.tr069.cleanup_tr069_records": _c("tr069", SWEEP, IDEMP, LOG),
-    "app.tasks.tr069.execute_bulk_action": _c("tr069", ITEMS, PER_ITEM, STATUS),
-    "app.tasks.tr069.execute_pending_jobs": _c("tr069", STATE, STATEFUL, STATUS),
+    "app.tasks.tr069.reconcile_command_outcomes": _c("tr069", STATE, STATEFUL, STATUS),
+    "app.tasks.tr069.execute_network_operation_job": _c(
+        "tr069",
+        NONE,
+        GUARDED,
+        STATUS,
+        "A durable dispatch and queued-to-running claim gate one ACS submission. "
+        "Ambiguous or interrupted delivery becomes unverified; it is never "
+        "automatically replayed.",
+    ),
     "app.tasks.tr069.refresh_ont_runtime_data": _c("tr069", SWEEP, IDEMP, HEALTH),
     "app.tasks.tr069.refresh_single_ont_runtime": _c("tr069", MANUAL, IDEMP, STATUS),
     "app.tasks.tr069.scrape_genieacs_metrics": _c("tr069", SWEEP, IDEMP, HEALTH),

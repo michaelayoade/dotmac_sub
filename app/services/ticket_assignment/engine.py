@@ -8,7 +8,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType
-from app.models.project import Project, ProjectTask, ProjectTaskAssignee
+from app.models.project import Project
 from app.models.support import Ticket
 from app.models.ticket_workflow import (
     TicketAssignmentCounter,
@@ -17,11 +17,23 @@ from app.models.ticket_workflow import (
 )
 from app.services.audit_adapter import stage_audit_event
 from app.services.common import coerce_uuid
+from app.services.db_session_adapter import db_session_adapter
+from app.services.owner_commands import (
+    CommandContext,
+    OwnerCommandDefinition,
+    execute_owner_command,
+)
 from app.services.ticket_assignment.rules import (
     build_context,
     build_project_context,
     list_active_rules,
     matches_rule,
+)
+
+_PROJECT_ASSIGNMENT = OwnerCommandDefinition(
+    owner="operations.project_lifecycle",
+    concern="project and task assignment and scheduling",
+    name="apply_project_assignment_rules",
 )
 from app.services.ticket_assignment.selectors import (
     list_team_candidate_person_ids,
@@ -82,12 +94,36 @@ def auto_assign_project(
     *,
     trigger: str = "create",
     actor_person_id: str | None = None,
+    context: CommandContext | None = None,
 ) -> list[AssignmentResult]:
     """Apply active workflow assignment rules to a project (CRM parity)."""
-    del trigger
-    del actor_person_id
+    if context is None:
+        context = CommandContext.system(
+            actor=str(actor_person_id or "system:project-assignment"),
+            scope="operations:projects:assign",
+            reason=f"project_assignment:{trigger}",
+            idempotency_key=f"project_assignment:{trigger}:{project_id}",
+        )
+        db_session_adapter.release_read_transaction(db)
+        return execute_owner_command(
+            db,
+            definition=_PROJECT_ASSIGNMENT,
+            context=context,
+            operation=lambda: auto_assign_project(
+                db,
+                project_id,
+                trigger=trigger,
+                actor_person_id=actor_person_id,
+                context=context,
+            ),
+        )
 
-    project = db.get(Project, coerce_uuid(project_id))
+    project = (
+        db.query(Project)
+        .filter(Project.id == coerce_uuid(project_id))
+        .with_for_update()
+        .one_or_none()
+    )
     if not project or not project.is_active:
         return [
             AssignmentResult(
@@ -128,37 +164,12 @@ def _apply_authoritative_project_rule(
     project: Project,
     rule: TicketAssignmentRule,
 ) -> AssignmentResult | None:
-    if _assignee_person_id(rule) or not _has_authoritative_creation_scope(rule):
-        return None
+    from app.services.projects import apply_project_assignment_rule
 
-    changed = False
-    if rule.team_id and project.service_team_id != rule.team_id:
-        project.service_team_id = rule.team_id
-        changed = True
-    if project.manager_person_id:
-        project.manager_person_id = None
-        changed = True
-    if project.project_manager_person_id:
-        project.project_manager_person_id = None
-        changed = True
-    if project.assistant_manager_person_id:
-        project.assistant_manager_person_id = None
-        changed = True
-
-    if changed:
-        db.flush()
-    return AssignmentResult(
-        assigned=bool(rule.team_id),
-        project_id=str(project.id),
-        rule_id=str(rule.id),
-        rule_name=rule.name,
-        strategy="group" if rule.team_id else None,
-        assignment_target="team" if rule.team_id else "rule_scope",
-        fallback_service_team_id=str(rule.team_id) if rule.team_id else None,
-        reason="group_assigned"
-        if rule.team_id
-        else "individual_assignment_suppressed_by_rule",
+    result = apply_project_assignment_rule(
+        db, project=project, rule=rule, authoritative_creation=True
     )
+    return _project_assignment_result(result)
 
 
 def _apply_direct_project_assignment(
@@ -167,66 +178,44 @@ def _apply_direct_project_assignment(
     project: Project,
     rule: TicketAssignmentRule,
 ) -> AssignmentResult | None:
-    assignee = _assignee_person_id(rule)
-    if not assignee:
+    from app.services.projects import apply_project_assignment_rule
+
+    result = apply_project_assignment_rule(
+        db, project=project, rule=rule, authoritative_creation=False
+    )
+    return _project_assignment_result(result)
+
+
+def _project_assignment_result(
+    result: dict[str, object] | None,
+) -> AssignmentResult | None:
+    if result is None:
         return None
-    target = _assignment_target(rule)
-    assignee_uuid = coerce_uuid(assignee)
 
-    changed = False
-    if target == "technical_supervisor":
-        if not project.manager_person_id:
-            project.manager_person_id = assignee_uuid
-            changed = True
-        if not project.project_manager_person_id:
-            project.project_manager_person_id = assignee_uuid
-            changed = True
-    elif target == "site_coordinator":
-        # assistant_manager is the "Site Project Coordinator" compatibility role.
-        if not project.assistant_manager_person_id:
-            project.assistant_manager_person_id = assignee_uuid
-            changed = True
-    elif target == "technician":
-        tasks = (
-            db.query(ProjectTask)
-            .filter(ProjectTask.project_id == project.id)
-            .filter(ProjectTask.is_active.is_(True))
-            .all()
-        )
-        for task in tasks:
-            if not task.assigned_to_person_id:
-                task.assigned_to_person_id = assignee_uuid
-                changed = True
-            if not any(
-                str(existing.person_id) == assignee for existing in task.assignees
-            ):
-                task.assignees.append(
-                    ProjectTaskAssignee(task_id=task.id, person_id=assignee_uuid)
-                )
-                changed = True
-    else:
-        return AssignmentResult(
-            assigned=False,
-            project_id=str(project.id),
-            rule_id=str(rule.id),
-            rule_name=rule.name,
-            assignment_target=target,
-            assignee_person_id=assignee,
-            reason="unsupported_assignment_target",
-        )
+    def text_value(key: str) -> str | None:
+        value = result.get(key)
+        return str(value) if value is not None else None
 
-    if changed:
-        db.flush()
+    candidate_count_value = result.get("candidate_count")
+    candidate_count = (
+        candidate_count_value
+        if isinstance(candidate_count_value, int)
+        else int(candidate_count_value)
+        if isinstance(candidate_count_value, str)
+        else 0
+    )
+
     return AssignmentResult(
-        assigned=changed,
-        project_id=str(project.id),
-        rule_id=str(rule.id),
-        rule_name=rule.name,
-        strategy="direct",
-        assignment_target=target,
-        candidate_count=1,
-        assignee_person_id=assignee,
-        reason="assigned" if changed else "already_assigned",
+        assigned=bool(result["assigned"]),
+        project_id=text_value("project_id"),
+        rule_id=text_value("rule_id"),
+        rule_name=text_value("rule_name"),
+        strategy=text_value("strategy"),
+        assignment_target=text_value("assignment_target"),
+        candidate_count=candidate_count,
+        assignee_person_id=text_value("assignee_person_id"),
+        fallback_service_team_id=text_value("fallback_service_team_id"),
+        reason=text_value("reason"),
     )
 
 

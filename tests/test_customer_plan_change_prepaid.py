@@ -168,7 +168,13 @@ def _stub_plan_change_side_effects(
     monkeypatch.setattr(
         radius_service,
         "reconcile_subscription_connectivity",
-        lambda db, subscription_id: None,
+        lambda db, subscription_id: radius_service.SubscriptionConnectivityOutcome(
+            subscription_id=str(subscription_id),
+            disposition=radius_service.ConnectivityProjectionDisposition.projected,
+            requested_logins=1,
+            projected_logins=1,
+            projection_targets=1,
+        ),
         raising=False,
     )
     monkeypatch.setattr(

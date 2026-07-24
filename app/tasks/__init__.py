@@ -126,6 +126,7 @@ from app.tasks.ont_runtime_status import (
 )
 from app.tasks.ont_signal_observations import record_ont_observations
 from app.tasks.operational_escalations import dispatch_operational_escalation_deliveries
+from app.tasks.outage_auto_notify import auto_dispatch_outage_notifications
 from app.tasks.payment_reconciliation import reconcile_topups
 from app.tasks.profile_sync import (
     execute_due_profile_sync_tasks,
@@ -179,10 +180,10 @@ from app.tasks.tr069 import (
     cleanup_tr069_records,
 )
 from app.tasks.tr069 import (
-    execute_bulk_action as tr069_execute_bulk_action,
+    execute_network_operation_job as tr069_execute_network_operation_job,
 )
 from app.tasks.tr069 import (
-    execute_pending_jobs as tr069_execute_pending_jobs,
+    reconcile_command_outcomes as tr069_reconcile_command_outcomes,
 )
 from app.tasks.tr069 import (
     refresh_ont_runtime_data as tr069_refresh_ont_runtime,
@@ -309,6 +310,7 @@ __all__ = [
     "run_lldp_topology_poll",
     "run_forwarding_control_observation_poll",
     "reconcile_detected_outages",
+    "auto_dispatch_outage_notifications",
     "run_uisp_topology_sync",
     "run_uisp_mgmt_ip_backfill",
     "apply_uisp_intent",
@@ -317,8 +319,8 @@ __all__ = [
     "run_unmatched_radio_review",
     "export_topology_metrics",
     "tr069_sync_all_acs_devices",
-    "tr069_execute_pending_jobs",
-    "tr069_execute_bulk_action",
+    "tr069_reconcile_command_outcomes",
+    "tr069_execute_network_operation_job",
     "tr069_apply_acs_config",
     "tr069_check_device_health",
     "tr069_refresh_ont_runtime",

@@ -28,6 +28,9 @@ from app.models.billing import (
     InvoiceStatus,
     LedgerCategory,
     LedgerEntry,
+    Payment,
+    PaymentSettlement,
+    PaymentStatus,
     ServiceEntitlement,
     ServiceEntitlementStatus,
     TaxApplication,
@@ -343,6 +346,8 @@ class PrepaidServiceRenewedOutcome:
 class FundingChangeRenewalDisposition(enum.StrEnum):
     no_due_service = "no_due_service"
     payable_invoice_remaining = "payable_invoice_remaining"
+    draft_invoice_settled = "draft_invoice_settled"
+    draft_invoice_pending = "draft_invoice_pending"
     funded = "funded"
     unfunded = "unfunded"
     already_covered = "already_covered"
@@ -350,6 +355,22 @@ class FundingChangeRenewalDisposition(enum.StrEnum):
     currency_mismatch = "currency_mismatch"
     non_cash_granted = "non_cash_granted"
     treatment_blocked = "treatment_blocked"
+
+
+class FundingChangeEvaluationDisposition(enum.StrEnum):
+    """Terminal result of validating one settlement-triggered renewal request."""
+
+    evaluated = "evaluated"
+    consolidated_invoice_allocation = "consolidated_invoice_allocation"
+
+
+@dataclass(frozen=True)
+class FundingChangeEvaluation:
+    """Durable-handler result for one confirmed funding event."""
+
+    payment_id: UUID
+    disposition: FundingChangeEvaluationDisposition
+    renewal: FundingChangeRenewalResult | None = None
 
 
 @dataclass(frozen=True)
@@ -365,6 +386,86 @@ class FundingChangeRenewalResult:
     renewals: tuple[PrepaidServiceRenewedOutcome, ...] = ()
     non_cash_granted: int = 0
     treatment_blocked: int = 0
+    draft_invoices_settled: int = 0
+    draft_invoices_pending: int = 0
+
+
+def evaluate_prepaid_service_after_settlement(
+    db: Session,
+    *,
+    account_id: UUID,
+    payment_id: UUID,
+    evidence_ref: str,
+) -> FundingChangeEvaluation:
+    """Validate settlement evidence and request its prepaid consequence.
+
+    The event adapter must not silently accept incomplete money evidence. A
+    failure raised here leaves the durable event handler attempt retryable. A
+    consolidated payment is a terminal non-prepaid outcome because its money
+    belongs to invoice allocations rather than one customer funding position.
+    """
+
+    payment = db.get(Payment, payment_id)
+    if payment is None:
+        _error(
+            "payment_not_found",
+            "Funding-change payment was not found.",
+            payment_id=str(payment_id),
+        )
+    if payment.account_id is None:
+        return FundingChangeEvaluation(
+            payment_id=payment.id,
+            disposition=(
+                FundingChangeEvaluationDisposition.consolidated_invoice_allocation
+            ),
+        )
+    if payment.account_id != account_id:
+        _error(
+            "payment_account_mismatch",
+            "Funding-change payment belongs to a different account.",
+            payment_id=str(payment.id),
+            event_account_id=str(account_id),
+            payment_account_id=str(payment.account_id),
+        )
+    if payment.status != PaymentStatus.succeeded or not payment.is_active:
+        _error(
+            "payment_not_settled",
+            "Funding-change payment is not an active succeeded payment.",
+            payment_id=str(payment.id),
+            payment_status=payment.status.value,
+            payment_is_active=payment.is_active,
+        )
+    settlement_id = db.scalar(
+        select(PaymentSettlement.id).where(
+            PaymentSettlement.payment_id == payment.id,
+        )
+    )
+    if settlement_id is None:
+        _error(
+            "settlement_missing",
+            "Funding-change payment has no settlement evidence.",
+            payment_id=str(payment.id),
+        )
+    effective_at = payment.paid_at or payment.created_at
+    if effective_at is None:
+        _error(
+            "settlement_time_missing",
+            "Funding-change payment has no effective settlement time.",
+            payment_id=str(payment.id),
+        )
+    renewal = apply_due_prepaid_service_after_funding_change(
+        db,
+        account_id=account_id,
+        effective_at=effective_at,
+        funding_currency=payment.currency,
+        evidence_ref=evidence_ref,
+        trigger_payment_id=payment.id,
+    )
+    return FundingChangeEvaluation(
+        payment_id=payment.id,
+        disposition=FundingChangeEvaluationDisposition.evaluated,
+        renewal=renewal,
+    )
 
 
 def _subscription_for_request(
@@ -805,6 +906,40 @@ def apply_due_prepaid_service_after_funding_change(
     if not evidence:
         raise ValueError("evidence_ref is required")
 
+    # Invoice-first invariant: an existing prepaid draft owns the documentary
+    # service-period boundary. Exact verified funding settles that draft; a
+    # shortfall (including NGN 0.50), unbacked credit, overlap, or ambiguity
+    # leaves it unchanged and blocks the parallel invoice-less renewal path.
+    from app.services.prepaid_draft_reconciliation import (
+        stage_prepaid_draft_after_funding_change,
+    )
+
+    draft_result = stage_prepaid_draft_after_funding_change(
+        db,
+        account_id=account_id,
+        currency=currency,
+        effective_at=evaluated_at,
+    )
+    if draft_result.drafts_found:
+        settled = draft_result.drafts_settled
+        pending = draft_result.drafts_blocked
+        return FundingChangeRenewalResult(
+            account_id=account_id,
+            scanned=draft_result.drafts_found,
+            funded=settled,
+            unfunded=pending,
+            already_covered=0,
+            missing_price=0,
+            currency_mismatch=0,
+            disposition=(
+                FundingChangeRenewalDisposition.draft_invoice_settled
+                if settled
+                else FundingChangeRenewalDisposition.draft_invoice_pending
+            ),
+            draft_invoices_settled=settled,
+            draft_invoices_pending=pending,
+        )
+
     due_subscriptions = list(
         db.scalars(
             select(Subscription)
@@ -1217,6 +1352,8 @@ def run_due_prepaid_service_renewals(
 
 
 __all__ = [
+    "FundingChangeEvaluation",
+    "FundingChangeEvaluationDisposition",
     "FundingChangeRenewalDisposition",
     "FundingChangeRenewalResult",
     "PREPAID_SERVICE_RENEWAL_ELIGIBLE_STATUSES",
@@ -1227,6 +1364,7 @@ __all__ = [
     "PrepaidServiceRenewedOutcome",
     "apply_due_prepaid_service_after_funding_change",
     "confirm_prepaid_service_renewal",
+    "evaluate_prepaid_service_after_settlement",
     "preview_prepaid_service_renewal",
     "renewal_outcomes_for_payment",
     "resolve_prepaid_monthly_charge",

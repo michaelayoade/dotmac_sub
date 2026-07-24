@@ -7,9 +7,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 APP_ROOT = REPO_ROOT / "app"
 
 
-# Known, TRACKED transitional gates. Each is allowed to exist TODAY but has a
-# named exit criterion (see docs/POST_CUTOVER_HARDENING.md). This set is a
-# RATCHET — it may only SHRINK:
+# Known, TRACKED transitional gates. This set is a RATCHET — it may only SHRINK:
 #   - A new (file, gate) not listed here fails ``test_no_new_source_of_truth_gates``.
 #   - A listed entry whose gate has been removed from code fails
 #     ``test_known_gate_debts_are_not_stale`` — forcing the allow-list to shrink
@@ -19,13 +17,9 @@ APP_ROOT = REPO_ROOT / "app"
 #   trust_ipam                 → delete once IPAM drift is verified ~0 and the
 #                                connectivity reconciler projects from the
 #                                IPAssignment set unconditionally (step 2b).
-#   _shadow_write_access_state → delete once group-routing access-state is
-#                                canonical and the per-user Mikrotik-Address-List
-#                                shadow is retired.
 KNOWN_GATE_DEBTS = frozenset(
     {
         ("app/services/connectivity_reconciler.py", "trust_ipam"),
-        ("app/services/events/handlers/enforcement.py", "_shadow_write_access_state"),
     }
 )
 
