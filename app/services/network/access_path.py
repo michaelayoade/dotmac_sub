@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
@@ -18,6 +18,7 @@ from app.models.network_monitoring import NetworkDevice
 from app.models.radius_active_session import RadiusActiveSession
 from app.services.common import coerce_uuid
 from app.services.fiber_topology import localize_fiber_fault, trace_fiber_subscription
+from app.services.network._common import decode_huawei_hex_serial
 from app.services.network.fiber_physical_continuity import (
     resolve_subscription_core_continuity,
 )
@@ -39,6 +40,109 @@ class AccessPathSummary:
     basestation_name: str | None
     gap: str | None
     live_session: bool
+    # Serving access endpoint. Resolved by CustomerPath but previously dropped
+    # here, which forced the customer page to fall back to the static
+    # provisioning NAS site and made "which cabinet is this customer on?" an
+    # unanswerable question in the admin UI.
+    access_device_id: object | None = None
+    access_device_name: str | None = None
+    pon_port_id: object | None = None
+    pon_port_label: str | None = None
+    ont_id: object | None = None
+    ont_serial: str | None = None
+    radio_id: object | None = None
+    radio_label: str | None = None
+    # Composed here, never in a template, so admin/portal/API render one string.
+    endpoint_display: str | None = None
+    # Which record this endpoint came from, named rather than implied. Using a
+    # single live-vs-provisioned flag misreports the fibre and wireless arms:
+    # CustomerPath.live_session is specific to the NAS arm, so a perfectly
+    # current OLT endpoint would be chipped "provisioned" and read as stale.
+    #   live_session      - NAS arm, resolved from a live RADIUS session
+    #   provisioning      - NAS arm, resolved from the provisioning NAS
+    #   ont_assignment    - fibre arm, resolved from the ONT assignment record
+    #   uisp_observation  - wireless arm, resolved from the UISP relationship
+    #   unresolved        - Sub cannot prove any of them
+    endpoint_source: str = "unresolved"
+    # False when the path resolved a device but still carries a gap. Kept apart
+    # from endpoint_source so provenance and completeness stop contradicting
+    # each other on the same card.
+    endpoint_complete: bool = True
+
+
+@dataclass(frozen=True)
+class TopologyTraceNode:
+    """One element of the active-path chain shown to support."""
+
+    kind: str  # ont | pon_port | olt | ap | nas | network_device
+    label: str
+    asset_id: object | None
+    # Health is layered on by observation owners (see network.service_diagnosis).
+    # access_path owns identity and ordering only, so an unenriched trace is
+    # honestly "unknown" rather than falsely "up".
+    state: str = "unknown"
+    observed_at: datetime | None = None
+    source: str | None = None
+    detail: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class TopologyTraceBreak:
+    """A point where the chain stops being provable."""
+
+    code: str
+    message: str
+    after_index: int | None
+
+
+@dataclass(frozen=True)
+class SubscriberTopologyTrace:
+    subscription_id: object
+    subscriber_id: object | None
+    access_kind: str | None
+    nodes: tuple[TopologyTraceNode, ...]
+    breaks: tuple[TopologyTraceBreak, ...]
+    evaluated_at: datetime
+
+    @property
+    def complete(self) -> bool:
+        return bool(self.nodes) and not self.breaks
+
+    def to_dict(self) -> dict[str, object]:
+        """JSON-safe by construction.
+
+        asdict() preserves UUIDs and datetimes, which json.dumps rejects, so
+        every id is stringified and every timestamp isoformatted here rather
+        than left for each consumer to discover the hard way.
+        """
+
+        return {
+            "subscription_id": str(self.subscription_id),
+            "subscriber_id": str(self.subscriber_id)
+            if self.subscriber_id is not None
+            else None,
+            "access_kind": self.access_kind,
+            "nodes": [
+                {
+                    "kind": node.kind,
+                    "label": node.label,
+                    "asset_id": str(node.asset_id)
+                    if node.asset_id is not None
+                    else None,
+                    "state": node.state,
+                    "observed_at": node.observed_at.isoformat()
+                    if node.observed_at
+                    else None,
+                    "source": node.source,
+                    "detail": node.detail,
+                }
+                for node in self.nodes
+            ],
+            "breaks": [asdict(gap) for gap in self.breaks],
+            "complete": self.complete,
+            "evaluated_at": self.evaluated_at.isoformat(),
+            "schema_version": 1,
+        }
 
 
 @dataclass(frozen=True)
@@ -541,6 +645,84 @@ def resolve_subscription_access_path(
     return resolve_customer_path(db, subscription_obj)
 
 
+def _pon_port_label(pon_port: Any | None) -> str | None:
+    """Prefer the operator-facing port name ("0/1/3") over the numeric id."""
+
+    if pon_port is None:
+        return None
+    name = getattr(pon_port, "name", None)
+    if name:
+        return str(name)
+    port_number = getattr(pon_port, "port_number", None)
+    return str(port_number) if port_number is not None else None
+
+
+def _ont_label(ont: Any | None) -> str | None:
+    """Match how the rest of the UI prints an ONT serial.
+
+    Huawei vendor serials are stored hex-encoded. Printing the raw column here
+    would show the same ONT under two different strings on one page.
+    """
+
+    if ont is None:
+        return None
+    for attribute in ("vendor_serial_number", "serial_number"):
+        raw = str(getattr(ont, attribute, "") or "").strip()
+        if raw:
+            return decode_huawei_hex_serial(raw) or raw
+    return None
+
+
+def _radio_label(radio: Any | None) -> str | None:
+    """CPEDevice has no name column; identify it by serial, model or UISP id."""
+
+    if radio is None:
+        return None
+    for attribute in ("serial_number", "model", "uisp_device_id", "mac_address"):
+        value = str(getattr(radio, attribute, "") or "").strip()
+        if value:
+            return value
+    return None
+
+
+def _endpoint_source(path: CustomerPath) -> str:
+    kind = path.access_device_kind
+    if path.access_device is None and path.node is None:
+        return "unresolved"
+    if kind == "olt":
+        return "ont_assignment"
+    if kind == "ap":
+        return "uisp_observation"
+    if kind == "nas":
+        return "live_session" if path.live_session else "provisioning"
+    return "live_session" if path.live_session else "provisioning"
+
+
+def _endpoint_display(path: CustomerPath) -> str | None:
+    """One string every surface renders identically.
+
+    Composed in the service on purpose: templates that build this themselves
+    drift apart, and the admin/portal disagreement is exactly what makes
+    support escalate.
+    """
+
+    device_name = getattr(path.access_device, "name", None)
+    if path.access_device_kind == "olt":
+        port = _pon_port_label(path.pon_port)
+        if device_name and port:
+            return f"{device_name} ({port})"
+        return device_name or (f"PON {port}" if port else None)
+    if path.access_device_kind == "ap":
+        node_name = getattr(path.node, "name", None) or device_name
+        basestation = getattr(path.basestation, "name", None)
+        if node_name and basestation and basestation != node_name:
+            return f"{node_name} ({basestation})"
+        return node_name or basestation
+    if path.access_device_kind == "nas":
+        return device_name or getattr(path.node, "name", None)
+    return device_name or getattr(path.node, "name", None)
+
+
 def summarize_subscription_access_path(
     db: Session,
     subscription: Subscription | str,
@@ -553,9 +735,19 @@ def summarize_subscription_access_path(
     if subscription_obj is None:
         raise ValueError("subscription not found")
     path = resolve_customer_path(db, subscription_obj)
+    return summarize_customer_path(subscription_obj, path)
+
+
+def summarize_customer_path(
+    subscription: Subscription,
+    path: CustomerPath,
+) -> AccessPathSummary:
+    """Project a resolved path. Split out so callers that already hold a
+    CustomerPath do not re-resolve it."""
+
     return AccessPathSummary(
-        subscription_id=subscription_obj.id,
-        subscriber_id=subscription_obj.subscriber_id,
+        subscription_id=subscription.id,
+        subscriber_id=subscription.subscriber_id,
         access_kind=path.access_device_kind,
         node_id=getattr(path.node, "id", None),
         node_name=getattr(path.node, "name", None),
@@ -563,6 +755,184 @@ def summarize_subscription_access_path(
         basestation_name=getattr(path.basestation, "name", None),
         gap=path.gap,
         live_session=path.live_session,
+        access_device_id=getattr(path.access_device, "id", None),
+        access_device_name=getattr(path.access_device, "name", None),
+        pon_port_id=getattr(path.pon_port, "id", None),
+        pon_port_label=_pon_port_label(path.pon_port),
+        ont_id=getattr(path.ont, "id", None),
+        ont_serial=_ont_label(path.ont),
+        radio_id=getattr(path.radio, "id", None),
+        radio_label=_radio_label(path.radio),
+        endpoint_display=_endpoint_display(path),
+        endpoint_source=_endpoint_source(path),
+        endpoint_complete=path.gap is None,
+    )
+
+
+def _ont_observed_state(ont: Any) -> tuple[str, datetime | None]:
+    """Map stored OLT-observed ONU status. Stored telemetry only — never a probe."""
+
+    raw = getattr(ont, "olt_status", None)
+    value = str(getattr(raw, "value", raw) or "").lower()
+    observed_at = getattr(ont, "olt_status_seen_at", None) or getattr(
+        ont, "last_seen_at", None
+    )
+    if "offline" in value:
+        return "down", observed_at
+    if "online" in value:
+        return "up", observed_at
+    return "unknown", observed_at
+
+
+def _trace_nodes_for_path(path: CustomerPath) -> list[TopologyTraceNode]:
+    nodes: list[TopologyTraceNode] = []
+
+    if path.ont is not None:
+        state, observed_at = _ont_observed_state(path.ont)
+        nodes.append(
+            TopologyTraceNode(
+                kind="ont",
+                label=_ont_label(path.ont) or "ONT",
+                asset_id=getattr(path.ont, "id", None),
+                state=state,
+                observed_at=observed_at,
+                source="network.olt_observed_state",
+                detail={
+                    "model": getattr(path.ont, "model", None),
+                    "onu_rx_signal_dbm": getattr(path.ont, "onu_rx_signal_dbm", None),
+                    "olt_rx_signal_dbm": getattr(path.ont, "olt_rx_signal_dbm", None),
+                },
+            )
+        )
+
+    if path.radio is not None:
+        nodes.append(
+            TopologyTraceNode(
+                kind="radio",
+                label=_radio_label(path.radio) or "CPE radio",
+                asset_id=getattr(path.radio, "id", None),
+                source="network.cpe",
+            )
+        )
+
+    if path.pon_port is not None:
+        nodes.append(
+            TopologyTraceNode(
+                kind="pon_port",
+                label=_pon_port_label(path.pon_port) or "PON",
+                asset_id=getattr(path.pon_port, "id", None),
+                source="network.access_path",
+            )
+        )
+
+    if path.access_device is not None:
+        nodes.append(
+            TopologyTraceNode(
+                kind=path.access_device_kind or "network_device",
+                label=str(getattr(path.access_device, "name", "access device")),
+                asset_id=getattr(path.access_device, "id", None),
+                source="network.access_path",
+                detail={
+                    "basestation": getattr(path.basestation, "name", None),
+                },
+            )
+        )
+
+    for device in path.upstream_chain:
+        nodes.append(
+            TopologyTraceNode(
+                kind="network_device",
+                label=str(getattr(device, "name", "device")),
+                asset_id=getattr(device, "id", None),
+                source="network.forwarding_topology",
+            )
+        )
+
+    return nodes
+
+
+def resolve_subscription_topology_trace(
+    db: Session,
+    subscription: Subscription | str,
+    *,
+    as_of: datetime | None = None,
+) -> SubscriberTopologyTrace:
+    """Active-path chain for one subscription: ONT/radio -> PON -> OLT/AP -> upstream.
+
+    Passive plant (splitter, FDH, drop) is intentionally excluded. Those assets
+    carry no observable live state, so they widen the support view without
+    helping answer "why is this customer down"; they belong to the fibre-plant
+    view that owns them.
+
+    The upstream chain is whatever ``CustomerPath`` can prove. A missing NAS hop
+    is reported as a break rather than back-filled from the provisioning record,
+    keeping this module's rule that no fallback manufactures an authoritative
+    hop.
+    """
+
+    subscription_obj = (
+        subscription
+        if isinstance(subscription, Subscription)
+        else db.get(Subscription, coerce_uuid(subscription))
+    )
+    if subscription_obj is None:
+        raise ValueError("subscription not found")
+
+    path = resolve_customer_path(db, subscription_obj)
+    return build_topology_trace(subscription_obj, path, as_of=as_of)
+
+
+def build_topology_trace(
+    subscription: Subscription,
+    path: CustomerPath,
+    *,
+    as_of: datetime | None = None,
+) -> SubscriberTopologyTrace:
+    """Build a trace from an already-resolved path.
+
+    Callers that render the endpoint and the chain together resolve the path
+    once and project it twice, rather than paying for resolution per surface.
+    """
+
+    evaluated_at = as_of or datetime.now(UTC)
+    nodes = _trace_nodes_for_path(path)
+
+    breaks: list[TopologyTraceBreak] = []
+    if path.gap:
+        breaks.append(
+            TopologyTraceBreak(
+                code=f"path.{path.gap}",
+                message="Sub cannot resolve this subscription's access path.",
+                after_index=len(nodes) - 1 if nodes else None,
+            )
+        )
+    if path.access_device is not None and not path.upstream_chain:
+        breaks.append(
+            TopologyTraceBreak(
+                code="upstream.unproven",
+                message=(
+                    "No reviewed forwarding path from this access device toward "
+                    "the core is declared."
+                ),
+                after_index=len(nodes) - 1,
+            )
+        )
+    if not nodes:
+        breaks.append(
+            TopologyTraceBreak(
+                code="path.unresolved",
+                message="No access equipment is associated with this subscription.",
+                after_index=None,
+            )
+        )
+
+    return SubscriberTopologyTrace(
+        subscription_id=subscription.id,
+        subscriber_id=subscription.subscriber_id,
+        access_kind=path.access_device_kind,
+        nodes=tuple(nodes),
+        breaks=tuple(breaks),
+        evaluated_at=evaluated_at,
     )
 
 
