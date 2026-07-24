@@ -1,30 +1,33 @@
 # Network support diagnostics (G1–G3)
 
-> **Decision, 2026-07-23 — the composed diagnosis (G2) was built and then removed.**
+> **Decision, 2026-07-23 — report observed state, not an inferred verdict.**
 >
-> A `network.service_diagnosis` service implementing the ladder in §5 was written,
-> tested and committed, then deleted. Review found that every defect in it lived in
-> the *inference* layer, not the fact-gathering: stage 1 bypassed the canonical
-> `resolve_customer_access` resolver and so could never report `captive`, missed
-> subscriber-level blocks entirely, and asserted a financial cause it had not
-> established; stage 2 reported a blocking fault for every non-PPPoE customer;
-> stages 6 and 8 could not fire at all.
+> An earlier version of this design (§5) proposed a `network.service_diagnosis`
+> service that composed a single ranked *cause* — a verdict ladder. It was
+> prototyped and rejected in favour of reporting observed state, for two reasons.
 >
-> The deeper problem is that a confidently wrong verdict is worse than none — an
-> agent who reads a cause stops looking. And the escalation evidence does not ask
-> for a cause: the channel messages are "which cabinet is this customer on", "is the
-> AP up", "is the ONT online". That is a **visibility** problem, not an inference
-> problem. Support staff interpret correctly once they can see.
+> First, the inference is where it goes wrong. A verdict stage that re-derives
+> access state instead of calling the canonical `resolve_customer_access` resolver
+> cannot report `captive`, misses subscriber-level blocks, and asserts a financial
+> cause it has not established; a credential stage keyed to PPPoE fabricates a fault
+> for every non-PPPoE customer; upstream and capacity stages cannot fire without
+> device health the trace does not carry. A confidently wrong verdict is worse than
+> none, because an agent who reads a cause stops looking.
 >
-> **What replaced it:** the access path and trace (§4), plus observed state reported
-> verbatim from its owners — RADIUS access state with `access_block_reason` /
-> `billing_block_reason` from `access_resolution`, session state, and ONT receive
+> Second, the escalation evidence does not ask for a cause. The channel messages are
+> "which cabinet is this customer on", "is the AP up", "is the ONT online". That is a
+> **visibility** problem, not an inference problem — support staff interpret
+> correctly once they can see.
+>
+> **What ships instead:** the access path and trace (§4), plus observed state
+> reported verbatim from its owners — RADIUS access state with `access_block_reason`
+> / `billing_block_reason` from `access_resolution`, session state, and ONT receive
 > power. No composed verdict, and no new derivation owner in the architecture.
 >
-> §5 is retained below as the record of what was tried and why it was rejected. The
-> ladder ordering remains a useful description of *where an agent should look*, and
-> would become relevant again only if automated first-line response (auto-reply,
-> auto-ticket) is ever built — where a machine, not a person, must act on a cause.
+> §5 is retained below as the approach considered and rejected. The ladder ordering
+> remains a useful description of *where an agent should look*, and would become
+> relevant again only if automated first-line response (auto-reply, auto-ticket) is
+> ever built — where a machine, not a person, must act on a cause.
 >
 > **G3 changed shape too:** ticket prefill carries the observed state as evidence,
 > but Sub no longer guesses the ticket type. The agent picks it.
