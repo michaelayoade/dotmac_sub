@@ -1,7 +1,7 @@
 """Add customer WHT policy and direct-customer WHT targets.
 
-Revision ID: 418_customer_wht_policy_and_direct_targets
-Revises: 417_service_extension_grant_intervals
+Revision ID: 419_customer_wht_policy_and_direct_targets
+Revises: 418_payment_channel_mapping_sot
 Create Date: 2026-07-24
 """
 
@@ -12,8 +12,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "418_customer_wht_policy_and_direct_targets"
-down_revision = "417_service_extension_grant_intervals"
+revision = "419_customer_wht_policy_and_direct_targets"
+down_revision = "418_payment_channel_mapping_sot"
 branch_labels = None
 depends_on = None
 
