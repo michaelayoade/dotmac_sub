@@ -52,6 +52,13 @@ its public key. Flutterwave requires gateway credentials and its webhook
 signing secret. Secret values live only in OpenBao (or an explicitly approved
 environment reference); connector config revisions store references only.
 
+Gateway availability also requires the installation's exact version/digest pin
+to resolve to a current or bounded historical deployed definition. An
+unavailable pin is a control-plane mismatch, not a healthy checkout option.
+Customer invoice and add-funds pages map runtime materialization failure to an
+unavailable gateway and continue to render other healthy gateways or direct
+transfer; they never turn that transport-readiness state into HTTP 500.
+
 Disabling new checkout disables only `payments.intent.v1`. Webhook,
 reconciliation, and refund bindings remain enabled so in-flight payments can
 finish safely. Disabling or quarantining the full installation is a separate
@@ -127,9 +134,24 @@ pinned capability binding to payment intents. Pre-cutover intents without a
 binding remain provider-pinned so an already-debited customer is not stranded;
 all new intents require and persist the selected binding.
 
+### Paystack manifest adoption correction
+
+PR #1567 changed Paystack configuration defaults and made `public_key`
+required without changing connector version `1.0.0` or adopting existing
+installation pins. Paystack `1.0.1` is the corrected immutable definition. The
+pre-#1567 and transitional `1.0.0` definitions remain executable only for the
+bounded adoption/rollback window. `integration.installations` is the sole
+writer of the pin transition, and
+`scripts.integrations.verify_manifest_pins` is the pre-replacement deployment
+gate. Remove both historical definitions only after every enabled Paystack
+installation reports `current`.
+
 ## Verification
 
 Tests must prove that unavailable gateways never render, complete bundles appear
 in priority order, duplicate finance identities fail closed, saved cards select
 Paystack in the service owner, intents retain their checkout binding, and secret
-values never return from admin projections.
+values never return from admin projections. Tests also prove exact historical
+pin execution, atomic/idempotent adoption, stale-review and incompatible-target
+rejection, deploy-gate ordering, and direct-transfer degradation when runtime
+materialization is unavailable.
