@@ -437,3 +437,38 @@ def test_config_rejects_an_out_of_bounds_interval(db_session):
                 "outage_auto_notify_interval_seconds": "5",
             },
         )
+
+
+# --- nothing runs by default ------------------------------------------------
+
+
+def test_beat_entry_follows_the_feature_flag_not_always_on():
+    """With automation off (the default) the runner is not even scheduled, so
+    no outage dispatch task fires at all."""
+    import inspect
+
+    from app.services import scheduler_config
+
+    source = inspect.getsource(scheduler_config)
+    marker = source.index('name="outage_auto_notify"')
+    window = source[marker - 900 : marker + 400]
+    assert "enabled=outage_auto_notify_enabled" in window
+    assert "enabled=True" not in window.split('name="outage_auto_notify"')[1]
+
+
+def test_automation_ships_off_and_dry_run():
+    from app.models.domain_settings import SettingDomain
+    from app.services import settings_spec
+
+    assert (
+        settings_spec.get_spec(
+            SettingDomain.network_monitoring, "outage_auto_notify_enabled"
+        ).default
+        is False
+    )
+    assert (
+        settings_spec.get_spec(
+            SettingDomain.network_monitoring, "outage_auto_notify_dry_run"
+        ).default
+        is True
+    )

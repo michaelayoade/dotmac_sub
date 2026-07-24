@@ -2475,6 +2475,4 @@ def customer_availability_report(
             "sidebar_stats": get_sidebar_stats(db),
         }
     )
-    return templates.TemplateResponse(
-        "admin/customers/availability.html", context
-    )
+    return templates.TemplateResponse("admin/customers/availability.html", context)

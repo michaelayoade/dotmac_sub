@@ -116,7 +116,9 @@ class CustomerAvailability:
         return round(max(0.0, min(100.0, pct)), 3)
 
 
-def _serving_elements(session: Session, subscription) -> tuple[list[ServingElement], str | None]:
+def _serving_elements(
+    session: Session, subscription
+) -> tuple[list[ServingElement], str | None]:
     """Resolve the infrastructure this customer sits behind."""
     from app.services.topology.customer_path import resolve_customer_path
 
@@ -189,7 +191,11 @@ def _infrastructure_downtime(
         if key not in wanted:
             continue
         downtime = int(row.downtime_seconds or 0)
-        day = row.snapshot_date.date() if hasattr(row.snapshot_date, "date") else row.snapshot_date
+        day = (
+            row.snapshot_date.date()
+            if hasattr(row.snapshot_date, "date")
+            else row.snapshot_date
+        )
         by_day[day] = max(by_day.get(day, 0), downtime)
         per_element[key] = per_element.get(key, 0) + downtime
 
