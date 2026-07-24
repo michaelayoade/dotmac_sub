@@ -289,3 +289,79 @@ def test_durable_session_projection_fails_for_event_retry_without_redis(
             {},
             require_durable=True,
         )
+
+
+def _system_user_credential(db_session, *, email: str):
+    from app.models.system_user import SystemUser
+
+    system_user = SystemUser(
+        first_name="Admin", last_name="User", email=email, is_active=True
+    )
+    db_session.add(system_user)
+    db_session.flush()
+    credential = UserCredential(
+        system_user_id=system_user.id,
+        provider=AuthProvider.local,
+        username=email,
+        password_hash=hash_password("old-password"),
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+    return system_user, credential
+
+
+def test_password_min_length_for_applies_system_user_floor(db_session) -> None:
+    from app.services.auth_flow import password_min_length_for
+
+    assert password_min_length_for(db_session, "system_user") >= 12
+    assert password_min_length_for(db_session, "subscriber") == password_min_length_for(
+        db_session, None
+    )
+
+
+def test_system_user_reset_rejects_password_below_admin_floor(
+    db_session, monkeypatch
+) -> None:
+    monkeypatch.setenv("JWT_SECRET", "credential-recovery-test-secret")
+    system_user, _ = _system_user_credential(
+        db_session, email="admin.floor@example.com"
+    )
+    capability = credential_recovery.issue_exact_reset_capability(
+        db_session, principal_type="system_user", principal_id=system_user.id
+    )
+    assert capability is not None
+    db_session.commit()
+
+    # 11 chars: below the system_user floor (12), above the general minimum (8).
+    with pytest.raises(DomainError) as captured:
+        credential_recovery.complete_password_reset(
+            db_session,
+            credential_recovery.CompletePasswordResetCommand(
+                context=_context(), token=capability.token, new_password="Abcdefgh123"
+            ),
+        )
+    assert captured.value.code == "auth.credential_recovery.invalid_password"
+
+
+def test_system_user_reset_accepts_password_at_admin_floor(
+    db_session, monkeypatch
+) -> None:
+    monkeypatch.setenv("JWT_SECRET", "credential-recovery-test-secret")
+    system_user, credential = _system_user_credential(
+        db_session, email="admin.ok@example.com"
+    )
+    capability = credential_recovery.issue_exact_reset_capability(
+        db_session, principal_type="system_user", principal_id=system_user.id
+    )
+    db_session.commit()
+
+    outcome = credential_recovery.complete_password_reset(
+        db_session,
+        credential_recovery.CompletePasswordResetCommand(
+            context=_context(), token=capability.token, new_password="Abcdefgh1234"
+        ),
+    )
+    assert outcome.principal_type == "system_user"
+    db_session.refresh(credential)
+    assert verify_password("Abcdefgh1234", credential.password_hash)
