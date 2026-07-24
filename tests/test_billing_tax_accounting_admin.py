@@ -82,9 +82,14 @@ def test_tax_accounting_operator_console_renders_direct_customer_identity(
     db_session,
 ) -> None:
     subscriber = Subscriber(
+        first_name="Helping",
+        last_name="Hands",
         company_name="Helping Hands NGO",
         display_name="Helping Hands NGO",
         email="ngo@example.com",
+        # A business subscriber so Subscriber.name resolves to the company name
+        # the console renders for the direct-customer WHT identity.
+        metadata_={"subscriber_category": "business"},
     )
     db_session.add(subscriber)
     db_session.flush()

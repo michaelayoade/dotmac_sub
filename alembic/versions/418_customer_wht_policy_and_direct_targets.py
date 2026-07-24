@@ -165,125 +165,70 @@ def _upgrade_withholding_tax_records() -> None:
     if not _table_exists("withholding_tax_records"):
         return
 
-    if bind.dialect.name == "sqlite":
-        has_account_id = _column_exists("withholding_tax_records", "account_id")
-        has_vat_exclusive_amount = _column_exists(
-            "withholding_tax_records", "vat_exclusive_amount"
-        )
-        has_vat_amount = _column_exists("withholding_tax_records", "vat_amount")
-        has_source_invoice_id = _column_exists(
-            "withholding_tax_records", "source_invoice_id"
-        )
-        has_policy_version = _column_exists("withholding_tax_records", "policy_version")
-        has_constraint = _WHT_TARGET_CONSTRAINT in _sqlite_table_sql(
-            "withholding_tax_records"
-        )
-        with op.batch_alter_table(
-            "withholding_tax_records",
-            recreate="always",
-        ) as batch:
-            if not has_account_id:
-                batch.add_column(
-                    sa.Column("account_id", sa.String(length=36), nullable=True)
-                )
-            if not has_vat_exclusive_amount:
-                batch.add_column(
-                    sa.Column("vat_exclusive_amount", sa.Numeric(12, 2), nullable=True)
-                )
-            if not has_vat_amount:
-                batch.add_column(
-                    sa.Column("vat_amount", sa.Numeric(12, 2), nullable=True)
-                )
-            if not has_source_invoice_id:
-                batch.add_column(
-                    sa.Column("source_invoice_id", sa.String(length=36), nullable=True)
-                )
-            if not has_policy_version:
-                batch.add_column(
-                    sa.Column("policy_version", sa.Integer(), nullable=True)
-                )
-            batch.alter_column("billing_account_id", nullable=True)
-            if not has_constraint:
-                batch.create_check_constraint(
-                    _WHT_TARGET_CONSTRAINT,
-                    "(CASE WHEN account_id IS NOT NULL THEN 1 ELSE 0 END + "
-                    "CASE WHEN billing_account_id IS NOT NULL THEN 1 ELSE 0 END) = 1",
-                )
-        _validate_exactly_one_target_rows(bind)
-        if not _index_exists("withholding_tax_records", _ACCOUNT_INDEX):
-            op.create_index(
-                _ACCOUNT_INDEX,
-                "withholding_tax_records",
-                ["account_id"],
-            )
-        if not _index_exists("withholding_tax_records", _SOURCE_INVOICE_INDEX):
-            op.create_index(
-                _SOURCE_INVOICE_INDEX,
-                "withholding_tax_records",
-                ["source_invoice_id"],
-            )
-    else:
-        if not _column_exists("withholding_tax_records", "account_id"):
-            op.add_column(
-                "withholding_tax_records",
-                sa.Column(
-                    "account_id",
-                    postgresql.UUID(as_uuid=True),
-                    sa.ForeignKey("subscribers.id"),
-                    nullable=True,
-                ),
-            )
-        if not _column_exists("withholding_tax_records", "vat_exclusive_amount"):
-            op.add_column(
-                "withholding_tax_records",
-                sa.Column("vat_exclusive_amount", sa.Numeric(12, 2), nullable=True),
-            )
-        if not _column_exists("withholding_tax_records", "vat_amount"):
-            op.add_column(
-                "withholding_tax_records",
-                sa.Column("vat_amount", sa.Numeric(12, 2), nullable=True),
-            )
-        if not _column_exists("withholding_tax_records", "source_invoice_id"):
-            op.add_column(
-                "withholding_tax_records",
-                sa.Column(
-                    "source_invoice_id",
-                    postgresql.UUID(as_uuid=True),
-                    sa.ForeignKey("invoices.id"),
-                    nullable=True,
-                ),
-            )
-        if not _column_exists("withholding_tax_records", "policy_version"):
-            op.add_column(
-                "withholding_tax_records",
-                sa.Column("policy_version", sa.Integer(), nullable=True),
-            )
-        if not _index_exists("withholding_tax_records", _ACCOUNT_INDEX):
-            op.create_index(
-                _ACCOUNT_INDEX,
-                "withholding_tax_records",
-                ["account_id"],
-            )
-        if not _index_exists("withholding_tax_records", _SOURCE_INVOICE_INDEX):
-            op.create_index(
-                _SOURCE_INVOICE_INDEX,
-                "withholding_tax_records",
-                ["source_invoice_id"],
-            )
-        _validate_exactly_one_target_rows(bind)
+    is_sqlite = bind.dialect.name == "sqlite"
+    # UUID columns render as CHAR(32)/String on SQLite and native UUID on
+    # Postgres. Top-level op.add_column works on both dialects (SQLite supports
+    # ADD COLUMN natively); env.py wraps these ops so re-adding an existing
+    # column on a fresh model-based schema is a no-op. Batch recreate is
+    # deliberately avoided: it drops and rebuilds the table, which trips global
+    # DDL listeners (e.g. geoalchemy2) and is forbidden post-squash.
+    uuid_type: sa.types.TypeEngine[object] = (
+        sa.String(length=36) if is_sqlite else postgresql.UUID(as_uuid=True)
+    )
+    # SQLite's ALTER TABLE ADD COLUMN cannot carry a FOREIGN KEY; the model-based
+    # squashed schema already declares these FKs, so fresh SQLite test databases
+    # have them. Only a real Postgres upgrade adds the columns with their FKs.
+    account_fk = [] if is_sqlite else [sa.ForeignKey("subscribers.id")]
+    source_invoice_fk = [] if is_sqlite else [sa.ForeignKey("invoices.id")]
+    op.add_column(
+        "withholding_tax_records",
+        sa.Column("account_id", uuid_type, *account_fk, nullable=True),
+    )
+    op.add_column(
+        "withholding_tax_records",
+        sa.Column("vat_exclusive_amount", sa.Numeric(12, 2), nullable=True),
+    )
+    op.add_column(
+        "withholding_tax_records",
+        sa.Column("vat_amount", sa.Numeric(12, 2), nullable=True),
+    )
+    op.add_column(
+        "withholding_tax_records",
+        sa.Column("source_invoice_id", uuid_type, *source_invoice_fk, nullable=True),
+    )
+    op.add_column(
+        "withholding_tax_records",
+        sa.Column("policy_version", sa.Integer(), nullable=True),
+    )
+    op.create_index(
+        _ACCOUNT_INDEX,
+        "withholding_tax_records",
+        ["account_id"],
+    )
+    op.create_index(
+        _SOURCE_INVOICE_INDEX,
+        "withholding_tax_records",
+        ["source_invoice_id"],
+    )
+    _validate_exactly_one_target_rows(bind)
+    # Relaxing billing_account_id to nullable and adding the exactly-one-target
+    # CHECK both require a table recreate on SQLite, which is forbidden here.
+    # The model-based squashed schema already declares both, so fresh SQLite
+    # test databases carry them; only a real Postgres upgrade needs to apply
+    # them, and Postgres does both as top-level operations.
+    if not is_sqlite:
         op.alter_column(
             "withholding_tax_records",
             "billing_account_id",
             existing_type=postgresql.UUID(as_uuid=True),
             nullable=True,
         )
-        if not _check_exists("withholding_tax_records", _WHT_TARGET_CONSTRAINT):
-            op.create_check_constraint(
-                _WHT_TARGET_CONSTRAINT,
-                "withholding_tax_records",
-                "(CASE WHEN account_id IS NOT NULL THEN 1 ELSE 0 END + "
-                "CASE WHEN billing_account_id IS NOT NULL THEN 1 ELSE 0 END) = 1",
-            )
+        op.create_check_constraint(
+            _WHT_TARGET_CONSTRAINT,
+            "withholding_tax_records",
+            "(CASE WHEN account_id IS NOT NULL THEN 1 ELSE 0 END + "
+            "CASE WHEN billing_account_id IS NOT NULL THEN 1 ELSE 0 END) = 1",
+        )
 
 
 def upgrade() -> None:
@@ -293,54 +238,39 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     bind = op.get_bind()
+    is_sqlite = bind.dialect.name == "sqlite"
     if _table_exists("withholding_tax_records"):
         _validate_downgrade_rows(bind)
-        if bind.dialect.name == "sqlite":
-            with op.batch_alter_table(
+        # SQLite cannot drop a CHECK constraint or restore NOT NULL without a
+        # recreate; those were only applied on Postgres in upgrade(), so this
+        # mirrors the dialect split. Column and index drops are top-level on
+        # both dialects (modern SQLite supports DROP COLUMN).
+        if not is_sqlite and _check_exists(
+            "withholding_tax_records", _WHT_TARGET_CONSTRAINT
+        ):
+            op.drop_constraint(
+                _WHT_TARGET_CONSTRAINT,
                 "withholding_tax_records",
-                recreate="always",
-            ) as batch:
-                if _check_exists("withholding_tax_records", _WHT_TARGET_CONSTRAINT):
-                    batch.drop_constraint(_WHT_TARGET_CONSTRAINT, type_="check")
-                batch.alter_column("billing_account_id", nullable=False)
-                if _index_exists("withholding_tax_records", _ACCOUNT_INDEX):
-                    batch.drop_index(_ACCOUNT_INDEX)
-                if _index_exists("withholding_tax_records", _SOURCE_INVOICE_INDEX):
-                    batch.drop_index(_SOURCE_INVOICE_INDEX)
-                if _column_exists("withholding_tax_records", "account_id"):
-                    batch.drop_column("account_id")
-                if _column_exists("withholding_tax_records", "vat_exclusive_amount"):
-                    batch.drop_column("vat_exclusive_amount")
-                if _column_exists("withholding_tax_records", "vat_amount"):
-                    batch.drop_column("vat_amount")
-                if _column_exists("withholding_tax_records", "source_invoice_id"):
-                    batch.drop_column("source_invoice_id")
-                if _column_exists("withholding_tax_records", "policy_version"):
-                    batch.drop_column("policy_version")
-        else:
-            if _check_exists("withholding_tax_records", _WHT_TARGET_CONSTRAINT):
-                op.drop_constraint(
-                    _WHT_TARGET_CONSTRAINT,
-                    "withholding_tax_records",
-                    type_="check",
-                )
-            if _index_exists("withholding_tax_records", _ACCOUNT_INDEX):
-                op.drop_index(_ACCOUNT_INDEX, table_name="withholding_tax_records")
-            if _index_exists("withholding_tax_records", _SOURCE_INVOICE_INDEX):
-                op.drop_index(
-                    _SOURCE_INVOICE_INDEX,
-                    table_name="withholding_tax_records",
-                )
-            if _column_exists("withholding_tax_records", "source_invoice_id"):
-                op.drop_column("withholding_tax_records", "source_invoice_id")
-            if _column_exists("withholding_tax_records", "policy_version"):
-                op.drop_column("withholding_tax_records", "policy_version")
-            if _column_exists("withholding_tax_records", "vat_amount"):
-                op.drop_column("withholding_tax_records", "vat_amount")
-            if _column_exists("withholding_tax_records", "vat_exclusive_amount"):
-                op.drop_column("withholding_tax_records", "vat_exclusive_amount")
-            if _column_exists("withholding_tax_records", "account_id"):
-                op.drop_column("withholding_tax_records", "account_id")
+                type_="check",
+            )
+        if _index_exists("withholding_tax_records", _ACCOUNT_INDEX):
+            op.drop_index(_ACCOUNT_INDEX, table_name="withholding_tax_records")
+        if _index_exists("withholding_tax_records", _SOURCE_INVOICE_INDEX):
+            op.drop_index(
+                _SOURCE_INVOICE_INDEX,
+                table_name="withholding_tax_records",
+            )
+        if _column_exists("withholding_tax_records", "source_invoice_id"):
+            op.drop_column("withholding_tax_records", "source_invoice_id")
+        if _column_exists("withholding_tax_records", "policy_version"):
+            op.drop_column("withholding_tax_records", "policy_version")
+        if _column_exists("withholding_tax_records", "vat_amount"):
+            op.drop_column("withholding_tax_records", "vat_amount")
+        if _column_exists("withholding_tax_records", "vat_exclusive_amount"):
+            op.drop_column("withholding_tax_records", "vat_exclusive_amount")
+        if _column_exists("withholding_tax_records", "account_id"):
+            op.drop_column("withholding_tax_records", "account_id")
+        if not is_sqlite:
             op.alter_column(
                 "withholding_tax_records",
                 "billing_account_id",

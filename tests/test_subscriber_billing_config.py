@@ -8,6 +8,7 @@ from app.schemas.subscriber import SubscriberUpdate
 from app.services import customer_tax_policies
 from app.services import subscriber as subscriber_service
 from app.services import web_customer_actions as web_customer_actions_service
+from app.services.db_session_adapter import db_session_adapter
 from app.services.owner_commands import CommandContext
 from app.services.subscriber import _apply_billing_defaults
 from app.services.web_subscriber_details import build_subscriber_detail_page_context
@@ -132,10 +133,16 @@ def test_customer_withholding_tax_policy_can_be_enabled_and_disabled(
     db_session,
     subscriber,
 ):
+    # The owner command requires a transaction-free session at entry; the
+    # subscriber fixture leaves an open read transaction. Capture the id before
+    # releasing — reading subscriber.id afterwards would re-expire the row and
+    # reopen a transaction.
+    account_id = subscriber.id
+    db_session_adapter.release_read_transaction(db_session)
     enabled = customer_tax_policies.set_customer_withholding_tax_policy(
         db_session,
         customer_tax_policies.SetCustomerWithholdingTaxPolicyCommand(
-            account_id=subscriber.id,
+            account_id=account_id,
             withholding_tax_enabled=True,
             updated_by="admin-1",
         ),
@@ -143,13 +150,14 @@ def test_customer_withholding_tax_policy_can_be_enabled_and_disabled(
             actor="admin-1",
             scope=customer_tax_policies.WRITE_SCOPE,
             reason="Enable customer WHT policy",
-            idempotency_key=f"enable-customer-wht:{subscriber.id}",
+            idempotency_key=f"enable-customer-wht:{account_id}",
         ),
     )
+    db_session_adapter.release_read_transaction(db_session)
     disabled = customer_tax_policies.set_customer_withholding_tax_policy(
         db_session,
         customer_tax_policies.SetCustomerWithholdingTaxPolicyCommand(
-            account_id=subscriber.id,
+            account_id=account_id,
             withholding_tax_enabled=False,
             updated_by="admin-1",
         ),
@@ -157,7 +165,7 @@ def test_customer_withholding_tax_policy_can_be_enabled_and_disabled(
             actor="admin-1",
             scope=customer_tax_policies.WRITE_SCOPE,
             reason="Disable customer WHT policy",
-            idempotency_key=f"disable-customer-wht:{subscriber.id}",
+            idempotency_key=f"disable-customer-wht:{account_id}",
         ),
     )
 

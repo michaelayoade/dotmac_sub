@@ -11,12 +11,6 @@ BATCH_OPERATION_ALLOWLIST = {
     # This historical schema-removal migration inspects every affected table
     # and column before entering its batch operations.
     "162_drop_olt_circuit_breaker_schema.py",
-    # SQLite cannot add a CHECK constraint or relax a column to nullable on an
-    # existing table without a recreate. This migration's Postgres path (the
-    # real deployment target) uses top-level guarded operations; only its
-    # SQLite branch batches, and it inspects every column, index, and
-    # constraint before each batch operation.
-    "418_customer_wht_policy_and_direct_targets.py",
 }
 
 

@@ -1012,10 +1012,12 @@ def stage_invoice_direct_transfer_intent(
     replay = next((intent for intent in pending if intent.idempotency_key == key), None)
     if replay is not None:
         replay_metadata = dict(replay.metadata_ or {})
-        if (
-            str(replay_metadata.get("invoice_id") or "") != str(invoice_id)
-            or round_money(replay.requested_amount) != normalized_amount
-        ):
+        # The invoice identifies the request; the stored amount (and its WHT
+        # snapshot) is immutable evidence. Replaying the same key for the same
+        # invoice must return that snapshot even if the recomputed amount would
+        # now differ (e.g. the WHT rate setting changed after creation). Only a
+        # different invoice under the same key is a genuine conflict.
+        if str(replay_metadata.get("invoice_id") or "") != str(invoice_id):
             raise _error(
                 "idempotency_conflict",
                 "Direct-transfer idempotency key was used with different details",

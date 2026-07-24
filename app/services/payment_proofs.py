@@ -824,6 +824,7 @@ def _verify_proof(
     withholding_tax_snapshot = dict(
         direct_transfer_metadata.get("withholding_tax") or {}
     )
+    wht_record_id: UUID | None = None
     if deposit_intent is not None:
         from app.services.account_credit_deposits import (
             AccountCreditDeposits,
@@ -917,7 +918,7 @@ def _verify_proof(
         if withholding_tax_snapshot:
             from app.services import tax_accounting
 
-            tax_accounting.stage_withholding_tax_receivable(
+            wht_record = tax_accounting.stage_withholding_tax_receivable(
                 db,
                 account_id=proof.account_id,
                 billing_account_id=None,
@@ -955,6 +956,7 @@ def _verify_proof(
                 currency=proof.currency,
                 context=context,
             )
+            wht_record_id = wht_record.id
     proof.status = PaymentProofStatus.verified
     proof.verified_amount = value
     proof.verified_by = str(verified_by)
@@ -983,7 +985,10 @@ def _verify_proof(
         proof=proof,
         event_type=EventType.payment_proof_verified,
     )
-    return PaymentProofResult.from_model(proof)
+    return PaymentProofResult.from_model(
+        proof,
+        withholding_tax_record_id=wht_record_id,
+    )
 
 
 def _verify_consolidated_proof(
