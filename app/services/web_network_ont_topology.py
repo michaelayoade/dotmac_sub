@@ -23,7 +23,10 @@ from app.models.network import (
     Splitter,
     SplitterPort,
 )
-from app.services.network.ont_status import resolve_effective_ont_status
+from app.services.device_operational_status import (
+    derive_olt_operational_status,
+    derive_ont_operational_status,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +39,9 @@ class TopologyNode:
     id: str | None = None
     name: str | None = None
     label: str | None = None
-    status: str = "offline"  # 'online' or 'offline'
+    operational_status: str | None = None
+    operational_reason: str | None = None
+    lifecycle_status: str | None = None
     url: str | None = None
     details: dict[str, Any] = field(default_factory=dict)
 
@@ -71,7 +76,9 @@ class FiberPathTopology:
                     "id": n.id,
                     "name": n.name,
                     "label": n.label,
-                    "status": n.status,
+                    "operational_status": n.operational_status,
+                    "operational_reason": n.operational_reason,
+                    "lifecycle_status": n.lifecycle_status,
                     "url": n.url,
                     "details": n.details,
                 }
@@ -115,14 +122,15 @@ def build_ont_fiber_path(db: Session, ont_id: str) -> FiberPathTopology:
     nodes: list[TopologyNode] = []
     links: list[TopologyLink] = []
 
-    ont_status = resolve_effective_ont_status(ont).status.value
+    ont_operational = derive_ont_operational_status(ont)
 
     ont_node = TopologyNode(
         node_type="ont",
         id=str(ont.id),
         name=ont.serial_number or "ONT",
         label=ont.name or ont.serial_number or "ONT",
-        status=ont_status,
+        operational_status=ont_operational.status,
+        operational_reason=ont_operational.reason,
         url=f"/admin/network/onts/{ont.id}",
         details={
             "serial_number": ont.serial_number,
@@ -167,14 +175,15 @@ def build_ont_fiber_path(db: Session, ont_id: str) -> FiberPathTopology:
 
     # Add OLT node
     if olt:
-        olt_status = "online" if getattr(olt, "is_active", False) else "offline"
+        olt_operational = derive_olt_operational_status(olt)
 
         olt_node = TopologyNode(
             node_type="olt",
             id=str(olt.id),
             name=olt.name or "OLT",
             label=olt.name or "OLT",
-            status=olt_status,
+            operational_status=olt_operational.status,
+            operational_reason=olt_operational.reason,
             url=f"/admin/network/olts/{olt.id}",
             details={
                 "vendor": olt.vendor,
@@ -191,7 +200,7 @@ def build_ont_fiber_path(db: Session, ont_id: str) -> FiberPathTopology:
             id=str(pon_port.id),
             name=pon_port.name or f"PON {pon_port.port_number}",
             label=pon_port.name or f"Port {pon_port.port_number}",
-            status="online" if pon_port.is_active else "offline",
+            lifecycle_status="active" if pon_port.is_active else "inactive",
             url=f"/admin/network/olts/{olt.id}?tab=pon-ports" if olt else None,
             details={
                 "port_number": pon_port.port_number,
@@ -248,7 +257,7 @@ def build_ont_fiber_path(db: Session, ont_id: str) -> FiberPathTopology:
             id=str(fdh.id),
             name=fdh.code or fdh.name or "FDH",
             label=fdh.name or fdh.code or "FDH Cabinet",
-            status="online" if fdh.is_active else "offline",
+            lifecycle_status="active" if fdh.is_active else "inactive",
             url=f"/admin/network/fdh-cabinets/{fdh.id}",
             details={
                 "code": fdh.code,
@@ -282,7 +291,7 @@ def build_ont_fiber_path(db: Session, ont_id: str) -> FiberPathTopology:
             id=str(splitter.id),
             name=splitter.name or f"Splitter 1:{splitter.splitter_ratio}",
             label=splitter_label,
-            status="online" if splitter.is_active else "offline",
+            lifecycle_status="active" if splitter.is_active else "inactive",
             url=f"/admin/network/splitters/{splitter.id}",
             details={
                 "ratio": f"1:{splitter.splitter_ratio}"

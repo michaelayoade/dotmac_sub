@@ -6,6 +6,67 @@ from app.models.subscription_engine import SettingValueType
 from app.services import settings_seed
 from app.services.domain_settings import network_settings
 
+
+class TestSeedSchedulerRuntimeSettings:
+    def test_materializes_environment_only_at_bootstrap(self, db_session, monkeypatch):
+        monkeypatch.setenv("NCC_REPORT_EMAIL_ENABLED", "true")
+
+        settings_seed.seed_scheduler_runtime_settings(db_session)
+
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.notification,
+                DomainSetting.key == "ncc_report_email_enabled",
+            )
+            .one()
+        )
+        assert setting.value_json is True
+
+    def test_preserves_existing_database_decision(self, db_session, monkeypatch):
+        db_session.add(
+            DomainSetting(
+                domain=SettingDomain.notification,
+                key="ncc_report_email_enabled",
+                value_type=SettingValueType.boolean,
+                value_text="false",
+                value_json=False,
+                is_active=True,
+            )
+        )
+        db_session.commit()
+        monkeypatch.setenv("NCC_REPORT_EMAIL_ENABLED", "true")
+
+        settings_seed.seed_scheduler_runtime_settings(db_session)
+
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.notification,
+                DomainSetting.key == "ncc_report_email_enabled",
+            )
+            .one()
+        )
+        assert setting.value_json is False
+
+    def test_materializes_registered_integer_environment_value(
+        self, db_session, monkeypatch
+    ):
+        monkeypatch.setenv("COMPENSATION_RETRY_INTERVAL_SECONDS", "120")
+
+        settings_seed.seed_scheduler_runtime_settings(db_session)
+
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.provisioning,
+                DomainSetting.key == "compensation_retry_interval_seconds",
+            )
+            .one()
+        )
+        assert setting.value_text == "120"
+
+
 # =============================================================================
 # Auth Settings Tests
 # =============================================================================
@@ -579,8 +640,7 @@ class TestSeedGeocodingSettings:
 class TestSeedSchedulerSettings:
     """Tests for seed_scheduler_settings function."""
 
-    def test_seeds_broker_url(self, db_session, monkeypatch):
-        """Test broker URL setting is seeded."""
+    def test_does_not_persist_deployment_broker_url(self, db_session, monkeypatch):
         monkeypatch.setenv("CELERY_BROKER_URL", "redis://custom:6379/0")
         monkeypatch.delenv("REDIS_URL", raising=False)
 
@@ -594,8 +654,7 @@ class TestSeedSchedulerSettings:
             )
             .first()
         )
-        assert setting is not None
-        assert "redis://" in setting.value_text
+        assert setting is None
 
     def test_seeds_timezone(self, db_session, monkeypatch):
         """Test timezone setting is seeded."""
@@ -1089,3 +1148,18 @@ class TestSeedCommsSettings:
             .first()
         )
         assert setting is not None
+
+    def test_seeds_periodic_campaign_admission(self, db_session, monkeypatch):
+        monkeypatch.setenv("CAMPAIGN_PROCESSING_ENABLED", "true")
+
+        settings_seed.seed_comms_settings(db_session)
+
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.comms,
+                DomainSetting.key == "campaign_processing_enabled",
+            )
+            .one()
+        )
+        assert setting.value_json is True

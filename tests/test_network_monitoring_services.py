@@ -172,8 +172,8 @@ def test_onu_auth_trend_returns_json_safe_series(db_session):
     json.dumps(trend["values"])
 
 
-def test_get_onu_status_summary_counts_never_seen_onts_as_offline(db_session):
-    """Never-seen active ONTs remain in the binary offline count."""
+def test_get_onu_status_summary_counts_never_seen_onts_as_not_working(db_session):
+    """Never-seen active ONTs remain in the binary not-working count."""
     olt = OLTDevice(
         name="Cold Cache OLT",
         vendor="Huawei",
@@ -190,13 +190,13 @@ def test_get_onu_status_summary_counts_never_seen_onts_as_offline(db_session):
     summary = monitoring_service.get_onu_status_summary(db_session)
 
     assert summary["total"] == 3
-    assert summary["offline"] == 3
-    assert summary["online"] == 0
+    assert summary["not_working"] == 3
+    assert summary["working"] == 0
 
 
 def test_get_onu_status_summary_is_binary_across_huawei_and_uisp(db_session):
-    """Huawei and UISP ONTs use the same online/offline projection."""
-    seen = datetime(2026, 7, 5, 6, 0, tzinfo=UTC)
+    """Huawei and UISP observations feed the same operational projection."""
+    seen = datetime.now(UTC)
     huawei_olt = OLTDevice(name="HW-RETRY-PENDING", vendor="Huawei")
     uf_olt = OLTDevice(
         name="GPON-UF-1",
@@ -208,7 +208,7 @@ def test_get_onu_status_summary_is_binary_across_huawei_and_uisp(db_session):
     db_session.flush()
     db_session.add_all(
         [
-            # Huawei ONT with no observation is offline while polling retries.
+            # Huawei ONT with no observation is not working while polling retries.
             OntUnit(serial_number="HW-ONT-1", olt_device_id=huawei_olt.id),
             # UFiber ONTs: observed online / observed offline / never observed.
             OntUnit(
@@ -230,12 +230,12 @@ def test_get_onu_status_summary_is_binary_across_huawei_and_uisp(db_session):
 
     summary = monitoring_service.get_onu_status_summary(db_session)
 
-    assert summary["online"] == 1  # observed-online UFiber ONT
-    assert summary["offline"] == 3
+    assert summary["working"] == 1
+    assert summary["not_working"] == 3
     assert summary["total"] == 4
 
 
-def test_get_onu_olt_status_summary_has_no_unknown_bucket(db_session):
+def test_get_onu_status_summary_has_only_operational_buckets(db_session):
     olt = OLTDevice(
         name="OLT Link Summary OLT",
         vendor="Huawei",
@@ -253,13 +253,15 @@ def test_get_onu_olt_status_summary_has_no_unknown_bucket(db_session):
     )
     db_session.commit()
 
-    summary = monitoring_service.get_onu_olt_status_summary(db_session)
+    summary = monitoring_service.get_onu_status_summary(db_session)
 
-    # Never-seen rows remain offline; the summary stays binary.
+    # Never-seen rows remain not working; the summary stays binary.
     assert summary["total"] == 3
-    assert summary["online"] == 0
-    assert summary["offline"] == 3
+    assert summary["working"] == 0
+    assert summary["not_working"] == 3
     assert "unknown" not in summary
+    assert "online" not in summary
+    assert "offline" not in summary
 
 
 def test_get_pon_outage_summary_flags_ports_with_assignments(db_session):
@@ -332,16 +334,19 @@ def test_get_onu_status_trend_uses_current_summary(db_session, monkeypatch):
     monkeypatch.setattr(
         monitoring_service,
         "get_onu_status_summary",
-        lambda db: {"total": 7, "online": 5, "offline": 2, "low_signal": 1},
+        lambda db: {
+            "total": 7,
+            "working": 5,
+            "not_working": 2,
+            "low_signal": 1,
+        },
     )
 
     trend = web_network_monitoring_service._get_onu_status_trend(db_session, hours=24)
 
     assert trend["has_data"] is True
-    assert trend["online"] == [5.0]
-    assert trend["offline"] == [2.0]
-    assert trend["olt_online"] == [5.0]
-    assert trend["olt_offline"] == [2.0]
+    assert trend["working"] == [5.0]
+    assert trend["not_working"] == [2.0]
     assert trend["low_signal"] == [1.0]
     assert trend["source"] == "inventory"
 

@@ -409,6 +409,7 @@ def _seed_startup_settings() -> None:
         seed_provisioning_workflows,
         seed_radius_policy_settings,
         seed_radius_settings,
+        seed_scheduler_runtime_settings,
         seed_scheduler_settings,
         seed_subscriber_settings,
         seed_tr069_settings,
@@ -472,6 +473,7 @@ def _seed_startup_settings() -> None:
         seed_lifecycle_settings(db)
         seed_comms_settings(db)
         seed_wireguard_settings(db)
+        seed_scheduler_runtime_settings(db)
     finally:
         db.close()
     logger.info(

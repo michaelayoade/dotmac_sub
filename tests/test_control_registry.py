@@ -3,7 +3,7 @@
 import pytest
 
 from app.models.domain_settings import DomainSetting, SettingDomain, SettingValueType
-from app.services import control_registry, module_manager, scheduler_config
+from app.services import control_registry, module_manager
 from app.services.control_registry import Layer
 
 
@@ -95,25 +95,19 @@ def test_canonical_writer_rejects_financial_lifecycle_keys(db_session):
         )
 
 
-def test_scheduler_routes_registered_optional_keys_through_resolver(db_session):
+def test_canonical_optional_control_resolver_obeys_explicit_decision(db_session):
     assert (
-        scheduler_config._effective_bool(
+        control_registry.is_enabled(
             db_session,
-            SettingDomain.usage,
-            "radius_accounting_import_enabled",
-            "RADIUS_ACCOUNTING_IMPORT_ENABLED",
-            True,
+            "sessions.radius_accounting_import",
         )
         is True
     )
     _set_canonical(db_session, "sessions.radius_accounting_import", False)
     assert (
-        scheduler_config._effective_bool(
+        control_registry.is_enabled(
             db_session,
-            SettingDomain.usage,
-            "radius_accounting_import_enabled",
-            "RADIUS_ACCOUNTING_IMPORT_ENABLED",
-            True,
+            "sessions.radius_accounting_import",
         )
         is False
     )

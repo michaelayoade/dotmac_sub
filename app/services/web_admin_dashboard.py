@@ -110,11 +110,11 @@ def _rollback_after_failed_query(db: Session) -> None:
 
 
 def _build_cached_ont_status_summary(db: Session) -> dict[str, int]:
-    """Return ONT status from locally persisted monitoring fields.
+    """Return owner-resolved ONT operation from persisted observations.
 
     The dashboard must not synchronously poll monitoring per OLT during initial
-    render. Background ingestion keeps these columns fresh enough for overview
-    counts, while live diagnostics pages can still query Zabbix directly.
+    render. The lifecycle owner evaluates observation age and returns only
+    working/not-working counts; diagnostics may still show the raw evidence.
     """
     from app.services.network.ont_status import ont_status_summary
 
@@ -246,7 +246,7 @@ def build_dashboard_kpis(
     *,
     total_subscribers: int,
     online_sessions_value: StateValue,
-    devices_online: int,
+    devices_working: int,
     devices_total: int,
     payments_this_month: float,
     overdue_amount: float,
@@ -282,7 +282,7 @@ def build_dashboard_kpis(
         ),
         "network_devices": Kpi(
             label="Network Devices",
-            value=StateValue.present(f"{devices_online} / {devices_total}"),
+            value=StateValue.present(f"{devices_working} / {devices_total}"),
             cohort_url="/admin/network/monitoring",
             tone=StatusTone.info,
         ),
@@ -349,11 +349,10 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
         fallback_stats=net_stats,
     )
     olt_total = network_health["olt_total"]
-    olt_online = network_health["olt_online"]
     ont_total = network_health["ont_total"]
-    ont_active = network_health["ont_active"]
+    ont_working = network_health["ont_working"]
     olts_total = network_health["olts_total"]
-    olts_online = network_health["olts_online"]
+    olts_working = network_health["olts_working"]
     health_pct = network_health["health_pct"]
     health_status = network_health["health_status"]
 
@@ -419,9 +418,9 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
         "orders_in_progress": 0,
         "orders_pending_activation": 0,
         "orders_completed_today": 0,
-        "olts_online": olts_online,
+        "olts_working": olts_working,
         "olts_total": olts_total,
-        "onts_active": ont_active,
+        "onts_working": ont_working,
         "onts_total": ont_total,
         "alarms_critical": net_stats["alarms_critical"],
         "alarms_major": net_stats["alarms_major"],
@@ -465,21 +464,23 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
 
     # --- Monitoring device summary (for operations dashboard) ---
     monitoring_summary = {
-        "devices_online": net_stats.get("online_count", 0),
-        "devices_offline": net_stats.get("offline_count", 0),
-        "devices_degraded": net_stats.get("degraded_count", 0),
+        "devices_working": net_stats.get("working_count", 0),
+        "devices_not_working": net_stats.get("not_working_count", 0),
         "devices_total": net_stats.get("total_count", 0),
     }
 
     # --- ONT status summary ---
     try:
         ont_service_summary = _build_cached_ont_status_summary(db)
-        ont_olt_link_summary = dict(ont_service_summary)
     except Exception:
         logger.debug("Failed to load ONT summary for dashboard", exc_info=True)
         _rollback_after_failed_query(db)
-        ont_service_summary = {"online": 0, "offline": 0, "low_signal": 0, "total": 0}
-        ont_olt_link_summary = {"online": 0, "offline": 0, "total": 0}
+        ont_service_summary = {
+            "working": 0,
+            "not_working": 0,
+            "low_signal": 0,
+            "total": 0,
+        }
 
     # --- Unconfigured ONTs (autofind read owner) ---
     unconfigured_ont_count = 0
@@ -558,7 +559,7 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
             pending_location_requests=pending_location_requests,
             pon_outage_count=len(pon_outages),
             infrastructure_alerts=infrastructure_alerts,
-            ont_offline_threshold=_network_monitoring_int_setting(
+            ont_not_working_threshold=_network_monitoring_int_setting(
                 db, "dashboard_attention_ont_offline_threshold", 5
             ),
         )
@@ -589,7 +590,7 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
     dashboard_kpis = build_dashboard_kpis(
         total_subscribers=sub_stats["total_count"],
         online_sessions_value=online_sessions_state,
-        devices_online=monitoring_summary["devices_online"],
+        devices_working=monitoring_summary["devices_working"],
         devices_total=monitoring_summary["devices_total"],
         payments_this_month=payments_this_month,
         overdue_amount=overdue_amount,
@@ -629,7 +630,6 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
         "online_customer_pct": online_pct,
         "monitoring_summary": monitoring_summary,
         "ont_service_summary": ont_service_summary,
-        "ont_olt_link_summary": ont_olt_link_summary,
         "pon_interface_summary": pon_interface_summary,
         "pon_outages": pon_outages,
         "vpn_tunnels": [],

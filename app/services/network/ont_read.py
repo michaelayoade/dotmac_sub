@@ -68,6 +68,11 @@ class OntReadFacade:
             raise HTTPException(status_code=404, detail="ONT not found.")
 
         effective_status = resolve_effective_ont_status(ont)
+        from app.services.device_operational_status import (
+            derive_ont_operational_status,
+        )
+
+        operational = derive_ont_operational_status(ont)
         runtime_status = effective_status.status.value
         acs_last_inform_at = _as_utc(getattr(ont, "acs_last_inform_at", None))
         effective_last_seen_at = resolve_effective_last_seen_at(
@@ -81,9 +86,9 @@ class OntReadFacade:
             "firmware_version": ont.firmware_version,
             "olt_status": runtime_status,
             "status_source": effective_status.source.value,
-            "status": runtime_status,
-            "status_reason": effective_status.reason,
-            "status_retry_pending": effective_status.retry_pending,
+            "status": operational.status,
+            "status_reason": operational.reason,
+            "status_presentation": operational.presentation.model_dump(),
             "acs_last_inform_at": acs_last_inform_at,
             "last_seen_at": effective_last_seen_at,
             "name": ont.name,

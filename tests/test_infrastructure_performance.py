@@ -45,6 +45,7 @@ def test_uptime_report_pon_derived_from_ont_ratio(db_session):
     pon = PonPort(olt=olt, name="0/1/1")
     db_session.add_all([olt, pon])
     db_session.flush()
+    observed_at = datetime.now(UTC)
     # 1 of 2 ONTs online -> 50%
     db_session.add_all(
         [
@@ -52,11 +53,13 @@ def test_uptime_report_pon_derived_from_ont_ratio(db_session):
                 serial_number="ONT-ON",
                 pon_port_id=pon.id,
                 olt_status=OnuOnlineStatus.online,
+                olt_status_seen_at=observed_at,
             ),
             OntUnit(
                 serial_number="ONT-OFF",
                 pon_port_id=pon.id,
                 olt_status=OnuOnlineStatus.offline,
+                olt_status_seen_at=observed_at,
             ),
         ]
     )
@@ -194,17 +197,20 @@ def test_ranking_window_captures_recent_downtime(db_session):
 
 
 def test_wallboard_counts_devices_by_live_status(db_session):
+    observed_at = datetime.now(UTC)
     db_session.add_all(
         [
             NetworkDevice(
                 name="AP up",
                 device_type=DeviceType.access_point,
                 live_status="up",
+                live_status_at=observed_at,
             ),
             NetworkDevice(
                 name="AP down",
                 device_type=DeviceType.access_point,
                 live_status="down",
+                live_status_at=observed_at,
             ),
             NetworkDevice(
                 name="AP no-cache",
@@ -217,9 +223,8 @@ def test_wallboard_counts_devices_by_live_status(db_session):
     db_session.commit()
     board = perf.wallboard(db_session)
     ap_card = next(c for c in board["cards"] if c["tier"] == "ap")
-    assert ap_card["up"] == 1
-    assert ap_card["down"] == 2
-    assert ap_card["degraded"] == 0
+    assert ap_card["working"] == 1
+    assert ap_card["not_working"] == 2
     assert ap_card["total"] == 3
 
 

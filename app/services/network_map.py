@@ -23,8 +23,10 @@ from app.models.network_monitoring import NetworkDevice, PopSite
 from app.models.subscriber import Address, Subscriber
 from app.models.usage import AccountingStatus, RadiusAccountingSession
 from app.services import settings_spec
-from app.services.device_operational_status import annotate_operational_status
-from app.services.network.ont_status import resolve_effective_ont_status
+from app.services.device_operational_status import (
+    annotate_operational_status,
+    derive_ont_operational_status,
+)
 from app.services.network.signal_thresholds import (
     classify_signal,
     get_signal_thresholds,
@@ -277,17 +279,16 @@ def build_network_map_context(db: Session) -> dict:
         )
         .all()
     )
-    ont_online = 0
-    ont_offline = 0
+    ont_working = 0
+    ont_not_working = 0
     ont_warning = 0
     warn_threshold, crit_threshold = get_signal_thresholds(db)
     for ont in ont_units:
-        effective_status = resolve_effective_ont_status(ont)
-        status = effective_status.status.value
-        if effective_status.is_online:
-            ont_online += 1
+        operational = derive_ont_operational_status(ont)
+        if operational.status == "working":
+            ont_working += 1
         else:
-            ont_offline += 1
+            ont_not_working += 1
         if ont.gps_longitude is None or ont.gps_latitude is None:
             continue
         olt_rx_dbm = ont.olt_rx_signal_dbm
@@ -311,7 +312,11 @@ def build_network_map_context(db: Session) -> dict:
                     "type": "ont",
                     "name": ont.name or ont.serial_number or "ONT",
                     "serial_number": ont.serial_number,
-                    "status": status,
+                    "status": operational.status,
+                    "status_reason": operational.reason,
+                    "status_presentation": operational.presentation.model_dump(
+                        mode="json"
+                    ),
                     "signal_quality": signal_quality,
                     "olt_rx_dbm": olt_rx_dbm,
                     "onu_rx_dbm": onu_rx_dbm,
@@ -459,28 +464,17 @@ def build_network_map_context(db: Session) -> dict:
         "customers_online": online_count,
         "customers_offline": offline_count,
         "network_devices": len(network_devices),
-        "network_devices_online": sum(
-            1 for device, _ in network_devices if device.operational_status == "up"
+        "network_devices_working": sum(
+            1 for device, _ in network_devices if device.operational_status == "working"
         ),
-        "network_devices_offline": sum(
-            1 for device, _ in network_devices if device.operational_status == "down"
-        ),
-        "network_devices_degraded": sum(
+        "network_devices_not_working": sum(
             1
             for device, _ in network_devices
-            if device.operational_status == "degraded"
-        ),
-        "network_devices_maintenance": sum(
-            1
-            for device, _ in network_devices
-            if device.operational_status == "maintenance"
-        ),
-        "network_devices_retry_pending": sum(
-            1 for device, _ in network_devices if device.operational_retry_pending
+            if device.operational_status == "not_working"
         ),
         "onts": len(ont_units),
-        "onts_online": ont_online,
-        "onts_offline": ont_offline,
+        "onts_working": ont_working,
+        "onts_not_working": ont_not_working,
         "onts_warning": ont_warning,
     }
 

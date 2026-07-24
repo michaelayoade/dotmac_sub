@@ -156,19 +156,22 @@ def test_resolve_effective_last_seen_at_prefers_newer_acs_inform() -> None:
     assert resolve_effective_last_seen_at(ont) == now - timedelta(minutes=1)
 
 
-def test_list_advanced_runtime_status_filter_uses_native_inventory(db_session) -> None:
-    """A retained native OLT-online observation remains in the online bucket."""
+def test_list_advanced_runtime_status_filter_uses_current_verification(
+    db_session,
+) -> None:
+    """A current OLT-online observation is in the working bucket."""
     ont = OntUnit(
         serial_number="ONT-RUNTIME-STATUS",
         is_active=True,
         olt_status=OnuOnlineStatus.online,
+        olt_status_seen_at=datetime.now(UTC),
     )
     db_session.add(ont)
     db_session.commit()
 
     rows, total = network_service.ont_units.list_advanced(
         db_session,
-        olt_status="online",
+        operational_status="working",
         limit=50,
         offset=0,
     )
@@ -177,9 +180,32 @@ def test_list_advanced_runtime_status_filter_uses_native_inventory(db_session) -
 
     rows, total = network_service.ont_units.list_advanced(
         db_session,
-        olt_status="offline",
+        operational_status="not_working",
         limit=50,
         offset=0,
     )
     assert total == 0
     assert rows == []
+
+
+def test_list_advanced_not_working_filter_includes_expired_null_evidence(
+    db_session,
+) -> None:
+    ont = OntUnit(
+        serial_number="ONT-RUNTIME-EXPIRED",
+        is_active=True,
+        olt_status=OnuOnlineStatus.online,
+        olt_status_seen_at=datetime.now(UTC) - timedelta(days=1),
+    )
+    db_session.add(ont)
+    db_session.commit()
+
+    rows, total = network_service.ont_units.list_advanced(
+        db_session,
+        operational_status="not_working",
+        limit=50,
+        offset=0,
+    )
+
+    assert total == 1
+    assert [item.serial_number for item in rows] == ["ONT-RUNTIME-EXPIRED"]

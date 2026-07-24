@@ -41,10 +41,7 @@ from app.services import network as network_service
 from app.services.network._common import decode_huawei_hex_serial, encode_to_hex_serial
 from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.olt_polling_parsers import _decode_huawei_packed_fsp
-from app.services.network.ont_status import (
-    effective_ont_online_clause,
-    resolve_effective_ont_status,
-)
+from app.services.network.ont_status import resolve_effective_ont_status
 from app.services.network.provisioning_events import list_ont_provisioning_events
 from app.services.web_network_core_devices_inventory import (
     _build_legacy_probe_statuses,
@@ -850,6 +847,11 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
         onu_rx = getattr(ont, "onu_rx_signal_dbm", None)
         quality = classify_signal(olt_rx, warn_threshold=warn, crit_threshold=crit)
         effective_status = resolve_effective_ont_status(ont)
+        from app.services.device_operational_status import (
+            derive_ont_operational_status,
+        )
+
+        ont_op = derive_ont_operational_status(ont)
         s = effective_status.status.value
         reason = getattr(ont, "offline_reason", None)
         reason_val = reason.value if reason else None
@@ -868,14 +870,11 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
             "status_class": ONLINE_STATUS_CLASSES.get(
                 s, ONLINE_STATUS_CLASSES["unknown"]
             ),
-            "reason_display": (
-                "Status refresh pending"
-                if effective_status.retry_pending
-                else OFFLINE_REASON_DISPLAY.get(reason_val, "")
-                if reason_val
-                else ""
-            ),
-            "retry_pending": effective_status.retry_pending,
+            "operational": ont_op.status,
+            "operational_reason": ont_op.reason,
+            "operational_reason_display": ont_op.reason_label,
+            "status_presentation": ont_op.presentation,
+            "reason_display": ont_op.reason_label,
             "distance_meters": distance_meters,
             "signal_updated_at": getattr(ont, "signal_updated_at", None),
         }
@@ -1410,7 +1409,7 @@ def onts_list_page_data(
     pon_port_id: str | None = None,
     pon_hint: str | None = None,
     zone_id: str | None = None,
-    online_status: str | None = None,
+    operational_status: str | None = None,
     authorization: str | None = None,
     offline_reason: str | None = None,
     signal_quality: str | None = None,
@@ -1472,7 +1471,7 @@ def onts_list_page_data(
                 pon_hint=pon_hint,
                 zone_id=zone_id,
                 signal_quality=signal_quality,
-                olt_status=online_status,
+                operational_status=operational_status,
                 authorization_status=query_authorization,
                 vendor=vendor,
                 search=search,
@@ -1550,8 +1549,8 @@ def onts_list_page_data(
         signal_data[str(ont.id)] = {
             "operational": ont_op.status,
             "operational_reason": ont_op.reason,
+            "operational_reason_display": ont_op.reason_label,
             "status_presentation": ont_op.presentation,
-            "retry_pending": effective_status.retry_pending,
             "olt_rx_dbm": olt_rx_dbm,
             "onu_rx_dbm": onu_rx_dbm,
             "signal_updated_at": getattr(ont, "signal_updated_at", None),
@@ -1593,11 +1592,7 @@ def onts_list_page_data(
                 "connection_request_class",
                 CONNECTION_REQUEST_STATUS_CLASSES["unavailable"],
             ),
-            "reason_display": (
-                "Status refresh pending"
-                if effective_status.retry_pending
-                else OFFLINE_REASON_DISPLAY.get(reason_val, "")
-            ),
+            "reason_display": ont_op.reason_label,
         }
 
     try:
@@ -1612,16 +1607,18 @@ def onts_list_page_data(
         logger.warning("Failed to request stale ONT status refresh", exc_info=True)
         status_refresh_admission = None
 
-    # Summary counts use cached inventory state; native polling runs out of band.
+    # Summary counts use the binary owner outcome; verification remains out of band.
     total_cpes_count = db.scalar(select(func.count()).select_from(CPEDevice)) or 0
     stats_filters = [OntUnit.is_active.is_(True)]
     if olt_id:
         stats_filters.append(OntUnit.olt_device_id == olt_id)
 
+    from app.services.network.ont_status import operational_ont_working_clause
+
     stats_row = db.execute(
         select(
             func.count().label("total"),
-            func.count().filter(effective_ont_online_clause()).label("online"),
+            func.count().filter(operational_ont_working_clause()).label("working"),
             func.count()
             .filter(
                 OntUnit.olt_rx_signal_dbm.isnot(None),
@@ -1633,16 +1630,16 @@ def onts_list_page_data(
         .where(*stats_filters)
     ).one()
     all_onts_count = int(stats_row.total or 0)
-    online_count = int(stats_row.online or 0)
+    working_count = int(stats_row.working or 0)
     low_signal_count = int(stats_row.low_signal or 0)
-    offline_count = max(all_onts_count - online_count, 0)
+    not_working_count = max(all_onts_count - working_count, 0)
 
     stats = {
         "total_onts": all_onts_count,
         "total_cpes": total_cpes_count,
         "total": all_onts_count + total_cpes_count,
-        "online_count": online_count,
-        "offline_count": offline_count,
+        "working_count": working_count,
+        "not_working_count": not_working_count,
         "low_signal_count": low_signal_count,
         "source": "inventory",
     }
@@ -1855,7 +1852,7 @@ def onts_list_page_data(
             "pon_port_id": pon_port_id or "",
             "pon_hint": pon_hint or "",
             "zone_id": zone_id or "",
-            "online_status": online_status or "",
+            "operational_status": operational_status or "",
             "authorization": authorization_filter,
             "signal_quality": signal_quality or "",
             "search": search or "",
@@ -1942,6 +1939,11 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
     if status_val not in ONLINE_STATUS_CLASSES:
         status_val = "unknown"
     effective_status = resolve_effective_ont_status(ont)
+    from app.services.device_operational_status import (
+        derive_ont_operational_status,
+    )
+
+    ont_op = derive_ont_operational_status(ont)
     status_display_val = effective_status.status.value
     status_source = effective_status.source.value
     normalized_acs_last_inform_at = getattr(ont, "acs_last_inform_at", None) or (
@@ -2010,13 +2012,11 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
             "connection_request_message"
         ),
         "offline_reason": reason_val,
-        "offline_reason_display": (
-            "Status refresh pending"
-            if effective_status.retry_pending
-            else OFFLINE_REASON_DISPLAY.get(reason_val, "")
-        ),
-        "status_reason": effective_status.reason,
-        "retry_pending": effective_status.retry_pending,
+        "offline_reason_display": OFFLINE_REASON_DISPLAY.get(reason_val, ""),
+        "operational_status": ont_op.status,
+        "operational_reason": ont_op.reason,
+        "operational_reason_display": ont_op.reason_label,
+        "status_presentation": ont_op.presentation,
         "warn_threshold": warn,
         "crit_threshold": crit,
         "online_status": status_display_val,
